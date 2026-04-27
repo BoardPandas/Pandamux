@@ -303,7 +303,9 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
           if (window.wmux?.clipboard?.pasteImage) {
             const filePath = await window.wmux.clipboard.pasteImage();
             if (filePath && ptyIdRef.current) {
-              window.wmux.pty.write(ptyIdRef.current, filePath);
+              // Route through terminal.paste so bracketed-paste markers wrap
+              // the path when the app (e.g. Claude Code) has bracketed paste on.
+              terminal.paste(filePath);
               handled = true;
             }
           }
@@ -311,7 +313,11 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
           if (!handled && ptyIdRef.current) {
             try {
               const text = await navigator.clipboard.readText();
-              if (text) window.wmux.pty.write(ptyIdRef.current, text);
+              // Use terminal.paste() — it honors bracketed-paste mode and emits
+              // the data through onData (already wired to PTY). Writing raw to
+              // pty.write strips the \x1b[200~/\x1b[201~ wrappers, so apps like
+              // Claude Code see each \n as Enter and only the first line lands.
+              if (text) terminal.paste(text);
             } catch {}
           }
         })();
