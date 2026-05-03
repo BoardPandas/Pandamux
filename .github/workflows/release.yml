@@ -125,11 +125,41 @@ jobs:
           Compress-Archive -Path "release/win-unpacked/*" `
             -DestinationPath "wmux-${{ steps.version.outputs.version }}-win-x64.zip"
 
-      - name: Upload release zip as artifact
+      # ── Generate latest.yml for electron-updater ──────────
+      - name: Generate latest.yml
+        shell: bash
+        run: |
+          node -e "
+            const crypto = require('crypto');
+            const fs = require('fs');
+            const version = '${{ steps.version.outputs.version }}';
+            const zip = 'wmux-' + version + '-win-x64.zip';
+            const data = fs.readFileSync(zip);
+            const sha512 = crypto.createHash('sha512').update(data).digest('base64');
+            const size = data.length;
+            const date = new Date().toISOString();
+            const yaml = [
+              'version: ' + version,
+              'files:',
+              '  - url: ' + zip,
+              '    sha512: ' + sha512,
+              '    size: ' + size,
+              'path: ' + zip,
+              'sha512: ' + sha512,
+              \"releaseDate: '\" + date + \"'\",
+              ''
+            ].join('\n');
+            fs.writeFileSync('latest.yml', yaml);
+            console.log('latest.yml generated for', zip, 'size=' + size, 'sha512=' + sha512.substring(0, 20) + '...');
+          "
+
+      - name: Upload release artifacts as workflow artifacts
         uses: actions/upload-artifact@v4
         with:
           name: wmux-release
-          path: wmux-${{ steps.version.outputs.version }}-win-x64.zip
+          path: |
+            wmux-${{ steps.version.outputs.version }}-win-x64.zip
+            latest.yml
 
       # ── GitHub Release ─────────────────────────────────────
       - name: Create or update GitHub Release
@@ -137,6 +167,8 @@ jobs:
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: wmux ${{ steps.version.outputs.tag }}
-          files: wmux-${{ steps.version.outputs.version }}-win-x64.zip
+          files: |
+            wmux-${{ steps.version.outputs.version }}-win-x64.zip
+            latest.yml
           draft: false
           generate_release_notes: true
