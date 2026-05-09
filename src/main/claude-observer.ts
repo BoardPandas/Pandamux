@@ -44,19 +44,12 @@ const PATTERNS = {
   // "Skill(name)" or "Skill(ns:name)"
   skillLoad: /Skill\(([^)]+)\)/,
 
-  // "● Bash(...)" / "⏩ Bash(...)" — various bullet styles Claude Code uses
-  toolUse: /[●⏩▸◆]\s*(Bash|Read|Write|Edit|Grep|Glob|Agent|WebSearch|WebFetch|LSP|Task)\s*\(/i,
-  mcpTool: /[●⏩▸◆]\s*plugin:([^:]+):([^\s]+)/,
-  // "⎿  …" tool result lines mean a tool is actively running
-  toolResult: /^[⎿⎾]/,
+  // "● Bash(...)" or "● plugin:name:tool (MCP)"
+  toolUse: /●\s*(Bash|Read|Write|Edit|Grep|Glob|Agent|WebSearch|WebFetch)\s*\(/,
+  mcpTool: /●\s*plugin:([^:]+):([^\s]+)/,
 
-  // "✻ Baked for 3m 10s" / "✻ Cost: $0.05" / alt chars — Claude finished responding
-  responseDone: /[✻✦⏎]\s*(Baked for|Cost:|Tokens:)/,
-
-  // Claude Code thinking spinner: "+Symbioting…", "✻ Cogitating…", "* Thinking…" etc.
-  // The spinner updates via \r (carriage return, in-place), so we match against the raw chunk too.
-  // Pattern: optional 0-4 non-word prefix chars, then any capitalized *ing word, then ellipsis.
-  thinkingActive: /^.{0,4}[A-Z][a-z]{3,}ing[…\.]+/,
+  // "✻ Baked for 3m 10s" or "✻ Cost: $0.05" — Claude finished responding
+  responseDone: /✻\s*(Baked for|Cost:)/,
 };
 
 function getOrCreate(surfaceId: SurfaceId): ClaudeActivity {
@@ -74,9 +67,7 @@ function getOrCreate(surfaceId: SurfaceId): ClaudeActivity {
  */
 export function observePtyData(surfaceId: SurfaceId, data: string): void {
   const clean = stripAnsi(data);
-  // Split on \n AND \r — the thinking spinner updates in-place via \r, never \n,
-  // so splitting only on \n would make us blind to all thinking activity.
-  const lines = clean.split(/\r?\n|\r/);
+  const lines = clean.split('\n');
 
   let changed = false;
   const activity = getOrCreate(surfaceId);
@@ -162,22 +153,6 @@ export function observePtyData(surfaceId: SurfaceId, data: string): void {
     const mcpMatch = trimmed.match(PATTERNS.mcpTool);
     if (mcpMatch) {
       activity.lastTool = `${mcpMatch[1]}:${mcpMatch[2]}`;
-      activity.isDone = false;
-      changed = true;
-      continue;
-    }
-
-    // Tool result line (⎿) — means a tool is actively running, clear done state
-    if (PATTERNS.toolResult.test(trimmed) && activity.isDone) {
-      activity.isDone = false;
-      changed = true;
-      continue;
-    }
-
-    // Thinking spinner: "+Symbioting…", "✻ Cogitating…", "* Brewing…" etc.
-    // These arrive via \r (in-place overwrite) and carry the elapsed thinking time.
-    // Matching them keeps isDone=false and lastUpdate fresh throughout thinking phases.
-    if (PATTERNS.thinkingActive.test(trimmed)) {
       activity.isDone = false;
       changed = true;
       continue;
