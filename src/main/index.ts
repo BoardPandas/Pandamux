@@ -6,13 +6,15 @@ import { PortScanner } from './port-scanner';
 import { GitPoller } from './git-poller';
 import { PrPoller } from './pr-poller';
 import { CDPProxy } from './cdp-proxy';
-import { IPC_CHANNELS } from '../shared/types';
+import { IPC_CHANNELS, SurfaceId } from '../shared/types';
 import { getPipePath } from '../shared/instance';
 import { loadSession, saveSession, handleVersionChange, SessionData } from './session-persistence';
 import { WindowManager } from './window-manager';
 import { initAutoUpdater } from './updater';
 import { initUpdateChecker, getLatestUpdate } from './update-checker';
 import { ensureClaudeContext, ensureClaudeHooks, ensureChromeDevtoolsConfig, ensureOrchestratorPlugin } from './claude-context';
+import { ensureOpencodeContext, ensureOpencodePlugin } from './opencode-context';
+import { applyExternalActivity } from './claude-observer';
 import { startOrchestrationWatcher } from './orchestration-watcher';
 import fs from 'fs';
 import path from 'path';
@@ -170,6 +172,8 @@ app.whenReady().then(() => {
   ensureClaudeHooks();
   ensureChromeDevtoolsConfig();
   ensureOrchestratorPlugin();
+  ensureOpencodeContext();
+  ensureOpencodePlugin();
 
   // IPC: renderer pushes session state (auto-save response or explicit save)
   ipcMain.on('session:save', (event, data: SessionData) => {
@@ -941,6 +945,19 @@ app.whenReady().then(() => {
             }, delay);
           }
         }
+        respond({ ok: true });
+        break;
+      }
+
+      case 'agent.activity': {
+        const p = request.params || {};
+        const surfaceId = p.surfaceId as SurfaceId;
+        if (!surfaceId) { respondError(-32602, 'surfaceId required'); break; }
+        applyExternalActivity(surfaceId, {
+          lastTool: p.tool || undefined,
+          activeSkill: p.skill || undefined,
+          isDone: typeof p.done === 'boolean' ? p.done : undefined,
+        });
         respond({ ok: true });
         break;
       }

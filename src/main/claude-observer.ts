@@ -180,6 +180,25 @@ export function clearActivity(surfaceId: SurfaceId): void {
 }
 
 /**
+ * Merge externally-sourced activity (e.g. pushed by the OpenCode plugin over
+ * the pipe) into the shared per-surface map and broadcast it on the same
+ * channel the sidebar already listens to. Agent-agnostic — Claude's own
+ * observer and external producers converge here.
+ */
+export function applyExternalActivity(
+  surfaceId: SurfaceId,
+  partial: Partial<ClaudeActivity>,
+): void {
+  const activity = getOrCreate(surfaceId);
+  if (partial.lastTool !== undefined) activity.lastTool = partial.lastTool;
+  if (partial.activeSkill !== undefined) activity.activeSkill = partial.activeSkill;
+  if (partial.isDone !== undefined) activity.isDone = partial.isDone;
+  if (partial.agents !== undefined) activity.agents = partial.agents;
+  activity.lastUpdate = Date.now();
+  broadcast(surfaceId, activity);
+}
+
+/**
  * Broadcast activity update to all renderer windows.
  */
 function broadcast(surfaceId: SurfaceId, activity: ClaudeActivity): void {

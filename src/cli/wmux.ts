@@ -353,6 +353,18 @@ async function main() {
         break;
       }
 
+      case 'agent-activity': {
+        const surfaceId = getFlag(args, '--surface') || process.env.WMUX_SURFACE_ID;
+        if (!surfaceId) { console.error('agent-activity: --surface or WMUX_SURFACE_ID required'); process.exit(1); }
+        const params: Record<string, any> = { surfaceId };
+        const tool = getFlag(args, '--tool'); if (tool) params.tool = tool;
+        const skill = getFlag(args, '--skill'); if (skill) params.skill = skill;
+        if (args.includes('--done')) params.done = true;
+        if (args.includes('--active')) params.done = false;
+        await sendV2('agent.activity', params);
+        break;
+      }
+
       default:
         console.error(`Unknown command: ${command}`);
         printUsage();

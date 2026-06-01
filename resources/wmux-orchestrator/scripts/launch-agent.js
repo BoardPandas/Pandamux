@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// launch-agent.js — Launch claude interactively with prompt from file
+// launch-agent.js — Launch an agent (claude by default, opencode if
+// WMUX_AGENT_CMD=opencode) with the prompt from a file.
 // Usage: node launch-agent.js <prompt-file>
 //
 // Uses execFileSync to bypass all shell quoting issues.
@@ -22,15 +23,23 @@ if (!fs.existsSync(promptFile)) {
 
 const prompt = fs.readFileSync(promptFile, 'utf8');
 
+const agentCmd = (process.env.WMUX_AGENT_CMD || 'claude').toLowerCase();
+
 try {
-  // --dangerously-skip-permissions: auto-approve all tools (interactive mode)
-  // '--' stops Commander.js variadic flags from consuming the prompt
-  // NOTE: do NOT use --bare — it skips keychain/OAuth and causes "Not logged in"
-  execFileSync('claude', [
-    '--dangerously-skip-permissions',
-    '--',
-    prompt
-  ], { stdio: 'inherit' });
+  if (agentCmd === 'opencode') {
+    // opencode run streams formatted progress; the user can watch.
+    // '--' stops flag parsing from consuming the prompt.
+    execFileSync('opencode', ['run', '--', prompt], { stdio: 'inherit' });
+  } else {
+    // --dangerously-skip-permissions: auto-approve all tools (interactive mode)
+    // '--' stops Commander.js variadic flags from consuming the prompt
+    // NOTE: do NOT use --bare — it skips keychain/OAuth and causes "Not logged in"
+    execFileSync('claude', [
+      '--dangerously-skip-permissions',
+      '--',
+      prompt
+    ], { stdio: 'inherit' });
+  }
 } catch (e) {
   process.exit(e.status || 1);
 }
