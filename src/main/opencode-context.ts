@@ -5,21 +5,27 @@ import * as os from 'os';
 const START_MARKER = '<!-- wmux:start';
 const END_MARKER = '<!-- wmux:end -->';
 
-/** Pure: insert/replace the wmux block within existing content, preserving the rest. */
+/**
+ * Pure: insert/replace the wmux block within existing content, preserving the rest.
+ * Trailing whitespace on the block is normalized away so re-applying is idempotent
+ * even when the instructions source ends with a newline (otherwise the trailing
+ * newline accumulates on every run).
+ */
 export function injectWmuxBlock(existing: string, wmuxBlock: string): string {
-  if (existing.trim() === '') return wmuxBlock;
+  const block = wmuxBlock.trimEnd();
+  if (existing.trim() === '') return block;
   const startIdx = existing.indexOf(START_MARKER);
   const endIdx = existing.indexOf(END_MARKER);
   if (startIdx === -1) {
     const separator = existing.endsWith('\n') ? '\n' : '\n\n';
-    return existing + separator + wmuxBlock;
+    return existing + separator + block;
   }
   if (endIdx === -1) {
-    return existing.substring(0, startIdx) + wmuxBlock;
+    return existing.substring(0, startIdx) + block;
   }
   const before = existing.substring(0, startIdx);
   const after = existing.substring(endIdx + END_MARKER.length);
-  return before + wmuxBlock + after;
+  return before + block + after;
 }
 
 function getInstructionsPath(): string {

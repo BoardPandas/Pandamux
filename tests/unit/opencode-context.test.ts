@@ -23,6 +23,19 @@ describe('injectWmuxBlock', () => {
     expect(out.includes('bottom')).toBe(true);
     expect(out.includes(BLOCK)).toBe(true);
   });
+  it('is idempotent when the block source ends with a newline', () => {
+    // Regression: a trailing newline on the source must not accumulate across runs.
+    const blockNl = `${BLOCK}\n`;
+    const first = injectWmuxBlock('', blockNl);
+    const second = injectWmuxBlock(first, blockNl);
+    expect(second).toBe(first);
+  });
+  it('is idempotent when appended after user content', () => {
+    const blockNl = `${BLOCK}\n`;
+    const first = injectWmuxBlock('# My rules\n', blockNl);
+    const second = injectWmuxBlock(first, blockNl);
+    expect(second).toBe(first);
+  });
 });
 
 describe('pluginNeedsUpdate', () => {
