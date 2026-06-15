@@ -5,9 +5,10 @@ import TerminalSettings from './TerminalSettings';
 import NotificationSettings from './NotificationSettings';
 import BrowserSettings from './BrowserSettings';
 import KeyboardSettings from './KeyboardSettings';
+import QuickLaunchSettings from './QuickLaunchSettings';
 import '../../styles/settings.css';
 
-const TABS = ['Sidebar', 'Workspace', 'Terminal', 'Notifications', 'Browser', 'Shortcuts'] as const;
+const TABS = ['Sidebar', 'Workspace', 'Terminal', 'Notifications', 'Browser', 'Profiles', 'Shortcuts'] as const;
 
 interface SettingsWindowProps {
   onClose: () => void;
@@ -48,6 +49,7 @@ export default function SettingsWindow({ onClose }: SettingsWindowProps) {
             {activeTab === 'Terminal' && <TerminalSettings />}
             {activeTab === 'Notifications' && <NotificationSettings />}
             {activeTab === 'Browser' && <BrowserSettings />}
+            {activeTab === 'Profiles' && <QuickLaunchSettings />}
             {activeTab === 'Shortcuts' && <KeyboardSettings />}
           </div>
         </div>

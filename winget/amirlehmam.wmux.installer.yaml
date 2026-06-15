@@ -1,0 +1,25 @@
+# Winget installer manifest (issue #32).
+# wmux ships as a portable zip (no code-signing → SmartScreen flags installers
+# harder than zip extractions), so winget treats it as InstallerType: zip with a
+# nested portable exe. This adds a `wmux` command alias to PATH and lets users
+# install/upgrade via `winget install amirlehmam.wmux`.
+PackageIdentifier: amirlehmam.wmux
+PackageVersion: 0.8.6
+Platform:
+  - Windows.Desktop
+MinimumOSVersion: 10.0.0.0
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+  - RelativeFilePath: wmux.exe
+    PortableCommandAlias: wmux
+Architecture: x64
+Scope: user
+UpgradeBehavior: install
+ReleaseDate: 2026-06-15
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/amirlehmam/wmux/releases/download/v0.8.6/wmux-0.8.6-win-x64.zip
+    InstallerSha256: A5B4D244AB41CD805696D89A797E257D8A204434CEFC50D3EC8E135C897CE6EE
+ManifestType: installer
+ManifestVersion: 1.6.0

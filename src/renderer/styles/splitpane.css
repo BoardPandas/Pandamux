@@ -176,6 +176,27 @@
 }
 .surface-tab-bar__new-menu button:hover { background: rgba(0,145,255,0.18); color: #fff; }
 .surface-tab-bar__new-menu-icon { display: inline-block; width: 14px; text-align: center; color: #888; }
+.surface-tab-bar__new-menu-sep {
+  height: 1px;
+  margin: 4px 2px;
+  background: rgba(255,255,255,0.10);
+}
+.surface-tab-bar__new-menu-profile-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.surface-tab-bar__new-menu-badge {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #7a7a7a;
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 3px;
+  padding: 0 4px;
+  line-height: 14px;
+}
 .surface-tab-bar__split-btn {
   display: flex;
   align-items: center;

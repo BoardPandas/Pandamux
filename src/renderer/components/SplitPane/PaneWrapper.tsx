@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { PaneId, SplitNode, SurfaceId, WorkspaceId } from '../../../shared/types';
+import { PaneId, SplitNode, SurfaceId, WorkspaceId, QuickLaunchProfile } from '../../../shared/types';
 import { removeLeaf, splitNode } from '../../store/split-utils';
 import TerminalPane from '../Terminal/TerminalPane';
 import BrowserPane from '../Browser/BrowserPane';
@@ -33,6 +33,8 @@ export default function PaneWrapper({ leaf, workspaceId, isFocused }: PaneWrappe
   const reorderSurface = useStore((s) => s.reorderSurface);
   const shortcuts = useStore((s) => s.shortcuts);
   const workspace = useStore((s) => s.workspaces.find(w => w.id === workspaceId));
+  const globalProfiles = useStore((s) => s.quickLaunchProfiles);
+  const [projectProfiles, setProjectProfiles] = useState<QuickLaunchProfile[]>([]);
 
   const surfaceIds = useMemo(() => surfaces.map((s) => s.id), [surfaces]);
 
@@ -181,9 +183,10 @@ export default function PaneWrapper({ leaf, workspaceId, isFocused }: PaneWrappe
           {surface.type === 'terminal' && (
             <TerminalPane
               surfaceId={surface.id}
-              shell={workspace?.shell}
-              cwd={workspace?.cwd}
+              shell={surface.shell || workspace?.shell}
+              cwd={surface.cwd || workspace?.cwd}
               colorScheme={surface.colorScheme}
+              startupCommands={surface.startupCommands}
               focused={isFocused && isActive}
               visible={isVisible}
               showFindBar={findBarVisible && isFocused && isActive}
@@ -191,7 +194,9 @@ export default function PaneWrapper({ leaf, workspaceId, isFocused }: PaneWrappe
               copyModeActive={copyModeActive && isFocused && isActive}
             />
           )}
-          {surface.type === 'browser' && <BrowserPane surfaceId={surface.id} />}
+          {surface.type === 'browser' && (
+            <BrowserPane surfaceId={surface.id} {...(surface.url ? { initialUrl: surface.url } : {})} />
+          )}
           {surface.type === 'markdown' && <MarkdownPane surfaceId={surface.id} />}
           {surface.type === 'diff' && <DiffPane surfaceId={surface.id} cwd={workspace?.cwd} />}
         </div>
@@ -208,6 +213,53 @@ export default function PaneWrapper({ leaf, workspaceId, isFocused }: PaneWrappe
     if (activeWorkspaceId) {
       addSurface(activeWorkspaceId, paneId, type);
     }
+  };
+
+  // Load project-level quick-launch profiles from <workspace cwd>/.wmux.json
+  // (issue #32, mirrors cmux's cmux.json). Reloads when the workspace cwd changes.
+  useEffect(() => {
+    let cancelled = false;
+    const dir = workspace?.cwd;
+    if (!dir || !window.wmux?.config?.getProjectProfiles) {
+      setProjectProfiles([]);
+      return;
+    }
+    window.wmux.config.getProjectProfiles(dir)
+      .then((profiles: QuickLaunchProfile[]) => {
+        if (!cancelled) setProjectProfiles(Array.isArray(profiles) ? profiles : []);
+      })
+      .catch(() => { if (!cancelled) setProjectProfiles([]); });
+    return () => { cancelled = true; };
+  }, [workspace?.cwd]);
+
+  const quickLaunchProfiles = useMemo(
+    () => [
+      ...globalProfiles.map((p) => ({ ...p, source: 'global' as const })),
+      ...projectProfiles.map((p) => ({ ...p, source: 'project' as const })),
+    ],
+    [globalProfiles, projectProfiles],
+  );
+
+  const handleNewSurfaceProfile = (profile: QuickLaunchProfile) => {
+    if (!activeWorkspaceId) return;
+    // Relative profile cwd (e.g. "./server" in a project .wmux.json) resolves
+    // against the workspace cwd; otherwise node-pty would resolve it against the
+    // app directory. Absolute paths (drive-letter, UNC, or POSIX root) pass through.
+    const resolveCwd = (cwd?: string): string | undefined => {
+      if (!cwd) return undefined;
+      const isAbsolute = /^[a-zA-Z]:[\\/]/.test(cwd) || cwd.startsWith('\\\\') || cwd.startsWith('/');
+      const base = workspace?.cwd;
+      if (isAbsolute || !base) return cwd;
+      const rel = cwd.replace(/^[.][\\/]/, '').replace(/\//g, '\\');
+      return base.replace(/[\\/]+$/, '') + '\\' + rel;
+    };
+    addSurface(activeWorkspaceId, paneId, profile.type, {
+      customTitle: profile.name,
+      shell: profile.shell,
+      cwd: resolveCwd(profile.cwd),
+      startupCommands: profile.startupCommands,
+      url: profile.url,
+    });
   };
 
   const handleSelectSurface = (index: number) => {
@@ -319,6 +371,8 @@ export default function PaneWrapper({ leaf, workspaceId, isFocused }: PaneWrappe
         onClose={handleCloseSurface}
         onNew={handleNewSurface}
         onNewTyped={handleNewSurfaceTyped}
+        profiles={quickLaunchProfiles}
+        onNewProfile={handleNewSurfaceProfile}
         onClosePane={handleClosePane}
         onSplitRight={handleSplitRight}
         onSplitDown={handleSplitDown}

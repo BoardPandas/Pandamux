@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { ThemeConfig } from '../shared/types';
+import { ThemeConfig, QuickLaunchProfile, SurfaceType } from '../shared/types';
 import { parseThemeFileContent, loadBundledThemes } from './theme-loader';
 
 // ---------------------------------------------------------------------------
@@ -21,6 +21,10 @@ function normalizeColor(color: string): string {
 
 interface WTProfile {
   guid?: string;
+  name?: string;
+  commandline?: string;
+  startingDirectory?: string;
+  hidden?: boolean;
   font?: { face?: string; size?: number };
   fontSize?: number;
   fontFace?: string;
@@ -174,6 +178,97 @@ export function parseWindowsTerminalConfig(): ThemeConfig | null {
     return parseWindowsTerminalSettingsJson(settings);
   } catch {
     return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Quick-launch profiles (issue #32)
+// ---------------------------------------------------------------------------
+
+const VALID_SURFACE_TYPES: SurfaceType[] = ['terminal', 'browser', 'markdown'];
+
+/** Coerce one raw config entry into a validated QuickLaunchProfile, or null. */
+function sanitizeProfile(raw: any, index: number, source: 'global' | 'project'): QuickLaunchProfile | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const name = typeof raw.name === 'string' ? raw.name.trim() : '';
+  if (!name) return null;
+  const type: SurfaceType = VALID_SURFACE_TYPES.includes(raw.type) ? raw.type : 'terminal';
+  const startupCommands = Array.isArray(raw.startupCommands)
+    ? raw.startupCommands.filter((c: unknown): c is string => typeof c === 'string' && c.length > 0)
+    : undefined;
+  return {
+    id: typeof raw.id === 'string' && raw.id ? raw.id : `${source}-${index}-${name}`,
+    name,
+    type,
+    source,
+    ...(typeof raw.icon === 'string' ? { icon: raw.icon } : {}),
+    ...(typeof raw.shell === 'string' ? { shell: raw.shell } : {}),
+    ...(typeof raw.cwd === 'string' ? { cwd: raw.cwd } : {}),
+    ...(startupCommands && startupCommands.length ? { startupCommands } : {}),
+    ...(typeof raw.url === 'string' ? { url: raw.url } : {}),
+  };
+}
+
+/**
+ * Read project-level quick-launch profiles from `<cwd>/.wmux.json` (mirrors
+ * cmux's `cmux.json`). Shape: `{ "profiles": [ { name, type, cwd, startupCommands, ... } ] }`.
+ * Returns [] when the file is absent or malformed — never throws.
+ */
+export function loadProjectProfiles(cwd: string): QuickLaunchProfile[] {
+  try {
+    if (!cwd || typeof cwd !== 'string') return [];
+    const file = path.join(cwd, '.wmux.json');
+    if (!fs.existsSync(file)) return [];
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    const list = Array.isArray(parsed) ? parsed : parsed?.profiles;
+    if (!Array.isArray(list)) return [];
+    return list
+      .map((raw, i) => sanitizeProfile(raw, i, 'project'))
+      .filter((p): p is QuickLaunchProfile => p !== null);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Import Windows Terminal profiles as quick-launch profiles, mapping each
+ * non-hidden profile's `commandline` (→ shell) and `startingDirectory` (→ cwd).
+ * This finishes the WT import that previously kept only the color scheme.
+ */
+export function importWindowsTerminalProfiles(): QuickLaunchProfile[] {
+  try {
+    const localAppData = process.env.LOCALAPPDATA;
+    if (!localAppData) return [];
+    const settingsPath = path.join(
+      localAppData,
+      'Packages',
+      'Microsoft.WindowsTerminal_8wekyb3d8bbwe',
+      'LocalState',
+      'settings.json',
+    );
+    if (!fs.existsSync(settingsPath)) return [];
+    const settings: WTSettings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+    let profiles: WTProfile[] = [];
+    if (Array.isArray(settings.profiles)) {
+      profiles = settings.profiles;
+    } else if (settings.profiles && Array.isArray(settings.profiles.list)) {
+      profiles = settings.profiles.list;
+    }
+    return profiles
+      .filter((p) => !p.hidden && (p.name || p.commandline))
+      .map((p, i) => {
+        const name = (p.name || p.commandline || `Profile ${i + 1}`).trim();
+        return {
+          id: `wt-${p.guid || i}`,
+          name,
+          type: 'terminal' as SurfaceType,
+          source: 'global' as const,
+          ...(p.commandline ? { shell: p.commandline } : {}),
+          ...(p.startingDirectory ? { cwd: p.startingDirectory.replace(/%([^%]+)%/g, (_m, v) => process.env[v] || _m) } : {}),
+        };
+      });
+  } catch {
+    return [];
   }
 }
 

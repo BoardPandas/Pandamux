@@ -32,6 +32,8 @@ interface UseTerminalOptions {
   focused?: boolean;
   /** Per-surface color scheme override — takes priority over terminalPrefs.theme. */
   colorScheme?: string;
+  /** Quick-launch profile commands, run once after the PTY is first created (issue #32). */
+  startupCommands?: string[];
 }
 
 interface UseTerminalResult {
@@ -122,7 +124,7 @@ async function fetchTheme(name: string): Promise<ThemeConfig> {
   }
 }
 
-export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = true, colorScheme }: UseTerminalOptions = {}): UseTerminalResult {
+export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = true, colorScheme, startupCommands }: UseTerminalOptions = {}): UseTerminalResult {
   const terminalRef = useRef<HTMLDivElement | null>(null);
   const xtermRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -130,6 +132,10 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
   const ptyIdRef = useRef<string | null>(null);
   const cleanupFnsRef = useRef<Array<() => void>>([]);
   const rendererRef = useRef<RendererHandle | null>(null);
+  // Captured in a ref so the (mount-once) terminal effect can read the latest
+  // startup commands without listing them as a dependency.
+  const startupCommandsRef = useRef<string[] | undefined>(startupCommands);
+  startupCommandsRef.current = startupCommands;
 
   // Subscribe to relevant settings so changes apply live.
   const prefs = useStore((s) => s.terminalPrefs);
@@ -400,6 +406,23 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
       }
     };
 
+    // Run a quick-launch profile's startup commands once, after the shell has had
+    // a moment to load its integration script and print a prompt. ConPTY buffers
+    // input, so the short delay just avoids the commands echoing before the
+    // banner; it doesn't gate correctness. Only fresh PTYs run these — re-mounting
+    // a keep-alive tab attaches to an existing PTY and skips this path.
+    const runStartupCommands = (id: string) => {
+      const cmds = startupCommandsRef.current;
+      if (!cmds || cmds.length === 0) return;
+      setTimeout(() => {
+        for (const cmd of cmds) {
+          if (typeof cmd === 'string' && cmd.length > 0) {
+            window.wmux.pty.write(id, cmd + '\r');
+          }
+        }
+      }, 600);
+    };
+
     // Resolve effective shell: explicit (workspace) > user default preference > main-process fallback.
     // Read prefs at spawn time so changing the default later doesn't re-spawn live PTYs.
     const effectiveShell = shell || useStore.getState().workspacePrefs.defaultShell || '';
@@ -415,6 +438,7 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
             .then((created: { id: string; shell: string }) => {
               setResolvedShellForSurface(surfaceId, created.shell);
               attachToPty(created.id);
+              runStartupCommands(created.id);
             })
             .catch((err: unknown) => terminal.writeln(`\r\n\x1b[31m[failed to create PTY: ${err}]\x1b[0m`));
         }
@@ -425,6 +449,7 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
         .then((created: { id: string; shell: string }) => {
           setResolvedShellForSurface(surfaceId, created.shell);
           attachToPty(created.id);
+          runStartupCommands(created.id);
         })
         .catch((err: unknown) => terminal.writeln(`\r\n\x1b[31m[failed to create PTY: ${err}]\x1b[0m`));
     }

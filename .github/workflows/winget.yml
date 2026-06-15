@@ -1,0 +1,33 @@
+# Auto-publish each wmux release to the Windows Package Manager (winget).
+# Issue #32: lowest-friction distribution win — no code-signing required.
+#
+# ONE-TIME SETUP (owner):
+#   1. Manually submit winget/*.yaml to https://github.com/microsoft/winget-pkgs
+#      once (fork → add manifests/a/amirlehmam/wmux/0.8.6/ → PR) to bootstrap the
+#      package. `winget-releaser` only UPDATES an existing package.
+#   2. Fork microsoft/winget-pkgs under your account.
+#   3. Create a classic PAT with `public_repo` scope and save it as the repo
+#      secret WINGET_TOKEN.
+# After that, every published GitHub release auto-opens a winget-pkgs PR.
+name: winget
+
+on:
+  release:
+    types: [released]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # Skip silently if the token hasn't been configured yet (no noisy failures).
+    if: ${{ github.repository == 'amirlehmam/wmux' }}
+    steps:
+      - name: Publish to winget
+        if: ${{ env.WINGET_TOKEN != '' }}
+        uses: vedantmgoyal9/winget-releaser@v2
+        with:
+          identifier: amirlehmam.wmux
+          installers-regex: 'wmux-.*-win-x64\.zip$'
+          token: ${{ secrets.WINGET_TOKEN }}
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}

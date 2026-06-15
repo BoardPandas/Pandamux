@@ -1,4 +1,5 @@
 import { StateCreator } from 'zustand';
+import { QuickLaunchProfile } from '../../shared/types';
 
 // ─── Persistence helpers (issue #12 + issue #15 + issue #19) ─────────────────
 // Zustand has no persistence middleware here, so any pref that lives only in
@@ -20,6 +21,7 @@ const STORAGE_KEYS = {
   notificationPrefs: 'wmux-notification-prefs',
   browserPrefs:      'wmux-browser-prefs',
   shortcuts:         'wmux-shortcuts',
+  quickLaunchProfiles: 'wmux-quick-launch-profiles',
 } as const;
 
 // Read the whole settings file once at module load (synchronous IPC). The
@@ -53,6 +55,24 @@ function loadPersisted<T>(key: string): Partial<T> {
   } catch {
     return {};
   }
+}
+
+// Array-valued settings (e.g. quick-launch profiles) need their own loader:
+// loadPersisted returns {} for a missing key, which isn't a usable array.
+function loadPersistedArray<T>(key: string): T[] {
+  const raw = FILE_SETTINGS[key];
+  if (Array.isArray(raw)) return raw as T[];
+  try {
+    const ls = typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null;
+    if (ls) {
+      const parsed = JSON.parse(ls);
+      if (Array.isArray(parsed)) {
+        try { (globalThis as any).window?.wmux?.settings?.set?.(key, parsed); } catch { /* no-op */ }
+        return parsed as T[];
+      }
+    }
+  } catch { /* fall through */ }
+  return [];
 }
 
 function persist<T>(key: string, value: T): void {
@@ -284,6 +304,8 @@ export interface SettingsSlice {
   terminalPrefs: TerminalPrefs;
   notificationPrefs: NotificationPrefs;
   browserPrefs: BrowserPrefs;
+  /** Global quick-launch profiles surfaced in the `+` caret dropdown (issue #32). */
+  quickLaunchProfiles: QuickLaunchProfile[];
 
   setShortcut(action: ShortcutAction, binding: ShortcutBinding): void;
   resetShortcuts(): void;
@@ -293,6 +315,7 @@ export interface SettingsSlice {
   setTerminalPrefs(prefs: Partial<TerminalPrefs>): void;
   setNotificationPrefs(prefs: Partial<NotificationPrefs>): void;
   setBrowserPrefs(prefs: Partial<BrowserPrefs>): void;
+  setQuickLaunchProfiles(profiles: QuickLaunchProfile[]): void;
 }
 
 // ─── Slice creator ────────────────────────────────────────────────────────────
@@ -305,6 +328,7 @@ export const createSettingsSlice: StateCreator<SettingsSlice> = (set) => ({
   terminalPrefs:     { ...DEFAULT_TERMINAL_PREFS,     ...loadPersisted<TerminalPrefs>(STORAGE_KEYS.terminalPrefs) },
   notificationPrefs: { ...DEFAULT_NOTIFICATION_PREFS, ...loadPersisted<NotificationPrefs>(STORAGE_KEYS.notificationPrefs) },
   browserPrefs:      { ...DEFAULT_BROWSER_PREFS,      ...loadPersisted<BrowserPrefs>(STORAGE_KEYS.browserPrefs) },
+  quickLaunchProfiles: loadPersistedArray<QuickLaunchProfile>(STORAGE_KEYS.quickLaunchProfiles),
 
   setShortcut(action: ShortcutAction, binding: ShortcutBinding): void {
     set((state) => {
@@ -361,5 +385,10 @@ export const createSettingsSlice: StateCreator<SettingsSlice> = (set) => ({
       persist(STORAGE_KEYS.browserPrefs, merged);
       return { browserPrefs: merged };
     });
+  },
+
+  setQuickLaunchProfiles(profiles: QuickLaunchProfile[]): void {
+    persist(STORAGE_KEYS.quickLaunchProfiles, profiles);
+    set({ quickLaunchProfiles: profiles });
   },
 });

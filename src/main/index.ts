@@ -7,7 +7,7 @@ import { GitPoller } from './git-poller';
 import { PrPoller } from './pr-poller';
 import { CDPProxy } from './cdp-proxy';
 import { IPC_CHANNELS, SurfaceId } from '../shared/types';
-import { getPipePath } from '../shared/instance';
+import { getPipePath, getAppDataDir } from '../shared/instance';
 import { loadSession, saveSession, handleVersionChange, SessionData } from './session-persistence';
 import { WindowManager } from './window-manager';
 import { initAutoUpdater } from './updater';
@@ -166,7 +166,31 @@ app.setAppUserModelId('com.wmux.app');
 // Auto-strip MOTW on startup so users never see security warnings or pinning failures
 stripMotw();
 
+// Single-instance lock (issue #32). Outside a wmux-spawned shell, `wmux` on PATH
+// resolves to the GUI exe rather than the CLI, so `wmux browser open <url>` (and
+// any stray re-launch) would otherwise spawn a SECOND window and ignore its args.
+// Holding the lock makes the second launch hand off to the running instance,
+// which just focuses its window. Named instances (WMUX_INSTANCE) point Electron's
+// userData at their own dir so the lock is per-instance and dev/prod still coexist.
+if (process.env.WMUX_INSTANCE?.trim()) {
+  app.setPath('userData', getAppDataDir());
+}
+const gotInstanceLock = app.requestSingleInstanceLock();
+if (!gotInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    const win = BrowserWindow.getAllWindows()[0];
+    if (win && !win.isDestroyed()) {
+      if (win.isMinimized()) win.restore();
+      win.focus();
+    }
+  });
+}
+
 app.whenReady().then(() => {
+  // A losing second instance is already quitting; don't run startup side effects.
+  if (!gotInstanceLock) return;
   // Inject wmux instructions into ~/.claude/CLAUDE.md for Claude Code awareness
   ensureClaudeContext();
   ensureClaudeHooks();

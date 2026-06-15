@@ -8,7 +8,7 @@ import { PtyManager } from './pty-manager';
 import { NotificationManager } from './notification-manager';
 import { detectShells } from './shell-detector';
 import { getDefaultTheme, getThemeByName, loadBundledThemes } from './theme-loader';
-import { parseWindowsTerminalConfig, parseGhosttyConfig } from './config-loader';
+import { parseWindowsTerminalConfig, parseGhosttyConfig, loadProjectProfiles, importWindowsTerminalProfiles } from './config-loader';
 import { loadUserConfig, getConfigPath } from './user-config';
 import { WindowManager } from './window-manager';
 import { CDPBridge } from './cdp-bridge';
@@ -113,6 +113,14 @@ export function registerIpcHandlers(windowManager: WindowManager, cdpProxyInstan
     return parseGhosttyConfig();
   });
 
+  // Quick-launch profiles (issue #32): read project `.wmux.json` and import WT profiles.
+  ipcMain.handle('config:getProjectProfiles', async (_event, cwd: string) => {
+    return loadProjectProfiles(cwd);
+  });
+  ipcMain.handle('config:importWindowsTerminalProfiles', async () => {
+    return importWindowsTerminalProfiles();
+  });
+
   // User config (~/.wmux/config.toml) — read on startup, reloadable at runtime.
   ipcMain.handle(IPC_CHANNELS.CONFIG_GET_USER_CONFIG, async () => {
     return loadUserConfig();
@@ -144,6 +152,14 @@ export function registerIpcHandlers(windowManager: WindowManager, cdpProxyInstan
     // Flash taskbar
     if (window && !window.isDestroyed()) {
       notificationManager.flashTaskbar(window);
+    }
+    // Ask the renderer to play the notification sound. The main process can't
+    // play audio (no Web Audio API), and only the renderer knows the user's
+    // `notificationPrefs.sound` preference — it decides whether to actually
+    // play. Sending here makes this the single chokepoint for every fired
+    // notification (OSC 9/99/777 + App.tsx) regardless of call-site (issue #32).
+    if (window && !window.isDestroyed()) {
+      window.webContents.send('notification:play-sound');
     }
   });
 

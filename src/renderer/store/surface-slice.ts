@@ -12,7 +12,14 @@ export interface SurfaceSlice {
     workspaceId: WorkspaceId,
     paneId: PaneId,
     type: SurfaceType,
-    options?: { colorScheme?: string; customTitle?: string },
+    options?: {
+      colorScheme?: string;
+      customTitle?: string;
+      shell?: string;
+      cwd?: string;
+      startupCommands?: string[];
+      url?: string;
+    },
   ) => SurfaceId;
 
   /** Close a surface; if it's the last one in the pane, the pane is removed */
@@ -71,6 +78,10 @@ export const createSurfaceSlice: StateCreator<SliceState, [], [], SurfaceSlice> 
       type,
       ...(options?.colorScheme ? { colorScheme: options.colorScheme } : {}),
       ...(options?.customTitle ? { customTitle: options.customTitle } : {}),
+      ...(options?.shell ? { shell: options.shell } : {}),
+      ...(options?.cwd ? { cwd: options.cwd } : {}),
+      ...(options?.startupCommands?.length ? { startupCommands: options.startupCommands } : {}),
+      ...(options?.url ? { url: options.url } : {}),
     };
     const newSurfaces = [...leaf.surfaces, newSurface];
     const newActiveSurfaceIndex = newSurfaces.length - 1;

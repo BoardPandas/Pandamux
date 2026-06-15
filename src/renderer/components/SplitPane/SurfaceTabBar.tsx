@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { SurfaceRef, SurfaceId, PaneId, WorkspaceId } from '../../../shared/types';
+import { SurfaceRef, SurfaceId, PaneId, WorkspaceId, QuickLaunchProfile } from '../../../shared/types';
 import { useStore } from '../../store';
 
 interface SurfaceTabBarProps {
@@ -11,6 +11,9 @@ interface SurfaceTabBarProps {
   onClose: (surfaceId: SurfaceId) => void;
   onNew: () => void;
   onNewTyped?: (type: 'terminal' | 'browser' | 'markdown') => void;
+  /** Quick-launch profiles surfaced in the `+` caret dropdown (issue #32). */
+  profiles?: QuickLaunchProfile[];
+  onNewProfile?: (profile: QuickLaunchProfile) => void;
   onClosePane?: () => void;
   onSplitRight?: () => void;
   onSplitDown?: () => void;
@@ -65,6 +68,8 @@ export default function SurfaceTabBar({
   onClose,
   onNew,
   onNewTyped,
+  profiles,
+  onNewProfile,
   onClosePane,
   onSplitRight,
   onSplitDown,
@@ -144,6 +149,11 @@ export default function SurfaceTabBar({
     if (onNewTyped) onNewTyped(type);
     else onNew();
   }, [onNewTyped, onNew]);
+
+  const pickProfile = useCallback((profile: QuickLaunchProfile) => {
+    setNewMenuOpen(false);
+    onNewProfile?.(profile);
+  }, [onNewProfile]);
 
   // Always show tab bar (even for 1 surface — like browser tabs)
   return (
@@ -292,6 +302,28 @@ export default function SurfaceTabBar({
               <button role="menuitem" onClick={() => pickNew('markdown')}>
                 <span className="surface-tab-bar__new-menu-icon">{surfaceIcon('markdown', false)}</span> Markdown
               </button>
+              {profiles && profiles.length > 0 && (
+                <>
+                  <div className="surface-tab-bar__new-menu-sep" role="separator" />
+                  {profiles.map((profile) => (
+                    <button
+                      key={profile.id}
+                      role="menuitem"
+                      className="surface-tab-bar__new-menu-profile"
+                      onClick={() => pickProfile(profile)}
+                      title={profile.source === 'project' ? 'Project profile (.wmux.json)' : 'Global profile'}
+                    >
+                      <span className="surface-tab-bar__new-menu-icon">
+                        {profile.icon || surfaceIcon(profile.type, false)}
+                      </span>
+                      <span className="surface-tab-bar__new-menu-profile-name">{profile.name}</span>
+                      {profile.source === 'project' && (
+                        <span className="surface-tab-bar__new-menu-badge">project</span>
+                      )}
+                    </button>
+                  ))}
+                </>
+              )}
             </div>
           )}
         </div>

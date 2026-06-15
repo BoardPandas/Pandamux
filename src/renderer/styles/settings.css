@@ -354,3 +354,33 @@
   max-width: 120px;
   line-height: 1.3;
 }
+
+/* ─── Quick-launch profiles (issue #32) ─────────────────────────────────── */
+.settings-button {
+  background: #2a2a2a;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  color: #fdfff1;
+  font-size: 12.5px;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.settings-button:hover { background: #353535; border-color: rgba(255,255,255,0.24); }
+.settings-button--danger { color: #ff8a8a; }
+.settings-button--danger:hover { background: rgba(255,80,80,0.14); border-color: rgba(255,120,120,0.4); }
+.settings-hint { color: #9a9a9a; font-size: 12px; line-height: 1.5; }
+.settings-hint code { background: rgba(255,255,255,0.08); padding: 0 4px; border-radius: 3px; }
+.ql-profile {
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 8px;
+  padding: 10px;
+  margin-bottom: 10px;
+  background: rgba(255,255,255,0.02);
+}
+.ql-profile__head { display: flex; gap: 8px; align-items: center; }
+.ql-profile__name { flex: 1; min-width: 0; }
+.ql-profile__icon { width: 48px; min-width: 48px; text-align: center; }
+.ql-profile__fields { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.ql-profile__fields .settings-input { width: 100%; }
+.ql-profile__commands { resize: vertical; font-family: Consolas, Menlo, Monaco, monospace; }

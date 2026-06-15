@@ -5,7 +5,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const net_1 = __importDefault(require("net"));
-const PIPE_PATH = '\\\\.\\pipe\\wmux';
+// Respect WMUX_PIPE when set (e.g. by a parent wmux running with WMUX_INSTANCE),
+// so the CLI talks to the same instance that spawned the shell.
+const PIPE_PATH = process.env.WMUX_PIPE || '\\\\.\\pipe\\wmux';
 function sendV1(command) {
     return new Promise((resolve, reject) => {
         const client = net_1.default.connect({ path: PIPE_PATH }, () => {
@@ -44,6 +46,21 @@ function sendV2(method, params = {}) {
         client.on('error', (err) => reject(err));
         setTimeout(() => { client.end(); reject(new Error('timeout')); }, 5000);
     });
+}
+// Simple flag helpers shared across commands.
+function getFlag(args, name) {
+    const i = args.indexOf(name);
+    if (i < 0 || i === args.length - 1)
+        return undefined;
+    return args[i + 1];
+}
+function stripFlag(args, name) {
+    const i = args.indexOf(name);
+    if (i < 0)
+        return args;
+    const copy = args.slice();
+    copy.splice(i, i === args.length - 1 ? 1 : 2);
+    return copy;
 }
 async function main() {
     const args = process.argv.slice(2);
@@ -98,8 +115,9 @@ async function main() {
                 break;
             // Surface
             case 'new-surface': {
-                const type = args.find((a, i) => args[i - 1] === '--type') || 'terminal';
-                console.log(JSON.stringify(await sendV2('surface.create', { type }), null, 2));
+                const type = getFlag(args, '--type') || 'terminal';
+                const colorScheme = getFlag(args, '--color-scheme');
+                console.log(JSON.stringify(await sendV2('surface.create', { type, ...(colorScheme ? { colorScheme } : {}) }), null, 2));
                 break;
             }
             case 'close-surface':
@@ -109,13 +127,100 @@ async function main() {
                 console.log(JSON.stringify(await sendV2('surface.focus', { id: args[1] }), null, 2));
                 break;
             case 'list-surfaces':
-                console.log(JSON.stringify(await sendV2('surface.list', { paneId: args.find((a, i) => args[i - 1] === '--pane') }), null, 2));
+                console.log(JSON.stringify(await sendV2('surface.list', { paneId: getFlag(args, '--pane') }), null, 2));
                 break;
+            // Surface: per-pane color scheme override (issue #4)
+            case 'set-color-scheme': {
+                // Two forms:
+                //   wmux set-color-scheme <scheme>            → apply to current surface
+                //   wmux set-color-scheme <surfaceId> <scheme> → apply to a specific surface
+                let surfaceId = args[1];
+                let scheme = args[2];
+                if (!scheme) {
+                    scheme = surfaceId;
+                    surfaceId = process.env.WMUX_SURFACE_ID || '';
+                }
+                if (!surfaceId) {
+                    console.error('No surface id. Pass one as argument or run inside a wmux pane.');
+                    process.exit(1);
+                }
+                if (!scheme) {
+                    console.error('Usage: wmux set-color-scheme [surfaceId] <scheme>');
+                    process.exit(1);
+                }
+                console.log(JSON.stringify(await sendV2('surface.set_color_scheme', { surfaceId, colorScheme: scheme }), null, 2));
+                break;
+            }
+            case 'clear-color-scheme': {
+                const surfaceId = args[1] || process.env.WMUX_SURFACE_ID || '';
+                if (!surfaceId) {
+                    console.error('No surface id. Pass one as argument or run inside a wmux pane.');
+                    process.exit(1);
+                }
+                console.log(JSON.stringify(await sendV2('surface.set_color_scheme', { surfaceId, colorScheme: null }), null, 2));
+                break;
+            }
+            case 'list-themes':
+            case 'themes': {
+                // Discovery for users writing scripts: what names are valid for --color-scheme?
+                console.log(JSON.stringify(await sendV2('theme.list'), null, 2));
+                break;
+            }
+            // User config (~/.wmux/config.toml)
+            case 'reload-config': {
+                // Re-read the TOML dotfile and broadcast the new prefs to every window.
+                console.log(JSON.stringify(await sendV2('config.reload'), null, 2));
+                break;
+            }
+            case 'config': {
+                const sub = args[1];
+                if (sub === 'show' || sub === 'get') {
+                    console.log(JSON.stringify(await sendV2('config.get'), null, 2));
+                }
+                else if (sub === 'reload') {
+                    console.log(JSON.stringify(await sendV2('config.reload'), null, 2));
+                }
+                else if (sub === 'path') {
+                    const home = process.env.USERPROFILE || process.env.HOME || '';
+                    console.log(`${home}\\.wmux\\config.toml`);
+                }
+                else {
+                    console.error('Usage: wmux config <show|reload|path>');
+                    process.exit(1);
+                }
+                break;
+            }
             // Pane
             case 'split': {
                 const direction = args.includes('--down') ? 'down' : 'right';
-                const type = args.find((a, i) => args[i - 1] === '--type') || 'terminal';
-                console.log(JSON.stringify(await sendV2('pane.split', { direction, type }), null, 2));
+                const type = getFlag(args, '--type') || 'terminal';
+                const colorScheme = getFlag(args, '--color-scheme');
+                console.log(JSON.stringify(await sendV2('pane.split', { direction, type, ...(colorScheme ? { colorScheme } : {}) }), null, 2));
+                break;
+            }
+            // "pane <sub>" verb form — mirrors the syntax from the issue example.
+            case 'pane': {
+                const sub = args[1];
+                if (sub === 'new' || sub === 'split') {
+                    const rest = args.slice(2);
+                    const direction = rest.includes('--down') ? 'down' : 'right';
+                    const type = getFlag(rest, '--type') || 'terminal';
+                    const colorScheme = getFlag(rest, '--color-scheme');
+                    console.log(JSON.stringify(await sendV2('pane.split', { direction, type, ...(colorScheme ? { colorScheme } : {}) }), null, 2));
+                }
+                else if (sub === 'close') {
+                    console.log(JSON.stringify(await sendV2('pane.close', { id: args[2] }), null, 2));
+                }
+                else if (sub === 'focus') {
+                    console.log(JSON.stringify(await sendV2('pane.focus', { id: args[2] }), null, 2));
+                }
+                else if (sub === 'list') {
+                    console.log(JSON.stringify(await sendV2('pane.list', { workspaceId: getFlag(args, '--workspace') }), null, 2));
+                }
+                else {
+                    console.error(`Unknown pane subcommand: ${sub}`);
+                    process.exit(1);
+                }
                 break;
             }
             case 'close-pane':
@@ -128,15 +233,55 @@ async function main() {
                 console.log(JSON.stringify(await sendV2('pane.zoom', { id: args[1] }), null, 2));
                 break;
             case 'list-panes':
-                console.log(JSON.stringify(await sendV2('pane.list', { workspaceId: args.find((a, i) => args[i - 1] === '--workspace') }), null, 2));
+                console.log(JSON.stringify(await sendV2('pane.list', { workspaceId: getFlag(args, '--workspace') }), null, 2));
                 break;
             case 'tree':
                 console.log(JSON.stringify(await sendV2('system.tree'), null, 2));
                 break;
-            // Terminal interaction
-            case 'send':
-                console.log(JSON.stringify(await sendV2('surface.send_text', { text: args.slice(1).join(' ') }), null, 2));
+            // Layout
+            case 'layout': {
+                const sub = args[1];
+                if (sub === 'grid') {
+                    const params = {};
+                    for (let i = 2; i < args.length; i += 2) {
+                        if (args[i] === '--count')
+                            params.count = parseInt(args[i + 1], 10);
+                        if (args[i] === '--type')
+                            params.type = args[i + 1];
+                        if (args[i] === '--anchor-surface')
+                            params.anchorSurfaceId = args[i + 1];
+                        if (args[i] === '--anchor-pane')
+                            params.anchorPaneId = args[i + 1];
+                        if (args[i] === '--workspace')
+                            params.workspaceId = args[i + 1];
+                    }
+                    if (!params.count || params.count < 1) {
+                        console.error('--count <N> is required and must be >= 1');
+                        process.exit(1);
+                    }
+                    // If no explicit anchor, fall back to the current shell's surface so the command "just works" from inside a pane.
+                    if (!params.anchorSurfaceId && !params.anchorPaneId && process.env.WMUX_SURFACE_ID) {
+                        params.anchorSurfaceId = process.env.WMUX_SURFACE_ID;
+                    }
+                    console.log(JSON.stringify(await sendV2('layout.grid', params), null, 2));
+                }
+                else {
+                    console.error(`Unknown layout command: ${sub}`);
+                    process.exit(1);
+                }
                 break;
+            }
+            // Terminal interaction
+            case 'send': {
+                // Drop --surface <id> (and its value) from the free-form text args.
+                const surfaceId = getFlag(args, '--surface') || process.env.WMUX_SURFACE_ID;
+                const textArgs = stripFlag(args.slice(1), '--surface');
+                const payload = { text: textArgs.join(' ') };
+                if (surfaceId)
+                    payload.surfaceId = surfaceId;
+                console.log(JSON.stringify(await sendV2('surface.send_text', payload), null, 2));
+                break;
+            }
             case 'send-key': {
                 const key = args[1];
                 const modifiers = [];
@@ -146,7 +291,11 @@ async function main() {
                     modifiers.push('shift');
                 if (args.includes('--alt'))
                     modifiers.push('alt');
-                console.log(JSON.stringify(await sendV2('surface.send_key', { key, modifiers }), null, 2));
+                const surfaceId = getFlag(args, '--surface') || process.env.WMUX_SURFACE_ID;
+                const payload = { key, modifiers };
+                if (surfaceId)
+                    payload.surfaceId = surfaceId;
+                console.log(JSON.stringify(await sendV2('surface.send_key', payload), null, 2));
                 break;
             }
             case 'read-screen': {
@@ -305,6 +454,11 @@ async function main() {
             case 'sidebar-state':
                 console.log(JSON.stringify(await sendV2('sidebar.get_state'), null, 2));
                 break;
+            case 'diff': {
+                const file = args.find((a, i) => args[i - 1] === '--file') || '';
+                console.log(JSON.stringify(await sendV2('diff.refresh', { file }), null, 2));
+                break;
+            }
             case 'hook': {
                 const params = {};
                 for (let i = 1; i < args.length; i += 2) {
@@ -316,6 +470,26 @@ async function main() {
                         params.agentId = args[i + 1];
                 }
                 await sendV2('hook.event', params);
+                break;
+            }
+            case 'agent-activity': {
+                const surfaceId = getFlag(args, '--surface') || process.env.WMUX_SURFACE_ID;
+                if (!surfaceId) {
+                    console.error('agent-activity: --surface or WMUX_SURFACE_ID required');
+                    process.exit(1);
+                }
+                const params = { surfaceId };
+                const tool = getFlag(args, '--tool');
+                if (tool)
+                    params.tool = tool;
+                const skill = getFlag(args, '--skill');
+                if (skill)
+                    params.skill = skill;
+                if (args.includes('--done'))
+                    params.done = true;
+                if (args.includes('--active'))
+                    params.done = false;
+                await sendV2('agent.activity', params);
                 break;
             }
             default:
@@ -341,15 +515,21 @@ Usage: wmux <command> [options]
 
 System:     ping, identify, capabilities, list-windows, focus-window <id>
 Workspace:  new-workspace, close-workspace, select-workspace, rename-workspace, list-workspaces
-Surface:    new-surface, close-surface, focus-surface, list-surfaces
-Pane:       split, close-pane, focus-pane, zoom-pane, list-panes, tree
+Surface:    new-surface [--type T] [--color-scheme NAME], close-surface, focus-surface, list-surfaces
+            set-color-scheme [surfaceId] <scheme>, clear-color-scheme [surfaceId], list-themes
+Pane:       split [--down] [--type T] [--color-scheme NAME], close-pane, focus-pane, zoom-pane, list-panes, tree
+            pane new|close|focus|list   (verb form, mirrors issue #4 example)
+Layout:     layout grid --count <N> [--type terminal] [--anchor-surface <id>]
 Terminal:   send <text>, send-key <key>, read-screen, trigger-flash
 Browser:    browser open|snapshot|click|type|fill|screenshot|get-text|eval|wait|back|forward|reload
 Agent:      agent spawn|spawn-batch|status|list|kill
 Markdown:   markdown set <id> --content <text> | --file <path>
+Diff:       diff [--file <path>]
 Notify:     notify <text>, list-notifications, clear-notifications
 Sidebar:    set-status, set-progress, log, sidebar-state
 Hook:       hook --event <type> --tool <name> [--agent <id>]
+Config:     config show|reload|path   (edits ~/.wmux/config.toml — see docs)
+            reload-config             (shorthand for 'config reload')
 `);
 }
 main();

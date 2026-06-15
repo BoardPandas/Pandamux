@@ -18,6 +18,36 @@ export interface SurfaceRef {
   shell?: string;
   /** Per-surface color scheme override (bundled theme name or user-defined scheme name). */
   colorScheme?: string;
+  /** Per-surface working directory override (quick-launch profiles — issue #32). */
+  cwd?: string;
+  /** Commands run once after the terminal PTY spawns (quick-launch profiles — issue #32). */
+  startupCommands?: string[];
+  /** Initial URL for a browser surface created from a quick-launch profile (issue #32). */
+  url?: string;
+}
+
+/**
+ * Quick-launch profile (issue #32): a one-click tab preset surfaced in the `+`
+ * caret dropdown. Lets a user open a terminal that auto-`cd`s and runs startup
+ * commands, picks a specific shell, or opens a browser tab at a fixed URL.
+ * Two scopes: `global` (user settings) and `project` (committed `.wmux.json`).
+ */
+export interface QuickLaunchProfile {
+  id: string;
+  name: string;
+  /** Short glyph/emoji shown in the dropdown (optional). */
+  icon?: string;
+  type: SurfaceType;
+  /** Terminal: shell executable override (falls back to the workspace shell). */
+  shell?: string;
+  /** Terminal/browser: working directory. Relative paths resolve against the workspace cwd. */
+  cwd?: string;
+  /** Terminal: commands run once after the PTY spawns. */
+  startupCommands?: string[];
+  /** Browser: initial URL to open. */
+  url?: string;
+  /** Provenance, set at load time (not persisted in config). */
+  source?: 'global' | 'project';
 }
 
 // Workspace

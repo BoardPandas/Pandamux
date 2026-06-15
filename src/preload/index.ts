@@ -39,6 +39,8 @@ contextBridge.exposeInMainWorld('wmux', {
     getThemeList: () => ipcRenderer.invoke(IPC_CHANNELS.CONFIG_GET_THEME_LIST),
     importWindowsTerminal: () => ipcRenderer.invoke(IPC_CHANNELS.CONFIG_IMPORT_WT),
     importGhostty: () => ipcRenderer.invoke(IPC_CHANNELS.CONFIG_IMPORT_GHOSTTY),
+    getProjectProfiles: (cwd: string) => ipcRenderer.invoke('config:getProjectProfiles', cwd),
+    importWindowsTerminalProfiles: () => ipcRenderer.invoke('config:importWindowsTerminalProfiles'),
     getUserConfig: () => ipcRenderer.invoke(IPC_CHANNELS.CONFIG_GET_USER_CONFIG),
     reloadUserConfig: () => ipcRenderer.invoke(IPC_CHANNELS.CONFIG_RELOAD_USER_CONFIG),
     getUserConfigPath: () => ipcRenderer.invoke('config:getUserConfigPath'),
@@ -62,6 +64,11 @@ contextBridge.exposeInMainWorld('wmux', {
       const handler = (_event: any, surfaceId: string) => callback(surfaceId);
       ipcRenderer.on('notification:focus-surface', handler);
       return () => ipcRenderer.removeListener('notification:focus-surface', handler);
+    },
+    onPlaySound: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on('notification:play-sound', handler);
+      return () => ipcRenderer.removeListener('notification:play-sound', handler);
     },
   },
   browser: {
