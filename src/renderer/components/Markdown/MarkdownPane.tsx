@@ -1,5 +1,6 @@
 import { useCallback, useMemo } from 'react';
 import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 import { openInWmuxBrowser } from '../../utils/open-in-browser';
 import '../../styles/markdown.css';
 
@@ -17,7 +18,16 @@ export default function MarkdownPane({ content = '', surfaceId }: MarkdownPanePr
       breaks: true,
     });
 
-    return marked.parse(content) as string;
+    // Markdown can arrive from untrusted sources (CLI/pipe callers, agents,
+    // loaded files). marked emits raw HTML, so sanitize before injecting it
+    // via dangerouslySetInnerHTML to prevent XSS in the renderer (which has
+    // preload/IPC access). FORBID javascript: URIs and event handlers.
+    const rawHtml = marked.parse(content) as string;
+    return DOMPurify.sanitize(rawHtml, {
+      USE_PROFILES: { html: true },
+      FORBID_TAGS: ['style', 'form', 'input', 'button', 'textarea', 'select'],
+      FORBID_ATTR: ['style'],
+    });
   }, [content]);
 
   const handleClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {

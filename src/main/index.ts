@@ -7,7 +7,7 @@ import { GitPoller } from './git-poller';
 import { PrPoller } from './pr-poller';
 import { CDPProxy } from './cdp-proxy';
 import { IPC_CHANNELS, SurfaceId } from '../shared/types';
-import { getPipePath, getAppDataDir } from '../shared/instance';
+import { getPipePath, getAppDataDir, ensurePipeToken } from '../shared/instance';
 import { loadSession, saveSession, handleVersionChange, SessionData } from './session-persistence';
 import { WindowManager } from './window-manager';
 import { initAutoUpdater } from './updater';
@@ -43,7 +43,12 @@ async function ensureBrowserPanel(): Promise<boolean> {
 }
 
 const windowManager = new WindowManager();
-const pipeServer = new PipeServer(getPipePath());
+// Per-instance secret that authenticates privileged (V2) pipe requests.
+// Generated/persisted once per APPDATA dir and injected into spawned shells
+// as WMUX_PIPE_TOKEN so the CLI and hooks can authenticate.
+const pipeToken = ensurePipeToken();
+process.env.WMUX_PIPE_TOKEN = pipeToken;
+const pipeServer = new PipeServer(getPipePath(), pipeToken);
 const portScanner = new PortScanner();
 const gitPoller = new GitPoller();
 const prPoller = new PrPoller();
@@ -188,9 +193,56 @@ if (!gotInstanceLock) {
   });
 }
 
+// ─── Webview / navigation hardening (issue #9) ────────────────────────────────
+// The renderer hosts <webview> tags that load arbitrary web content. Lock down
+// the attack surface so a compromised/hostile page can't escalate:
+//  - strip Node integration & preload from attached webviews
+//  - block window.open popups (route http/https to the OS browser instead)
+//  - prevent the top-level app window from navigating away from its own UI
+function hardenWebContents(): void {
+  app.on('web-contents-created', (_event, contents) => {
+    const type = contents.getType();
+
+    if (type === 'webview') {
+      // Enforce safe webview preferences regardless of attributes set in the DOM.
+      contents.on('will-attach-webview', (_e, webPreferences, params) => {
+        delete (webPreferences as any).preload;
+        delete (webPreferences as any).preloadURL;
+        webPreferences.nodeIntegration = false;
+        webPreferences.contextIsolation = true;
+        (params as any).nodeintegration = 'false';
+      });
+    }
+
+    // Open new-window requests externally rather than spawning in-app windows
+    // with full privileges. Only http/https go to the OS browser; deny the rest.
+    contents.setWindowOpenHandler(({ url }) => {
+      if (/^https?:\/\//i.test(url)) {
+        void shell.openExternal(url);
+      }
+      return { action: 'deny' };
+    });
+
+    // The main app window (loads localhost in dev, file:// in prod) must never
+    // be navigated to remote content. Webviews host their own contents and are
+    // exempt — their navigation is the whole point.
+    if (type !== 'webview') {
+      contents.on('will-navigate', (e, url) => {
+        const isDevServer = url.startsWith('http://localhost:') || url.startsWith('http://127.0.0.1:');
+        const isLocalFile = url.startsWith('file://');
+        if (!isDevServer && !isLocalFile) {
+          e.preventDefault();
+          if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
+        }
+      });
+    }
+  });
+}
+
 app.whenReady().then(() => {
   // A losing second instance is already quitting; don't run startup side effects.
   if (!gotInstanceLock) return;
+  hardenWebContents();
   // Inject wmux instructions into ~/.claude/CLAUDE.md for Claude Code awareness
   ensureClaudeContext();
   ensureClaudeHooks();
@@ -666,6 +718,22 @@ app.whenReady().then(() => {
           try {
             const filePath = request.params?.filePath || request.params?.path || request.params?.file;
             if (!filePath) { respondError(-32000, 'No file path provided'); return; }
+            // Defense-in-depth: even with a valid pipe token, only render plain
+            // text/markdown files and cap the size, so this can't be used to
+            // slurp secrets (e.g. id_rsa, .env) into the markdown viewer.
+            const ALLOWED_MD_EXT = new Set(['.md', '.markdown', '.mdx', '.txt', '.text', '.rst']);
+            const ext = path.extname(filePath).toLowerCase();
+            if (!ALLOWED_MD_EXT.has(ext)) {
+              respondError(-32602, `Unsupported file type for markdown.load_file: ${ext || '(none)'}`);
+              return;
+            }
+            let stat: fs.Stats;
+            try { stat = fs.statSync(filePath); } catch { respondError(-32000, 'File not found'); return; }
+            const MAX_MD_BYTES = 5 * 1024 * 1024;
+            if (!stat.isFile() || stat.size > MAX_MD_BYTES) {
+              respondError(-32602, 'File is not a regular file or exceeds 5MB limit');
+              return;
+            }
             const content = fs.readFileSync(filePath, 'utf-8');
             const win = BrowserWindow.getAllWindows()[0];
             if (!win || win.isDestroyed()) { respondError(-32000, 'No window'); return; }

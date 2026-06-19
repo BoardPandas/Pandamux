@@ -60,7 +60,7 @@ describe('PipeServer', () => {
 
   it('handles V2 JSON-RPC', async () => {
     const pipe = uniquePipe();
-    server = new PipeServer(pipe);
+    server = new PipeServer(pipe, 'test-token');
     server.on('v2', (req, respond) => {
       if (req.method === 'workspace.list') {
         respond({ workspaces: [] });
@@ -73,6 +73,7 @@ describe('PipeServer', () => {
       method: 'workspace.list',
       params: {},
       id: 1,
+      token: 'test-token',
     }));
     const parsed = JSON.parse(response);
     expect(parsed.result.workspaces).toEqual([]);
@@ -81,7 +82,7 @@ describe('PipeServer', () => {
 
   it('returns error for unknown V2 method', async () => {
     const pipe = uniquePipe();
-    server = new PipeServer(pipe);
+    server = new PipeServer(pipe, 'test-token');
     server.start();
     await new Promise(r => setTimeout(r, 200));
 
@@ -89,9 +90,91 @@ describe('PipeServer', () => {
       method: 'unknown.method',
       params: {},
       id: 2,
+      token: 'test-token',
     }));
     const parsed = JSON.parse(response);
     expect(parsed.error).toBeDefined();
     expect(parsed.error.code).toBe(-32601);
+  });
+
+  it('rejects privileged V2 methods without a token', async () => {
+    const pipe = uniquePipe();
+    server = new PipeServer(pipe, 'secret');
+    let handlerCalled = false;
+    server.on('v2', (req, respond) => { handlerCalled = true; respond({ ok: true }); });
+    server.start();
+    await new Promise(r => setTimeout(r, 200));
+
+    const response = await connectAndSend(pipe, JSON.stringify({
+      method: 'agent.spawn',
+      params: { cmd: 'calc.exe' },
+      id: 3,
+    }));
+    const parsed = JSON.parse(response);
+    expect(parsed.error).toBeDefined();
+    expect(parsed.error.code).toBe(-32001);
+    expect(handlerCalled).toBe(false);
+  });
+
+  it('rejects privileged V2 methods with a wrong token', async () => {
+    const pipe = uniquePipe();
+    server = new PipeServer(pipe, 'secret');
+    server.on('v2', (req, respond) => respond({ ok: true }));
+    server.start();
+    await new Promise(r => setTimeout(r, 200));
+
+    const response = await connectAndSend(pipe, JSON.stringify({
+      method: 'browser.eval',
+      params: { js: '1+1' },
+      id: 4,
+      token: 'wrong',
+    }));
+    const parsed = JSON.parse(response);
+    expect(parsed.error.code).toBe(-32001);
+  });
+
+  it('allows privileged V2 methods with the correct token', async () => {
+    const pipe = uniquePipe();
+    server = new PipeServer(pipe, 'secret');
+    server.on('v2', (req, respond) => respond({ ok: true }));
+    server.start();
+    await new Promise(r => setTimeout(r, 200));
+
+    const response = await connectAndSend(pipe, JSON.stringify({
+      method: 'agent.spawn',
+      params: { cmd: 'echo hi' },
+      id: 5,
+      token: 'secret',
+    }));
+    const parsed = JSON.parse(response);
+    expect(parsed.result).toEqual({ ok: true });
+  });
+
+  it('allows public V2 methods without a token', async () => {
+    const pipe = uniquePipe();
+    server = new PipeServer(pipe, 'secret');
+    server.on('v2', (req, respond) => {
+      if (req.method === 'system.identify') respond({ name: 'wmux' });
+    });
+    server.start();
+    await new Promise(r => setTimeout(r, 200));
+
+    const response = await connectAndSend(pipe, JSON.stringify({
+      method: 'system.identify',
+      params: {},
+      id: 6,
+    }));
+    const parsed = JSON.parse(response);
+    expect(parsed.result.name).toBe('wmux');
+  });
+
+  it('still accepts unauthenticated V1 telemetry', async () => {
+    const pipe = uniquePipe();
+    server = new PipeServer(pipe, 'secret');
+    server.start();
+    await new Promise(r => setTimeout(r, 200));
+
+    const response = await connectAndSend(pipe, 'ping');
+    expect(response).toBe('pong');
   });
 });

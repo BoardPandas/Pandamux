@@ -5,9 +5,29 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const net_1 = __importDefault(require("net"));
+const fs_1 = __importDefault(require("fs"));
+const os_1 = __importDefault(require("os"));
+const path_1 = __importDefault(require("path"));
 // Respect WMUX_PIPE when set (e.g. by a parent wmux running with WMUX_INSTANCE),
 // so the CLI talks to the same instance that spawned the shell.
 const PIPE_PATH = process.env.WMUX_PIPE || '\\\\.\\pipe\\wmux';
+// Auth token for privileged (V2) pipe requests. wmux injects WMUX_PIPE_TOKEN
+// into the shells it spawns; for CLIs launched elsewhere, fall back to the
+// token file in the instance's APPDATA dir (readable only by this user).
+function readPipeToken() {
+    const fromEnv = process.env.WMUX_PIPE_TOKEN?.trim();
+    if (fromEnv)
+        return fromEnv;
+    try {
+        const suffix = process.env.WMUX_INSTANCE?.trim() ? `-${process.env.WMUX_INSTANCE.trim()}` : '';
+        const base = process.env.APPDATA || path_1.default.join(os_1.default.homedir(), 'AppData', 'Roaming');
+        return fs_1.default.readFileSync(path_1.default.join(base, `wmux${suffix}`, 'pipe-token'), 'utf-8').trim();
+    }
+    catch {
+        return '';
+    }
+}
+const PIPE_TOKEN = readPipeToken();
 function sendV1(command) {
     return new Promise((resolve, reject) => {
         const client = net_1.default.connect({ path: PIPE_PATH }, () => {
@@ -23,7 +43,7 @@ function sendV1(command) {
 function sendV2(method, params = {}) {
     return new Promise((resolve, reject) => {
         const client = net_1.default.connect({ path: PIPE_PATH }, () => {
-            const request = JSON.stringify({ method, params, id: 1 });
+            const request = JSON.stringify({ method, params, id: 1, token: PIPE_TOKEN });
             client.write(request + '\n');
         });
         let data = '';

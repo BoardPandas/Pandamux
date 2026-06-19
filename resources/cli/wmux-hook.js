@@ -14,7 +14,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const net_1 = __importDefault(require("net"));
 const tool = process.argv[2] || 'unknown';
-const pipePath = '\\\\.\\pipe\\wmux';
+const pipePath = process.env.WMUX_PIPE || '\\\\.\\pipe\\wmux';
+const token = process.env.WMUX_PIPE_TOKEN || '';
 
 let stdinData = '';
 let sent = false;
@@ -42,7 +43,7 @@ function sendHook() {
     if (file) params.file = file;
 
     const client = net_1.default.connect({ path: pipePath }, () => {
-        const msg = JSON.stringify({ method: 'hook.event', params, id: 1 });
+        const msg = JSON.stringify({ method: 'hook.event', params, id: 1, token });
         client.write(msg + '\n', () => client.end());
     });
     client.on('error', () => {

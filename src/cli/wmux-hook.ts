@@ -8,9 +8,10 @@ import net from 'net';
 
 const tool = process.argv[2] || 'unknown';
 const pipePath = process.env.WMUX_PIPE || '\\\\.\\pipe\\wmux';
+const token = process.env.WMUX_PIPE_TOKEN || '';
 
 const client = net.connect({ path: pipePath }, () => {
-  const msg = JSON.stringify({ method: 'hook.event', params: { tool }, id: 1 });
+  const msg = JSON.stringify({ method: 'hook.event', params: { tool }, id: 1, token });
   client.write(msg + '\n', () => client.end());
 });
 

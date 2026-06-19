@@ -6,6 +6,52 @@ import { webContents } from 'electron';
 const DEFAULT_PORT = 9222;
 const MAX_PORT = 9230;
 
+// DNS-rebinding guard. The proxy binds to loopback only, but a browser on the
+// same machine can still reach it if a malicious page resolves an attacker
+// domain to 127.0.0.1. Chrome's own remote-debugging endpoint rejects such
+// requests by requiring the Host header to be a loopback literal (or absent,
+// as with non-HTTP WebSocket/native clients). We mirror that policy so the
+// full CDP surface (Runtime.evaluate ⇒ arbitrary JS in the webview) can't be
+// driven from a web origin.
+export function isAllowedCdpHost(hostHeader: string | undefined): boolean {
+  // Native CDP clients (e.g. raw ws) may omit Host — allow only when absent.
+  if (hostHeader === undefined) return true;
+  // Strip optional :port. Bracketed IPv6 arrives as "[::1]:9222"; a bare IPv6
+  // literal ("::1") has multiple colons and no port to strip.
+  let host = hostHeader.trim();
+  if (host.startsWith('[')) {
+    const end = host.indexOf(']');
+    host = end === -1 ? host.slice(1) : host.slice(1, end);
+  } else {
+    const colon = host.indexOf(':');
+    // Only treat a single trailing :port as a port (IPv4 / hostname). Multiple
+    // colons with no brackets ⇒ bare IPv6 literal, leave intact.
+    if (colon !== -1 && host.indexOf(':', colon + 1) === -1) {
+      host = host.slice(0, colon);
+    }
+  }
+  host = host.toLowerCase();
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '0:0:0:0:0:0:0:1';
+}
+
+// Origin guard for the WebSocket upgrade. The Host check alone is NOT enough:
+// WebSocket connections are exempt from CORS preflight, so a malicious page in
+// the user's browser can open ws://127.0.0.1:9222 directly — the browser sends
+// Host: 127.0.0.1:9222 (which passes isAllowedCdpHost) but also an Origin
+// header identifying the web page. Driving the proxy then yields
+// Runtime.evaluate (arbitrary JS in the webview) ⇒ RCE-equivalent.
+//
+// Legit CDP clients (chrome-devtools-mcp / puppeteer-core / raw `ws`) do NOT
+// send an Origin header, while browsers ALWAYS send one for a page-initiated
+// WebSocket. So we allow only an absent Origin (plus the DevTools front-end
+// scheme) and reject every web/file origin — mirroring Chrome's own
+// --remote-allow-origins policy.
+export function isAllowedCdpOrigin(origin: string | undefined): boolean {
+  if (origin === undefined || origin === '') return true;
+  if (origin.toLowerCase().startsWith('devtools://')) return true;
+  return false;
+}
+
 export class CDPProxy {
   private server: http.Server | null = null;
   private wss: WebSocketServer | null = null;
@@ -30,6 +76,14 @@ export class CDPProxy {
   async start(): Promise<void> {
     this.server = http.createServer((req, res) => {
       res.setHeader('Content-Type', 'application/json');
+
+      // Reject cross-origin (DNS-rebinding) requests before exposing any
+      // CDP target metadata or WebSocket debugger URLs.
+      if (!isAllowedCdpHost(req.headers.host)) {
+        res.statusCode = 403;
+        res.end(JSON.stringify({ error: 'Forbidden host' }));
+        return;
+      }
 
       if (req.url === '/json/version') {
         res.end(JSON.stringify({
@@ -67,8 +121,16 @@ export class CDPProxy {
       res.end('{}');
     });
 
-    // WebSocket server using ws library (handles handshake properly)
-    this.wss = new WebSocketServer({ server: this.server });
+    // WebSocket server using ws library (handles handshake properly).
+    // verifyClient applies BOTH a loopback-only Host policy AND an Origin policy
+    // to the WS upgrade. The Host check stops DNS-rebinding; the Origin check
+    // stops a page in the user's own browser from opening this debugger socket
+    // directly (WebSockets bypass CORS, so a passing Host isn't sufficient).
+    this.wss = new WebSocketServer({
+      server: this.server,
+      verifyClient: (info: { req: http.IncomingMessage }) =>
+        isAllowedCdpHost(info.req.headers.host) && isAllowedCdpOrigin(info.req.headers.origin),
+    });
 
     this.wss.on('connection', (ws) => {
       if (!this.webContentsId) {

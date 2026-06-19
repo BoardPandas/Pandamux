@@ -1,5 +1,6 @@
 import net from 'net';
 import { EventEmitter } from 'events';
+import { tokensMatch } from '../shared/instance';
 
 export interface V1Command {
   command: string;
@@ -11,7 +12,20 @@ export interface V2Request {
   method: string;
   params: Record<string, any>;
   id?: string | number;
+  token?: string;
 }
+
+// V2 methods that are safe to call without authentication. These are read-only
+// or telemetry-style and don't grant code execution / file access. Everything
+// else (agent.spawn, browser.eval, markdown.load_file, pane/workspace mutation,
+// …) requires a valid per-instance token. Keeping an allowlist (rather than a
+// blocklist) means any new privileged method is locked down by default.
+const PUBLIC_V2_METHODS = new Set<string>([
+  'system.identify',
+  'system.capabilities',
+  'hook.event',
+  'agent.activity',
+]);
 
 export interface V2Response {
   result?: any;
@@ -22,10 +36,12 @@ export interface V2Response {
 export class PipeServer extends EventEmitter {
   private server: net.Server | null = null;
   private pipePath: string;
+  private authToken: string;
 
-  constructor(pipePath = '\\\\.\\pipe\\wmux') {
+  constructor(pipePath = '\\\\.\\pipe\\wmux', authToken = '') {
     super();
     this.pipePath = pipePath;
+    this.authToken = authToken;
   }
 
   start(): void {
@@ -136,6 +152,20 @@ export class PipeServer extends EventEmitter {
       const response: V2Response = { error: { code, message }, id: request.id };
       socket.write(JSON.stringify(response) + '\n');
     };
+
+    // Authenticate privileged methods. Public methods (identify/capabilities/
+    // hooks) are exempt so detection and shell/agent telemetry keep working
+    // without a token. -32001 signals "unauthorized" to clients.
+    if (!PUBLIC_V2_METHODS.has(request.method)) {
+      if (!this.authToken) {
+        respondError(-32001, 'Unauthorized: pipe auth token not initialized');
+        return;
+      }
+      if (!tokensMatch(request.token || '', this.authToken)) {
+        respondError(-32001, 'Unauthorized: missing or invalid token');
+        return;
+      }
+    }
 
     // Emit the V2 request and let handlers respond
     const handled = this.emit('v2', request, respond, respondError);
