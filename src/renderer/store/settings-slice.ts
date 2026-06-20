@@ -268,7 +268,7 @@ export interface NotificationPrefs {
   taskbarFlash: boolean;
   paneRing: boolean;
   paneFlashAnimation: boolean;
-  sound: 'default' | 'none';
+  sound: 'default' | 'chime' | 'ping' | 'marimba' | 'pop' | 'none';
 }
 
 export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefs = {

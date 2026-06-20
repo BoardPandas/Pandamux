@@ -1,4 +1,5 @@
 import { useStore } from '../../store';
+import { NOTIFICATION_SOUND_LABELS, previewNotificationSound } from '../../notification-sound';
 
 export default function NotificationSettings() {
   const { notificationPrefs, setNotificationPrefs } = useStore();
@@ -52,16 +53,29 @@ export default function NotificationSettings() {
 
       <div className="settings-row">
         <label className="settings-label">Notification sound</label>
-        <select
-          className="settings-select"
-          value={notificationPrefs.sound}
-          onChange={(e) =>
-            setNotificationPrefs({ sound: e.target.value as 'default' | 'none' })
-          }
-        >
-          <option value="default">Default</option>
-          <option value="none">None</option>
-        </select>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <select
+            className="settings-select"
+            value={notificationPrefs.sound}
+            onChange={(e) => {
+              const sound = e.target.value as typeof notificationPrefs.sound;
+              setNotificationPrefs({ sound });
+              previewNotificationSound(sound);
+            }}
+          >
+            {NOTIFICATION_SOUND_LABELS.map((s) => (
+              <option key={s.value} value={s.value}>{s.label}</option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="settings-button"
+            disabled={notificationPrefs.sound === 'none'}
+            onClick={() => previewNotificationSound(notificationPrefs.sound)}
+          >
+            Preview
+          </button>
+        </div>
       </div>
     </div>
   );

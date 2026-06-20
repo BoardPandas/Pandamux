@@ -20,12 +20,12 @@ interface PaneWrapperProps {
 
 export default function PaneWrapper({ leaf, workspaceId, isFocused }: PaneWrapperProps) {
   const { surfaces, activeSurfaceIndex, paneId } = leaf;
-  const activeSurface = surfaces[activeSurfaceIndex];
 
   const notifications = useStore((s) => s.notifications);
   const markRead = useStore((s) => s.markRead);
   const activeWorkspaceId = useStore((s) => s.activeWorkspaceId);
   const addSurface = useStore((s) => s.addSurface);
+  const updateSurface = useStore((s) => s.updateSurface);
   const closeSurface = useStore((s) => s.closeSurface);
   const selectSurface = useStore((s) => s.selectSurface);
   const moveSurface = useStore((s) => s.moveSurface);
@@ -121,7 +121,6 @@ export default function PaneWrapper({ leaf, workspaceId, isFocused }: PaneWrappe
       // Escape exits copy mode
       if (e.key === 'Escape' && copyModeActive) {
         setCopyModeActive(false);
-        return;
       }
     }
 
@@ -196,7 +195,18 @@ export default function PaneWrapper({ leaf, workspaceId, isFocused }: PaneWrappe
             />
           )}
           {surface.type === 'browser' && (
-            <BrowserPane surfaceId={surface.id} {...(surface.url ? { initialUrl: surface.url } : {})} />
+            <BrowserPane
+              surfaceId={surface.id}
+              {...(surface.url ? { initialUrl: surface.url } : {})}
+              // Persist the live URL into the surface so a split-tree
+              // restructure (which remounts this pane) restores the page the
+              // user was on instead of resetting to the default (issue #40).
+              onUrlChange={(u) => {
+                if (u && u !== 'about:blank') {
+                  updateSurface(workspaceId, paneId, surface.id, { url: u });
+                }
+              }}
+            />
           )}
           {surface.type === 'markdown' && <MarkdownPane surfaceId={surface.id} />}
           {surface.type === 'diff' && <DiffPane surfaceId={surface.id} cwd={workspace?.cwd} />}
@@ -265,7 +275,12 @@ export default function PaneWrapper({ leaf, workspaceId, isFocused }: PaneWrappe
       const base = workspace?.cwd;
       if (isAbsolute || !base) return cwd;
       const rel = cwd.replace(/^[.][\\/]/, '').replace(/\//g, '\\');
-      return base.replace(/[\\/]+$/, '') + '\\' + rel;
+      // Strip trailing separators without a regex (avoids ReDoS-class patterns).
+      let trimmedBase = base;
+      while (trimmedBase.length > 0 && (trimmedBase.endsWith('\\') || trimmedBase.endsWith('/'))) {
+        trimmedBase = trimmedBase.slice(0, -1);
+      }
+      return trimmedBase + '\\' + rel;
     };
     addSurface(activeWorkspaceId, paneId, profile.type, {
       customTitle: profile.name,

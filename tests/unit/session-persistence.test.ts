@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { saveSession, loadSession, SessionData } from '../../src/main/session-persistence';
+import type { SessionData } from '../../src/main/session-persistence';
 
 // Use a temp directory for tests
 const TEST_DIR = path.join(os.tmpdir(), 'wmux-test-sessions-' + process.pid);
@@ -77,5 +77,51 @@ describe('session-persistence', () => {
     expect(loaded.windows[0].workspaces[0].customColor).toBe('#C0392B');
     expect(loaded.windows[0].workspaces[1].splitTree.type).toBe('branch');
     expect(loaded.windows[0].workspaces[1].splitTree.children).toHaveLength(2);
+  });
+});
+
+// Issue #35: a version update must NOT delete explicitly-named saved sessions
+// (they are layout-only snapshots the user chose to keep). Only the volatile
+// auto session.json is reset. The module computes its storage paths from
+// %APPDATA% at import time, so we override APPDATA and re-import per test.
+describe('handleVersionChange (issue #35)', () => {
+  const APPDATA_OVERRIDE = path.join(os.tmpdir(), 'wmux-vc-test-' + process.pid);
+  let mod: typeof import('../../src/main/session-persistence');
+  let savedAppData: string | undefined;
+
+  beforeEach(async () => {
+    savedAppData = process.env.APPDATA;
+    process.env.APPDATA = APPDATA_OVERRIDE;
+    delete process.env.WMUX_INSTANCE;
+    vi.resetModules();
+    mod = await import('../../src/main/session-persistence');
+    mod.ensureDirectories();
+  });
+
+  afterEach(() => {
+    if (savedAppData === undefined) delete process.env.APPDATA;
+    else process.env.APPDATA = savedAppData;
+    fs.rmSync(APPDATA_OVERRIDE, { recursive: true, force: true });
+  });
+
+  it('preserves named saved sessions across a version change', () => {
+    mod.handleVersionChange('0.9.0'); // establish the version marker
+    mod.saveNamedSession({ name: 'My Layout', savedAt: 123, workspaces: [] } as any);
+    expect(mod.loadNamedSession('My Layout')).not.toBeNull();
+
+    const changed = mod.handleVersionChange('0.9.1');
+    expect(changed).toBe(true);
+    expect(mod.listNamedSessions().map((s) => s.name)).toContain('My Layout');
+    expect(mod.loadNamedSession('My Layout')).not.toBeNull();
+    expect(mod.getLastSessionName()).toBe('My Layout');
+  });
+
+  it('clears the volatile auto session.json on a version change', () => {
+    mod.handleVersionChange('1.0.0'); // establish the version marker
+    mod.saveSession({ version: 1, windows: [] } as any);
+    expect(mod.loadSession()).not.toBeNull();
+
+    mod.handleVersionChange('1.0.1');
+    expect(mod.loadSession()).toBeNull();
   });
 });

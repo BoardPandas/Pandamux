@@ -5,6 +5,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { SearchAddon } from '@xterm/addon-search';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { ImageAddon } from '@xterm/addon-image';
+import { SerializeAddon } from '@xterm/addon-serialize';
 import { useStore } from '../store';
 import { SplitNode, ThemeConfig } from '../../shared/types';
 import { UserColorScheme } from '../store/settings-slice';
@@ -110,6 +111,14 @@ const themeCache = new Map<string, ThemeConfig>();
 // remounts so the wheel handler can distinguish tmux (mouse-enabled) from a
 // plain shell even when xterm's buffer.active.type is reset after remount.
 const surfaceMouseEnabled = new Map<string, boolean>();
+
+// Cache of serialized xterm buffers keyed by surfaceId. A split-tree
+// restructure remounts PaneWrapper (React reconciliation moves it to a
+// different depth/parent), disposing and recreating the terminal — which would
+// otherwise wipe the scrollback (issue #49). We snapshot on unmount and replay
+// on the next mount. Bounded so genuine pane closes can't leak the cache.
+const surfaceBufferCache = new Map<string, string>();
+const MAX_BUFFER_CACHE = 32;
 
 // Convert a wheel delta to a line count (sign preserved, magnitude ≥ 1).
 function wheelDeltaToLines(ev: WheelEvent, rows: number): number {
@@ -325,6 +334,7 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
     const searchAddon = new SearchAddon();
     const unicode11Addon = new Unicode11Addon();
     const imageAddon = new ImageAddon();
+    const serializeAddon = new SerializeAddon();
 
     fitAddonRef.current = fitAddon;
     searchAddonRef.current = searchAddon;
@@ -334,6 +344,7 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
     terminal.loadAddon(searchAddon);
     terminal.loadAddon(unicode11Addon);
     terminal.loadAddon(imageAddon);
+    terminal.loadAddon(serializeAddon);
     terminal.unicode.activeVersion = '11';
 
     // Suppress xterm's automatic Primary Device Attributes (DA1) reply — the
@@ -355,6 +366,19 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
 
     // Open terminal in the DOM
     terminal.open(terminalRef.current);
+
+    // Restore a buffer snapshot captured before a previous unmount (issue #49).
+    // Written now — before the PTY reattaches below — so the restored scrollback
+    // lands ahead of any new PTY output. We snapshot the normal buffer only
+    // (excludeAltBuffer), so a TUI like tmux/vim simply redraws itself via the
+    // post-remount SIGWINCH on top of the restored shell scrollback.
+    if (surfaceId) {
+      const snapshot = surfaceBufferCache.get(surfaceId);
+      if (snapshot) {
+        surfaceBufferCache.delete(surfaceId);
+        terminal.write(snapshot);
+      }
+    }
 
     // Wheel handling — we always take ownership on the capture phase (xterm's
     // own forwarding is unreliable after the WebGL context swap, #41, and an
@@ -735,6 +759,25 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
       // Do NOT kill the PTY here — only explicit close (handleCloseSurface)
       // kills PTYs. This allows tree restructuring (closing an adjacent pane)
       // to re-mount this component without losing the terminal session.
+
+      // Snapshot the buffer before disposal so a remount (split-tree
+      // restructure) can replay it (issue #49). Normal buffer only, so a TUI's
+      // own SIGWINCH redraw owns the alt screen after remount. Bounded LRU so a
+      // genuine pane close (no remount to consume it) can't grow the cache.
+      if (surfaceId) {
+        try {
+          const snapshot = serializeAddon.serialize({ excludeAltBuffer: true });
+          if (snapshot) {
+            if (surfaceBufferCache.size >= MAX_BUFFER_CACHE) {
+              const oldest = surfaceBufferCache.keys().next().value;
+              if (oldest !== undefined) surfaceBufferCache.delete(oldest);
+            }
+            surfaceBufferCache.set(surfaceId, snapshot);
+          }
+        } catch {
+          // Serialization failure is non-fatal — just lose the snapshot.
+        }
+      }
 
       // Release the GPU renderer (and its WebGL budget slot) before disposing
       rendererRef.current?.dispose();

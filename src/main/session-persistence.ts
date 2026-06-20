@@ -68,23 +68,26 @@ export function getSessionPath(): string {
   return SESSION_FILE;
 }
 
-/** Returns true if the app version changed (or first launch). Clears all stale session data. */
+/**
+ * Returns true if the app version changed (or first launch).
+ *
+ * Clears only the *auto-restored* session (`session.json`) so the user gets a
+ * clean Session 1 on the first launch of a new version — that file can hold a
+ * live layout whose PTYs died with the previous process. Explicitly **named**
+ * saved sessions (issue #35) are layout-only snapshots that the user chose to
+ * keep, so they MUST survive updates; loading one always re-spawns fresh PTYs
+ * (useTerminal calls pty.create when pty.has(surfaceId) is false), so there are
+ * no stale handles to freeze. The last-session pointer is preserved too, so the
+ * user can reload their last named session after an update.
+ */
 export function handleVersionChange(currentVersion: string): boolean {
   ensureDirectories();
   try {
     const saved = fs.existsSync(VERSION_FILE) ? fs.readFileSync(VERSION_FILE, 'utf-8').trim() : '';
     if (saved === currentVersion) return false;
-    // Version changed — clear everything so users get a clean Session 1
+    // Reset only the volatile auto-session. Named sessions (SAVED_DIR) and the
+    // last-session pointer are intentionally preserved across updates.
     try { if (fs.existsSync(SESSION_FILE)) fs.unlinkSync(SESSION_FILE); } catch {}
-    try { if (fs.existsSync(LAST_SESSION_FILE)) fs.unlinkSync(LAST_SESSION_FILE); } catch {}
-    // Clear named sessions (stale PTY references would freeze terminals)
-    try {
-      if (fs.existsSync(SAVED_DIR)) {
-        for (const f of fs.readdirSync(SAVED_DIR)) {
-          try { fs.unlinkSync(path.join(SAVED_DIR, f)); } catch {}
-        }
-      }
-    } catch {}
     fs.writeFileSync(VERSION_FILE, currentVersion, 'utf-8');
     return true;
   } catch { return false; }
