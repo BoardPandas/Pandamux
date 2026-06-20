@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { PaneId, SplitNode, SurfaceId, WorkspaceId, QuickLaunchProfile } from '../../../shared/types';
+import { PaneId, SplitNode, SurfaceId, WorkspaceId, QuickLaunchProfile, ShellInfo } from '../../../shared/types';
 import { removeLeaf, splitNode } from '../../store/split-utils';
 import TerminalPane from '../Terminal/TerminalPane';
 import BrowserPane from '../Browser/BrowserPane';
@@ -35,6 +35,7 @@ export default function PaneWrapper({ leaf, workspaceId, isFocused }: PaneWrappe
   const workspace = useStore((s) => s.workspaces.find(w => w.id === workspaceId));
   const globalProfiles = useStore((s) => s.quickLaunchProfiles);
   const [projectProfiles, setProjectProfiles] = useState<QuickLaunchProfile[]>([]);
+  const [availableShells, setAvailableShells] = useState<ShellInfo[]>([]);
 
   const surfaceIds = useMemo(() => surfaces.map((s) => s.id), [surfaces]);
 
@@ -232,6 +233,19 @@ export default function PaneWrapper({ leaf, workspaceId, isFocused }: PaneWrappe
     return () => { cancelled = true; };
   }, [workspace?.cwd]);
 
+  // Fetch available shells once on mount for the shell picker dropdown
+  useEffect(() => {
+    window.wmux?.system?.getShells?.()
+      .then((shells: ShellInfo[]) => setAvailableShells(Array.isArray(shells) ? shells : []))
+      .catch(() => {});
+  }, []);
+
+  const handleNewSurfaceShell = (shell: ShellInfo) => {
+    if (activeWorkspaceId) {
+      addSurface(activeWorkspaceId, paneId, 'terminal', { shell: shell.command });
+    }
+  };
+
   const quickLaunchProfiles = useMemo(
     () => [
       ...globalProfiles.map((p) => ({ ...p, source: 'global' as const })),
@@ -371,6 +385,8 @@ export default function PaneWrapper({ leaf, workspaceId, isFocused }: PaneWrappe
         onClose={handleCloseSurface}
         onNew={handleNewSurface}
         onNewTyped={handleNewSurfaceTyped}
+        shells={availableShells}
+        onNewShell={handleNewSurfaceShell}
         profiles={quickLaunchProfiles}
         onNewProfile={handleNewSurfaceProfile}
         onClosePane={handleClosePane}

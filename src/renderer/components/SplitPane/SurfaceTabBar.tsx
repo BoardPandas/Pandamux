@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { SurfaceRef, SurfaceId, PaneId, WorkspaceId, QuickLaunchProfile } from '../../../shared/types';
+import { SurfaceRef, SurfaceId, PaneId, WorkspaceId, QuickLaunchProfile, ShellInfo } from '../../../shared/types';
 import { useStore } from '../../store';
 import { IconAdd, IconSplit, IconSplitDown, IconClose, IconCaret } from './icons';
 
@@ -13,6 +13,9 @@ interface SurfaceTabBarProps {
   onClose: (surfaceId: SurfaceId) => void;
   onNew: () => void;
   onNewTyped?: (type: 'terminal' | 'browser' | 'markdown') => void;
+  /** Detected shells surfaced in the `+` caret dropdown (PR #43). */
+  shells?: ShellInfo[];
+  onNewShell?: (shell: ShellInfo) => void;
   /** Quick-launch profiles surfaced in the `+` caret dropdown (issue #32). */
   profiles?: QuickLaunchProfile[];
   onNewProfile?: (profile: QuickLaunchProfile) => void;
@@ -70,6 +73,8 @@ export default function SurfaceTabBar({
   onClose,
   onNew,
   onNewTyped,
+  shells,
+  onNewShell,
   profiles,
   onNewProfile,
   onClosePane,
@@ -178,6 +183,11 @@ export default function SurfaceTabBar({
     if (onNewTyped) onNewTyped(type);
     else onNew();
   }, [onNewTyped, onNew]);
+
+  const pickShell = useCallback((shell: ShellInfo) => {
+    setOpenMenu(null);
+    onNewShell?.(shell);
+  }, [onNewShell]);
 
   const pickProfile = useCallback((profile: QuickLaunchProfile) => {
     setOpenMenu(null);
@@ -307,7 +317,7 @@ export default function SurfaceTabBar({
       </div>
 
       <div className="surface-tab-bar__cluster">
-        {/* New (split-button): main click = default terminal, caret = type/profile menu */}
+        {/* New (split-button): main click = default terminal, caret = type/shell/profile menu */}
         <div className="surface-tab-bar__group">
           <button
             className="surface-tab-bar__ctl surface-tab-bar__ctl--new"
@@ -379,9 +389,20 @@ export default function SurfaceTabBar({
         >
           {openMenu === 'new' ? (
             <>
-              <button role="menuitem" onClick={() => pickNew('terminal')}>
-                <span className="surface-tab-menu__icon">{surfaceIcon('terminal', false)}</span> Terminal
-              </button>
+              {shells && shells.length > 0 ? (
+                <>
+                  {shells.map((shell) => (
+                    <button key={shell.command} role="menuitem" onClick={() => pickShell(shell)}>
+                      <span className="surface-tab-menu__icon">{surfaceIcon('terminal', false)}</span> {shell.name}
+                    </button>
+                  ))}
+                  <div className="surface-tab-menu__sep" role="separator" />
+                </>
+              ) : (
+                <button role="menuitem" onClick={() => pickNew('terminal')}>
+                  <span className="surface-tab-menu__icon">{surfaceIcon('terminal', false)}</span> Terminal
+                </button>
+              )}
               <button role="menuitem" onClick={() => pickNew('browser')}>
                 <span className="surface-tab-menu__icon">{surfaceIcon('browser', false)}</span> Browser
               </button>
