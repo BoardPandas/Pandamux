@@ -1,5 +1,6 @@
 import { StateCreator } from 'zustand';
 import { QuickLaunchProfile } from '../../shared/types';
+import { Language, detectDefaultLanguage } from '../i18n/core';
 
 // ─── Persistence helpers (issue #12 + issue #15 + issue #19) ─────────────────
 // Zustand has no persistence middleware here, so any pref that lives only in
@@ -22,6 +23,7 @@ const STORAGE_KEYS = {
   browserPrefs:      'wmux-browser-prefs',
   shortcuts:         'wmux-shortcuts',
   quickLaunchProfiles: 'wmux-quick-launch-profiles',
+  language:          'wmux-language',
 } as const;
 
 // Read the whole settings file once at module load (synchronous IPC). The
@@ -73,6 +75,25 @@ function loadPersistedArray<T>(key: string): T[] {
     }
   } catch { /* fall through */ }
   return [];
+}
+
+// Scalar-valued settings (the UI language, issue #56) need their own loader:
+// loadPersisted returns {} for a missing key, which isn't a usable string. Falls
+// back to the OS/browser locale on first launch, then English.
+function loadPersistedLanguage(): Language {
+  const fromFile = FILE_SETTINGS[STORAGE_KEYS.language];
+  let candidate = typeof fromFile === 'string' ? fromFile : '';
+  if (!candidate) {
+    try {
+      const ls = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEYS.language) : null;
+      if (ls) {
+        candidate = ls;
+        try { (globalThis as any).window?.wmux?.settings?.set?.(STORAGE_KEYS.language, ls); } catch { /* no-op */ }
+      }
+    } catch { /* localStorage unavailable */ }
+  }
+  if (candidate === 'en' || candidate === 'fr' || candidate === 'zh') return candidate;
+  return detectDefaultLanguage();
 }
 
 function persist<T>(key: string, value: T): void {
@@ -312,6 +333,8 @@ export interface SettingsSlice {
   browserPrefs: BrowserPrefs;
   /** Global quick-launch profiles surfaced in the `+` caret dropdown (issue #32). */
   quickLaunchProfiles: QuickLaunchProfile[];
+  /** Selected UI language (issue #56). */
+  language: Language;
 
   setShortcut(action: ShortcutAction, binding: ShortcutBinding): void;
   resetShortcuts(): void;
@@ -322,6 +345,7 @@ export interface SettingsSlice {
   setNotificationPrefs(prefs: Partial<NotificationPrefs>): void;
   setBrowserPrefs(prefs: Partial<BrowserPrefs>): void;
   setQuickLaunchProfiles(profiles: QuickLaunchProfile[]): void;
+  setLanguage(language: Language): void;
 }
 
 // ─── Slice creator ────────────────────────────────────────────────────────────
@@ -335,6 +359,7 @@ export const createSettingsSlice: StateCreator<SettingsSlice> = (set) => ({
   notificationPrefs: { ...DEFAULT_NOTIFICATION_PREFS, ...loadPersisted<NotificationPrefs>(STORAGE_KEYS.notificationPrefs) },
   browserPrefs:      { ...DEFAULT_BROWSER_PREFS,      ...loadPersisted<BrowserPrefs>(STORAGE_KEYS.browserPrefs) },
   quickLaunchProfiles: loadPersistedArray<QuickLaunchProfile>(STORAGE_KEYS.quickLaunchProfiles),
+  language:          loadPersistedLanguage(),
 
   setShortcut(action: ShortcutAction, binding: ShortcutBinding): void {
     set((state) => {
@@ -396,5 +421,10 @@ export const createSettingsSlice: StateCreator<SettingsSlice> = (set) => ({
   setQuickLaunchProfiles(profiles: QuickLaunchProfile[]): void {
     persist(STORAGE_KEYS.quickLaunchProfiles, profiles);
     set({ quickLaunchProfiles: profiles });
+  },
+
+  setLanguage(language: Language): void {
+    persist(STORAGE_KEYS.language, language);
+    set({ language });
   },
 });

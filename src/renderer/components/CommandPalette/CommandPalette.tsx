@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useStore } from '../../store';
 import { SurfaceId } from '../../../shared/types';
-import { ShortcutAction, ShortcutBinding, DEFAULT_SHORTCUTS } from '../../store/settings-slice';
+import { ShortcutAction, ShortcutBinding } from '../../store/settings-slice';
+import { useT } from '../../i18n';
 import '../../styles/command-palette.css';
 
 interface CommandPaletteProps {
@@ -51,6 +52,7 @@ function fuzzyMatch(needle: string, haystack: string): boolean {
 
 export default function CommandPalette({ onClose, onAction }: CommandPaletteProps) {
   const { shortcuts, workspaces, activeWorkspaceId, selectWorkspace } = useStore();
+  const t = useT();
 
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -73,7 +75,7 @@ export default function CommandPalette({ onClose, onAction }: CommandPaletteProp
         id: `action:${action}`,
         label: actionToLabel(action),
         shortcut: formatBinding(binding),
-        category: 'Actions',
+        category: t('palette.category.actions'),
         action: () => onAction(action),
       });
     }
@@ -83,8 +85,8 @@ export default function CommandPalette({ onClose, onAction }: CommandPaletteProp
     // new markdown view (issue #54) — the manual counterpart to `wmux markdown <file>`.
     items.push({
       id: 'command:open-markdown-file',
-      label: 'Open Markdown File…',
-      category: 'Commands',
+      label: t('palette.openMarkdown'),
+      category: t('palette.category.commands'),
       action: () => {
         onClose();
         void (async () => {
@@ -106,10 +108,11 @@ export default function CommandPalette({ onClose, onAction }: CommandPaletteProp
     // Category: Workspaces — switch to each workspace by name
     for (const ws of workspaces) {
       const isCurrent = ws.id === activeWorkspaceId;
+      const currentSuffix = isCurrent ? ` (${t('palette.current')})` : '';
       items.push({
         id: `workspace:${ws.id}`,
-        label: `${ws.title}${isCurrent ? ' (current)' : ''}`,
-        category: 'Workspaces',
+        label: `${ws.title}${currentSuffix}`,
+        category: t('palette.category.workspaces'),
         action: () => {
           selectWorkspace(ws.id);
           onClose();
@@ -123,7 +126,7 @@ export default function CommandPalette({ onClose, onAction }: CommandPaletteProp
       items.push({
         id: `theme:${theme}`,
         label: theme,
-        category: 'Themes',
+        category: t('palette.category.themes'),
         action: () => {
           console.log(`[wmux] Switch theme: ${theme}`);
           onClose();
@@ -132,7 +135,7 @@ export default function CommandPalette({ onClose, onAction }: CommandPaletteProp
     }
 
     return items;
-  }, [shortcuts, workspaces, activeWorkspaceId, selectWorkspace, onAction, onClose]);
+  }, [shortcuts, workspaces, activeWorkspaceId, selectWorkspace, onAction, onClose, t]);
 
   // Filter based on query
   const filteredItems = useMemo(() => {
@@ -172,7 +175,6 @@ export default function CommandPalette({ onClose, onAction }: CommandPaletteProp
       e.preventDefault();
       const item = filteredItems[selectedIndex];
       if (item) item.action();
-      return;
     }
   };
 
@@ -193,11 +195,11 @@ export default function CommandPalette({ onClose, onAction }: CommandPaletteProp
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Type a command or search..."
+          placeholder={t('palette.placeholder')}
         />
         <div className="command-palette__results" ref={listRef}>
           {visibleItems.length === 0 ? (
-            <div className="command-palette__empty">No results found</div>
+            <div className="command-palette__empty">{t('palette.empty')}</div>
           ) : (
             visibleItems.map((item, index) => (
               <div

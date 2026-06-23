@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import ReactDOM from 'react-dom';
 import { WorkspaceInfo, WorkspaceId } from '../../../shared/types';
+import { useT } from '../../i18n';
 
 interface WorkspaceContextMenuProps {
   x: number;
@@ -56,6 +57,7 @@ export default function WorkspaceContextMenu({
   onMarkRead,
   onMarkUnread,
 }: WorkspaceContextMenuProps) {
+  const t = useT();
   const menuRef = useRef<HTMLDivElement>(null);
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(workspace.title);
@@ -131,7 +133,7 @@ export default function WorkspaceContextMenu({
       role="menu"
     >
       {/* Pin / Unpin */}
-      {item(workspace.pinned ? 'Unpin Workspace' : 'Pin Workspace', () => onPin(workspaceId))}
+      {item(workspace.pinned ? t('ctx.unpin') : t('ctx.pin'), () => onPin(workspaceId))}
 
       {/* Rename */}
       {renaming ? (
@@ -151,7 +153,7 @@ export default function WorkspaceContextMenu({
           onClick={() => { setRenaming(true); setRenameValue(workspace.title); }}
           role="menuitem"
         >
-          Rename Workspace…
+          {t('ctx.rename')}
         </div>
       )}
 
@@ -165,7 +167,7 @@ export default function WorkspaceContextMenu({
         role="menuitem"
         aria-haspopup="true"
       >
-        Workspace Color ▶
+        {t('ctx.color')} ▶
         {showColorSubmenu && (
           <div className="ctx-menu__submenu">
             <div
@@ -173,7 +175,7 @@ export default function WorkspaceContextMenu({
               onClick={() => { onSetColor(workspaceId, null); onClose(); }}
               role="menuitem"
             >
-              Clear Color
+              {t('ctx.clearColor')}
             </div>
             <div className="ctx-menu__swatches">
               {COLOR_PRESETS.map((c) => (
@@ -194,21 +196,21 @@ export default function WorkspaceContextMenu({
       <div className="ctx-menu__separator" />
 
       {/* Move */}
-      {item('Move Up', () => onMoveUp(workspaceId))}
-      {item('Move Down', () => onMoveDown(workspaceId))}
-      {item('Move to Top', () => onMoveToTop(workspaceId))}
+      {item(t('ctx.moveUp'), () => onMoveUp(workspaceId))}
+      {item(t('ctx.moveDown'), () => onMoveDown(workspaceId))}
+      {item(t('ctx.moveTop'), () => onMoveToTop(workspaceId))}
 
       <div className="ctx-menu__separator" />
 
       {/* Close */}
-      {item('Close Workspace', () => onCloseWorkspace(workspaceId), true)}
-      {item('Close Other Workspaces', () => onCloseOthers(workspaceId), true)}
+      {item(t('ctx.close'), () => onCloseWorkspace(workspaceId), true)}
+      {item(t('ctx.closeOthers'), () => onCloseOthers(workspaceId), true)}
 
       <div className="ctx-menu__separator" />
 
       {/* Mark read/unread */}
-      {item('Mark as Read', () => onMarkRead(workspaceId))}
-      {item('Mark as Unread', () => onMarkUnread(workspaceId))}
+      {item(t('ctx.markRead'), () => onMarkRead(workspaceId))}
+      {item(t('ctx.markUnread'), () => onMarkUnread(workspaceId))}
     </div>
   );
 
