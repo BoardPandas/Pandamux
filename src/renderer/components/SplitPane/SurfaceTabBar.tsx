@@ -24,6 +24,8 @@ interface SurfaceTabBarProps {
   onSplitDown?: () => void;
   onDropSurface?: (sourcePaneId: PaneId, surfaceId: SurfaceId, targetPaneId: PaneId) => void;
   onReorderSurface?: (surfaceId: SurfaceId, newIndex: number) => void;
+  onSurfaceDragStart?: (surfaceId: SurfaceId) => void;
+  onSurfaceDragEnd?: () => void;
   isDragActive?: boolean;
   isFocused?: boolean;
 }
@@ -82,6 +84,8 @@ export default function SurfaceTabBar({
   onSplitDown,
   onDropSurface,
   onReorderSurface,
+  onSurfaceDragStart,
+  onSurfaceDragEnd,
   isDragActive,
   isFocused,
 }: SurfaceTabBarProps) {
@@ -216,7 +220,10 @@ export default function SurfaceTabBar({
         setDraggingSurfaceId(null);
         document.body.classList.remove('wmux-dragging');
         const data = e.dataTransfer.getData('application/wmux-surface');
-        if (!data) return;
+        if (!data) {
+          onSurfaceDragEnd?.();
+          return;
+        }
         try {
           const { sourcePaneId, surfaceId } = JSON.parse(data);
           if (sourcePaneId === paneId && onReorderSurface && savedInsertIndex !== null) {
@@ -228,7 +235,11 @@ export default function SurfaceTabBar({
           } else if (sourcePaneId !== paneId && onDropSurface) {
             onDropSurface(sourcePaneId as PaneId, surfaceId as SurfaceId, paneId);
           }
-        } catch {}
+        } catch {
+          onSurfaceDragEnd?.();
+          return;
+        }
+        onSurfaceDragEnd?.();
       }}
       onDragLeave={() => setInsertIndex(null)}
     >
@@ -264,11 +275,13 @@ export default function SurfaceTabBar({
                 );
                 e.dataTransfer.effectAllowed = 'move';
                 setDraggingSurfaceId(surface.id);
+                onSurfaceDragStart?.(surface.id);
                 document.body.classList.add('wmux-dragging');
               }}
               onDragEnd={() => {
                 setDraggingSurfaceId(null);
                 setInsertIndex(null);
+                onSurfaceDragEnd?.();
                 document.body.classList.remove('wmux-dragging');
               }}
               onDragOver={(e) => {

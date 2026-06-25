@@ -12,6 +12,7 @@ import CommandPalette from './components/CommandPalette/CommandPalette';
 import BrowserPane from './components/Browser/BrowserPane';
 import Tutorial from './components/Tutorial/Tutorial';
 import { initPipeBridge } from './pipe-bridge';
+import type { SurfaceDragPayload, SurfaceDragPreview, SurfaceDragPreviewTarget } from './components/SplitPane/drag-preview-types';
 
 const DEFAULT_SIDEBAR_WIDTH = 240;
 
@@ -631,10 +632,37 @@ export default function App() {
   }, []);
 
   const [zoomedPaneId, setZoomedPaneId] = useState<PaneId | null>(null);
+  const [surfaceDrag, setSurfaceDrag] = useState<SurfaceDragPayload | null>(null);
+  const [surfaceDragPreview, setSurfaceDragPreview] = useState<SurfaceDragPreview | null>(null);
 
   const handleToggleZoom = useCallback(() => {
     setZoomedPaneId((prev) => (prev ? null : focusedPaneId));
   }, [focusedPaneId]);
+
+  const handleSurfaceDragStart = useCallback((payload: SurfaceDragPayload) => {
+    setSurfaceDrag(payload);
+  }, []);
+
+  const handleSurfaceDragEnd = useCallback(() => {
+    setSurfaceDrag(null);
+    setSurfaceDragPreview(null);
+    document.body.classList.remove('wmux-dragging');
+  }, []);
+
+  const handleSurfaceDragPreviewTarget = useCallback((_targetPaneId: PaneId, _target: SurfaceDragPreviewTarget) => {
+    setSurfaceDragPreview(null);
+  }, []);
+
+  const handleClearSurfaceDragPreview = useCallback(() => {
+    setSurfaceDragPreview(null);
+  }, []);
+
+  const handleSurfaceDragCommit = useCallback(() => {
+    if (surfaceDragPreview) setZoomedPaneId(null);
+    setSurfaceDrag(null);
+    setSurfaceDragPreview(null);
+    document.body.classList.remove('wmux-dragging');
+  }, [surfaceDragPreview]);
 
   // Clear zoom when the zoomed pane no longer exists
   useEffect(() => {
@@ -737,6 +765,12 @@ export default function App() {
                 focusedPaneId={ws.id === activeWorkspaceId ? focusedPaneId : null}
                 onRatioChange={ws.id === activeWorkspaceId ? handleRatioChange : undefined}
                 onPaneFocus={handlePaneFocus}
+                surfaceDrag={ws.id === activeWorkspaceId ? surfaceDrag : null}
+                onSurfaceDragStart={handleSurfaceDragStart}
+                onSurfaceDragEnd={handleSurfaceDragEnd}
+                onSurfaceDragPreviewTarget={handleSurfaceDragPreviewTarget}
+                onClearSurfaceDragPreview={handleClearSurfaceDragPreview}
+                onSurfaceDragCommit={handleSurfaceDragCommit}
               />
             </div>
           ))}

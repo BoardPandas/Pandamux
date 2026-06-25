@@ -8,6 +8,7 @@ import DiffPane from '../Diff/DiffPane';
 import NotificationRing from '../Terminal/NotificationRing';
 import SurfaceTabBar from './SurfaceTabBar';
 import { useStore } from '../../store';
+import type { SurfaceDragPayload, SurfaceDragPreviewTarget } from './drag-preview-types';
 import '../../styles/splitpane.css';
 import '../../styles/terminal.css';
 
@@ -16,9 +17,22 @@ interface PaneWrapperProps {
   workspaceId: WorkspaceId;
   leaf: SplitNode & { type: 'leaf' };
   isFocused: boolean;
+  surfaceDrag: SurfaceDragPayload | null;
+  onSurfaceDragStart: (payload: SurfaceDragPayload) => void;
+  onSurfaceDragEnd: () => void;
+  onSurfaceDragPreviewTarget: (targetPaneId: PaneId, target: SurfaceDragPreviewTarget) => void;
+  onClearSurfaceDragPreview: () => void;
+  onSurfaceDragCommit: () => void;
 }
 
-export default function PaneWrapper({ leaf, workspaceId, isFocused }: PaneWrapperProps) {
+export default function PaneWrapper({
+  leaf,
+  workspaceId,
+  isFocused,
+  onSurfaceDragStart,
+  onSurfaceDragEnd,
+  onSurfaceDragCommit,
+}: PaneWrapperProps) {
   const { surfaces, activeSurfaceIndex, paneId } = leaf;
 
   const notifications = useStore((s) => s.notifications);
@@ -356,11 +370,17 @@ export default function PaneWrapper({ leaf, workspaceId, isFocused }: PaneWrappe
     setDragActive(false);
     document.body.classList.remove('wmux-dragging');
     const data = e.dataTransfer.getData('application/wmux-surface');
-    if (!data || !activeWorkspaceId) return;
+    if (!data || !activeWorkspaceId) {
+      onSurfaceDragEnd();
+      return;
+    }
     try {
       const { sourcePaneId, surfaceId } = JSON.parse(data);
+      onSurfaceDragCommit();
       splitAndMoveSurface(activeWorkspaceId, paneId, sourcePaneId as PaneId, surfaceId as SurfaceId, direction);
-    } catch {}
+    } catch {
+      onSurfaceDragEnd();
+    }
   };
 
   const handleCenterDrop = (e: React.DragEvent) => {
@@ -368,13 +388,21 @@ export default function PaneWrapper({ leaf, workspaceId, isFocused }: PaneWrappe
     setDragActive(false);
     document.body.classList.remove('wmux-dragging');
     const data = e.dataTransfer.getData('application/wmux-surface');
-    if (!data || !activeWorkspaceId) return;
+    if (!data || !activeWorkspaceId) {
+      onSurfaceDragEnd();
+      return;
+    }
     try {
       const { sourcePaneId, surfaceId } = JSON.parse(data);
       if (sourcePaneId !== paneId) {
+        onSurfaceDragCommit();
         moveSurface(activeWorkspaceId, sourcePaneId as PaneId, surfaceId as SurfaceId, paneId);
+        return;
       }
-    } catch {}
+      onSurfaceDragEnd();
+    } catch {
+      onSurfaceDragEnd();
+    }
   };
 
   const preventDragDefault = (e: React.DragEvent) => {
@@ -409,6 +437,12 @@ export default function PaneWrapper({ leaf, workspaceId, isFocused }: PaneWrappe
         onSplitDown={handleSplitDown}
         onDropSurface={handleDropSurface}
         onReorderSurface={handleReorderSurface}
+        onSurfaceDragStart={(surfaceId) => onSurfaceDragStart({
+          workspaceId,
+          sourcePaneId: paneId,
+          surfaceId,
+        })}
+        onSurfaceDragEnd={onSurfaceDragEnd}
         isDragActive={dragActive}
         isFocused={isFocused}
       />
