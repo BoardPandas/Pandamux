@@ -23,22 +23,36 @@ interface WindowEntry {
 export class WindowManager {
   private windows = new Map<WindowId, WindowEntry>();
 
-  createWindow(bounds?: { x: number; y: number; width: number; height: number }): WindowId {
+  createWindow(
+    bounds?: { x: number; y: number; width: number; height: number },
+    maximized?: boolean,
+  ): WindowId {
     const id = `win-${uuid()}` as WindowId;
 
-    // Validate saved bounds: reasonable size + on a visible display
+    // Validate + clamp saved bounds against the display they best match. On
+    // multi-monitor + mixed-DPI setups, DIP bounds captured on one monitor can
+    // otherwise be re-applied to the wrong display and collapse the window toward
+    // the min-size floor — the "tiny window" in issue #57.
     if (bounds) {
       if (bounds.width < 400 || bounds.height < 300) {
         bounds = undefined;
       } else {
-        const b = bounds;
-        const displays = screen.getAllDisplays();
-        const isOnScreen = displays.some(d => {
-          const wa = d.workArea;
-          return b.x < wa.x + wa.width && b.x + b.width > wa.x &&
-                 b.y < wa.y + wa.height && b.y + b.height > wa.y;
-        });
-        if (!isOnScreen) bounds = undefined;
+        const target = screen.getDisplayMatching(bounds as Electron.Rectangle);
+        const wa = target.workArea;
+        const intersects =
+          bounds.x < wa.x + wa.width && bounds.x + bounds.width > wa.x &&
+          bounds.y < wa.y + wa.height && bounds.y + bounds.height > wa.y;
+        if (!intersects) {
+          bounds = undefined;
+        } else {
+          // Clamp size to the target work area and nudge the window fully on it,
+          // so a restore can never shrink below what that display can show.
+          const width = Math.min(bounds.width, wa.width);
+          const height = Math.min(bounds.height, wa.height);
+          const x = Math.max(wa.x, Math.min(bounds.x, wa.x + wa.width - width));
+          const y = Math.max(wa.y, Math.min(bounds.y, wa.y + wa.height - height));
+          bounds = { x, y, width, height };
+        }
       }
     }
 
@@ -74,6 +88,13 @@ export class WindowManager {
       win.webContents.openDevTools({ mode: 'detach' });
     } else {
       win.loadFile(path.join(__dirname, '../renderer/index.html'));
+    }
+
+    // Restore the maximized state on the correct monitor. Bounds above were set
+    // to the pre-maximize ("normal") rectangle on the target display, so maximize
+    // lands on that display and a later un-maximize returns there (issue #57).
+    if (maximized) {
+      win.maximize();
     }
 
     win.on('closed', () => {

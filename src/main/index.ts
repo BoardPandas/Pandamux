@@ -256,7 +256,10 @@ app.whenReady().then(() => {
     // Augment with actual window bounds (renderer can't know these)
     const win = BrowserWindow.fromWebContents(event.sender);
     if (win && !win.isDestroyed() && data.windows?.[0]) {
-      data.windows[0].bounds = win.getBounds();
+      // Persist the maximized flag and the *normal* (pre-maximize) rectangle so a
+      // relaunch can re-maximize on the right monitor and un-maximize sanely (issue #57).
+      data.windows[0].maximized = win.isMaximized();
+      data.windows[0].bounds = win.getNormalBounds();
     }
     saveSession(data);
     scheduleAutoSave();
@@ -269,8 +272,8 @@ app.whenReady().then(() => {
 
   // Attempt to restore last saved window bounds
   const savedSession = loadSession();
-  const savedBounds = savedSession?.windows?.[0]?.bounds;
-  windowManager.createWindow(savedBounds);
+  const savedWindow = savedSession?.windows?.[0];
+  windowManager.createWindow(savedWindow?.bounds, savedWindow?.maximized);
 
   // Initialize auto-updater only when packaged (avoids errors in dev)
   if (app.isPackaged) {

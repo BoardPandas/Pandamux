@@ -13,6 +13,7 @@ export interface SessionData {
   version: 1;
   windows: Array<{
     bounds: { x: number; y: number; width: number; height: number };
+    maximized?: boolean; // restore full-size state on relaunch (issue #57)
     sidebarWidth: number;
     activeWorkspaceId: string | null;
     workspaces: Array<{

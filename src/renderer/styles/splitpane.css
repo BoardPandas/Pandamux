@@ -16,6 +16,18 @@
 .split-divider--vertical .split-divider__line { height: 2px; width: 100%; top: 50%; transform: translateY(-50%) scaleY(0.5); }
 .split-divider:hover .split-divider--horizontal .split-divider__line { transform: translateX(-50%) scaleX(1); }
 .split-divider:hover .split-divider--vertical .split-divider__line { transform: translateY(-50%) scaleY(1); }
+
+/* Keep the line highlighted for the whole drag, not just while hovered. */
+.split-divider--dragging .split-divider__line { background: rgba(0, 145, 255, 0.6); }
+.split-divider--dragging.split-divider--horizontal .split-divider__line { transform: translateX(-50%) scaleX(1); }
+.split-divider--dragging.split-divider--vertical .split-divider__line { transform: translateY(-50%) scaleY(1); }
+
+/* Full-window overlay shown only while dragging. Sits above panes and the
+   out-of-process <webview> so pointer events can't be swallowed mid-drag
+   (issue #59). Maximal z-index + fixed positioning escape any pane clipping. */
+.split-divider__drag-overlay { position: fixed; inset: 0; z-index: 2147483647; background: transparent; }
+.split-divider__drag-overlay--horizontal { cursor: col-resize; }
+.split-divider__drag-overlay--vertical { cursor: row-resize; }
 .pane-wrapper {
   position: relative;
   width: 100%;
