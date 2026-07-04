@@ -43,8 +43,30 @@ async function releaseAgeMs(version: string): Promise<number | null> {
 }
 
 let installPrompted = false;
+let missingChannelFileWarned = false;
+
+// A release without latest.yml (manual/partial releases, transient GitHub
+// errors) is an expected condition, not a failure — the notify-only checker in
+// update-checker.ts still covers it (issue #68).
+export function isMissingChannelFileError(err: unknown): boolean {
+  const e = err as { code?: string; message?: string } | null | undefined;
+  if (e?.code === 'ERR_UPDATER_CHANNEL_FILE_NOT_FOUND') return true;
+  const msg = e?.message || String(err ?? '');
+  return msg.includes('ERR_UPDATER_CHANNEL_FILE_NOT_FOUND') || msg.includes('Cannot find latest.yml');
+}
+
+export function isUpdaterDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.WMUX_DISABLE_UPDATER === '1';
+}
 
 export function initAutoUpdater(): void {
+  // Kill switch for air-gapped / corporate / sandboxed environments that
+  // cannot (or should not) reach GitHub (issue #68).
+  if (isUpdaterDisabled()) {
+    console.log('[updater] Disabled via WMUX_DISABLE_UPDATER=1');
+    return;
+  }
+
   // Gate both download and install — nothing happens without passing the
   // quarantine window and an explicit user click.
   autoUpdater.autoDownload = false;
@@ -96,6 +118,13 @@ export function initAutoUpdater(): void {
   });
 
   autoUpdater.on('error', (err) => {
+    if (isMissingChannelFileError(err)) {
+      if (!missingChannelFileWarned) {
+        missingChannelFileWarned = true;
+        console.warn('[updater] latest.yml not found in latest release — update check skipped.');
+      }
+      return;
+    }
     console.error('[updater] Auto-updater error:', err);
   });
 

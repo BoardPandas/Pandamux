@@ -236,11 +236,27 @@ node -e "
 # 9. Create zip
 powershell -NoProfile -Command "Compress-Archive -Path '..\wmux-release-staging\*' -DestinationPath '..\wmux-<VERSION>-win-x64.zip' -CompressionLevel Optimal"
 
-# 10. Tag, push, publish
+# 9b. Generate latest.yml (REQUIRED — electron-updater 404s on every launch
+# without it; issue #68. The CI workflow does this automatically, but manual
+# releases MUST do it too.)
+node -e "
+  const crypto = require('crypto'); const fs = require('fs');
+  const version = '<VERSION>';
+  const zip = '../wmux-' + version + '-win-x64.zip';
+  const data = fs.readFileSync(zip);
+  const sha512 = crypto.createHash('sha512').update(data).digest('base64');
+  const yaml = ['version: ' + version, 'files:', '  - url: wmux-' + version + '-win-x64.zip',
+    '    sha512: ' + sha512, '    size: ' + data.length, 'path: wmux-' + version + '-win-x64.zip',
+    'sha512: ' + sha512, 'releaseDate: ' + JSON.stringify(new Date().toISOString()), ''].join('\n');
+  fs.writeFileSync('../latest.yml', yaml);
+  console.log('latest.yml written:', data.length, 'bytes,', sha512.slice(0, 16) + '...');
+"
+
+# 10. Tag, push, publish (zip AND latest.yml — both assets are required)
 git add package.json package-lock.json && git commit -m "chore(release): bump to <VERSION>"
 git push origin master
 git tag -a v<VERSION> -m "wmux <VERSION>" && git push origin v<VERSION>
-gh release create v<VERSION> ../wmux-<VERSION>-win-x64.zip --repo amirlehmam/wmux --title "v<VERSION>" --notes "..."
+gh release create v<VERSION> ../wmux-<VERSION>-win-x64.zip ../latest.yml --repo amirlehmam/wmux --title "v<VERSION>" --notes "..."
 
 # 11. (Optional) Hot-swap into the locally running wmux for immediate testing
 cp build-out/app.asar resources/app.asar
@@ -262,6 +278,7 @@ rm -rf .asar-staging build-out /tmp/asar-verify ../wmux-release-staging
 - [ ] PR-specific markers grep-confirmed inside the packed ASAR (extracted to /tmp)
 - [ ] wmux-orchestrator plugin copied to release staging
 - [ ] rcedit applied (icon + version metadata) — `{ rcedit }` destructured
+- [ ] `latest.yml` generated (sha512 + size of the final zip) and uploaded as a release asset — electron-updater 404s without it (issue #68)
 - [ ] Zip created and uploaded to GitHub release
 - [ ] Mark of the Web: remind user to right-click > Unblock after download
 
