@@ -17,6 +17,11 @@ nodeLinker: hoisted
 # Allow only the packages that must compile a native addon or fetch a platform
 # binary at install time.
 allowBuilds:
-  node-pty: true   # native ConPTY/pty addon (node-gyp)
-  electron: true   # postinstall downloads the Electron binary
-  esbuild: true    # postinstall installs the esbuild binary (used by Vite)
+  node-pty: true # native ConPTY/pty addon (node-gyp)
+  electron: true # postinstall downloads the Electron binary
+  esbuild: true # postinstall installs the esbuild binary (used by Vite)
+  # electron-winstaller (pulled in transitively by electron-builder) builds the
+  # Squirrel/NSIS installer helper. We package manually (ASAR + zip, `dir`
+  # target), never the Windows installer, so its build script is intentionally
+  # skipped. Explicit false settles pnpm's pre-run deps-status check.
+  electron-winstaller: false
