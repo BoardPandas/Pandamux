@@ -1,0 +1,762 @@
+project:
+  name: "PandaMUX Everywhere"
+  description: "Electron-based Windows terminal multiplexer for AI agents, with keep-alive split panes, a named-pipe control plane, a CLI, and a CDP-driven browser panel."
+  repo_base_url: "https://github.com/BoardPandas/Pandamux/blob"
+  ref_commit_hash: "0ab9e6463a9017a7b8ea98f10b3f847507658ac4"
+  branch: "master"
+  updated_at: "2026-07-05"
+
+pages:
+  - id: pandamux_01_overview
+    title: "Overview"
+    folder: ""
+    filename: "OVERVIEW.md"
+    description: "What PandaMUX Everywhere is, its stack, repo layout, and where to start reading."
+    category: overview
+    source_files:
+      - "README.md"
+      - "package.json"
+      - "CLAUDE.md"
+      - "src/main/index.ts"
+      - "src/renderer/App.tsx"
+    sections:
+      - id: pandamux_01_overview_introduction
+        title: "Introduction"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_01_overview_purpose
+        title: "Purpose and Direction"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_01_overview_stack
+        title: "Technology Stack"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_01_overview_layout
+        title: "Repository Layout"
+        autogen: true
+        diagrams_needed: true
+        diagram_types: ["flowchart"]
+      - id: pandamux_01_overview_entry-points
+        title: "Entry Points"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_01_overview_navigate
+        title: "Where to Start"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+    related_pages:
+      - pandamux_02_getting-started
+      - pandamux_03_architecture
+
+  - id: pandamux_02_getting-started
+    title: "Getting Started"
+    folder: ""
+    filename: "GETTING_STARTED.md"
+    description: "Prerequisites, pnpm install, dev workflow, build scripts, and tests."
+    category: guide
+    source_files:
+      - "package.json"
+      - "pnpm-workspace.yaml"
+      - "README.md"
+      - "CLAUDE.md"
+      - "tsconfig.json"
+      - "tsconfig.node.json"
+    sections:
+      - id: pandamux_02_getting-started_prerequisites
+        title: "Prerequisites"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_02_getting-started_installation
+        title: "Installation"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_02_getting-started_dev
+        title: "Development Workflow"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_02_getting-started_build
+        title: "Build Scripts"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_02_getting-started_testing
+        title: "Running Tests"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_02_getting-started_native
+        title: "Native Dependencies and Gotchas"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+    related_pages:
+      - pandamux_01_overview
+      - pandamux_13_release
+
+  - id: pandamux_03_architecture
+    title: "Architecture"
+    folder: "core"
+    filename: "ARCHITECTURE.md"
+    description: "Electron process model, IPC, preload bridge, split tree, and keep-alive surfaces."
+    category: architecture
+    source_files:
+      - "src/main/index.ts"
+      - "src/preload/index.ts"
+      - "src/renderer/index.tsx"
+      - "src/renderer/App.tsx"
+      - "src/shared/types.ts"
+      - "src/shared/id.ts"
+      - "src/shared/instance.ts"
+    sections:
+      - id: pandamux_03_architecture_process-model
+        title: "Process Model"
+        autogen: true
+        diagrams_needed: true
+        diagram_types: ["flowchart"]
+      - id: pandamux_03_architecture_main
+        title: "Main Process"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_03_architecture_renderer
+        title: "Renderer Process"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_03_architecture_preload
+        title: "Preload Bridge"
+        autogen: true
+        source_files:
+          - "src/preload/index.ts"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_03_architecture_ipc
+        title: "IPC Channels"
+        autogen: true
+        source_files:
+          - "src/shared/types.ts"
+        diagrams_needed: true
+        diagram_types: ["sequence"]
+      - id: pandamux_03_architecture_split-tree
+        title: "Split Tree and Surfaces"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_03_architecture_keep-alive
+        title: "Keep-Alive Tabs"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+    related_pages:
+      - pandamux_04_main-process
+      - pandamux_05_renderer-and-state
+      - pandamux_08_named-pipe-ipc
+
+  - id: pandamux_04_main-process
+    title: "Main Process Modules"
+    folder: "core"
+    filename: "MAIN_PROCESS.md"
+    description: "The Electron main-process modules: entry point, PTY lifecycle, windows, IPC handlers, and helpers."
+    category: module
+    source_files:
+      - "src/main/index.ts"
+      - "src/main/pty-manager.ts"
+      - "src/main/window-manager.ts"
+      - "src/main/ipc-handlers.ts"
+      - "src/main/agent-manager.ts"
+      - "src/main/notification-manager.ts"
+      - "src/main/session-persistence.ts"
+      - "src/main/settings-store.ts"
+    sections:
+      - id: pandamux_04_main-process_entry
+        title: "Entry Point and Bootstrap"
+        autogen: true
+        source_files:
+          - "src/main/index.ts"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_04_main-process_pty
+        title: "PTY Manager"
+        autogen: true
+        source_files:
+          - "src/main/pty-manager.ts"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_04_main-process_window
+        title: "Window Manager"
+        autogen: true
+        source_files:
+          - "src/main/window-manager.ts"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_04_main-process_ipc
+        title: "IPC Handlers"
+        autogen: true
+        source_files:
+          - "src/main/ipc-handlers.ts"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_04_main-process_persistence
+        title: "Session Persistence and Settings"
+        autogen: true
+        source_files:
+          - "src/main/session-persistence.ts"
+          - "src/main/settings-store.ts"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_04_main-process_supporting
+        title: "Supporting Modules"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+    related_pages:
+      - pandamux_03_architecture
+      - pandamux_08_named-pipe-ipc
+
+  - id: pandamux_05_renderer-and-state
+    title: "Renderer and State"
+    folder: "core"
+    filename: "RENDERER_AND_STATE.md"
+    description: "React UI structure, terminal rendering, keyboard shortcuts, and the Zustand store."
+    category: module
+    source_files:
+      - "src/renderer/App.tsx"
+      - "src/renderer/components/**/*.tsx"
+      - "src/renderer/hooks/*.ts"
+      - "src/renderer/store/*.ts"
+    sections:
+      - id: pandamux_05_renderer-and-state_app
+        title: "React Application Shell"
+        autogen: true
+        source_files:
+          - "src/renderer/App.tsx"
+          - "src/renderer/index.tsx"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_05_renderer-and-state_components
+        title: "Component Inventory"
+        autogen: true
+        source_files:
+          - "src/renderer/components/**/*.tsx"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_05_renderer-and-state_terminal
+        title: "Terminal Rendering"
+        autogen: true
+        source_files:
+          - "src/renderer/hooks/useTerminal.ts"
+          - "src/renderer/components/Terminal/TerminalPane.tsx"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_05_renderer-and-state_shortcuts
+        title: "Keyboard Shortcuts"
+        autogen: true
+        source_files:
+          - "src/renderer/hooks/useKeyboardShortcuts.ts"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_05_renderer-and-state_store
+        title: "Zustand Store"
+        autogen: true
+        source_files:
+          - "src/renderer/store/*.ts"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_05_renderer-and-state_split-utils
+        title: "Split Tree Utilities"
+        autogen: true
+        source_files:
+          - "src/renderer/store/split-utils.ts"
+          - "src/renderer/store/split-preview-utils.ts"
+        diagrams_needed: true
+        diagram_types: ["flowchart"]
+    related_pages:
+      - pandamux_03_architecture
+      - pandamux_06_configuration
+
+  - id: pandamux_06_configuration
+    title: "Configuration"
+    folder: "core"
+    filename: "CONFIGURATION.md"
+    description: "Settings store, user config, theme loading, terminal-config import, and environment variables."
+    category: configuration
+    source_files:
+      - "src/main/config-loader.ts"
+      - "src/main/settings-store.ts"
+      - "src/main/user-config.ts"
+      - "src/main/theme-loader.ts"
+      - "src/main/toml-parser.ts"
+      - "src/renderer/store/settings-slice.ts"
+    sections:
+      - id: pandamux_06_configuration_layers
+        title: "Configuration Layers"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_06_configuration_settings-store
+        title: "Settings Store"
+        autogen: true
+        source_files:
+          - "src/main/settings-store.ts"
+          - "src/renderer/store/settings-slice.ts"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_06_configuration_user-config
+        title: "User Config"
+        autogen: true
+        source_files:
+          - "src/main/user-config.ts"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_06_configuration_themes
+        title: "Theme Loading"
+        autogen: true
+        source_files:
+          - "src/main/theme-loader.ts"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_06_configuration_import
+        title: "Terminal Config Import"
+        autogen: true
+        source_files:
+          - "src/main/config-loader.ts"
+          - "src/main/toml-parser.ts"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_06_configuration_env
+        title: "Environment Variables"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+    related_pages:
+      - pandamux_05_renderer-and-state
+      - pandamux_12_shell-integration
+
+  - id: pandamux_07_cli-reference
+    title: "CLI Reference"
+    folder: "api"
+    filename: "CLI_REFERENCE.md"
+    description: "The pandamux CLI: every command group, arguments, and how it maps to pipe methods."
+    category: api
+    source_files:
+      - "src/cli/pandamux.ts"
+      - "src/cli/pandamux-hook.ts"
+    sections:
+      - id: pandamux_07_cli-reference_overview
+        title: "Overview and Invocation"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_07_cli-reference_system
+        title: "System Commands"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_07_cli-reference_workspace
+        title: "Workspace Commands"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_07_cli-reference_surface-pane
+        title: "Surface and Pane Commands"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_07_cli-reference_terminal-io
+        title: "Terminal I/O Commands"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_07_cli-reference_browser
+        title: "Browser Commands"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_07_cli-reference_agent
+        title: "Agent Commands"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_07_cli-reference_notify
+        title: "Notification and Sidebar Commands"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+    related_pages:
+      - pandamux_08_named-pipe-ipc
+      - pandamux_09_agent-orchestration
+
+  - id: pandamux_08_named-pipe-ipc
+    title: "Named Pipe Control Plane"
+    folder: "features"
+    filename: "NAMED_PIPE_IPC.md"
+    description: "The \\\\.\\pipe\\pandamux server: V1 text hooks, V2 JSON-RPC, the renderer bridge, and Electron IPC channels."
+    category: feature
+    source_files:
+      - "src/main/pipe-server.ts"
+      - "src/main/v2-bridge.ts"
+      - "src/main/v2-browser.ts"
+      - "src/renderer/pipe-bridge.ts"
+      - "src/shared/types.ts"
+      - "src/shared/instance.ts"
+    sections:
+      - id: pandamux_08_named-pipe-ipc_overview
+        title: "Overview"
+        autogen: true
+        diagrams_needed: true
+        diagram_types: ["flowchart"]
+      - id: pandamux_08_named-pipe-ipc_v1
+        title: "V1 Text Protocol"
+        autogen: true
+        source_files:
+          - "src/main/pipe-server.ts"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_08_named-pipe-ipc_v2
+        title: "V2 JSON-RPC Protocol"
+        autogen: true
+        source_files:
+          - "src/main/pipe-server.ts"
+          - "src/main/v2-bridge.ts"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_08_named-pipe-ipc_methods
+        title: "Method Catalog"
+        autogen: true
+        source_files:
+          - "src/main/v2-bridge.ts"
+          - "src/main/v2-browser.ts"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_08_named-pipe-ipc_bridge
+        title: "Renderer Bridge"
+        autogen: true
+        source_files:
+          - "src/renderer/pipe-bridge.ts"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_08_named-pipe-ipc_channels
+        title: "Electron IPC Channels"
+        autogen: true
+        source_files:
+          - "src/shared/types.ts"
+        diagrams_needed: false
+        diagram_types: []
+    related_pages:
+      - pandamux_07_cli-reference
+      - pandamux_04_main-process
+
+  - id: pandamux_09_agent-orchestration
+    title: "Agent Orchestration"
+    folder: "features"
+    filename: "AGENT_ORCHESTRATION.md"
+    description: "Spawning agent PTYs across panes, the orchestration watcher, store slices, and the orchestrator plugin."
+    category: feature
+    source_files:
+      - "src/main/agent-manager.ts"
+      - "src/main/orchestration-watcher.ts"
+      - "src/renderer/store/agent-slice.ts"
+      - "src/renderer/store/orchestration-slice.ts"
+      - "src/renderer/components/Sidebar/OrchestrationPanel.tsx"
+      - "resources/pandamux-orchestrator/README.md"
+    sections:
+      - id: pandamux_09_agent-orchestration_overview
+        title: "Overview"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_09_agent-orchestration_manager
+        title: "Agent Manager"
+        autogen: true
+        source_files:
+          - "src/main/agent-manager.ts"
+        diagrams_needed: true
+        diagram_types: ["state"]
+      - id: pandamux_09_agent-orchestration_watcher
+        title: "Orchestration Watcher"
+        autogen: true
+        source_files:
+          - "src/main/orchestration-watcher.ts"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_09_agent-orchestration_state
+        title: "Store Slices"
+        autogen: true
+        source_files:
+          - "src/renderer/store/agent-slice.ts"
+          - "src/renderer/store/orchestration-slice.ts"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_09_agent-orchestration_plugin
+        title: "Orchestrator Plugin"
+        autogen: true
+        source_files:
+          - "resources/pandamux-orchestrator/README.md"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_09_agent-orchestration_panel
+        title: "Orchestration Panel UI"
+        autogen: true
+        source_files:
+          - "src/renderer/components/Sidebar/OrchestrationPanel.tsx"
+        diagrams_needed: false
+        diagram_types: []
+    related_pages:
+      - pandamux_07_cli-reference
+      - pandamux_11_ai-integration
+
+  - id: pandamux_10_browser-cdp
+    title: "Browser Panel and CDP"
+    folder: "features"
+    filename: "BROWSER_CDP.md"
+    description: "The browser pane driven through the Chrome DevTools Protocol: bridge, proxy, and CLI surface."
+    category: feature
+    source_files:
+      - "src/main/cdp-bridge.ts"
+      - "src/main/cdp-proxy.ts"
+      - "src/main/v2-browser.ts"
+      - "src/renderer/components/Browser/BrowserPane.tsx"
+      - "src/renderer/components/Browser/AddressBar.tsx"
+    sections:
+      - id: pandamux_10_browser-cdp_overview
+        title: "Overview"
+        autogen: true
+        diagrams_needed: true
+        diagram_types: ["sequence"]
+      - id: pandamux_10_browser-cdp_bridge
+        title: "CDP Bridge"
+        autogen: true
+        source_files:
+          - "src/main/cdp-bridge.ts"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_10_browser-cdp_proxy
+        title: "CDP Proxy"
+        autogen: true
+        source_files:
+          - "src/main/cdp-proxy.ts"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_10_browser-cdp_pane
+        title: "Browser Pane UI"
+        autogen: true
+        source_files:
+          - "src/renderer/components/Browser/BrowserPane.tsx"
+          - "src/renderer/components/Browser/AddressBar.tsx"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_10_browser-cdp_cli
+        title: "Browser CLI Surface"
+        autogen: true
+        source_files:
+          - "src/main/v2-browser.ts"
+        diagrams_needed: false
+        diagram_types: []
+    related_pages:
+      - pandamux_07_cli-reference
+      - pandamux_08_named-pipe-ipc
+
+  - id: pandamux_11_ai-integration
+    title: "AI Agent Integration"
+    folder: "features"
+    filename: "AI_INTEGRATION.md"
+    description: "Claude Code context injection, hook configuration, plugin install, activity observation, and OpenCode support."
+    category: feature
+    source_files:
+      - "src/main/claude-context.ts"
+      - "src/main/claude-observer.ts"
+      - "src/main/opencode-context.ts"
+    sections:
+      - id: pandamux_11_ai-integration_overview
+        title: "Overview"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_11_ai-integration_context
+        title: "Claude Context Injection"
+        autogen: true
+        source_files:
+          - "src/main/claude-context.ts"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_11_ai-integration_hooks
+        title: "Hook and Plugin Configuration"
+        autogen: true
+        source_files:
+          - "src/main/claude-context.ts"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_11_ai-integration_observer
+        title: "Claude Activity Observer"
+        autogen: true
+        source_files:
+          - "src/main/claude-observer.ts"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_11_ai-integration_opencode
+        title: "OpenCode Support"
+        autogen: true
+        source_files:
+          - "src/main/opencode-context.ts"
+        diagrams_needed: false
+        diagram_types: []
+    related_pages:
+      - pandamux_09_agent-orchestration
+      - pandamux_12_shell-integration
+
+  - id: pandamux_12_shell-integration
+    title: "Shell Integration and Status"
+    folder: "features"
+    filename: "SHELL_INTEGRATION.md"
+    description: "Shell hook scripts, OSC sequences, and the git, PR, port, and shell-detection pollers."
+    category: feature
+    source_files:
+      - "src/shell-integration/pandamux-bash-integration.sh"
+      - "src/shell-integration/pandamux-powershell-integration.ps1"
+      - "src/shell-integration/pandamux-cmd-integration.cmd"
+      - "src/main/git-poller.ts"
+      - "src/main/pr-poller.ts"
+      - "src/main/port-scanner.ts"
+      - "src/main/shell-detector.ts"
+    sections:
+      - id: pandamux_12_shell-integration_overview
+        title: "Overview"
+        autogen: true
+        diagrams_needed: true
+        diagram_types: ["flowchart"]
+      - id: pandamux_12_shell-integration_scripts
+        title: "Shell Hook Scripts"
+        autogen: true
+        source_files:
+          - "src/shell-integration/pandamux-bash-integration.sh"
+          - "src/shell-integration/pandamux-powershell-integration.ps1"
+          - "src/shell-integration/pandamux-cmd-integration.cmd"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_12_shell-integration_git
+        title: "Git Poller"
+        autogen: true
+        source_files:
+          - "src/main/git-poller.ts"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_12_shell-integration_pr
+        title: "PR Poller"
+        autogen: true
+        source_files:
+          - "src/main/pr-poller.ts"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_12_shell-integration_ports
+        title: "Port Scanner"
+        autogen: true
+        source_files:
+          - "src/main/port-scanner.ts"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_12_shell-integration_detector
+        title: "Shell Detector"
+        autogen: true
+        source_files:
+          - "src/main/shell-detector.ts"
+        diagrams_needed: false
+        diagram_types: []
+    related_pages:
+      - pandamux_06_configuration
+      - pandamux_11_ai-integration
+
+  - id: pandamux_13_release
+    title: "Release and Packaging"
+    folder: "operations"
+    filename: "RELEASE.md"
+    description: "The ASAR-based portable-zip release flow, native-module unpacking, rcedit, auto-update, and CI."
+    category: runbook
+    source_files:
+      - "CLAUDE.md"
+      - "electron-builder.json"
+      - ".github/workflows/release.yml"
+      - ".github/workflows/winget.yml"
+      - "src/main/updater.ts"
+      - "src/main/update-checker.ts"
+    sections:
+      - id: pandamux_13_release_overview
+        title: "Overview"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_13_release_build
+        title: "Build and Staging"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_13_release_asar
+        title: "ASAR Packaging and Native Modules"
+        autogen: true
+        source_files:
+          - "electron-builder.json"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_13_release_metadata
+        title: "Icon and Metadata (rcedit)"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_13_release_updater
+        title: "Auto-Update and latest.yml"
+        autogen: true
+        source_files:
+          - "src/main/updater.ts"
+          - "src/main/update-checker.ts"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_13_release_ci
+        title: "CI Workflows"
+        autogen: true
+        source_files:
+          - ".github/workflows/release.yml"
+          - ".github/workflows/winget.yml"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_13_release_checklist
+        title: "Release Checklist"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+    related_pages:
+      - pandamux_02_getting-started
+      - pandamux_01_overview
+
+  - id: pandamux_14_glossary
+    title: "Glossary"
+    folder: ""
+    filename: "GLOSSARY.md"
+    description: "Domain terms and branded ID types used across PandaMUX Everywhere."
+    category: glossary
+    source_files:
+      - "src/shared/types.ts"
+      - "src/shared/id.ts"
+      - "CLAUDE.md"
+    sections:
+      - id: pandamux_14_glossary_terms
+        title: "Terms"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+    related_pages:
+      - pandamux_01_overview
+      - pandamux_03_architecture
+
+notes:
+  - "Existing docs/superpowers/plans and docs/superpowers/specs are manually maintained and left untouched by doc-sync."
+  - "docs/config.md is a pre-existing manual note, not tracked by this TOC."
+  - "resources/themes/ is empty at this commit; theme-loader is documented from code, not from bundled theme files."
+  - "The project is frozen to bug fixes pending a native Rust rewrite (see CLAUDE.md); these docs describe the current Electron build."
