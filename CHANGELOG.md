@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Full repo review and native Rust rewrite master plan (`tasks/plan-repo.md`): approved direction to rebuild wmux as a fully native Rust app (Iced + alacritty_terminal + portable-pty + russh), drop the browser pane, add SSH copy/paste, remote Claude Code, and image-paste-over-SSH features, migrate the interim Electron app from npm to pnpm, and package with Velopack + Azure Artifact Signing.
 - Claude Code developer tooling under `.claude/` (agents, skills, rules, hooks, references, scripts).
 - `.gitattributes` enforcing LF line endings on shell scripts so shebangs work on Git Bash/macOS/Linux.
 
