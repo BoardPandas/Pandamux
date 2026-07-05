@@ -69,7 +69,7 @@ export function registerIpcHandlers(windowManager: WindowManager, cdpProxyInstan
       return created;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      throw new Error(`Failed to create terminal: ${msg}`);
+      throw new Error(`Failed to create terminal: ${msg}`, { cause: err });
     }
   });
 
