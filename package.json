@@ -1,6 +1,6 @@
 {
   "name": "pandamux",
-  "version": "0.15.7",
+  "version": "0.15.8",
   "description": "PandaMUX Everywhere: Windows terminal multiplexer for AI agents",
   "license": "MIT",
   "packageManager": "pnpm@11.10.0",

@@ -1,8 +1,9 @@
 # PandaMUX Everywhere: Full Repo Review and Native Rust Rewrite Plan
 
 Date: 2026-07-05
-Status: Approved direction (fully native Rust, Warp/Zed-style). This document is the master plan.
+Status: Approved direction (fully native Rust, Warp/Zed-style). This document is the master plan. **Phase 1 (pnpm migration) is COMPLETE; next up is Phase 2 (de-risk spike), the first Rust work.**
 Updated: 2026-07-05 (review pass): refined terminal-engine and UI-framework rationale; added the crate-isolation invariant and a state-ownership design note; added a testing strategy; expanded the risk table; restructured the phases with the pnpm migration promoted to Phase 1 (gates all Rust work).
+Updated: 2026-07-05 (Phase 1 complete): marked Phase 1 DONE and reconciled its steps to the as-built implementation; recorded the node-pty N-API / npmRebuild and pnpm workspace-mode gotchas in Section 10.
 
 ---
 
@@ -205,17 +206,20 @@ Deprecation (Phase 7) is then just deleting the Electron files when the Rust app
 
 Phases are sequential. Phase 1 (pnpm) gates all Rust work per the user's direction. The old "long middle" is split into Phases 4 and 5 so parity progress is measurable.
 
-### Phase 1: pnpm migration (do this first; blocks everything else)
-Consult the BP knowledge base before touching config, per repo rule. Repo strategy is settled: Rust builds on master alongside the frozen Electron app (see Section 6 "Repo strategy"); no branch/subtree decision is needed. Path-filtered/non-required Rust CI gets set up when the workspace scaffold lands in Phase 3.
+### Phase 1: pnpm migration (COMPLETE 2026-07-05)
+Status: **DONE**. Commits `fb6a6ac` (migration) + `dc78668` (native-rebuild + workspace-mode fix) on master, pushed. Exit criteria met: clean-tree `pnpm install --frozen-lockfile` exits 0 with no Python/VS toolchain; `pnpm run build:main` (tsc) and `pnpm run build:renderer` (vite) succeed; node-pty verified loading under both Node 24 and Electron 33. Tests 153/158 (the 5 are the conpty console-list agent in a headless shell, an environment artifact, not a regression). CI packaging is validated on the next release run.
+
+Repo strategy settled: Rust builds on master alongside the frozen Electron app (see Section 6 "Repo strategy"); path-filtered/non-required Rust CI lands with the workspace scaffold in Phase 3.
+
+As implemented (a few corrections to the original plan, kept here for accuracy):
 1. npm to pnpm migration:
-   - `.npmrc`: `node-linker=hoisted` (mandatory for node-pty + ASAR packing).
-   - `pnpm-workspace.yaml`: `allowBuilds: { node-pty: true }` (pnpm 11 blocks build scripts by default).
-   - Pin pnpm **11.10.0** and Node **24.18.0** (24 LTS). `pnpm import` from package-lock.json; delete package-lock.json + node_modules; set the `packageManager` field via corepack (`corepack use pnpm@11.10.0`); set `engines` in package.json (`node >=24.18.0`, `pnpm >=11.10.0`) and optionally `.nvmrc`/`.node-version` to `24.18.0`.
-   - CI: `pnpm/action-setup@v4` (version `11.10.0`) BEFORE `setup-node` (`node-version: 24.18.0`, `cache: pnpm`), `pnpm install --frozen-lockfile`, `npx` to `pnpm exec`.
-   - Release-process note: staging installs can keep `npm install --omit=dev --ignore-scripts` OR use `pnpm install` with the hoisted linker; verify `.asar-staging/node_modules` contains zero junctions before any `rm -rf` (pnpm junction-deletion hazard, pnpm#10707).
+   - Settings live in `pnpm-workspace.yaml`, not `.npmrc` (pnpm 11 treats `.npmrc` as registry/auth only): `nodeLinker: hoisted` (mandatory for node-pty + ASAR), `allowBuilds` for node-pty/electron/esbuild (pnpm 11 blocks dependency build scripts by default; `onlyBuiltDependencies` is deprecated in favor of `allowBuilds`), and `packages: [.]` so `pnpm run` works at the root without `-w`.
+   - Pinned pnpm 11.10.0 + Node 24.18.0 via the `packageManager` and `engines` fields; added `.nvmrc`/`.node-version`; converted package-lock.json to `pnpm-lock.yaml` via `pnpm import`.
+   - No native rebuild: removed the `electron-builder install-app-deps` postinstall and set `"npmRebuild": false` in electron-builder.json. node-pty is N-API, so its prebuild is ABI-portable and no per-runtime rebuild is needed (see the Phase 1 gotchas in Section 10).
+   - CI (release.yml): `pnpm/action-setup@v4` before `setup-node` (Node 24.18.0, `cache: pnpm`), `pnpm install --frozen-lockfile`, `pnpm exec` for the build/package steps.
+   - Release-process doc updated to pnpm (staging uses `pnpm install --prod --ignore-scripts --config.node-linker=hoisted` to stay junction-free).
 2. Feature freeze the Electron app: bug fixes only; all new work goes to the Rust track.
-3. Optional: remove the browser pane early on the Electron side too (it is dropped from the product either way).
-Exit criteria: `pnpm install --frozen-lockfile` reproduces a working build and release from a clean tree; CI green; a release dry-run packs a correct ASAR.
+3. Browser pane removal on the Electron side: still optional/deferred.
 
 ### Phase 2: De-risk spike (exit criteria gated)
 1. Iced window with a custom wgpu terminal-grid widget (cosmic-text + swash + glyphon) fed by portable-pty running pwsh; study cosmic-term's TerminalBox implementation.
