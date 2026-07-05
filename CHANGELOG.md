@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Migrated the build toolchain from npm to pnpm (Phase 1 of the Rust rewrite plan). Pinned pnpm 11.10.0 + Node 24.18.0 (24 LTS) via the `packageManager` and `engines` fields; added `pnpm-workspace.yaml` (hoisted `node_modules` for node-pty/ASAR, plus `allowBuilds` approvals for node-pty/electron/esbuild since pnpm 11 blocks dependency build scripts by default, and a `packages: [.]` entry so `pnpm run` works at the repo root without `-w`), `.nvmrc`/`.node-version`, and converted the lockfile to `pnpm-lock.yaml`. Updated the Release CI workflow and the documented release process to use pnpm. Developers should run `corepack enable pnpm` and use `pnpm` commands (e.g. `pnpm install`, `pnpm run dev`).
 - Updated runtime dependencies to their current releases: `react`/`react-dom` 19.2.7, `zustand` 5.0.14, `electron-updater` 6.8.9, `marked` 18.0.5, and dev tooling `@typescript-eslint/*` 8.62.1, `@types/react` 19.2.17.
 - Replaced the `uuid` package with the platform-native `crypto.randomUUID()` via a small `src/shared/id.ts` helper (used in both the main process and the renderer). `uuid` went ESM-only in v12, which would break the CommonJS main-process build; the built-in generator produces the same RFC 4122 v4 IDs with no dependency. Dropped `uuid` and `@types/uuid`; moved `@types/ws` from `dependencies` to `devDependencies` where it belongs.
+- Upgraded xterm.js to 6.0 and its addons to their matching releases (`@xterm/addon-image` 0.9.0, `@xterm/addon-search` 0.16.0, `@xterm/addon-serialize` 0.14.0, `@xterm/addon-unicode11` 0.9.0, `@xterm/addon-web-links` 0.12.0, `@xterm/addon-webgl` 0.19.0). The terminal renderer now falls back WebGL → DOM.
+
+### Removed
+
+- Dropped the `@xterm/addon-canvas` renderer. The Canvas addon was never republished for the xterm 6.0 API (it stayed pinned to xterm 5) and was already deprecated for mispainting rows/wide characters under load (issues #23/#30). Visible terminals use the WebGL renderer, falling back to xterm's built-in DOM renderer when WebGL is unavailable, over the per-process context budget, or after a WebGL context loss.
 
 ### Security
 
