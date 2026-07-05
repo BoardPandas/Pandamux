@@ -1,6 +1,12 @@
 # pnpm configuration (pnpm 11). In pnpm 11 these settings live here, not in
 # .npmrc (which is for registry/auth only). See tasks/plan-repo.md Phase 1.
 
+# This is a single-package repo, but the mere presence of this file puts pnpm
+# in workspace mode. Declaring the root as the sole package makes `pnpm run
+# <script>` work at the root without needing `-w`/--workspace-root.
+packages:
+  - .
+
 # Mandatory: a flat, symlink-free node_modules (npm/yarn-classic layout).
 # node-pty's native addon resolution and the electron-builder ASAR packaging
 # step both assume a hoisted tree; the default symlinked store breaks them.

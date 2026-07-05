@@ -27,7 +27,7 @@ pnpm run test:watch    # Vitest watch mode
 pnpm run lint          # ESLint src/
 ```
 
-The `postinstall` (`electron-builder install-app-deps`) rebuilds node-pty from source against the Electron ABI via node-gyp, which needs Python + VS Build Tools. On Python 3.12+ install `setuptools` first (`pip install setuptools`) to restore the removed `distutils` module (CI does this). If the from-source rebuild fails locally, node-pty's win32-x64 prebuilds still work at runtime, and the release flow forces the prebuild path anyway (see Release Process).
+node-pty is the only native dependency and ships **N-API prebuilds** (ABI-stable across Node and Electron; verified loading under both Node 24 and Electron 33 / ABI 130 / N-API 9). We deliberately do NOT rebuild it from source: there is no `install-app-deps` postinstall, and `electron-builder.json` sets `"npmRebuild": false`. This trusts the prebuilds (unpacked from the asar via `asarUnpack`), avoids node-pty's flaky legacy winpty gyp build, and means a normal `pnpm install` needs no Python/VS Build Tools toolchain. If you ever add a non-N-API native dependency you must reintroduce a rebuild step, and on Python 3.12+ run `pip install setuptools` first so node-gyp finds the removed `distutils` module.
 
 ### Known Build Gotcha
 

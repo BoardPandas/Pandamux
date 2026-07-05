@@ -2,6 +2,8 @@
   "appId": "com.pandamux.app",
   "productName": "PandaMUX Everywhere",
   "executableName": "pandamux",
+  "//npmRebuild": "node-pty is the only native dep and ships N-API prebuilds (ABI-stable across Node and Electron; verified loading under Electron 33 / ABI 130 / N-API 9). Rebuilding from source is unnecessary and breaks on some toolchains via node-pty's legacy winpty gyp target, so trust the prebuilds. .node files are unpacked from the asar via asarUnpack below.",
+  "npmRebuild": false,
   "directories": {
     "output": "release"
   },

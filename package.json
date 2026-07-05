@@ -1,6 +1,6 @@
 {
   "name": "pandamux",
-  "version": "0.15.6",
+  "version": "0.15.7",
   "description": "PandaMUX Everywhere: Windows terminal multiplexer for AI agents",
   "license": "MIT",
   "packageManager": "pnpm@11.10.0",
@@ -17,7 +17,6 @@
     "build": "tsc -p tsconfig.node.json && vite build && electron-builder",
     "build:main": "tsc -p tsconfig.node.json",
     "build:renderer": "vite build",
-    "postinstall": "electron-builder install-app-deps",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint src/"
