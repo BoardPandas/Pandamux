@@ -9,7 +9,7 @@ interface BrowserPaneProps {
   onUrlChange?: (url: string) => void;
 }
 
-export default function BrowserPane({ initialUrl = 'https://github.com/amirlehmam/wmux', surfaceId, workspaceId, onUrlChange }: BrowserPaneProps) {
+export default function BrowserPane({ initialUrl = 'https://github.com/BoardPandas/Pandamux', surfaceId, workspaceId, onUrlChange }: BrowserPaneProps) {
   const [url, setUrl] = useState(initialUrl);
   const [currentUrl, setCurrentUrl] = useState(initialUrl);
   const [isLoading, setIsLoading] = useState(false);

@@ -10,8 +10,8 @@ import { IPC_CHANNELS } from '../shared/types';
 // lightweight, zero-trust-install notification and a source of release metadata
 // (published_at) that updater.ts reuses to compute release age.
 
-const REPO_OWNER = 'amirlehmam';
-const REPO_NAME = 'wmux';
+const REPO_OWNER = 'BoardPandas';
+const REPO_NAME = 'Pandamux';
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const FIRST_CHECK_DELAY_MS = 5_000;
 

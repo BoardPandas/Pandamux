@@ -1,19 +1,34 @@
 <h1 align="center">wmux</h1>
-<p align="center">A visibility layer for Claude Code on Windows — see what your AI agent does in real-time</p>
+<p align="center">A visibility layer for Claude Code on Windows: see what your AI agent does in real-time</p>
 
 <p align="center">
-  Built on Electron + xterm.js. Inspired by <a href="https://github.com/manaflow-ai/cmux">cmux</a>.
+  Windows terminal multiplexer for AI agents. The current build is Electron + xterm.js; a fully
+  native, GPU-rendered Rust rewrite is underway (see <a href="#project-direction">Project direction</a>).
+  Socket protocol lineage traces to <a href="https://github.com/manaflow-ai/cmux">cmux</a>.
 </p>
 
 <p align="center">
-  <a href="https://github.com/amirlehmam/wmux"><img src="https://img.shields.io/badge/platform-Windows-0078D4?logo=windows" alt="Windows" /></a>
-  <a href="https://github.com/amirlehmam/wmux/releases"><img src="https://img.shields.io/github/v/release/amirlehmam/wmux?label=release&color=555" alt="Release" /></a>
-  <a href="https://github.com/amirlehmam/wmux/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-555" alt="License" /></a>
+  <a href="https://github.com/BoardPandas/Pandamux"><img src="https://img.shields.io/badge/platform-Windows-0078D4?logo=windows" alt="Windows" /></a>
+  <a href="https://github.com/BoardPandas/Pandamux/releases"><img src="https://img.shields.io/github/v/release/BoardPandas/Pandamux?label=release&color=555" alt="Release" /></a>
+  <a href="https://github.com/BoardPandas/Pandamux/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-555" alt="License" /></a>
 </p>
 
 <p align="center">
-  <img src="https://wmux.org/assets/wmux-full.png" alt="wmux — terminal multiplexer with live browser panel" width="900" />
+  <img src="https://wmux.org/assets/wmux-full.png" alt="wmux terminal multiplexer" width="900" />
 </p>
+
+## Project direction
+
+wmux is being rebuilt as a fully native, GPU-rendered Rust application (Iced + alacritty_terminal + portable-pty), moving off Electron for a faster, more resilient terminal. The full master plan lives in [`tasks/plan-repo.md`](tasks/plan-repo.md).
+
+What this means today:
+
+- **Interim Electron app** (this repo, `master`): frozen to bug fixes only, migrating from npm to pnpm. It remains the shipping build until the Rust app reaches parity.
+- **The browser pane is being retired.** The CDP browser panel and `wmux browser *` commands are present in the current build but are dropped in the native rewrite; Claude Code's own browser tooling replaces them.
+- **New in the rewrite:** copy/paste over SSH (OSC 52), running Claude Code on remote Linux hosts over SSH, and pasting/dropping local images straight into a remote Claude Code session.
+- Everything else carries over: workspaces, splits, tabs, notifications, the orchestrator plugin, shell integration, and the named-pipe API (kept wire-compatible).
+
+The feature documentation below describes the **current shipping Electron build**.
 
 ## Features
 
@@ -130,15 +145,15 @@ Interactive 7-step onboarding walks you through workspaces, splits, tabs, the br
 
 ### Download (recommended)
 
-Download [wmux-0.7.10-win-x64.zip](https://github.com/amirlehmam/wmux/releases/latest) from GitHub Releases, extract anywhere, and run `wmux.exe`. No installer, no code signing, no admin required.
+Download the latest `wmux-<version>-win-x64.zip` from [GitHub Releases](https://github.com/BoardPandas/Pandamux/releases/latest), extract anywhere, and run `wmux.exe`. No installer, no code signing, no admin required.
 
 > **Note:** After extracting, right-click the zip before extracting and select **Unblock** if Windows SmartScreen warns about the executable.
 
 ### From source
 
 ```bash
-git clone https://github.com/amirlehmam/wmux.git
-cd wmux
+git clone https://github.com/BoardPandas/Pandamux.git
+cd Pandamux
 npm install
 npm run build:main
 npm run dev
@@ -146,17 +161,15 @@ npm run dev
 
 ## Why wmux?
 
-I run a lot of Claude Code sessions in parallel. On macOS there is [cmux](https://github.com/manaflow-ai/cmux), and it is exactly what I needed — vertical tabs with live metadata, notification rings when agents need attention, a scriptable browser, and a socket API for automation. But I work on Windows, and nothing like it existed.
+Running many Claude Code sessions in parallel on Windows is painful. Windows Terminal has tabs but no notification system, so you have to check each tab manually to see if an agent finished or is waiting for input. tmux works in WSL but loses all Windows integration. Other Electron terminals exist, but none focus on the AI-agent workflow.
 
-Windows Terminal has tabs but no notification system. You have to manually check each tab to see if an agent finished or is waiting for input. tmux works in WSL but loses all Windows integration. Electron terminals exist but none focus on the AI agent workflow.
+wmux is a visibility layer for AI coding agents. It does not replace Claude Code or change how it works; it passively observes and shows you what is happening. Auto-configured hooks in `settings.json` report tool usage and agent activity to the sidebar. When a command finishes or is interrupted, the sidebar dot changes color and you get a notification.
 
-So I built wmux — a visibility layer for AI coding agents. It doesn't replace Claude Code or change how it works. It passively observes and shows you what's happening. A CDP proxy on `localhost:9222` lets Claude Code's native browser tools control the wmux browser panel — you watch every page load, click, and form fill in real-time. Auto-configured hooks in `settings.json` report tool usage and agent activity to the sidebar. When a command finishes or is interrupted, the sidebar dot changes color and you get a notification.
+The sidebar shows exactly what each agent is doing: the git branch it is on, the PR it opened, the ports it is listening on, and whether it needs your attention. Shell integration scripts inject themselves into PowerShell, CMD, and Bash sessions and report CWD changes, git branch switches, shell state, and PR status back to the sidebar via a named pipe in real time.
 
-The sidebar shows exactly what each agent is doing — the git branch it is on, the PR it opened, the ports it is listening on, and whether it needs your attention. Shell integration scripts inject themselves into PowerShell, CMD, and Bash sessions and report CWD changes, git branch switches, shell state, and PR status back to the sidebar via a named pipe in real time.
+On first launch, wmux auto-configures itself: it injects a minimal informational block into `~/.claude/CLAUDE.md`, adds a `PostToolUse` hook to `~/.claude/settings.json`, and installs the wmux-orchestrator Claude Code plugin. No API keys are needed; everything runs through your existing Claude Code session. (The current build also starts a CDP proxy on `localhost:9222` for the browser panel; that panel is being retired in the native rewrite.)
 
-On first launch, wmux auto-configures itself: it injects a minimal informational block into `~/.claude/CLAUDE.md`, adds a `PostToolUse` hook to `~/.claude/settings.json`, installs the wmux-orchestrator Claude Code plugin, and starts a CDP proxy on `localhost:9222`. No API keys needed — everything runs through the user's existing Claude Code session.
-
-Everything is automatable through the `wmux` CLI or the named pipe directly. The protocol matches cmux, so tools built for one work with the other.
+Everything is automatable through the `wmux` CLI or the named pipe directly. The socket protocol's design traces to [cmux](https://github.com/manaflow-ai/cmux), the macOS terminal for multitasking, and remains wire-compatible with it, so tools built for one work with the other.
 
 ## wmux-orchestrator
 
@@ -175,7 +188,7 @@ wmux ships with a bundled Claude Code plugin that enables parallel multi-agent o
 
 The plugin is auto-installed into `~/.claude/plugins/cache/` on wmux startup. It also works without wmux — agents fall back to native Claude Code subagents.
 
-Also published standalone: [plugin.wmux.org](https://plugin.wmux.org) · [github.com/amirlehmam/wmux-orchestrator](https://github.com/amirlehmam/wmux-orchestrator)
+Bundled in this repo under `resources/wmux-orchestrator/`, and fronted by its own page at [plugin.wmux.org](https://plugin.wmux.org).
 
 ## Shell Integration
 
@@ -404,18 +417,15 @@ resources/
   sounds/             # Notification sounds
 ```
 
-## Based on cmux
+## Lineage
 
-wmux is an independent, from-scratch Windows reimplementation inspired by [cmux](https://github.com/manaflow-ai/cmux), the macOS terminal for multitasking. It shares cmux's design philosophy and is wire-compatible with its socket protocol — tools built for cmux's API work with wmux — but it does not reuse cmux's source code.
+wmux is an independent Windows project whose socket protocol and design philosophy trace to [cmux](https://github.com/manaflow-ai/cmux), the macOS terminal for multitasking. It is wire-compatible with cmux's socket protocol (tools built for cmux's API work with wmux) but does not reuse cmux's source code.
 
 ## Contributing
 
-- [GitHub Issues](https://github.com/amirlehmam/wmux/issues) — bug reports and feature requests
-- [GitHub Discussions](https://github.com/amirlehmam/wmux/discussions) — questions and ideas
-
-[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/amirlehmam-wmux-badge.png)](https://mseep.ai/app/amirlehmam-wmux)
-
+- [GitHub Issues](https://github.com/BoardPandas/Pandamux/issues): bug reports and feature requests
+- [GitHub Discussions](https://github.com/BoardPandas/Pandamux/discussions): questions and ideas
 
 ## License
 
-wmux is open source under the [MIT License](LICENSE). It is an independent reimplementation inspired by cmux and does not incorporate cmux's source code.
+wmux is open source under the [MIT License](LICENSE). Its socket protocol and design are inspired by cmux; it does not incorporate cmux's source code.

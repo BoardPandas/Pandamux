@@ -1,9 +1,9 @@
 # Winget version manifest (issue #32).
 # Submitted to microsoft/winget-pkgs under
-#   manifests/a/amirlehmam/wmux/<version>/
+#   manifests/b/BoardPandas/wmux/<version>/
 # After the first manual submission, .github/workflows/winget.yml keeps it
 # updated automatically on every GitHub release.
-PackageIdentifier: amirlehmam.wmux
+PackageIdentifier: BoardPandas.wmux
 PackageVersion: 0.8.6
 DefaultLocale: en-US
 ManifestType: version

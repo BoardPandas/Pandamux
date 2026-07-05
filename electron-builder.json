@@ -6,8 +6,8 @@
   },
   "publish": {
     "provider": "github",
-    "owner": "amirlehmam",
-    "repo": "wmux"
+    "owner": "BoardPandas",
+    "repo": "Pandamux"
   },
   "files": [
     "dist/**/*",

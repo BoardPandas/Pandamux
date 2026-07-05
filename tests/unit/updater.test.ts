@@ -31,7 +31,7 @@ describe('isMissingChannelFileError', () => {
   it('matches the electron-updater 404 message', () => {
     const err = new Error(
       'Cannot find latest.yml in the latest release artifacts ' +
-      '(https://github.com/amirlehmam/wmux/releases/download/v0.15.0/latest.yml): HttpError: 404'
+      '(https://github.com/BoardPandas/Pandamux/releases/download/v0.15.0/latest.yml): HttpError: 404'
     );
     expect(isMissingChannelFileError(err)).toBe(true);
   });

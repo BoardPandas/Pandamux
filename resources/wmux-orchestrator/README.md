@@ -148,5 +148,5 @@ wmux-orchestrator/
 ## Links
 
 - **wmux** -- [wmux.org](https://wmux.org)
-- **GitHub** -- [github.com/amirlehmam/wmux](https://github.com/amirlehmam/wmux)
+- **GitHub** -- [github.com/BoardPandas/Pandamux](https://github.com/BoardPandas/Pandamux)
 - **License** -- MIT

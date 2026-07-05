@@ -5,7 +5,7 @@ import { useT } from '../../i18n';
 // project's GitHub issues page and website. The version comes from the main
 // process (Electron's app.getVersion()) so it always matches the packaged build
 // rather than a hardcoded literal.
-const REPO_URL = 'https://github.com/amirlehmam/wmux';
+const REPO_URL = 'https://github.com/BoardPandas/Pandamux';
 const ISSUES_URL = `${REPO_URL}/issues`;
 const WEBSITE_URL = 'https://wmux.org';
 

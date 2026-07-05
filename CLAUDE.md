@@ -2,9 +2,13 @@
 
 Electron-based Windows terminal multiplexer for AI agents. TypeScript, React 19, Zustand, xterm.js, node-pty.
 
-**Owner**: amirlehmam (GitHub) — speaks French, prefers fast pragmatic solutions, tests live.
-**Repo**: github.com/amirlehmam/wmux | **Site**: wmux.org (Netlify, static from `site/`)
-**Version**: 0.6.0
+**Owner**: BoardPandas (github.com/BoardPandas). Prefers fast, pragmatic solutions; tests live.
+**Repo**: github.com/BoardPandas/Pandamux | **Site**: wmux.org (Netlify, static from `site/`)
+**Version**: see `package.json` / `CHANGELOG.md` (currently 0.15.x)
+
+> **Direction**: wmux is being rebuilt as a fully native Rust app (Iced + alacritty_terminal + portable-pty; the browser pane is dropped). The Electron app in this repo is frozen to bug fixes and is migrating npm to pnpm. The master plan is `tasks/plan-repo.md`. **This guide documents the current Electron build.** The Rust workspace gets its own CLAUDE.md hierarchy once its crates exist.
+>
+> The `.claude/` folder is the source of truth for how this repo runs (commits, changelog, knowledge-base checks, agents). See Conventions at the bottom.
 
 ---
 
@@ -22,11 +26,11 @@ npm run lint           # ESLint src/
 
 ### Known Build Gotcha
 
-Project lives in `OneDrive - Pulsa` (path with spaces). This breaks:
+The original checkout lived under a OneDrive path with spaces, which broke:
 - `npm link` / `node-gyp` (can't build node-pty)
 - `electron-builder` winCodeSign (symlink errors)
 
-**Workaround**: Don't use `electron-builder` for the final package. Use ASAR-based manual packaging (see Release Process below).
+The current checkout (`D:\Dev\Repos\Pandamux`) has no spaces, so these may not bite. Either way, the release flow uses ASAR-based manual packaging (see Release Process below) rather than `electron-builder` for the final package.
 
 ---
 
@@ -256,7 +260,7 @@ node -e "
 git add package.json package-lock.json && git commit -m "chore(release): bump to <VERSION>"
 git push origin master
 git tag -a v<VERSION> -m "wmux <VERSION>" && git push origin v<VERSION>
-gh release create v<VERSION> ../wmux-<VERSION>-win-x64.zip ../latest.yml --repo amirlehmam/wmux --title "v<VERSION>" --notes "..."
+gh release create v<VERSION> ../wmux-<VERSION>-win-x64.zip ../latest.yml --repo BoardPandas/Pandamux --title "v<VERSION>" --notes "..."
 
 # 11. (Optional) Hot-swap into the locally running wmux for immediate testing
 cp build-out/app.asar resources/app.asar
@@ -452,4 +456,5 @@ Test files in `tests/unit/`: agent-manager, cdp-bridge, config-loader, notificat
 - **Immutable trees**: Split tree mutations always produce new objects via `patchLeaf()`
 - **PTY IDs = Surface IDs**: Always pass `surfaceId` when creating PTYs for reliable re-attachment
 - **No MCP**: All Claude Code integration via CLI commands
-- **French comms**: User communicates in French, code/docs in English
+- **Workflow source of truth (`.claude/`)**: before committing, update `CHANGELOG.md` and bump the version per `.claude/rules/commit-changelog.md`; write commit messages to a file and use `git commit -F` (never inline `-m`). Consult the BP and LL-G knowledge bases before config/code work (`.claude/rules/bp-check.md`, `.claude/rules/llg-check.md`). Use the custom agents in `.claude/agents/`, not built-in subagent types.
+- **Writing style**: no em dashes or double dashes in files, code, or comments; use commas, colons, parentheses, or semicolons instead.

@@ -4,8 +4,8 @@ Standalone landing page for the wmux-orchestrator Claude Code plugin.
 
 - **Production**: https://plugin.wmux.org
 - **Source**: this directory
-- **Parent project**: [wmux](https://wmux.org) — the host multiplexer
-- **Plugin repo**: https://github.com/amirlehmam/wmux-orchestrator
+- **Parent project**: [wmux](https://wmux.org), the host multiplexer
+- **Plugin repo**: https://github.com/BoardPandas/Pandamux (bundled under `resources/wmux-orchestrator/`)
 
 ## Stack
 
