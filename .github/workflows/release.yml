@@ -19,27 +19,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # pnpm BEFORE setup-node so setup-node's pnpm cache works. Version comes
+      # from the packageManager field in package.json (single source of truth).
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: npm
+          node-version: 24.18.0
+          cache: pnpm
 
       - name: Fix Python distutils for node-gyp
         run: pip install setuptools
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       # ── Build ──────────────────────────────────────────────
       - name: Build main + preload + CLI
-        run: npm run build:main
+        run: pnpm run build:main
 
       - name: Build renderer
-        run: npx vite build
+        run: pnpm exec vite build
 
       # ── Package (unpacked directory, no installer) ─────────
       - name: Package with electron-builder
-        run: npx electron-builder --win --dir --publish never
+        run: pnpm exec electron-builder --win --dir --publish never
 
       - name: Extract version
         id: version

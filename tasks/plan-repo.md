@@ -294,7 +294,11 @@ The rest of the Section 4 checklist.
 
 ## 10. Learning lessons / gotchas (fill during implementation)
 
-- (Phase 1) ...
+- (Phase 1) DONE 2026-07-05. pnpm 11 config moved out of `.npmrc`: `nodeLinker: hoisted` and `allowBuilds` live in `pnpm-workspace.yaml` (`.npmrc` is registry/auth only now). `onlyBuiltDependencies` is deprecated in pnpm 11, replaced by `allowBuilds` (a map, e.g. `node-pty: true`). Native/binary packages needing approval here: node-pty, electron, esbuild.
+- (Phase 1) A globally npm-installed pnpm (`AppData\Roaming\npm\pnpm.ps1`) shadows the `packageManager` pin; run `corepack enable pnpm` so the corepack shim (in the Node dir) wins and the pinned 11.10.0 is used. Verify with `(Get-Command pnpm -All).Source`.
+- (Phase 1) pnpm's `verify-deps-before-run` means a FAILING root `postinstall` makes the install incomplete, which then makes every `pnpm run <script>` re-trigger install and fail too. Bypass for verification by invoking binaries directly (`node_modules\.bin\tsc.cmd`, etc.); the real fix is making install exit 0.
+- (Phase 1) The `postinstall` (`electron-builder install-app-deps`) rebuilds node-pty from source (node-gyp). Two local-toolchain gotchas, both pre-existing and identical under npm, neither caused by pnpm: (a) Python 3.12+ removed `distutils` -> `pip install setuptools` restores it (CI already does this); (b) node-pty's bundled winpty from-source build can fail (`GetCommitHash.bat` / gyp) on some Windows toolchains. Not on the release critical path: node-pty ships win32-x64 prebuilds (present and runtime-verified: `pty.node` loaded, spawn returned a pid), and the release flow deletes `node-pty/build` to force the prebuild path.
+- (Phase 1) Verified under pnpm: `tsc` clean; 153/158 unit tests pass. The 5 failures are node-pty conpty console-list (`AttachConsole failed`) in a headless/no-console shell, an environment artifact, not a pnpm regression.
 - (Phase 2) ...
 - (Phase 3) ...
 

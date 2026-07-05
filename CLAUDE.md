@@ -6,7 +6,7 @@ Electron-based Windows terminal multiplexer for AI agents. TypeScript, React 19,
 **Repo**: github.com/BoardPandas/Pandamux | **Site**: pandamux.boardpandas.ai (Netlify, static from `site/`)
 **Version**: see `package.json` / `CHANGELOG.md` (currently 0.15.x)
 
-> **Direction**: PandaMUX Everywhere is being rebuilt as a fully native Rust app (Iced + alacritty_terminal + portable-pty; the browser pane is dropped). The Electron app in this repo is frozen to bug fixes and is migrating npm to pnpm. The master plan is `tasks/plan-repo.md`. **This guide documents the current Electron build.** The Rust workspace gets its own CLAUDE.md hierarchy once its crates exist.
+> **Direction**: PandaMUX Everywhere is being rebuilt as a fully native Rust app (Iced + alacritty_terminal + portable-pty; the browser pane is dropped). The Electron app in this repo is frozen to bug fixes and now uses pnpm (migrated from npm). The master plan is `tasks/plan-repo.md`. **This guide documents the current Electron build.** The Rust workspace gets its own CLAUDE.md hierarchy once its crates exist.
 >
 > The `.claude/` folder is the source of truth for how this repo runs (commits, changelog, knowledge-base checks, agents). See Conventions at the bottom.
 
@@ -14,15 +14,20 @@ Electron-based Windows terminal multiplexer for AI agents. TypeScript, React 19,
 
 ## Build & Dev
 
+This repo uses **pnpm** (not npm). Toolchain is pinned: pnpm 11.10.0 + Node 24.18.0 (24 LTS), both enforced via `engines` and the `packageManager` field. Use corepack (`corepack enable pnpm`) so the pinned pnpm is used automatically; a globally installed pnpm is shadowed by the corepack shim. pnpm settings live in `pnpm-workspace.yaml` (`nodeLinker: hoisted` is mandatory for node-pty + ASAR; `allowBuilds` approves the native/binary packages, since pnpm 11 blocks dependency build scripts by default).
+
 ```bash
-npm run dev            # Vite (port 5199) + Electron hot-reload
-npm run build:main     # tsc main/preload/cli only (fast iteration)
-npm run build:renderer # Vite production build (renderer only)
-npm run build          # Full: tsc + vite + electron-builder
-npm test               # Vitest unit tests
-npm run test:watch     # Vitest watch mode
-npm run lint           # ESLint src/
+pnpm install           # Install deps (hoisted node_modules; runs allowBuilds + postinstall)
+pnpm run dev           # Vite (port 5199) + Electron hot-reload
+pnpm run build:main    # tsc main/preload/cli only (fast iteration)
+pnpm run build:renderer # Vite production build (renderer only)
+pnpm run build         # Full: tsc + vite + electron-builder
+pnpm test              # Vitest unit tests
+pnpm run test:watch    # Vitest watch mode
+pnpm run lint          # ESLint src/
 ```
+
+The `postinstall` (`electron-builder install-app-deps`) rebuilds node-pty from source against the Electron ABI via node-gyp, which needs Python + VS Build Tools. On Python 3.12+ install `setuptools` first (`pip install setuptools`) to restore the removed `distutils` module (CI does this). If the from-source rebuild fails locally, node-pty's win32-x64 prebuilds still work at runtime, and the release flow forces the prebuild path anyway (see Release Process).
 
 ### Known Build Gotcha
 
@@ -155,8 +160,8 @@ PandaMUX Everywhere is distributed as a **portable zip** (not NSIS installer) be
 
 ```bash
 # 1. Build everything
-npm run build:main        # Compile TS → dist/main/, dist/preload/, dist/cli/
-npx vite build            # Build renderer → dist/renderer/
+pnpm run build:main       # Compile TS → dist/main/, dist/preload/, dist/cli/
+pnpm exec vite build      # Build renderer → dist/renderer/
 
 # 2. Verify compiled code
 # Check that fixes are in the compiled output:
@@ -172,7 +177,7 @@ rm -rf .asar-staging build-out
 mkdir -p .asar-staging build-out
 cp -r dist .asar-staging/dist          # explicit dest path — trailing-slash form is flaky on Git Bash
 cp package.json .asar-staging/package.json
-( cd .asar-staging && npm install --omit=dev --ignore-scripts )   # subshell — cwd doesn't leak
+( cd .asar-staging && pnpm install --prod --ignore-scripts --config.node-linker=hoisted )   # subshell (cwd doesn't leak); the hoisted flag keeps staging node_modules junction-free (pnpm-workspace.yaml is not copied into staging, so pass it explicitly), avoiding the pnpm reparse-point deletion hazard on the later rm -rf
 rm -rf .asar-staging/node_modules/node-pty/build   # force prebuilds load path: conpty.dll (useConptyDll) resolves relative to the LOADED conpty.node, and only prebuilds/win32-x64/ has the conpty/ dir next to it
 
 # 4. Pack ASAR (with native module unpacking)
@@ -273,8 +278,8 @@ rm -rf .asar-staging build-out /tmp/asar-verify ../pandamux-release-staging
 
 ### Release Checklist
 
-- [ ] `npm run build:main` succeeds
-- [ ] `npx vite build` succeeds
+- [ ] `pnpm run build:main` succeeds
+- [ ] `pnpm exec vite build` succeeds
 - [ ] Compiled code verified (grep for key changes in dist/)
 - [ ] ASAR packed with `--unpack-dir node_modules/node-pty/prebuilds` (NOT `--unpack` glob)
 - [ ] ASAR size is ~24M (natives unpacked). 80M+ ⇒ unpack didn't take. 180M+ ⇒ staging polluted.
@@ -439,9 +444,9 @@ npx netlify deploy --prod --dir site
 ## Testing
 
 ```bash
-npm test                    # Run all unit tests
-npm run test:watch          # Watch mode
-npx vitest run tests/unit/pty-manager.test.ts  # Single file
+pnpm test                   # Run all unit tests
+pnpm run test:watch         # Watch mode
+pnpm exec vitest run tests/unit/pty-manager.test.ts  # Single file
 ```
 
 Test files in `tests/unit/`: agent-manager, cdp-bridge, config-loader, notification-slice, pipe-server, port-scanner, pty-manager, session-persistence, shell-detector, split-tree.
