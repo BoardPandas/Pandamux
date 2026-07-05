@@ -1,9 +1,9 @@
 /**
- * wmux instance identity.
+ * pandamux instance identity.
  *
- * Set WMUX_INSTANCE=<name> to run wmux as a separate, side-by-side instance:
+ * Set PANDAMUX_INSTANCE=<name> to run pandamux as a separate, side-by-side instance:
  * the named pipe and APPDATA directory get a "-<name>" suffix, so a dev build
- * can run alongside an installed production wmux without colliding on the
+ * can run alongside an installed production pandamux without colliding on the
  * pipe (Windows pipes are exclusive) or overwriting session.json.
  */
 import crypto from 'crypto';
@@ -12,17 +12,17 @@ import path from 'path';
 import os from 'os';
 
 function suffix(): string {
-  const name = process.env.WMUX_INSTANCE?.trim();
+  const name = process.env.PANDAMUX_INSTANCE?.trim();
   return name ? `-${name}` : '';
 }
 
 export function getPipePath(): string {
-  return `\\\\.\\pipe\\wmux${suffix()}`;
+  return `\\\\.\\pipe\\pandamux${suffix()}`;
 }
 
 export function getAppDataDir(): string {
   const base = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
-  return path.join(base, `wmux${suffix()}`);
+  return path.join(base, `pandamux${suffix()}`);
 }
 
 /**
@@ -38,12 +38,12 @@ export function getPipeTokenPath(): string {
 
 /**
  * Reads the auth token a CLI/hook client must send. Resolution order:
- *   1. WMUX_PIPE_TOKEN env var (injected by wmux into spawned shells)
- *   2. the token file in APPDATA (for clients launched outside a wmux shell)
+ *   1. PANDAMUX_PIPE_TOKEN env var (injected by pandamux into spawned shells)
+ *   2. the token file in APPDATA (for clients launched outside a pandamux shell)
  * Returns '' when none is available.
  */
 export function readPipeToken(): string {
-  const fromEnv = process.env.WMUX_PIPE_TOKEN?.trim();
+  const fromEnv = process.env.PANDAMUX_PIPE_TOKEN?.trim();
   if (fromEnv) return fromEnv;
   try {
     return fs.readFileSync(getPipeTokenPath(), 'utf-8').trim();
@@ -71,7 +71,7 @@ export function ensurePipeToken(): string {
     fs.writeFileSync(tokenPath, token, { encoding: 'utf-8', mode: 0o600 });
     try { fs.chmodSync(tokenPath, 0o600); } catch { /* best-effort on Windows */ }
   } catch (err) {
-    console.warn('[wmux] Failed to persist pipe token:', err);
+    console.warn('[pandamux] Failed to persist pipe token:', err);
   }
   return token;
 }

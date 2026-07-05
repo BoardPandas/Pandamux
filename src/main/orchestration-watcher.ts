@@ -1,11 +1,11 @@
 /**
  * orchestration-watcher.ts — polls the OS temp directory for active
- * wmux-orchestrator runs and broadcasts their state.json to all windows.
+ * pandamux-orchestrator runs and broadcasts their state.json to all windows.
  *
- * The wmux-orchestrator Claude Code plugin writes its run state to
- * `{os.tmpdir()}/wmux-orch-*\/state.json` (see skills/orchestrate/SKILL.md
+ * The pandamux-orchestrator Claude Code plugin writes its run state to
+ * `{os.tmpdir()}/pandamux-orch-*\/state.json` (see skills/orchestrate/SKILL.md
  * Phase 6). This watcher is fully decoupled from the plugin — it only
- * reads files, never writes. It runs as long as wmux is running; when a
+ * reads files, never writes. It runs as long as pandamux is running; when a
  * run completes, it sends one final "complete" update then stops tracking it.
  */
 
@@ -37,7 +37,7 @@ function listOrchDirs(): string[] {
     const tmp = os.tmpdir();
     const entries = fs.readdirSync(tmp, { withFileTypes: true });
     return entries
-      .filter((e) => e.isDirectory() && e.name.startsWith('wmux-orch-'))
+      .filter((e) => e.isDirectory() && e.name.startsWith('pandamux-orch-'))
       .map((e) => path.join(tmp, e.name));
   } catch {
     return [];
@@ -147,7 +147,7 @@ function tick(): void {
 
 export function startOrchestrationWatcher(): void {
   if (pollTimer) return;
-  // Run an immediate tick so the sidebar picks up an in-flight run at wmux start.
+  // Run an immediate tick so the sidebar picks up an in-flight run at pandamux start.
   try { tick(); } catch (err) { console.warn('[orchestration-watcher] initial tick failed:', err); }
   pollTimer = setInterval(() => {
     try { tick(); } catch (err) { console.warn('[orchestration-watcher] tick failed:', err); }

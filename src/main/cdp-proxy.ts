@@ -185,7 +185,7 @@ export class CDPProxy {
       ws.on('close', cleanup);
       ws.on('error', cleanup);
 
-      console.log('[wmux] CDP proxy: client connected');
+      console.log('[pandamux] CDP proxy: client connected');
     });
 
     // Safety net: prevent 'error' events from becoming uncaught exceptions
@@ -202,13 +202,13 @@ export class CDPProxy {
             resolve();
           });
         });
-        console.log(`[wmux] CDP proxy listening on localhost:${p}`);
+        console.log(`[pandamux] CDP proxy listening on localhost:${p}`);
         return;
       } catch {
         continue;
       }
     }
-    console.warn('[wmux] CDP proxy: all ports 9222-9230 busy');
+    console.warn('[pandamux] CDP proxy: all ports 9222-9230 busy');
   }
 
   stop(): void {

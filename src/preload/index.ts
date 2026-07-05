@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { IPC_CHANNELS } from '../shared/types';
 
-contextBridge.exposeInMainWorld('wmux', {
+contextBridge.exposeInMainWorld('pandamux', {
   pty: {
     create: (options: { shell: string; cwd: string; env: Record<string, string>; surfaceId?: string; startupCommands?: string[]; cols?: number; rows?: number }) =>
       ipcRenderer.invoke(IPC_CHANNELS.PTY_CREATE, options) as Promise<{ id: string; shell: string; startupCommandsConsumed?: boolean }>,
@@ -82,7 +82,7 @@ contextBridge.exposeInMainWorld('wmux', {
   browser: {
     navigate: (surfaceId: string, url: string) => {
       // Dispatch a custom event that BrowserPane listens for
-      window.dispatchEvent(new CustomEvent('wmux:browser-navigate', { detail: { url, surfaceId: surfaceId || undefined } }));
+      window.dispatchEvent(new CustomEvent('pandamux:browser-navigate', { detail: { url, surfaceId: surfaceId || undefined } }));
     },
   },
   agent: {

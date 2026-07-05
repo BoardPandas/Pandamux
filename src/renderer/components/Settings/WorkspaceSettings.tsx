@@ -54,7 +54,7 @@ export default function WorkspaceSettings() {
         />
       </div>
       <p className="settings-hint">
-        When Claude edits or writes files, wmux pops a diff tab in the bottom pane. Turn this off to
+        When Claude edits or writes files, pandamux pops a diff tab in the bottom pane. Turn this off to
         stop it appearing.
       </p>
 

@@ -65,11 +65,11 @@ jobs:
       #     HTTP_RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" \
       #       -X POST \
       #       -H "Authorization: Bearer ${{ secrets.SIGNPATH_API_TOKEN }}" \
-      #       -F "projectSlug=wmux" \
-      #       -F "signingPolicySlug=wmux" \
+      #       -F "projectSlug=pandamux" \
+      #       -F "signingPolicySlug=pandamux" \
       #       -F "artifactConfigurationSlug=initial" \
       #       -F "description=CI release v${{ steps.version.outputs.version }}" \
-      #       -F "artifact=@release/win-unpacked/wmux.exe" \
+      #       -F "artifact=@release/win-unpacked/pandamux.exe" \
       #       -D headers.txt \
       #       "https://app.signpath.io/api/v1/${{ secrets.SIGNPATH_ORGANIZATION_ID }}/SigningRequests/SubmitWithArtifact")
       #     HTTP_CODE=$(echo "$HTTP_RESPONSE" | grep "HTTP_CODE:" | cut -d: -f2)
@@ -114,9 +114,9 @@ jobs:
       #   run: |
       #     curl -s \
       #       -H "Authorization: Bearer ${{ secrets.SIGNPATH_API_TOKEN }}" \
-      #       -o "release/win-unpacked/wmux.exe" \
+      #       -o "release/win-unpacked/pandamux.exe" \
       #       "https://app.signpath.io/api/v1/${{ secrets.SIGNPATH_ORGANIZATION_ID }}/SigningRequests/${{ steps.sign-submit.outputs.signing_request_id }}/SignedArtifact"
-      #     echo "Signed exe downloaded, size: $(wc -c < release/win-unpacked/wmux.exe) bytes"
+      #     echo "Signed exe downloaded, size: $(wc -c < release/win-unpacked/pandamux.exe) bytes"
 
       # ── Embed icon + metadata into exe (rcedit) ───────────
       - name: Embed icon and version metadata
@@ -125,15 +125,15 @@ jobs:
           VER=$(node -p "require('./package.json').version")
           node -e "
             const { rcedit } = require('rcedit');
-            rcedit('release/win-unpacked/wmux.exe', {
+            rcedit('release/win-unpacked/pandamux.exe', {
               icon: 'resources/icons/icon.ico',
               'version-string': {
-                ProductName: 'wmux',
-                FileDescription: 'wmux',
-                CompanyName: 'wmux',
-                InternalName: 'wmux',
-                OriginalFilename: 'wmux.exe',
-                LegalCopyright: 'Copyright (c) 2025 wmux'
+                ProductName: 'PandaMUX Everywhere',
+                FileDescription: 'PandaMUX Everywhere',
+                CompanyName: 'BoardPandas',
+                InternalName: 'pandamux',
+                OriginalFilename: 'pandamux.exe',
+                LegalCopyright: 'Copyright (c) 2025 BoardPandas'
               },
               'file-version': process.env.VER,
               'product-version': process.env.VER
@@ -147,7 +147,7 @@ jobs:
         shell: pwsh
         run: |
           Compress-Archive -Path "release/win-unpacked/*" `
-            -DestinationPath "wmux-${{ steps.version.outputs.version }}-win-x64.zip"
+            -DestinationPath "pandamux-${{ steps.version.outputs.version }}-win-x64.zip"
 
       # ── Generate latest.yml for electron-updater ──────────
       - name: Generate latest.yml
@@ -157,7 +157,7 @@ jobs:
             const crypto = require('crypto');
             const fs = require('fs');
             const version = '${{ steps.version.outputs.version }}';
-            const zip = 'wmux-' + version + '-win-x64.zip';
+            const zip = 'pandamux-' + version + '-win-x64.zip';
             const data = fs.readFileSync(zip);
             const sha512 = crypto.createHash('sha512').update(data).digest('base64');
             const size = data.length;
@@ -180,9 +180,9 @@ jobs:
       - name: Upload release artifacts as workflow artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: wmux-release
+          name: pandamux-release
           path: |
-            wmux-${{ steps.version.outputs.version }}-win-x64.zip
+            pandamux-${{ steps.version.outputs.version }}-win-x64.zip
             latest.yml
 
       # ── GitHub Release ─────────────────────────────────────
@@ -190,9 +190,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
-          name: wmux ${{ steps.version.outputs.tag }}
+          name: PandaMUX Everywhere ${{ steps.version.outputs.tag }}
           files: |
-            wmux-${{ steps.version.outputs.version }}-win-x64.zip
+            pandamux-${{ steps.version.outputs.version }}-win-x64.zip
             latest.yml
           draft: false
           generate_release_notes: true

@@ -1,4 +1,4 @@
-<h1 align="center">wmux</h1>
+<h1 align="center">PandaMUX Everywhere</h1>
 <p align="center">A visibility layer for Claude Code on Windows: see what your AI agent does in real-time</p>
 
 <p align="center">
@@ -14,17 +14,17 @@
 </p>
 
 <p align="center">
-  <img src="https://wmux.org/assets/wmux-full.png" alt="wmux terminal multiplexer" width="900" />
+  <img src="https://pandamux.boardpandas.ai/assets/pandamux-full.png" alt="PandaMUX Everywhere terminal multiplexer" width="900" />
 </p>
 
 ## Project direction
 
-wmux is being rebuilt as a fully native, GPU-rendered Rust application (Iced + alacritty_terminal + portable-pty), moving off Electron for a faster, more resilient terminal. The full master plan lives in [`tasks/plan-repo.md`](tasks/plan-repo.md).
+PandaMUX Everywhere is being rebuilt as a fully native, GPU-rendered Rust application (Iced + alacritty_terminal + portable-pty), moving off Electron for a faster, more resilient terminal. The full master plan lives in [`tasks/plan-repo.md`](tasks/plan-repo.md).
 
 What this means today:
 
 - **Interim Electron app** (this repo, `master`): frozen to bug fixes only, migrating from npm to pnpm. It remains the shipping build until the Rust app reaches parity.
-- **The browser pane is being retired.** The CDP browser panel and `wmux browser *` commands are present in the current build but are dropped in the native rewrite; Claude Code's own browser tooling replaces them.
+- **The browser pane is being retired.** The CDP browser panel and `pandamux browser *` commands are present in the current build but are dropped in the native rewrite; Claude Code's own browser tooling replaces them.
 - **New in the rewrite:** copy/paste over SSH (OSC 52), running Claude Code on remote Linux hosts over SSH, and pasting/dropping local images straight into a remote Claude Code session.
 - Everything else carries over: workspaces, splits, tabs, notifications, the orchestrator plugin, shell integration, and the named-pipe API (kept wire-compatible).
 
@@ -36,19 +36,19 @@ The feature documentation below describes the **current shipping Electron build*
 <tr>
 <td width="40%" valign="middle">
 <h3>Passive Claude Code integration</h3>
-wmux observes Claude Code without changing how it works. Auto-configured hooks in <code>~/.claude/settings.json</code> report agent and tool activity to the sidebar. A CDP proxy on <code>localhost:9222</code> lets Claude Code's native <code>chrome-devtools-mcp</code> plugin control the wmux browser panel directly. Zero setup — everything is auto-injected on startup.
+PandaMUX Everywhere observes Claude Code without changing how it works. Auto-configured hooks in <code>~/.claude/settings.json</code> report agent and tool activity to the sidebar. A CDP proxy on <code>localhost:9222</code> lets Claude Code's native <code>chrome-devtools-mcp</code> plugin control the PandaMUX Everywhere browser panel directly. Zero setup — everything is auto-injected on startup.
 </td>
 <td width="60%">
-<img src="./docs/assets/wmux-sidebar.png" alt="Sidebar showing active Claude Code sessions" width="100%" />
+<img src="./docs/assets/pandamux-sidebar.png" alt="Sidebar showing active Claude Code sessions" width="100%" />
 </td>
 </tr>
 <tr>
 <td width="40%" valign="middle">
 <h3>Live browser visibility</h3>
-When Claude Code browses the web, every action appears in the wmux browser panel in real-time. Navigate, click, type, take screenshots — Claude Code uses its own tools, wmux just shows what's happening. CDP proxy on <code>localhost:9222</code> bridges the connection transparently. Terminal and markdown links open in the panel too.
+When Claude Code browses the web, every action appears in the PandaMUX browser panel in real-time. Navigate, click, type, take screenshots — Claude Code uses its own tools, PandaMUX just shows what's happening. CDP proxy on <code>localhost:9222</code> bridges the connection transparently. Terminal and markdown links open in the panel too.
 </td>
 <td width="60%">
-<img src="./docs/assets/wmux-browser.png" alt="Built-in browser panel showing live web activity" width="100%" />
+<img src="./docs/assets/pandamux-browser.png" alt="Built-in browser panel showing live web activity" width="100%" />
 </td>
 </tr>
 <tr>
@@ -57,16 +57,16 @@ When Claude Code browses the web, every action appears in the wmux browser panel
 Sidebar dots show what each Claude Code session is doing at a glance. <b>Orange pulsing</b> = working. <b>Green</b> = done. <b>Red</b> = interrupted (Ctrl+C). Git branch, dirty state, working directory, open ports, and PR status update in real-time from shell integration hooks.
 </td>
 <td width="60%">
-<img src="./docs/assets/wmux-sidebar.png" alt="Sidebar with live activity indicators" width="100%" />
+<img src="./docs/assets/pandamux-sidebar.png" alt="Sidebar with live activity indicators" width="100%" />
 </td>
 </tr>
 <tr>
 <td width="40%" valign="middle">
 <h3>Notification center</h3>
-Panes get a blue ring and tabs light up when agents finish or need attention. Supports OSC 9/99/777, <code>wmux notify</code> CLI, and idle detection. Click the bell icon to see all pending notifications — jump to any with one click. Windows toast notifications and taskbar flash on alerts.
+Panes get a blue ring and tabs light up when agents finish or need attention. Supports OSC 9/99/777, <code>pandamux notify</code> CLI, and idle detection. Click the bell icon to see all pending notifications — jump to any with one click. Windows toast notifications and taskbar flash on alerts.
 </td>
 <td width="60%">
-<img src="./docs/assets/wmux-notification.png" alt="Notification panel listing agent completions" width="100%" />
+<img src="./docs/assets/pandamux-notification.png" alt="Notification panel listing agent completions" width="100%" />
 </td>
 </tr>
 <tr>
@@ -75,25 +75,25 @@ Panes get a blue ring and tabs light up when agents finish or need attention. Su
 Terminal tabs display a shell-specific label — <b>PowerShell</b>, <b>bash</b>, <b>zsh</b>, or <b>cmd</b> — detected automatically from the spawned process. No configuration needed. Makes it easy to identify each pane at a glance when running multiple agents in different shells.
 </td>
 <td width="60%">
-<img src="./docs/assets/wmux-shell-labels.png" alt="Tab strip with shell-specific labels" width="100%" />
+<img src="./docs/assets/pandamux-shell-labels.png" alt="Tab strip with shell-specific labels" width="100%" />
 </td>
 </tr>
 <tr>
 <td width="40%" valign="middle">
 <h3>Custom themes &amp; per-pane colors</h3>
-450+ bundled Ghostty themes plus 17 curated wmux themes. Set a default color scheme in <code>~/.wmux/config.toml</code>, override per pane with <code>wmux split --color-scheme NAME</code>, or define custom named schemes directly in settings. Drag-imported from Windows Terminal or Ghostty configs.
+450+ bundled Ghostty themes plus 17 curated PandaMUX themes. Set a default color scheme in <code>~/.pandamux/config.toml</code>, override per pane with <code>pandamux split --color-scheme NAME</code>, or define custom named schemes directly in settings. Drag-imported from Windows Terminal or Ghostty configs.
 </td>
 <td width="60%">
-<img src="./docs/assets/wmux-themes.png" alt="Settings panel showing color scheme selection" width="100%" />
+<img src="./docs/assets/pandamux-themes.png" alt="Settings panel showing color scheme selection" width="100%" />
 </td>
 </tr>
 <tr>
 <td width="40%" valign="middle">
-<h3>wmux-orchestrator plugin</h3>
-Bundled Claude Code plugin that decomposes complex tasks into parallel agents coordinated through dependency-aware waves. Each agent runs in its own visible terminal pane with automated review and auto-fix. Activated via <code>/wmux:orchestrate</code> — no daemon, no config, no API keys.
+<h3>pandamux-orchestrator plugin</h3>
+Bundled Claude Code plugin that decomposes complex tasks into parallel agents coordinated through dependency-aware waves. Each agent runs in its own visible terminal pane with automated review and auto-fix. Activated via <code>/pandamux:orchestrate</code> — no daemon, no config, no API keys.
 </td>
 <td width="60%">
-<img src="./docs/assets/wmux-terminals.png" alt="Multiple agents running in split terminal panes" width="100%" />
+<img src="./docs/assets/pandamux-terminals.png" alt="Multiple agents running in split terminal panes" width="100%" />
 </td>
 </tr>
 <tr>
@@ -102,25 +102,25 @@ Bundled Claude Code plugin that decomposes complex tasks into parallel agents co
 Split any pane right or down. Resize dividers by dragging. Zoom a pane to full screen with <code>Ctrl+Shift+Enter</code>. Each pane supports multiple tabs — all rendered simultaneously with <code>visibility: hidden</code> so PTY sessions stay alive when switching. Workspace state is persisted across restarts.
 </td>
 <td width="60%">
-<img src="./docs/assets/wmux-terminals.png" alt="Horizontal and vertical pane splits" width="100%" />
+<img src="./docs/assets/pandamux-terminals.png" alt="Horizontal and vertical pane splits" width="100%" />
 </td>
 </tr>
 <tr>
 <td width="40%" valign="middle">
 <h3>Saved sessions</h3>
-Save your entire workspace layout (splits, working directories, browser URL, shell type) and restore it with one click. Click the save icon in the sidebar footer to name a session, the folder icon to load. On startup, wmux auto-loads your last session — no more manual <code>cd</code> and re-splitting every time.
+Save your entire workspace layout (splits, working directories, browser URL, shell type) and restore it with one click. Click the save icon in the sidebar footer to name a session, the folder icon to load. On startup, PandaMUX Everywhere auto-loads your last session — no more manual <code>cd</code> and re-splitting every time.
 </td>
 <td width="60%">
-<img src="./docs/assets/wmux-sidebar.png" alt="Sidebar with session save and load controls" width="100%" />
+<img src="./docs/assets/pandamux-sidebar.png" alt="Sidebar with session save and load controls" width="100%" />
 </td>
 </tr>
 <tr>
 <td width="40%" valign="middle">
 <h3>Clipboard image paste</h3>
-Copy a screenshot (Win+Shift+S, Print Screen, Snipping Tool) and press <code>Ctrl+V</code> in a wmux terminal. The image is saved to a temp file and the path is injected into the terminal — Claude Code reads it directly, like pasting on claude.ai but from any screenshot tool.
+Copy a screenshot (Win+Shift+S, Print Screen, Snipping Tool) and press <code>Ctrl+V</code> in a PandaMUX Everywhere terminal. The image is saved to a temp file and the path is injected into the terminal — Claude Code reads it directly, like pasting on claude.ai but from any screenshot tool.
 </td>
 <td width="60%">
-<img src="./docs/assets/wmux-full.png" alt="Image paste workflow via clipboard" width="100%" />
+<img src="./docs/assets/pandamux-full.png" alt="Image paste workflow via clipboard" width="100%" />
 </td>
 </tr>
 <tr>
@@ -129,14 +129,14 @@ Copy a screenshot (Win+Shift+S, Print Screen, Snipping Tool) and press <code>Ctr
 Interactive 7-step onboarding walks you through workspaces, splits, tabs, the browser panel, and notifications. Designed to get a new user productive in under 2 minutes. Reopen anytime from the <code>?</code> button in the title bar.
 </td>
 <td width="60%">
-<img src="./docs/assets/wmux-tutorial.png" alt="First-launch tutorial overlay" width="100%" />
+<img src="./docs/assets/pandamux-tutorial.png" alt="First-launch tutorial overlay" width="100%" />
 </td>
 </tr>
 </table>
 
 - **Release update badge** — A badge in the title bar notifies you when a new GitHub release is available. Click to open the releases page. No auto-update, no background downloads.
-- **Clickable links** — URLs in terminal output and markdown panes open directly in the wmux browser panel. Ctrl+click or just click (configurable).
-- **Scriptable** — Named pipe server (`\\.\pipe\wmux`) with a JSON-RPC API. Create workspaces, split panes, send keystrokes, read terminal content, control the browser via CDP, and spawn sub-agent terminals programmatically.
+- **Clickable links** — URLs in terminal output and markdown panes open directly in the PandaMUX browser panel. Ctrl+click or just click (configurable).
+- **Scriptable** — Named pipe server (`\\.\pipe\pandamux`) with a JSON-RPC API. Create workspaces, split panes, send keystrokes, read terminal content, control the browser via CDP, and spawn sub-agent terminals programmatically.
 - **Windows native** — ConPTY for proper terminal emulation, Windows toast notifications, taskbar flash on alerts, native title bar overlay.
 - **Windows Terminal + Ghostty compatible** — Import your themes, fonts, and colors from Windows Terminal `settings.json` or `~/.config/ghostty/config`. Ships with 450+ bundled Ghostty themes.
 - **GPU-accelerated** — xterm.js with WebGL rendering for smooth terminal output at any speed.
@@ -145,7 +145,7 @@ Interactive 7-step onboarding walks you through workspaces, splits, tabs, the br
 
 ### Download (recommended)
 
-Download the latest `wmux-<version>-win-x64.zip` from [GitHub Releases](https://github.com/BoardPandas/Pandamux/releases/latest), extract anywhere, and run `wmux.exe`. No installer, no code signing, no admin required.
+Download the latest `pandamux-<version>-win-x64.zip` from [GitHub Releases](https://github.com/BoardPandas/Pandamux/releases/latest), extract anywhere, and run `pandamux.exe`. No installer, no code signing, no admin required.
 
 > **Note:** After extracting, right-click the zip before extracting and select **Unblock** if Windows SmartScreen warns about the executable.
 
@@ -159,40 +159,40 @@ npm run build:main
 npm run dev
 ```
 
-## Why wmux?
+## Why PandaMUX Everywhere?
 
 Running many Claude Code sessions in parallel on Windows is painful. Windows Terminal has tabs but no notification system, so you have to check each tab manually to see if an agent finished or is waiting for input. tmux works in WSL but loses all Windows integration. Other Electron terminals exist, but none focus on the AI-agent workflow.
 
-wmux is a visibility layer for AI coding agents. It does not replace Claude Code or change how it works; it passively observes and shows you what is happening. Auto-configured hooks in `settings.json` report tool usage and agent activity to the sidebar. When a command finishes or is interrupted, the sidebar dot changes color and you get a notification.
+PandaMUX Everywhere is a visibility layer for AI coding agents. It does not replace Claude Code or change how it works; it passively observes and shows you what is happening. Auto-configured hooks in `settings.json` report tool usage and agent activity to the sidebar. When a command finishes or is interrupted, the sidebar dot changes color and you get a notification.
 
 The sidebar shows exactly what each agent is doing: the git branch it is on, the PR it opened, the ports it is listening on, and whether it needs your attention. Shell integration scripts inject themselves into PowerShell, CMD, and Bash sessions and report CWD changes, git branch switches, shell state, and PR status back to the sidebar via a named pipe in real time.
 
-On first launch, wmux auto-configures itself: it injects a minimal informational block into `~/.claude/CLAUDE.md`, adds a `PostToolUse` hook to `~/.claude/settings.json`, and installs the wmux-orchestrator Claude Code plugin. No API keys are needed; everything runs through your existing Claude Code session. (The current build also starts a CDP proxy on `localhost:9222` for the browser panel; that panel is being retired in the native rewrite.)
+On first launch, PandaMUX Everywhere auto-configures itself: it injects a minimal informational block into `~/.claude/CLAUDE.md`, adds a `PostToolUse` hook to `~/.claude/settings.json`, and installs the pandamux-orchestrator Claude Code plugin. No API keys are needed; everything runs through your existing Claude Code session. (The current build also starts a CDP proxy on `localhost:9222` for the browser panel; that panel is being retired in the native rewrite.)
 
-Everything is automatable through the `wmux` CLI or the named pipe directly. The socket protocol's design traces to [cmux](https://github.com/manaflow-ai/cmux), the macOS terminal for multitasking, and remains wire-compatible with it, so tools built for one work with the other.
+Everything is automatable through the `pandamux` CLI or the named pipe directly. The socket protocol's design traces to [cmux](https://github.com/manaflow-ai/cmux), the macOS terminal for multitasking, and remains wire-compatible with it, so tools built for one work with the other.
 
-## wmux-orchestrator
+## pandamux-orchestrator
 
-wmux ships with a bundled Claude Code plugin that enables parallel multi-agent orchestration. Activate it with `/wmux:orchestrate` in any Claude Code session.
+PandaMUX Everywhere ships with a bundled Claude Code plugin that enables parallel multi-agent orchestration. Activate it with `/pandamux:orchestrate` in any Claude Code session.
 
 **What it does:**
 1. Analyzes your codebase and decomposes the task into independent work units
-2. Assigns each unit to a Claude Code agent in its own wmux terminal pane
+2. Assigns each unit to a Claude Code agent in its own PandaMUX Everywhere terminal pane
 3. Runs agents in dependency-aware waves — later waves wait for earlier ones to finish
 4. A reviewer agent inspects the combined output and triggers auto-fixes if needed
 
 **Plugin commands:**
 ```
-/wmux:orchestrate   Decompose and run a complex task across parallel agents
+/pandamux:orchestrate   Decompose and run a complex task across parallel agents
 ```
 
-The plugin is auto-installed into `~/.claude/plugins/cache/` on wmux startup. It also works without wmux — agents fall back to native Claude Code subagents.
+The plugin is auto-installed into `~/.claude/plugins/cache/` on PandaMUX Everywhere startup. It also works without PandaMUX — agents fall back to native Claude Code subagents.
 
-Bundled in this repo under `resources/wmux-orchestrator/`, and fronted by its own page at [plugin.wmux.org](https://plugin.wmux.org).
+Bundled in this repo under `resources/pandamux-orchestrator/`, and fronted by its own page at [plugin.pandamux.boardpandas.ai](https://plugin.pandamux.boardpandas.ai).
 
 ## Shell Integration
 
-wmux automatically injects integration scripts into your shells:
+PandaMUX Everywhere automatically injects integration scripts into your shells:
 
 - **PowerShell** — Overrides the `prompt` function. Reports CWD, git branch, dirty state, and shell state (working/done/interrupted) via `NamedPipeClientStream`. Preexec hook via PSReadLine detects when commands start. Background job polls `gh pr view` every 45 seconds.
 - **CMD** — Embeds OSC 9 escape sequences in the `PROMPT` variable for CWD reporting.
@@ -202,10 +202,10 @@ Environment variables available in all shells:
 
 | Variable | Description |
 |----------|-------------|
-| `WMUX` | Always `1` inside wmux |
-| `WMUX_CLI` | Path to the wmux CLI script |
-| `WMUX_SURFACE_ID` | Current surface (tab) ID |
-| `WMUX_PIPE` | Named pipe path (`\\.\pipe\wmux`) |
+| `PANDAMUX` | Always `1` inside PandaMUX Everywhere |
+| `PANDAMUX_CLI` | Path to the pandamux CLI script |
+| `PANDAMUX_SURFACE_ID` | Current surface (tab) ID |
+| `PANDAMUX_PIPE` | Named pipe path (`\\.\pipe\pandamux`) |
 
 ## Keyboard Shortcuts
 
@@ -288,40 +288,40 @@ All shortcuts are rebindable via Settings (`Ctrl+,`).
 
 ## CLI
 
-The `wmux` CLI communicates with the running app over the named pipe.
+The `pandamux` CLI communicates with the running app over the named pipe.
 
 ```bash
-wmux ping                          # Check if wmux is running
-wmux notify "Build complete"       # Send a notification
-wmux new-workspace --title "API"   # Create a workspace
-wmux list-workspaces               # List all workspaces
-wmux split --right                 # Split focused pane
-wmux send "npm test"               # Send text to terminal
-wmux send-key Enter --ctrl         # Send keystroke
-wmux read-screen --lines 50        # Read terminal content
+pandamux ping                          # Check if pandamux is running
+pandamux notify "Build complete"       # Send a notification
+pandamux new-workspace --title "API"   # Create a workspace
+pandamux list-workspaces               # List all workspaces
+pandamux split --right                 # Split focused pane
+pandamux send "npm test"               # Send text to terminal
+pandamux send-key Enter --ctrl         # Send keystroke
+pandamux read-screen --lines 50        # Read terminal content
 
 # Browser (CDP-powered)
-wmux browser open http://localhost:3000
-wmux browser snapshot              # Accessibility tree with @eN refs
-wmux browser click @e5             # Click element by ref
-wmux browser type @e3 "hello"      # Type into input by ref
-wmux browser fill @e3 "value"      # Set input value directly
-wmux browser screenshot            # Base64 PNG screenshot
-wmux browser eval "document.title" # Run JavaScript
+pandamux browser open http://localhost:3000
+pandamux browser snapshot              # Accessibility tree with @eN refs
+pandamux browser click @e5             # Click element by ref
+pandamux browser type @e3 "hello"      # Type into input by ref
+pandamux browser fill @e3 "value"      # Set input value directly
+pandamux browser screenshot            # Base64 PNG screenshot
+pandamux browser eval "document.title" # Run JavaScript
 
 # Agents
-wmux agent spawn --cmd "claude --resume abc" --label "Research"
-wmux agent spawn-batch --json '[{"cmd":"claude","label":"Agent 1"},{"cmd":"claude","label":"Agent 2"}]'
-wmux agent list                    # List all agents
-wmux agent status <agent-id>       # Check agent status
-wmux agent kill <agent-id>         # Kill an agent
+pandamux agent spawn --cmd "claude --resume abc" --label "Research"
+pandamux agent spawn-batch --json '[{"cmd":"claude","label":"Agent 1"},{"cmd":"claude","label":"Agent 2"}]'
+pandamux agent list                    # List all agents
+pandamux agent status <agent-id>       # Check agent status
+pandamux agent kill <agent-id>         # Kill an agent
 
-wmux tree                          # Workspace / pane / surface hierarchy
+pandamux tree                          # Workspace / pane / surface hierarchy
 ```
 
 ## Socket API
 
-Connect to `\\.\pipe\wmux` for programmatic control. Two protocols supported:
+Connect to `\\.\pipe\pandamux` for programmatic control. Two protocols supported:
 
 **V1** (text, used by shell integration):
 ```
@@ -357,7 +357,7 @@ ping
 
 ## Session Restore
 
-On relaunch, wmux restores:
+On relaunch, PandaMUX Everywhere restores:
 
 - Window position and size
 - Workspace layout (titles, colors, pin state)
@@ -367,13 +367,13 @@ On relaunch, wmux restores:
 - Browser panel URLs
 - Active workspace and pane selection
 
-wmux does **not** restore live process state. Active Claude Code, tmux, or vim sessions are not resumed after restart. Shells are respawned fresh in the saved working directories.
+PandaMUX Everywhere does **not** restore live process state. Active Claude Code, tmux, or vim sessions are not resumed after restart. Shells are respawned fresh in the saved working directories.
 
 ## Config
 
 ### Terminal themes
 
-Set a global default color scheme in `~/.wmux/config.toml`:
+Set a global default color scheme in `~/.pandamux/config.toml`:
 
 ```toml
 [terminal]
@@ -383,15 +383,15 @@ color_scheme = "Dracula"
 Override per pane at split time or on the fly:
 
 ```bash
-wmux split --color-scheme "Tokyo Night"
-wmux set-color-scheme "Solarized Dark"
+pandamux split --color-scheme "Tokyo Night"
+pandamux set-color-scheme "Solarized Dark"
 ```
 
 Define custom named schemes in Settings > Terminal > Custom Schemes.
 
 ### Import from existing terminal configs
 
-wmux reads configuration from:
+PandaMUX Everywhere reads configuration from:
 
 1. **Windows Terminal** — `%LOCALAPPDATA%\Packages\Microsoft.WindowsTerminal_...\LocalState\settings.json`
 2. **Ghostty** — `~/.config/ghostty/config`
@@ -407,19 +407,19 @@ src/
   main/               # Electron main process
   renderer/           # React app (sidebar, splits, terminals, browser)
   preload/            # contextBridge API
-  cli/                # wmux CLI tool
+  cli/                # pandamux CLI tool
   shared/             # Types shared between main and renderer
   shell-integration/  # PowerShell, CMD, WSL scripts
 
 resources/
-  wmux-orchestrator/  # Bundled Claude Code plugin (auto-installed on startup)
-  themes/             # Ghostty + wmux theme files
+  pandamux-orchestrator/  # Bundled Claude Code plugin (auto-installed on startup)
+  themes/             # Ghostty + PandaMUX theme files
   sounds/             # Notification sounds
 ```
 
 ## Lineage
 
-wmux is an independent Windows project whose socket protocol and design philosophy trace to [cmux](https://github.com/manaflow-ai/cmux), the macOS terminal for multitasking. It is wire-compatible with cmux's socket protocol (tools built for cmux's API work with wmux) but does not reuse cmux's source code.
+PandaMUX Everywhere is an independent Windows project whose socket protocol and design philosophy trace to [cmux](https://github.com/manaflow-ai/cmux), the macOS terminal for multitasking. It is wire-compatible with cmux's socket protocol (tools built for cmux's API work with PandaMUX) but does not reuse cmux's source code.
 
 ## Contributing
 
@@ -428,4 +428,4 @@ wmux is an independent Windows project whose socket protocol and design philosop
 
 ## License
 
-wmux is open source under the [MIT License](LICENSE). Its socket protocol and design are inspired by cmux; it does not incorporate cmux's source code.
+PandaMUX Everywhere is open source under the [MIT License](LICENSE). Its socket protocol and design are inspired by cmux; it does not incorporate cmux's source code.

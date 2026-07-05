@@ -15,27 +15,27 @@ function getAllSurfaces(node: SplitNode): SurfaceRef[] {
 }
 
 /**
- * Open a URL in the wmux browser panel.
+ * Open a URL in the pandamux browser panel.
  * - If Ctrl/Cmd is held, always opens in the system browser.
  * - Otherwise, finds or creates a browser surface in the active workspace,
  *   then navigates to the URL.
  */
-export function openInWmuxBrowser(url: string, opts?: { forceExternal?: boolean }): void {
+export function openInPandaMUXBrowser(url: string, opts?: { forceExternal?: boolean }): void {
   if (opts?.forceExternal) {
-    window.wmux?.system?.openExternal?.(url);
+    window.pandamux?.system?.openExternal?.(url);
     return;
   }
 
   const state = useStore.getState();
   const wsId = state.activeWorkspaceId as WorkspaceId;
   if (!wsId) {
-    window.wmux?.system?.openExternal?.(url);
+    window.pandamux?.system?.openExternal?.(url);
     return;
   }
 
   const ws = state.workspaces.find(w => w.id === wsId);
   if (!ws) {
-    window.wmux?.system?.openExternal?.(url);
+    window.pandamux?.system?.openExternal?.(url);
     return;
   }
 
@@ -45,7 +45,7 @@ export function openInWmuxBrowser(url: string, opts?: { forceExternal?: boolean 
 
   if (browserSurface) {
     // Browser exists — just navigate
-    window.dispatchEvent(new CustomEvent('wmux:browser-navigate', { detail: { url, surfaceId: browserSurface.id } }));
+    window.dispatchEvent(new CustomEvent('pandamux:browser-navigate', { detail: { url, surfaceId: browserSurface.id } }));
     return;
   }
 
@@ -53,7 +53,7 @@ export function openInWmuxBrowser(url: string, opts?: { forceExternal?: boolean 
   const paneIds = getAllPaneIds(ws.splitTree);
   const targetPaneId = paneIds[0];
   if (!targetPaneId) {
-    window.wmux?.system?.openExternal?.(url);
+    window.pandamux?.system?.openExternal?.(url);
     return;
   }
 
@@ -67,6 +67,6 @@ export function openInWmuxBrowser(url: string, opts?: { forceExternal?: boolean 
   // Wait for React to mount the BrowserPane + webview dom-ready, then navigate
   // 600ms covers: React render (~16ms) + webview init (~200-500ms)
   setTimeout(() => {
-    window.dispatchEvent(new CustomEvent('wmux:browser-navigate', { detail: { url, surfaceId: newSurfaceId } }));
+    window.dispatchEvent(new CustomEvent('pandamux:browser-navigate', { detail: { url, surfaceId: newSurfaceId } }));
   }, 600);
 }

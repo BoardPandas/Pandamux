@@ -3,7 +3,7 @@ import { useStore } from '../../store';
 import { OrchestrationWave, OrchestrationAgent, OrchestrationState } from '../../../shared/types';
 
 /**
- * Sidebar panel for the wmux-orchestrator plugin. Self-contained; auto-hides
+ * Sidebar panel for the pandamux-orchestrator plugin. Self-contained; auto-hides
  * when no orchestration is active. Main process pushes state via IPC.
  */
 export default function OrchestrationPanel() {

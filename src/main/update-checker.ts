@@ -1,7 +1,7 @@
 import { app, BrowserWindow, net } from 'electron';
 import { IPC_CHANNELS } from '../shared/types';
 
-// wmux has two distinct update paths:
+// pandamux has two distinct update paths:
 //   1. updater.ts (electron-updater) — actually downloads/installs, now gated by a
 //      quarantine window + an explicit user-confirmed install (see issue #29).
 //   2. this module — a notify-only poll of GitHub /releases/latest that broadcasts
@@ -48,7 +48,7 @@ export function fetchLatestRelease(): Promise<{ tag_name: string; html_url: stri
       redirect: 'follow',
     });
     req.setHeader('Accept', 'application/vnd.github+json');
-    req.setHeader('User-Agent', `wmux/${app.getVersion()}`);
+    req.setHeader('User-Agent', `pandamux/${app.getVersion()}`);
     let body = '';
     req.on('response', (res) => {
       if (res.statusCode !== 200) {

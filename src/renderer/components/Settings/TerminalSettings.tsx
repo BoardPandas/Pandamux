@@ -10,7 +10,7 @@ export default function TerminalSettings() {
   // Load the list of bundled themes from the main process on mount so the
   // dropdown reflects actual files in resources/themes/ rather than a stub.
   useEffect(() => {
-    (window as any).wmux?.config?.getThemeList?.().then((list: string[]) => {
+    (window as any).pandamux?.config?.getThemeList?.().then((list: string[]) => {
       if (Array.isArray(list) && list.length > 0) setThemes(list);
     });
   }, []);
@@ -90,7 +90,7 @@ export default function TerminalSettings() {
         </div>
       </div>
       <div className="settings-row" style={{ opacity: 0.7, fontSize: '12px' }}>
-        Applied to new panes. Override per pane via <code>wmux split --color-scheme NAME</code> or <code>wmux set-color-scheme NAME</code>.
+        Applied to new panes. Override per pane via <code>pandamux split --color-scheme NAME</code> or <code>pandamux set-color-scheme NAME</code>.
       </div>
 
       <div className="settings-divider" />

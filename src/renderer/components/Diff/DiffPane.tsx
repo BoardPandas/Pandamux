@@ -87,7 +87,7 @@ export default function DiffPane({ surfaceId, cwd }: DiffPaneProps) {
 
   const loadFiles = useCallback(async () => {
     try {
-      const result = await window.wmux?.diff?.getFiles(cwd || '');
+      const result = await window.pandamux?.diff?.getFiles(cwd || '');
       if (result?.files) {
         const newFiles = result.files as ChangedFile[];
         const newKey = newFiles.map(f => `${f.path}|${f.status}|${f.additions}|${f.deletions}`).join('\n');
@@ -108,7 +108,7 @@ export default function DiffPane({ surfaceId, cwd }: DiffPaneProps) {
 
   const loadDiff = useCallback(async (file: string) => {
     try {
-      const result = await window.wmux?.diff?.getFileDiff(cwd || '', file);
+      const result = await window.pandamux?.diff?.getFileDiff(cwd || '', file);
       if (result?.diff !== undefined) {
         if (result.diff !== lastDiffRawRef.current) {
           lastDiffRawRef.current = result.diff;
@@ -153,9 +153,9 @@ export default function DiffPane({ surfaceId, cwd }: DiffPaneProps) {
 
   // Listen for immediate updates from Claude Code hooks (faster than polling)
   useEffect(() => {
-    if (!window.wmux?.diff?.onUpdate) return;
+    if (!window.pandamux?.diff?.onUpdate) return;
     let debounce: ReturnType<typeof setTimeout>;
-    const unsub = window.wmux.diff.onUpdate((data: { file?: string }) => {
+    const unsub = window.pandamux.diff.onUpdate((data: { file?: string }) => {
       clearTimeout(debounce);
       debounce = setTimeout(() => {
         if (data?.file) setSelectedFile(data.file);

@@ -1,5 +1,5 @@
 /*
- * motion.js — scroll motion engine for wmux-orchestrator marketing site
+ * motion.js — scroll motion engine for pandamux-orchestrator marketing site
  * Agent D · Wave 2 · orch-781419
  *
  * Drives CSS custom properties on scroll (--scroll on <html>, --progress on

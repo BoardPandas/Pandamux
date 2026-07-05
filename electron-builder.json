@@ -1,6 +1,7 @@
 {
-  "appId": "com.wmux.app",
-  "productName": "wmux",
+  "appId": "com.pandamux.app",
+  "productName": "PandaMUX Everywhere",
+  "executableName": "pandamux",
   "directories": {
     "output": "release"
   },
@@ -33,10 +34,10 @@
     "allowToChangeInstallationDirectory": true,
     "createDesktopShortcut": true,
     "createStartMenuShortcut": true,
-    "shortcutName": "wmux"
+    "shortcutName": "PandaMUX Everywhere"
   },
   "portable": {
-    "artifactName": "wmux-${version}-portable.exe"
+    "artifactName": "pandamux-${version}-portable.exe"
   },
   "extraResources": [
     { "from": "resources/icon.png", "to": "icon.png" },
@@ -44,7 +45,7 @@
     { "from": "resources/sounds", "to": "sounds" },
     { "from": "resources/claude-instructions.md", "to": "claude-instructions/claude-instructions.md" },
     { "from": "src/shell-integration", "to": "shell-integration" },
-    { "from": "dist/cli/wmux.js", "to": "cli/wmux.js" },
-    { "from": "resources/wmux-orchestrator", "to": "wmux-orchestrator" }
+    { "from": "dist/cli/pandamux.js", "to": "cli/pandamux.js" },
+    { "from": "resources/pandamux-orchestrator", "to": "pandamux-orchestrator" }
   ]
 }

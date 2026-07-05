@@ -1,4 +1,4 @@
-/* ambient.js — wmux-orchestrator marketing site
+/* ambient.js — pandamux-orchestrator marketing site
  *
  * Two ambient interactive layers:
  *   1. Cursor-follow glow: writes --mouse-x / --mouse-y on <html>, fed to
@@ -358,7 +358,7 @@
   function showKeyboardHint(prefersReduced) {
     if (prefersReduced) return;
     try {
-      if (sessionStorage.getItem('wmux-hint-seen')) return;
+      if (sessionStorage.getItem('pandamux-hint-seen')) return;
     } catch (e) {
       // sessionStorage unavailable (private mode, disabled cookies) — skip.
       return;
@@ -414,7 +414,7 @@
       card.style.opacity = '0';
       document.removeEventListener('keydown', onKey);
       try {
-        sessionStorage.setItem('wmux-hint-seen', '1');
+        sessionStorage.setItem('pandamux-hint-seen', '1');
       } catch (e) { /* noop */ }
       setTimeout(function () {
         if (card.parentNode) card.parentNode.removeChild(card);

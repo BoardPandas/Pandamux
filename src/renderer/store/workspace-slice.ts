@@ -61,7 +61,7 @@ export const createWorkspaceSlice: StateCreator<WorkspaceSlice> = (set, get) => 
 
   closeWorkspace(id: WorkspaceId): void {
     // Reap every shell in the workspace before dropping its subtree (issue #65).
-    // Closing a workspace (Ctrl+Shift+W, sidebar ×, `wmux close-workspace`) used
+    // Closing a workspace (Ctrl+Shift+W, sidebar ×, `pandamux close-workspace`) used
     // to discard the entire split tree WITHOUT killing any of its PTYs, orphaning
     // every pane's wrapper shell for the life of the app.
     const closing = get().workspaces.find((w) => w.id === id);

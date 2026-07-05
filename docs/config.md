@@ -1,9 +1,9 @@
-# wmux config file
+# PandaMUX Everywhere config file
 
-wmux reads `~/.wmux/config.toml` on startup (Windows: `%USERPROFILE%\.wmux\config.toml`).
+PandaMUX Everywhere reads `~/.pandamux/config.toml` on startup (Windows: `%USERPROFILE%\.pandamux\config.toml`).
 The file is optional — if it isn't present, built-in defaults apply.
 
-Edit it, then run `wmux reload-config` (or restart wmux) to pick up changes.
+Edit it, then run `pandamux reload-config` (or restart pandamux) to pick up changes.
 
 ## Full example
 
@@ -17,11 +17,11 @@ scrollback-lines = 10000
 
 [terminal.colors]
 # Default scheme for every new pane. Any bundled theme name works
-# (see `wmux list-themes`), or the key of a user-defined scheme below.
+# (see `pandamux list-themes`), or the key of a user-defined scheme below.
 default = "Dracula"
 
 # User-defined named schemes — override individual fields of the base theme.
-# Invoke them with:   wmux split --color-scheme prod
+# Invoke them with:   pandamux split --color-scheme prod
 [terminal.colors.schemes.prod]
 background = "#2b0b0b"
 foreground = "#ffdddd"
@@ -54,19 +54,19 @@ palette = [
 1. Built-in defaults
 2. Settings UI values (persisted to Zustand / localStorage)
 3. **`config.toml`** — applied over 1 and 2 at startup and on `reload-config`
-4. Per-pane overrides (e.g. `wmux split --color-scheme prod`) — always win for that pane
+4. Per-pane overrides (e.g. `pandamux split --color-scheme prod`) — always win for that pane
 
 "File wins at startup, app wins at runtime": if you tweak a value in the Settings
-UI after wmux booted, your tweak sticks until the next reload.
+UI after PandaMUX Everywhere booted, your tweak sticks until the next reload.
 
 ## CLI helpers
 
 ```bash
-wmux config path      # print the config file path
-wmux config show      # dump the parsed config (useful for debugging syntax)
-wmux config reload    # re-read the file and apply to running surfaces
-wmux reload-config    # alias of `config reload`
-wmux list-themes      # print all valid `default`/`--color-scheme` names
+pandamux config path      # print the config file path
+pandamux config show      # dump the parsed config (useful for debugging syntax)
+pandamux config reload    # re-read the file and apply to running surfaces
+pandamux reload-config    # alias of `config reload`
+pandamux list-themes      # print all valid `default`/`--color-scheme` names
 ```
 
 ## Notes
@@ -75,7 +75,7 @@ wmux list-themes      # print all valid `default`/`--color-scheme` names
   (`font-family` and `fontFamily` both work).
 - `cursor` inside a scheme is the cursor color; use `cursor-style` (under `[terminal]`)
   for the shape.
-- A parse error in one key is reported in `wmux config show` but never
+- A parse error in one key is reported in `pandamux config show` but never
   aborts loading — the rest of the file still applies.
-- Per-pane overrides via `wmux split --color-scheme NAME` or
-  `wmux set-color-scheme [id] NAME` always take precedence for that surface.
+- Per-pane overrides via `pandamux split --color-scheme NAME` or
+  `pandamux set-color-scheme [id] NAME` always take precedence for that surface.

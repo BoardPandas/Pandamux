@@ -13,8 +13,8 @@ interface Step {
 
 const STEPS: Step[] = [
   {
-    title: 'Welcome to wmux',
-    body: 'wmux is a terminal multiplexer for running AI coding agents in parallel. This quick tour will show you the essentials.',
+    title: 'Welcome to PandaMUX Everywhere',
+    body: 'PandaMUX Everywhere is a terminal multiplexer for running AI coding agents in parallel. This quick tour will show you the essentials.',
     shortcuts: [],
   },
   {

@@ -6,7 +6,7 @@ interface CursorLikeLayer {
   _render?: (triggeredByAnimationFrame: boolean) => void;
   handleCursorMove?: () => void;
   handleGridChanged?: (start: number, end: number) => void;
-  __wmuxCursorSynced?: boolean;
+  __pandamuxCursorSynced?: boolean;
 }
 
 /**
@@ -17,7 +17,7 @@ interface CursorLikeLayer {
  * cursorBlink is on, only repaints via the blink timer's requestAnimationFrame
  * (CursorRenderLayer.handleGridChanged → restartBlinkAnimation, deferred). The
  * WebGL renderer instead draws the cursor inline with text every frame, so it
- * always tracks the caret. Under wmux's Electron renderer (many panes + a live
+ * always tracks the caret. Under pandamux's Electron renderer (many panes + a live
  * webview browser panel) that blink rAF gets throttled, so the block cursor
  * visibly lags behind typing in TUIs like Claude Code (issue #23). We replicate
  * WebGL's behavior for Canvas by forcing a synchronous _render on move/change
@@ -39,8 +39,8 @@ export function forceSyncCursorRendering(terminal: Terminal): boolean {
       (l): l is CursorLikeLayer =>
         !!l && typeof l === 'object' && '_cursorRenderers' in l && typeof (l as any)._render === 'function'
     );
-    if (!cursor || cursor.__wmuxCursorSynced) return false;
-    cursor.__wmuxCursorSynced = true;
+    if (!cursor || cursor.__pandamuxCursorSynced) return false;
+    cursor.__pandamuxCursorSynced = true;
 
     const drawNow = (): void => {
       // restartBlinkAnimation() sets isCursorVisible=true (so _render won't

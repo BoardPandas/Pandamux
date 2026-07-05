@@ -3,22 +3,22 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>wmux Documentation — complete guide for beginners</title>
-  <meta name="description" content="Complete wmux documentation: installation, concepts, keyboard shortcuts, Claude Code integration, the wmux-orchestrator plugin. A guide from zero to confident." />
+  <title>PandaMUX Everywhere Documentation — complete guide for beginners</title>
+  <meta name="description" content="Complete PandaMUX Everywhere documentation: installation, concepts, keyboard shortcuts, Claude Code integration, the pandamux-orchestrator plugin. A guide from zero to confident." />
   <meta name="author" content="BoardPandas" />
   <meta name="theme-color" content="#0a0a0a" />
 
-  <meta property="og:title" content="wmux Documentation — complete guide" />
-  <meta property="og:description" content="Everything you need to know to use wmux: from installation to the Claude Code plugin." />
+  <meta property="og:title" content="PandaMUX Everywhere Documentation — complete guide" />
+  <meta property="og:description" content="Everything you need to know to use PandaMUX Everywhere: from installation to the Claude Code plugin." />
   <meta property="og:type" content="article" />
-  <meta property="og:url" content="https://wmux.org/docs/en/" />
-  <meta property="og:site_name" content="wmux" />
+  <meta property="og:url" content="https://pandamux.boardpandas.ai/docs/en/" />
+  <meta property="og:site_name" content="PandaMUX Everywhere" />
 
-  <link rel="icon" type="image/png" href="../../assets/wmux_logo.png" />
-  <link rel="canonical" href="https://wmux.org/docs/en/" />
-  <link rel="alternate" hreflang="fr" href="https://wmux.org/docs/" />
-  <link rel="alternate" hreflang="en" href="https://wmux.org/docs/en/" />
-  <link rel="alternate" hreflang="x-default" href="https://wmux.org/docs/" />
+  <link rel="icon" type="image/png" href="../../assets/pandamux_logo.png" />
+  <link rel="canonical" href="https://pandamux.boardpandas.ai/docs/en/" />
+  <link rel="alternate" hreflang="fr" href="https://pandamux.boardpandas.ai/docs/" />
+  <link rel="alternate" hreflang="en" href="https://pandamux.boardpandas.ai/docs/en/" />
+  <link rel="alternate" hreflang="x-default" href="https://pandamux.boardpandas.ai/docs/" />
 
   <style>
     @font-face {
@@ -315,14 +315,14 @@
     <div class="doc-header-inner">
       <div class="doc-header-left">
         <a href="/" class="logo-link">
-          <img src="../../assets/wmux_logo.png" alt="wmux" />
-          <span>wmux</span>
+          <img src="../../assets/pandamux_logo.png" alt="PandaMUX Everywhere" />
+          <span>PandaMUX</span>
         </a>
         <span class="crumb">/ docs / en</span>
       </div>
       <nav>
         <a href="/">Home</a>
-        <a href="https://plugin.wmux.org">Plugin</a>
+        <a href="https://plugin.pandamux.boardpandas.ai">Plugin</a>
         <a href="https://github.com/BoardPandas/Pandamux">GitHub</a>
         <span style="color: var(--border); margin: 0 4px 0 10px;" aria-hidden="true">·</span>
         <a href="/docs/">FR</a>
@@ -335,7 +335,7 @@
     <aside class="doc-toc">
       <p class="doc-toc__title">On this page</p>
       <ul>
-        <li><a href="#what-is-wmux">What is wmux?</a></li>
+        <li><a href="#what-is-pandamux">What is PandaMUX Everywhere?</a></li>
         <li><a href="#installation">Installation</a></li>
         <li><a href="#first-launch">First launch</a></li>
         <li><a href="#concepts">Core concepts</a></li>
@@ -347,7 +347,7 @@
         <li><a href="#sessions">Save &amp; restore sessions</a></li>
         <li><a href="#themes">Themes</a></li>
         <li><a href="#shell">Shell integration</a></li>
-        <li><a href="#cli">The <code>wmux</code> CLI</a></li>
+        <li><a href="#cli">The <code>pandamux</code> CLI</a></li>
         <li><a href="#plugin-orchestrator">Orchestrator plugin</a></li>
         <li><a href="#faq">Common issues</a></li>
         <li><a href="#resources">Resources</a></li>
@@ -355,18 +355,18 @@
     </aside>
 
     <main class="doc-main">
-      <h1>wmux Documentation</h1>
+      <h1>PandaMUX Everywhere Documentation</h1>
       <p class="lead">
-        Everything you need to know to get started with wmux, even if you've never used a terminal multiplexer in your life. This guide takes you from zero to confident, step by step.
+        Everything you need to know to get started with PandaMUX Everywhere, even if you've never used a terminal multiplexer in your life. This guide takes you from zero to confident, step by step.
       </p>
 
       <!-- ─────────────────────────────────────────────────────── -->
-      <h2 id="what-is-wmux">What is wmux?</h2>
+      <h2 id="what-is-pandamux">What is PandaMUX Everywhere?</h2>
       <p>
-        <strong>wmux</strong> is a Windows desktop application that lets you keep several terminals open at the same time, organized in vertical tabs, with the ability to split any tab into multiple panes. Think of it as the Windows equivalent of tools like tmux (Linux/macOS), Ghostty, or Warp — but built specifically for working with AI agents like Claude Code.
+        <strong>PandaMUX Everywhere</strong> is a Windows desktop application that lets you keep several terminals open at the same time, organized in vertical tabs, with the ability to split any tab into multiple panes. Think of it as the Windows equivalent of tools like tmux (Linux/macOS), Ghostty, or Warp — but built specifically for working with AI agents like Claude Code.
       </p>
       <p>
-        Concretely, when you launch wmux you get:
+        Concretely, when you launch PandaMUX Everywhere you get:
       </p>
       <ul>
         <li>A <strong>single window</strong> that can hold as many terminals as you want</li>
@@ -376,57 +376,57 @@
         <li><strong>Automatic Claude Code integration</strong>, with nothing to configure</li>
       </ul>
       <p>
-        <strong>Who is this for?</strong> Anyone who wants to run several AI agents in parallel on Windows and keep track of what they're doing. If you already use Claude Code and you're tired of juggling multiple terminal windows, wmux is for you.
+        <strong>Who is this for?</strong> Anyone who wants to run several AI agents in parallel on Windows and keep track of what they're doing. If you already use Claude Code and you're tired of juggling multiple terminal windows, PandaMUX Everywhere is for you.
       </p>
 
       <div class="callout">
-        <strong>The problem wmux solves.</strong> AI agents like Claude Code work in bursts — sometimes 30 seconds, sometimes 10 minutes. While one agent is running, you could start another. Without wmux, you have to open several terminal windows, arrange them by hand, and you miss notifications when you're on another screen. With wmux, everything is in one window, each agent has its place, and notifications find you wherever you are.
+        <strong>The problem PandaMUX Everywhere solves.</strong> AI agents like Claude Code work in bursts — sometimes 30 seconds, sometimes 10 minutes. While one agent is running, you could start another. Without PandaMUX Everywhere, you have to open several terminal windows, arrange them by hand, and you miss notifications when you're on another screen. With PandaMUX Everywhere, everything is in one window, each agent has its place, and notifications find you wherever you are.
       </div>
 
       <!-- ─────────────────────────────────────────────────────── -->
       <h2 id="installation">Installation</h2>
       <p>
-        wmux ships as a <strong>portable zip archive</strong>. There is no installer: you download, extract, and run. Here are the exact steps:
+        PandaMUX Everywhere ships as a <strong>portable zip archive</strong>. There is no installer: you download, extract, and run. Here are the exact steps:
       </p>
 
       <h3>1. Download the latest release</h3>
       <p>
-        Head to the <a href="https://github.com/BoardPandas/Pandamux/releases/latest" target="_blank" rel="noopener">GitHub releases page</a> and grab the file named <code>wmux-X.Y.Z-win-x64.zip</code> (where <code>X.Y.Z</code> is the most recent version). The zip is about 150 MB.
+        Head to the <a href="https://github.com/BoardPandas/Pandamux/releases/latest" target="_blank" rel="noopener">GitHub releases page</a> and grab the file named <code>pandamux-X.Y.Z-win-x64.zip</code> (where <code>X.Y.Z</code> is the most recent version). The zip is about 150 MB.
       </p>
 
       <h3>2. Extract the zip</h3>
       <p>
-        Right-click the downloaded file, choose <em>Extract All</em>, and pick a destination folder. I recommend <code>C:\Users\YourName\wmux</code> for easy access. Avoid <code>Program Files</code> unless you are running as administrator.
+        Right-click the downloaded file, choose <em>Extract All</em>, and pick a destination folder. I recommend <code>C:\Users\YourName\pandamux</code> for easy access. Avoid <code>Program Files</code> unless you are running as administrator.
       </p>
 
       <div class="callout warning">
-        <strong>Heads up — Mark of the Web.</strong> Windows tags files downloaded via a browser as "from the internet". This tag can stop wmux from loading some modules. To strip it, open PowerShell in your wmux folder and run:
+        <strong>Heads up — Mark of the Web.</strong> Windows tags files downloaded via a browser as "from the internet". This tag can stop PandaMUX Everywhere from loading some modules. To strip it, open PowerShell in your PandaMUX Everywhere folder and run:
         <pre><code>Get-ChildItem -Recurse | Unblock-File</code></pre>
         You can also right-click the zip <em>before</em> extracting → <em>Properties</em> → check <em>Unblock</em> at the bottom → <em>OK</em>. Even simpler.
       </div>
 
-      <h3>3. Launch wmux</h3>
+      <h3>3. Launch PandaMUX Everywhere</h3>
       <p>
-        In the folder where you extracted wmux, double-click <code>wmux.exe</code>. The first time, Windows SmartScreen will show a blue screen with "Windows protected your PC". That's normal — wmux is not yet signed with an expensive Authenticode certificate. Click <em>More info</em>, then <em>Run anyway</em>.
+        In the folder where you extracted PandaMUX Everywhere, double-click <code>pandamux.exe</code>. The first time, Windows SmartScreen will show a blue screen with "Windows protected your PC". That's normal — PandaMUX Everywhere is not yet signed with an expensive Authenticode certificate. Click <em>More info</em>, then <em>Run anyway</em>.
       </p>
       <p>
-        wmux opens with a dark window and a default PowerShell terminal. Welcome.
+        PandaMUX Everywhere opens with a dark window and a default PowerShell terminal. Welcome.
       </p>
 
       <div class="callout tip">
-        <strong>Tip — pin wmux to the taskbar.</strong> Right-click the wmux icon in the taskbar and choose <em>Pin to taskbar</em>. Now you can launch wmux with one click anytime.
+        <strong>Tip — pin PandaMUX Everywhere to the taskbar.</strong> Right-click the PandaMUX Everywhere icon in the taskbar and choose <em>Pin to taskbar</em>. Now you can launch PandaMUX Everywhere with one click anytime.
       </div>
 
       <!-- ─────────────────────────────────────────────────────── -->
       <h2 id="first-launch">First launch</h2>
       <p>
-        When you open wmux for the first time, here is what you see:
+        When you open PandaMUX Everywhere for the first time, here is what you see:
       </p>
       <ul>
         <li><strong>On the left</strong>: the <em>sidebar</em> with a single workspace named something like <code>ws-1</code>. That's your current "tab".</li>
         <li><strong>In the center</strong>: a PowerShell terminal ready to accept commands.</li>
         <li><strong>On the right</strong>: possibly an empty browser pane (you can close it with <kbd>Ctrl+Shift+B</kbd> if you don't need it).</li>
-        <li><strong>At the top</strong>: a title bar with the wmux name, a notification bell, and the standard window controls.</li>
+        <li><strong>At the top</strong>: a title bar with the PandaMUX Everywhere name, a notification bell, and the standard window controls.</li>
       </ul>
       <p>
         Double-click the workspace in the sidebar to rename it. I recommend naming your workspaces by project — for example <code>my-site</code>, <code>api-backend</code>, etc.
@@ -435,7 +435,7 @@
       <!-- ─────────────────────────────────────────────────────── -->
       <h2 id="concepts">Core concepts</h2>
       <p>
-        wmux organizes your work into four layers. Understanding these four words will save you a lot of time.
+        PandaMUX Everywhere organizes your work into four layers. Understanding these four words will save you a lot of time.
       </p>
 
       <h3>Workspace</h3>
@@ -480,7 +480,7 @@
       <!-- ─────────────────────────────────────────────────────── -->
       <h2 id="shortcuts">Keyboard shortcuts</h2>
       <p>
-        wmux has 50+ shortcuts, but you really only need about a dozen day-to-day. Learn these and you'll be productive:
+        PandaMUX Everywhere has 50+ shortcuts, but you really only need about a dozen day-to-day. Learn these and you'll be productive:
       </p>
 
       <div class="kbd-list">
@@ -528,29 +528,29 @@
       <!-- ─────────────────────────────────────────────────────── -->
       <h2 id="claude-code">Working with Claude Code</h2>
       <p>
-        This is where wmux really earns its keep. wmux automatically detects Claude Code and wires up its integration without asking you to configure anything. When you run <code>claude</code> in a wmux terminal, the following happens behind the scenes:
+        This is where PandaMUX Everywhere really earns its keep. PandaMUX Everywhere automatically detects Claude Code and wires up its integration without asking you to configure anything. When you run <code>claude</code> in a PandaMUX Everywhere terminal, the following happens behind the scenes:
       </p>
       <ul>
-        <li>wmux injects its instructions into <code>~/.claude/CLAUDE.md</code> (read-only, surgical, non-intrusive) so Claude Code knows it's running inside wmux and uses the embedded browser instead of spawning Playwright.</li>
+        <li>PandaMUX Everywhere injects its instructions into <code>~/.claude/CLAUDE.md</code> (read-only, surgical, non-intrusive) so Claude Code knows it's running inside PandaMUX Everywhere and uses the embedded browser instead of spawning Playwright.</li>
         <li><strong>Claude Code hooks</strong> (<code>SessionStart</code>, <code>PostToolUse</code>, <code>SubagentStop</code>, <code>Stop</code>) are auto-registered. They report in real time to the sidebar what tools the agent is using, how many, whether it's paused, whether it's waiting for your input.</li>
         <li>A <strong>CDP proxy</strong> on <code>localhost:9222</code> exposes the embedded browser to Claude Code via <code>chrome-devtools-mcp</code>. Every page, click, and form submission the agent visits shows up in your browser pane.</li>
       </ul>
       <p>
-        Concrete result: you run <code>claude</code>, ask it "browse github.com and find the wmux repo", and you watch in real time what it's doing inside the browser pane. No Playwright, no invisible windows, no configuration.
+        Concrete result: you run <code>claude</code>, ask it "browse github.com and find the PandaMUX Everywhere repo", and you watch in real time what it's doing inside the browser pane. No Playwright, no invisible windows, no configuration.
       </p>
 
-      <h3>The wmux-orchestrator plugin</h3>
+      <h3>The pandamux-orchestrator plugin</h3>
       <p>
-        To go further with Claude Code, wmux ships with a plugin called <strong>wmux-orchestrator</strong>. It lets you run several Claude Code agents in parallel on a single task, each in its own visible pane. The plugin analyzes your codebase, splits the task into subtasks, and coordinates everything.
+        To go further with Claude Code, PandaMUX Everywhere ships with a plugin called <strong>pandamux-orchestrator</strong>. It lets you run several Claude Code agents in parallel on a single task, each in its own visible pane. The plugin analyzes your codebase, splits the task into subtasks, and coordinates everything.
       </p>
       <p>
-        It's explained in full on <a href="https://plugin.wmux.org" target="_blank" rel="noopener">plugin.wmux.org</a> with an interactive simulator.
+        It's explained in full on <a href="https://plugin.pandamux.boardpandas.ai" target="_blank" rel="noopener">plugin.pandamux.boardpandas.ai</a> with an interactive simulator.
       </p>
 
       <!-- ─────────────────────────────────────────────────────── -->
       <h2 id="split-panes">Split panes</h2>
       <p>
-        Having several terminals side by side is often what saves you the most time. wmux makes it trivial.
+        Having several terminals side by side is often what saves you the most time. PandaMUX Everywhere makes it trivial.
       </p>
 
       <h3>Split horizontally</h3>
@@ -580,11 +580,11 @@
       <!-- ─────────────────────────────────────────────────────── -->
       <h2 id="browser">The embedded browser</h2>
       <p>
-        wmux ships with a real Chromium browser (not a basic webview) that you can open next to any terminal. It serves two purposes:
+        PandaMUX Everywhere ships with a real Chromium browser (not a basic webview) that you can open next to any terminal. It serves two purposes:
       </p>
       <ol>
         <li><strong>Watch Claude Code work in real time</strong> when it browses the web via <code>chrome-devtools-mcp</code>. Every agent action is visible live, as if you were looking over its shoulder.</li>
-        <li><strong>Read library docs, check a dashboard, open Stack Overflow</strong> without leaving wmux.</li>
+        <li><strong>Read library docs, check a dashboard, open Stack Overflow</strong> without leaving PandaMUX Everywhere.</li>
       </ol>
       <p>
         To open a browser, use <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd>. A browser pane opens on the right. Type a URL in the address bar, or click the "new surface" button to stack several browser tabs in the same pane.
@@ -596,17 +596,17 @@
       <!-- ─────────────────────────────────────────────────────── -->
       <h2 id="notifications">Notifications</h2>
       <p>
-        When an agent finishes a task or needs your attention, wmux alerts you several ways at once:
+        When an agent finishes a task or needs your attention, PandaMUX Everywhere alerts you several ways at once:
       </p>
       <ul>
         <li><strong>The pane flashes blue</strong> (a blue light ring around the affected terminal). That's the primary visual signal inside the active window.</li>
         <li><strong>The sidebar shows a badge</strong> next to the affected workspace, with the count of unread notifications.</li>
-        <li><strong>The wmux icon in the Windows taskbar flashes</strong>. That's the signal when you're on another application.</li>
+        <li><strong>The PandaMUX Everywhere icon in the Windows taskbar flashes</strong>. That's the signal when you're on another application.</li>
         <li><strong>A Windows toast notification</strong> appears at the bottom right with the workspace title and the message.</li>
         <li><strong>A sound</strong> can play (disabled by default, enable in settings).</li>
       </ul>
       <p>
-        Notifications are triggered automatically by the <a href="#shell">shell integration scripts</a> that detect when a command finishes or is interrupted. To trigger one manually from a script, use <code>wmux notify "My message"</code>.
+        Notifications are triggered automatically by the <a href="#shell">shell integration scripts</a> that detect when a command finishes or is interrupted. To trigger one manually from a script, use <code>pandamux notify "My message"</code>.
       </p>
 
       <h3>Activity indicators</h3>
@@ -623,22 +623,22 @@
       <!-- ─────────────────────────────────────────────────────── -->
       <h2 id="sessions">Save &amp; restore sessions</h2>
       <p>
-        wmux automatically saves your window state every 30 seconds: workspaces, panes, tabs, working directories, browser URLs. When you close wmux and reopen it, you land back on the exact same layout.
+        PandaMUX Everywhere automatically saves your window state every 30 seconds: workspaces, panes, tabs, working directories, browser URLs. When you close PandaMUX Everywhere and reopen it, you land back on the exact same layout.
       </p>
       <p>
         You can also save a named session manually to come back to it later:
       </p>
-      <pre><code>wmux session save "before-refactor"
-wmux session list
-wmux session load "before-refactor"</code></pre>
+      <pre><code>pandamux session save "before-refactor"
+pandamux session list
+pandamux session load "before-refactor"</code></pre>
       <p>
-        Sessions are stored in <code>%APPDATA%\wmux\sessions\</code> as JSON files.
+        Sessions are stored in <code>%APPDATA%\pandamux\sessions\</code> as JSON files.
       </p>
 
       <!-- ─────────────────────────────────────────────────────── -->
       <h2 id="themes">Themes</h2>
       <p>
-        wmux bundles 450+ ready-to-use themes imported from the Ghostty project, plus the ability to import your own themes from Windows Terminal.
+        PandaMUX Everywhere bundles 450+ ready-to-use themes imported from the Ghostty project, plus the ability to import your own themes from Windows Terminal.
       </p>
 
       <h3>Change theme</h3>
@@ -648,23 +648,23 @@ wmux session load "before-refactor"</code></pre>
 
       <h3>Import a Windows Terminal theme</h3>
       <p>
-        If you've already set up Windows Terminal with a theme you like, wmux can read it directly:
+        If you've already set up Windows Terminal with a theme you like, PandaMUX Everywhere can read it directly:
       </p>
-      <pre><code>wmux config import-wt</code></pre>
+      <pre><code>pandamux config import-wt</code></pre>
       <p>
-        This imports every <code>colorSchemes</code> entry from your Windows Terminal <code>settings.json</code> and makes it available in wmux.
+        This imports every <code>colorSchemes</code> entry from your Windows Terminal <code>settings.json</code> and makes it available in PandaMUX Everywhere.
       </p>
 
       <h3>Import a Ghostty theme</h3>
       <p>
         Same idea with a Ghostty config file:
       </p>
-      <pre><code>wmux config import-ghostty ~/.config/ghostty/config</code></pre>
+      <pre><code>pandamux config import-ghostty ~/.config/ghostty/config</code></pre>
 
       <!-- ─────────────────────────────────────────────────────── -->
       <h2 id="shell">Shell integration</h2>
       <p>
-        For wmux to know what's happening in each terminal (current git branch, directory, last command exit code, active ports), it injects integration scripts into your shell at startup. Three shells are supported:
+        For PandaMUX Everywhere to know what's happening in each terminal (current git branch, directory, last command exit code, active ports), it injects integration scripts into your shell at startup. Three shells are supported:
       </p>
       <ul>
         <li><strong>PowerShell</strong> (Windows PowerShell + PowerShell 7+) — full integration including GitHub PR polling every 45 seconds</li>
@@ -672,54 +672,54 @@ wmux session load "before-refactor"</code></pre>
         <li><strong>cmd.exe</strong> — basic OSC 9 escape sequences for notifications</li>
       </ul>
       <p>
-        Integration is <strong>automatic</strong>: you don't have to do anything. wmux detects your default shell, injects the script when the terminal launches, and it just works.
+        Integration is <strong>automatic</strong>: you don't have to do anything. PandaMUX Everywhere detects your default shell, injects the script when the terminal launches, and it just works.
       </p>
       <p>
-        If you want to see what is injected, look inside <code>%APPDATA%\wmux\shell-integration\</code>. The scripts are documented and you can tweak them if you want to customize what shows up in the sidebar.
+        If you want to see what is injected, look inside <code>%APPDATA%\pandamux\shell-integration\</code>. The scripts are documented and you can tweak them if you want to customize what shows up in the sidebar.
       </p>
 
       <div class="callout">
-        <strong>Environment variables injected.</strong> In any terminal launched by wmux, the following variables are available: <code>WMUX=1</code> (to detect you're inside wmux), <code>WMUX_SURFACE_ID</code> (the unique tab ID), <code>WMUX_PIPE</code> (the named pipe path for the CLI), <code>WMUX_CLI</code> (the <code>wmux.exe</code> path). Useful if you want to write your own scripts that talk to wmux.
+        <strong>Environment variables injected.</strong> In any terminal launched by PandaMUX Everywhere, the following variables are available: <code>PANDAMUX=1</code> (to detect you're inside PandaMUX Everywhere), <code>PANDAMUX_SURFACE_ID</code> (the unique tab ID), <code>PANDAMUX_PIPE</code> (the named pipe path for the CLI), <code>PANDAMUX_CLI</code> (the <code>pandamux.exe</code> path). Useful if you want to write your own scripts that talk to PandaMUX Everywhere.
       </div>
 
       <!-- ─────────────────────────────────────────────────────── -->
-      <h2 id="cli">The <code>wmux</code> CLI</h2>
+      <h2 id="cli">The <code>pandamux</code> CLI</h2>
       <p>
-        wmux is scriptable. When you launch the application, it starts a named pipe (<code>\\.\pipe\wmux</code>) that accepts JSON-RPC v2 commands. The <code>wmux.exe</code> executable is also a client of that pipe: you can use it from any shell to drive wmux from a command line.
+        PandaMUX Everywhere is scriptable. When you launch the application, it starts a named pipe (<code>\\.\pipe\pandamux</code>) that accepts JSON-RPC v2 commands. The <code>pandamux.exe</code> executable is also a client of that pipe: you can use it from any shell to drive PandaMUX Everywhere from a command line.
       </p>
 
       <h3>A few useful examples</h3>
       <pre><code># Create a new named workspace
-wmux new-workspace --title "my-project" --cwd C:\Users\me\dev\project
+pandamux new-workspace --title "my-project" --cwd C:\Users\me\dev\project
 
 # Split the current pane and run a command inside it
-wmux split --down
-wmux send "npm run dev"
+pandamux split --down
+pandamux send "npm run dev"
 
 # List all workspaces
-wmux list-workspaces
+pandamux list-workspaces
 
 # Open a URL in the built-in browser
-wmux browser open https://github.com/BoardPandas/Pandamux
+pandamux browser open https://github.com/BoardPandas/Pandamux
 
 # Trigger a notification
-wmux notify "Build finished successfully"
+pandamux notify "Build finished successfully"
 
 # Get the full window tree (JSON)
-wmux tree</code></pre>
+pandamux tree</code></pre>
 
       <p>
-        The full command list is available via <code>wmux --help</code> in any terminal. The CLI is what lets Claude Code and every other automation tool talk to wmux.
+        The full command list is available via <code>pandamux --help</code> in any terminal. The CLI is what lets Claude Code and every other automation tool talk to PandaMUX Everywhere.
       </p>
 
       <div class="callout tip">
-        <strong>Why no MCP?</strong> wmux does not expose an MCP server, by design. The CLI over named pipe is simpler, more reliable, and integrates better with existing workflows. Claude Code can call <code>wmux</code> directly via <code>Bash</code> without needing an extra abstraction layer.
+        <strong>Why no MCP?</strong> PandaMUX Everywhere does not expose an MCP server, by design. The CLI over named pipe is simpler, more reliable, and integrates better with existing workflows. Claude Code can call <code>pandamux</code> directly via <code>Bash</code> without needing an extra abstraction layer.
       </div>
 
       <!-- ─────────────────────────────────────────────────────── -->
-      <h2 id="plugin-orchestrator">The wmux-orchestrator plugin</h2>
+      <h2 id="plugin-orchestrator">The pandamux-orchestrator plugin</h2>
       <p>
-        wmux ships a Claude Code plugin called <strong>wmux-orchestrator</strong> that turns a single complex task into several agents working in parallel, each in its own visible pane.
+        PandaMUX Everywhere ships a Claude Code plugin called <strong>pandamux-orchestrator</strong> that turns a single complex task into several agents working in parallel, each in its own visible pane.
       </p>
       <p>
         For example, if you ask "refactor authentication to use JWT", the orchestrator will:
@@ -728,21 +728,21 @@ wmux tree</code></pre>
         <li>Analyze the codebase and identify all affected files</li>
         <li>Split the task into subtasks (shared types, service, middleware, tests)</li>
         <li>Organize the subtasks into waves based on their dependencies</li>
-        <li>Spawn a Claude Code agent per subtask, each in its own wmux pane</li>
+        <li>Spawn a Claude Code agent per subtask, each in its own PandaMUX Everywhere pane</li>
         <li>Coordinate wave transitions automatically</li>
         <li>Launch a reviewer agent at the end to check consistency</li>
       </ol>
       <p>
-        The plugin is already installed with wmux (it's copied into <code>~/.claude/plugins/cache/</code> on first launch). You can use it directly with:
+        The plugin is already installed with PandaMUX Everywhere (it's copied into <code>~/.claude/plugins/cache/</code> on first launch). You can use it directly with:
       </p>
-      <pre><code>/wmux-orchestrator:orchestrate "refactor auth to JWT"</code></pre>
+      <pre><code>/pandamux-orchestrator:orchestrate "refactor auth to JWT"</code></pre>
       <p>
-        For a full explanation with an interactive simulator, live demo, detailed architecture, and step-by-step usage guide, visit <a href="https://plugin.wmux.org" target="_blank" rel="noopener">plugin.wmux.org</a>.
+        For a full explanation with an interactive simulator, live demo, detailed architecture, and step-by-step usage guide, visit <a href="https://plugin.pandamux.boardpandas.ai" target="_blank" rel="noopener">plugin.pandamux.boardpandas.ai</a>.
       </p>
 
       <p style="margin-top: 24px;">
-        <a href="https://plugin.wmux.org" target="_blank" rel="noopener" class="btn-link">
-          Visit plugin.wmux.org
+        <a href="https://plugin.pandamux.boardpandas.ai" target="_blank" rel="noopener" class="btn-link">
+          Visit plugin.pandamux.boardpandas.ai
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7"/><path d="M7 7h10v10"/></svg>
         </a>
       </p>
@@ -750,9 +750,9 @@ wmux tree</code></pre>
       <!-- ─────────────────────────────────────────────────────── -->
       <h2 id="faq">Common issues</h2>
 
-      <h3>wmux won't start, I get an error about <code>node-pty</code></h3>
+      <h3>PandaMUX Everywhere won't start, I get an error about <code>node-pty</code></h3>
       <p>
-        This is almost always the Mark of the Web blocking native module loading. In PowerShell, navigate to the wmux folder and run <code>Get-ChildItem -Recurse | Unblock-File</code>, then relaunch. If that doesn't fix it, re-download the zip and uncheck <em>Unblock</em> in Properties BEFORE extracting.
+        This is almost always the Mark of the Web blocking native module loading. In PowerShell, navigate to the PandaMUX Everywhere folder and run <code>Get-ChildItem -Recurse | Unblock-File</code>, then relaunch. If that doesn't fix it, re-download the zip and uncheck <em>Unblock</em> in Properties BEFORE extracting.
       </p>
 
       <h3>Keyboard shortcuts don't work</h3>
@@ -760,12 +760,12 @@ wmux tree</code></pre>
         Check that your antivirus or something like AutoHotkey isn't intercepting combinations. Windows Defender and most consumer antiviruses don't interfere, but some productivity tools do. Test in Settings → <em>Keyboard shortcuts</em> with the "test" button.
       </p>
 
-      <h3>Claude Code doesn't recognize wmux</h3>
+      <h3>Claude Code doesn't recognize PandaMUX Everywhere</h3>
       <p>
-        When you run <code>claude</code> in a wmux terminal, verify that the environment variables are injected: run <code>echo $env:WMUX</code> (PowerShell) or <code>echo $WMUX</code> (bash). You should see <code>1</code>. If you see nothing, the shell integration didn't load — restart the shell or relaunch wmux.
+        When you run <code>claude</code> in a PandaMUX Everywhere terminal, verify that the environment variables are injected: run <code>echo $env:PANDAMUX</code> (PowerShell) or <code>echo $PANDAMUX</code> (bash). You should see <code>1</code>. If you see nothing, the shell integration didn't load — restart the shell or relaunch PandaMUX Everywhere.
       </p>
       <p>
-        Also check that <code>~/.claude/CLAUDE.md</code> contains a section starting with <code># wmux</code>. If it's missing, auto-injection failed. Relaunch wmux from an admin terminal and inspect the logs.
+        Also check that <code>~/.claude/CLAUDE.md</code> contains a section starting with <code># pandamux</code>. If it's missing, auto-injection failed. Relaunch PandaMUX Everywhere from an admin terminal and inspect the logs.
       </p>
 
       <h3>The built-in browser is slow or black</h3>
@@ -773,14 +773,14 @@ wmux tree</code></pre>
         Turn on GPU acceleration in Settings → <em>Advanced</em> → <em>Hardware acceleration</em>. On older machines without a dedicated GPU, it can make a big difference. On very old GPUs or inside a VM, turn acceleration off instead — it can produce visual artifacts.
       </p>
 
-      <h3>How do I update wmux?</h3>
+      <h3>How do I update PandaMUX Everywhere?</h3>
       <p>
-        wmux has a built-in auto-updater that checks for new versions on launch. When an update is available, you see a small notification. Click it and wmux updates itself. You can also force a check via <em>Help</em> → <em>Check for updates</em>, or manually download the latest release from GitHub and replace your installation.
+        PandaMUX Everywhere has a built-in auto-updater that checks for new versions on launch. When an update is available, you see a small notification. Click it and PandaMUX Everywhere updates itself. You can also force a check via <em>Help</em> → <em>Check for updates</em>, or manually download the latest release from GitHub and replace your installation.
       </p>
 
-      <h3>Can I use wmux on macOS or Linux?</h3>
+      <h3>Can I use PandaMUX Everywhere on macOS or Linux?</h3>
       <p>
-        No. wmux is built specifically for Windows (it uses ConPTY, native Win32 APIs, and Windows-specific Electron optimizations). On macOS, use <a href="https://cmux.com" target="_blank" rel="noopener">cmux</a>, the parent project written in Swift/AppKit. On Linux there's tmux, Ghostty, or Warp — but you won't get the wmux-orchestrator plugin.
+        No. PandaMUX Everywhere is built specifically for Windows (it uses ConPTY, native Win32 APIs, and Windows-specific Electron optimizations). On macOS, use <a href="https://cmux.com" target="_blank" rel="noopener">cmux</a>, the parent project written in Swift/AppKit. On Linux there's tmux, Ghostty, or Warp — but you won't get the pandamux-orchestrator plugin.
       </p>
 
       <!-- ─────────────────────────────────────────────────────── -->
@@ -793,17 +793,17 @@ wmux tree</code></pre>
         <li><strong>Releases</strong> — <a href="https://github.com/BoardPandas/Pandamux/releases" target="_blank" rel="noopener">All versions</a> with changelog</li>
         <li><strong>Discussions</strong> — <a href="https://github.com/BoardPandas/Pandamux/discussions" target="_blank" rel="noopener">GitHub Discussions</a> to ask questions</li>
         <li><strong>Issues</strong> — <a href="https://github.com/BoardPandas/Pandamux/issues" target="_blank" rel="noopener">Report a bug</a></li>
-        <li><strong>Orchestrator plugin</strong> — <a href="https://plugin.wmux.org" target="_blank" rel="noopener">plugin.wmux.org</a>: full plugin documentation with an interactive simulator</li>
-        <li><strong>cmux (macOS)</strong> — <a href="https://cmux.com" target="_blank" rel="noopener">cmux.com</a>: the macOS version wmux is the Windows fork of</li>
+        <li><strong>Orchestrator plugin</strong> — <a href="https://plugin.pandamux.boardpandas.ai" target="_blank" rel="noopener">plugin.pandamux.boardpandas.ai</a>: full plugin documentation with an interactive simulator</li>
+        <li><strong>cmux (macOS)</strong> — <a href="https://cmux.com" target="_blank" rel="noopener">cmux.com</a>: the macOS version PandaMUX Everywhere is the Windows fork of</li>
       </ul>
 
       <p style="margin-top: 32px; display: flex; gap: 12px; flex-wrap: wrap;">
         <a href="/" class="btn-outline">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
-          Back to wmux.org
+          Back to pandamux.boardpandas.ai
         </a>
         <a href="https://github.com/BoardPandas/Pandamux/releases/latest" target="_blank" rel="noopener" class="btn-link">
-          Download wmux
+          Download PandaMUX Everywhere
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
         </a>
       </p>
@@ -812,7 +812,7 @@ wmux tree</code></pre>
 
   <footer class="doc-footer">
     <p>
-      © 2026 wmux · <a href="https://github.com/BoardPandas/Pandamux">GitHub</a> · <a href="https://github.com/BoardPandas/Pandamux/blob/master/LICENSE">MIT License</a> · Windows fork of <a href="https://cmux.com">cmux</a>
+      © 2026 PandaMUX Everywhere · <a href="https://github.com/BoardPandas/Pandamux">GitHub</a> · <a href="https://github.com/BoardPandas/Pandamux/blob/master/LICENSE">MIT License</a> · Windows fork of <a href="https://cmux.com">cmux</a>
     </p>
   </footer>
 

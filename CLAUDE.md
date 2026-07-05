@@ -1,12 +1,12 @@
-# wmux — Development Guide
+# PandaMUX Everywhere — Development Guide
 
 Electron-based Windows terminal multiplexer for AI agents. TypeScript, React 19, Zustand, xterm.js, node-pty.
 
 **Owner**: BoardPandas (github.com/BoardPandas). Prefers fast, pragmatic solutions; tests live.
-**Repo**: github.com/BoardPandas/Pandamux | **Site**: wmux.org (Netlify, static from `site/`)
+**Repo**: github.com/BoardPandas/Pandamux | **Site**: pandamux.boardpandas.ai (Netlify, static from `site/`)
 **Version**: see `package.json` / `CHANGELOG.md` (currently 0.15.x)
 
-> **Direction**: wmux is being rebuilt as a fully native Rust app (Iced + alacritty_terminal + portable-pty; the browser pane is dropped). The Electron app in this repo is frozen to bug fixes and is migrating npm to pnpm. The master plan is `tasks/plan-repo.md`. **This guide documents the current Electron build.** The Rust workspace gets its own CLAUDE.md hierarchy once its crates exist.
+> **Direction**: PandaMUX Everywhere is being rebuilt as a fully native Rust app (Iced + alacritty_terminal + portable-pty; the browser pane is dropped). The Electron app in this repo is frozen to bug fixes and is migrating npm to pnpm. The master plan is `tasks/plan-repo.md`. **This guide documents the current Electron build.** The Rust workspace gets its own CLAUDE.md hierarchy once its crates exist.
 >
 > The `.claude/` folder is the source of truth for how this repo runs (commits, changelog, knowledge-base checks, agents). See Conventions at the bottom.
 
@@ -40,13 +40,13 @@ The current checkout (`D:\Dev\Repos\Pandamux`) has no spaces, so these may not b
 src/
   main/           Electron main process
   renderer/       React UI (Vite)
-  preload/        contextBridge (window.wmux)
-  cli/            CLI → named pipe (\\.\pipe\wmux)
+  preload/        contextBridge (window.pandamux)
+  cli/            CLI → named pipe (\\.\pipe\pandamux)
   shared/         Shared types (IPC channels, branded IDs)
   shell-integration/  Shell hooks (bash/zsh/PowerShell/cmd)
 
 resources/        Runtime assets (icons, themes, sounds, shell-integration, CLI)
-  wmux-orchestrator/  Claude Code plugin (auto-installed on startup)
+  pandamux-orchestrator/  Claude Code plugin (auto-installed on startup)
 site/             Landing page (static HTML, Netlify)
 tests/            Unit + e2e (Vitest)
 docs/             Planning docs
@@ -58,13 +58,13 @@ docs/             Planning docs
 |------|------|
 | `index.ts` | Entry point, AppUserModelId, auto-save (30s), pipe server startup, V2 pipe handlers (workspace/pane/surface/markdown/sidebar/notification) |
 | `pty-manager.ts` | PTY lifecycle (create with surfaceId, write, resize, kill) |
-| `pipe-server.ts` | Named pipe `\\.\pipe\wmux` — V1 text (shell hooks), V2 JSON-RPC (CLI/agents) |
+| `pipe-server.ts` | Named pipe `\\.\pipe\pandamux` — V1 text (shell hooks), V2 JSON-RPC (CLI/agents) |
 | `cdp-bridge.ts` | Browser webview control via Chrome DevTools Protocol |
 | `cdp-proxy.ts` | CDP WebSocket proxy |
 | `agent-manager.ts` | Agent PTY spawning, round-robin distribution across panes |
 | `window-manager.ts` | Electron BrowserWindow creation/management |
 | `ipc-handlers.ts` | All IPC channel handlers |
-| `claude-context.ts` | Auto-injects wmux instructions into `~/.claude/CLAUDE.md`, configures hooks, installs wmux-orchestrator plugin |
+| `claude-context.ts` | Auto-injects PandaMUX Everywhere instructions into `~/.claude/CLAUDE.md`, configures hooks, installs pandamux-orchestrator plugin |
 | `claude-observer.ts` | Monitors Claude Code activity for sidebar display |
 | `session-persistence.ts` | Auto-save/restore window state |
 | `git-poller.ts` | Git branch/dirty status polling |
@@ -93,7 +93,7 @@ docs/             Planning docs
 - `useKeyboardShortcuts.ts` — 51+ shortcut actions, safe interception
 
 **Pipe Bridge** (`pipe-bridge.ts`):
-- Exposes Zustand store operations as `window.__wmux_*` globals
+- Exposes Zustand store operations as `window.__pandamux_*` globals
 - Called by main process via `executeJavaScript` to bridge V2 pipe commands to renderer
 - Covers: workspace CRUD, pane split/close/list, surface CRUD, markdown content, notifications
 
@@ -105,7 +105,7 @@ docs/             Planning docs
 - `agent-slice.ts` — Agent metadata tracking
 - `split-utils.ts` — Immutable split tree helpers
 
-### Preload API (`window.wmux`)
+### Preload API (`window.pandamux`)
 
 ```
 pty:      create, write, resize, kill, has, onData, onExit
@@ -128,9 +128,9 @@ window:   create, close, focus, list, minimize, maximize, isMaximized
 ## Key Design Decisions
 
 ### No MCP — CLI Only
-Do NOT build MCP servers. Use the wmux CLI (`wmux <command>`) via Bash instead.
+Do NOT build MCP servers. Use the pandamux CLI (`pandamux <command>`) via Bash instead.
 The CLI talks to the named pipe, which is simpler and more reliable.
-For new Claude Code integrations, add CLI commands in `src/cli/wmux.ts`.
+For new Claude Code integrations, add CLI commands in `src/cli/pandamux.ts`.
 
 ### Branded ID Types
 `WorkspaceId`, `PaneId`, `SurfaceId`, `WindowId` — branded string types in `src/shared/types.ts`.
@@ -149,7 +149,7 @@ Mutations go through `splitNode()`, `removeLeaf()`, `findLeaf()`, `getAllPaneIds
 
 ## Release Process (CRITICAL)
 
-wmux is distributed as a **portable zip** (not NSIS installer) because without code-signing, Windows SmartScreen flags installers more aggressively than zip extractions.
+PandaMUX Everywhere is distributed as a **portable zip** (not NSIS installer) because without code-signing, Windows SmartScreen flags installers more aggressively than zip extractions.
 
 ### Step-by-step
 
@@ -179,7 +179,7 @@ rm -rf .asar-staging/node_modules/node-pty/build   # force prebuilds load path: 
 # Use --unpack-dir (path-based), NOT --unpack "**/*.node" — the glob form
 # silently fails on Git Bash for Windows (shell eats the pattern, asar produces
 # the asar but creates no .unpacked dir, no error). Output to build-out/ so we
-# never touch the live resources/app.asar while wmux may be running.
+# never touch the live resources/app.asar while pandamux may be running.
 npx asar pack .asar-staging build-out/app.asar --unpack-dir "node_modules/node-pty/prebuilds"
 
 # 5. Verify native modules are unpacked
@@ -197,22 +197,22 @@ grep -c 'your_fix_string' /tmp/asar-verify/dist/main/index.js
 
 # 6. Create release staging
 # Easiest base: the previous release zip. Avoids needing a separate
-# wmux_v_extracted/ dir and avoids picking up stray files from the project root.
-rm -rf ../wmux-release-staging
-mkdir -p ../wmux-release-staging
-( cd ../wmux-release-staging && unzip -q ../wmux/wmux-<PREV_VERSION>-win-x64.zip )
+# pandamux_v_extracted/ dir and avoids picking up stray files from the project root.
+rm -rf ../pandamux-release-staging
+mkdir -p ../pandamux-release-staging
+( cd ../pandamux-release-staging && unzip -q ../pandamux/pandamux-<PREV_VERSION>-win-x64.zip )
 
 # 7. Copy ASAR + resources into release staging
-cp build-out/app.asar ../wmux-release-staging/resources/app.asar
-rm -rf ../wmux-release-staging/resources/app.asar.unpacked
-cp -r build-out/app.asar.unpacked ../wmux-release-staging/resources/app.asar.unpacked
-cp resources/icon.png ../wmux-release-staging/resources/
-rm -rf ../wmux-release-staging/resources/themes && cp -r resources/themes ../wmux-release-staging/resources/themes
-rm -rf ../wmux-release-staging/resources/sounds && cp -r resources/sounds ../wmux-release-staging/resources/sounds
-mkdir -p ../wmux-release-staging/resources/cli && cp dist/cli/wmux.js ../wmux-release-staging/resources/cli/wmux.js
-rm -rf ../wmux-release-staging/resources/shell-integration && mkdir -p ../wmux-release-staging/resources/shell-integration
-cp -r src/shell-integration/* ../wmux-release-staging/resources/shell-integration/
-rm -rf ../wmux-release-staging/resources/wmux-orchestrator && cp -r resources/wmux-orchestrator ../wmux-release-staging/resources/wmux-orchestrator
+cp build-out/app.asar ../pandamux-release-staging/resources/app.asar
+rm -rf ../pandamux-release-staging/resources/app.asar.unpacked
+cp -r build-out/app.asar.unpacked ../pandamux-release-staging/resources/app.asar.unpacked
+cp resources/icon.png ../pandamux-release-staging/resources/
+rm -rf ../pandamux-release-staging/resources/themes && cp -r resources/themes ../pandamux-release-staging/resources/themes
+rm -rf ../pandamux-release-staging/resources/sounds && cp -r resources/sounds ../pandamux-release-staging/resources/sounds
+mkdir -p ../pandamux-release-staging/resources/cli && cp dist/cli/pandamux.js ../pandamux-release-staging/resources/cli/pandamux.js
+rm -rf ../pandamux-release-staging/resources/shell-integration && mkdir -p ../pandamux-release-staging/resources/shell-integration
+cp -r src/shell-integration/* ../pandamux-release-staging/resources/shell-integration/
+rm -rf ../pandamux-release-staging/resources/pandamux-orchestrator && cp -r resources/pandamux-orchestrator ../pandamux-release-staging/resources/pandamux-orchestrator
 
 # 8. Embed icon + metadata in exe (rcedit)
 # CRITICAL: rcedit exports `{ rcedit }` (named export). `const rcedit =
@@ -220,25 +220,25 @@ rm -rf ../wmux-release-staging/resources/wmux-orchestrator && cp -r resources/wm
 # Always destructure: `const { rcedit } = require('rcedit')`.
 node -e "
   const { rcedit } = require('rcedit');
-  rcedit('../wmux-release-staging/wmux.exe', {
+  rcedit('../pandamux-release-staging/pandamux.exe', {
     icon: 'resources/icons/icon.ico',
     'version-string': {
-      ProductName: 'wmux',
-      FileDescription: 'wmux',
-      CompanyName: 'wmux',
-      InternalName: 'wmux',
-      OriginalFilename: 'wmux.exe',
-      LegalCopyright: 'Copyright (c) 2026 wmux'
+      ProductName: 'PandaMUX Everywhere',
+      FileDescription: 'PandaMUX Everywhere',
+      CompanyName: 'BoardPandas',
+      InternalName: 'pandamux',
+      OriginalFilename: 'pandamux.exe',
+      LegalCopyright: 'Copyright (c) 2026 PandaMUX Everywhere'
     },
     'file-version': '0.7.20',
     'product-version': '0.7.20'
   }).then(() => console.log('rcedit done'), e => { console.error(e); process.exit(1); });
 "
 # NOTE: rcedit CANNOT modify a running exe. The staging copy is fine; never
-# point rcedit at the wmux.exe living in the project root if it's running.
+# point rcedit at the pandamux.exe living in the project root if it's running.
 
 # 9. Create zip
-powershell -NoProfile -Command "Compress-Archive -Path '..\wmux-release-staging\*' -DestinationPath '..\wmux-<VERSION>-win-x64.zip' -CompressionLevel Optimal"
+powershell -NoProfile -Command "Compress-Archive -Path '..\pandamux-release-staging\*' -DestinationPath '..\pandamux-<VERSION>-win-x64.zip' -CompressionLevel Optimal"
 
 # 9b. Generate latest.yml (REQUIRED — electron-updater 404s on every launch
 # without it; issue #68. The CI workflow does this automatically, but manual
@@ -246,11 +246,11 @@ powershell -NoProfile -Command "Compress-Archive -Path '..\wmux-release-staging\
 node -e "
   const crypto = require('crypto'); const fs = require('fs');
   const version = '<VERSION>';
-  const zip = '../wmux-' + version + '-win-x64.zip';
+  const zip = '../pandamux-' + version + '-win-x64.zip';
   const data = fs.readFileSync(zip);
   const sha512 = crypto.createHash('sha512').update(data).digest('base64');
-  const yaml = ['version: ' + version, 'files:', '  - url: wmux-' + version + '-win-x64.zip',
-    '    sha512: ' + sha512, '    size: ' + data.length, 'path: wmux-' + version + '-win-x64.zip',
+  const yaml = ['version: ' + version, 'files:', '  - url: pandamux-' + version + '-win-x64.zip',
+    '    sha512: ' + sha512, '    size: ' + data.length, 'path: pandamux-' + version + '-win-x64.zip',
     'sha512: ' + sha512, 'releaseDate: ' + JSON.stringify(new Date().toISOString()), ''].join('\n');
   fs.writeFileSync('../latest.yml', yaml);
   console.log('latest.yml written:', data.length, 'bytes,', sha512.slice(0, 16) + '...');
@@ -259,16 +259,16 @@ node -e "
 # 10. Tag, push, publish (zip AND latest.yml — both assets are required)
 git add package.json package-lock.json && git commit -m "chore(release): bump to <VERSION>"
 git push origin master
-git tag -a v<VERSION> -m "wmux <VERSION>" && git push origin v<VERSION>
-gh release create v<VERSION> ../wmux-<VERSION>-win-x64.zip ../latest.yml --repo BoardPandas/Pandamux --title "v<VERSION>" --notes "..."
+git tag -a v<VERSION> -m "PandaMUX Everywhere <VERSION>" && git push origin v<VERSION>
+gh release create v<VERSION> ../pandamux-<VERSION>-win-x64.zip ../latest.yml --repo BoardPandas/Pandamux --title "v<VERSION>" --notes "..."
 
-# 11. (Optional) Hot-swap into the locally running wmux for immediate testing
+# 11. (Optional) Hot-swap into the locally running pandamux for immediate testing
 cp build-out/app.asar resources/app.asar
 rm -rf resources/app.asar.unpacked && cp -r build-out/app.asar.unpacked resources/app.asar.unpacked
-# Then restart wmux to pick up changes
+# Then restart pandamux to pick up changes
 
 # 12. Cleanup
-rm -rf .asar-staging build-out /tmp/asar-verify ../wmux-release-staging
+rm -rf .asar-staging build-out /tmp/asar-verify ../pandamux-release-staging
 ```
 
 ### Release Checklist
@@ -280,7 +280,7 @@ rm -rf .asar-staging build-out /tmp/asar-verify ../wmux-release-staging
 - [ ] ASAR size is ~24M (natives unpacked). 80M+ ⇒ unpack didn't take. 180M+ ⇒ staging polluted.
 - [ ] node-pty native modules present in `app.asar.unpacked/node_modules/node-pty/prebuilds/win32-x64/`
 - [ ] PR-specific markers grep-confirmed inside the packed ASAR (extracted to /tmp)
-- [ ] wmux-orchestrator plugin copied to release staging
+- [ ] pandamux-orchestrator plugin copied to release staging
 - [ ] rcedit applied (icon + version metadata) — `{ rcedit }` destructured
 - [ ] `latest.yml` generated (sha512 + size of the final zip) and uploaded as a release asset — electron-updater 404s without it (issue #68)
 - [ ] Zip created and uploaded to GitHub release
@@ -292,16 +292,16 @@ rm -rf .asar-staging build-out /tmp/asar-verify ../wmux-release-staging
 - **rcedit named export**: `const { rcedit } = require('rcedit')`. Non-destructured `const rcedit = require('rcedit')` throws "rcedit is not a function" (different from older docs).
 - **asar `--unpack` glob silently fails on Git Bash for Windows**: pattern like `"**/*.node"` gets shell-eaten and asar emits no `.unpacked/` dir, no error. Use `--unpack-dir node_modules/node-pty/prebuilds` (path-based) instead.
 - **Bash cwd drift can recursively pollute staging**: if you `cd .asar-staging` and forget to come back, the next `mkdir build-out && asar pack` creates `.asar-staging/build-out/app.asar`, and a re-pack will swallow its own output into the new asar (188M). Always use subshells `( cd dir && cmd )` or absolute paths.
-- **Don't pack ASAR directly to `resources/app.asar`** if wmux may be running — pack to `build-out/` and copy at step 7.
+- **Don't pack ASAR directly to `resources/app.asar`** if pandamux may be running — pack to `build-out/` and copy at step 7.
 - **MOTW (Mark of the Web)**: Downloaded zips get `Zone.Identifier` NTFS stream. Fix: `powershell "Get-ChildItem -Recurse | Unblock-File"`
-- **Windows taskbar pinning** uses PE `FileDescription` for the shortcut name — ensure rcedit sets it to "wmux"
-- **AppUserModelId** is set to `com.wmux.app` in `src/main/index.ts` for proper taskbar grouping
+- **Windows taskbar pinning** uses PE `FileDescription` for the shortcut name — ensure rcedit sets it to "PandaMUX Everywhere"
+- **AppUserModelId** is set to `com.pandamux.app` in `src/main/index.ts` for proper taskbar grouping
 
 ---
 
 ## Named Pipe V2 Handlers
 
-The pipe server in `index.ts` handles V2 JSON-RPC methods. Most delegate to the renderer via `executeJavaScript('window.__wmux_*(...)')`. The renderer's `pipe-bridge.ts` exposes Zustand store operations as these globals.
+The pipe server in `index.ts` handles V2 JSON-RPC methods. Most delegate to the renderer via `executeJavaScript('window.__pandamux_*(...)')`. The renderer's `pipe-bridge.ts` exposes Zustand store operations as these globals.
 
 **Fully implemented V2 methods:**
 - `system.identify`, `system.capabilities`, `system.tree`
@@ -320,21 +320,21 @@ The pipe server in `index.ts` handles V2 JSON-RPC methods. Most delegate to the 
 
 ---
 
-## wmux-orchestrator Plugin
+## pandamux-orchestrator Plugin
 
-Claude Code plugin bundled in `resources/wmux-orchestrator/`. Auto-installed into `~/.claude/plugins/cache/` on startup by `ensureOrchestratorPlugin()` in `claude-context.ts`. Also published standalone: `github.com/amirlehmam/wmux-orchestrator`.
+Claude Code plugin bundled in `resources/pandamux-orchestrator/`. Auto-installed into `~/.claude/plugins/cache/` on startup by `ensureOrchestratorPlugin()` in `claude-context.ts`. Also published standalone: `github.com/amirlehmam/wmux-orchestrator`.
 
-**What it does:** Decomposes complex dev tasks into parallel Claude Code agents coordinated through dependency-aware waves with automated review. With wmux: each agent in its own visible terminal pane. Without wmux: falls back to native subagents.
+**What it does:** Decomposes complex dev tasks into parallel Claude Code agents coordinated through dependency-aware waves with automated review. With PandaMUX Everywhere: each agent in its own visible terminal pane. Without PandaMUX Everywhere: falls back to native subagents.
 
 **Plugin structure:**
 ```
-resources/wmux-orchestrator/
+resources/pandamux-orchestrator/
   .claude-plugin/plugin.json    Manifest (name, version, author)
-  commands/orchestrate.md       /wmux:orchestrate slash command
+  commands/orchestrate.md       /pandamux:orchestrate slash command
   skills/orchestrate/SKILL.md   Core: codebase analysis, wave planning, agent spawning
   skills/reviewer/SKILL.md      Post-orchestration review and auto-fix
-  skills/wmux-detect/SKILL.md   Detects wmux availability for degraded mode
-  agents/wmux-worker.md         Worker template with file zone enforcement
+  skills/pandamux-detect/SKILL.md   Detects pandamux availability for degraded mode
+  agents/pandamux-worker.md         Worker template with file zone enforcement
   hooks/hooks.json              PostToolUse, SubagentStop, Stop, SessionStart
   scripts/json-tool.js          Node.js JSON helper (replaces jq)
   scripts/orchestration-state.sh  State file management library
@@ -344,7 +344,7 @@ resources/wmux-orchestrator/
   scripts/*.sh                  Other utilities (cleanup, collect-results, etc.)
 ```
 
-**Key design:** Skills handle intelligence (prompts), hooks handle reactivity (events), scripts handle wmux operations (CLI). State shared via JSON file in TMPDIR. No daemon.
+**Key design:** Skills handle intelligence (prompts), hooks handle reactivity (events), scripts handle pandamux operations (CLI). State shared via JSON file in TMPDIR. No daemon.
 
 ---
 
@@ -352,40 +352,40 @@ resources/wmux-orchestrator/
 
 ```bash
 # System
-wmux ping | identify | capabilities
+pandamux ping | identify | capabilities
 
 # Workspaces
-wmux new-workspace [--title T] [--shell S] [--cwd D]
-wmux close-workspace | select-workspace | rename-workspace | list-workspaces
+pandamux new-workspace [--title T] [--shell S] [--cwd D]
+pandamux close-workspace | select-workspace | rename-workspace | list-workspaces
 
 # Surfaces (tabs within a pane)
-wmux new-surface [--type terminal|browser|markdown]
-wmux close-surface | focus-surface | list-surfaces
+pandamux new-surface [--type terminal|browser|markdown]
+pandamux close-surface | focus-surface | list-surfaces
 
 # Panes
-wmux split [--down] [--type T] | close-pane | focus-pane | zoom-pane | list-panes | tree
+pandamux split [--down] [--type T] | close-pane | focus-pane | zoom-pane | list-panes | tree
 
 # Terminal I/O
-wmux send <text> | send-key <key> [--ctrl] [--shift] [--alt]
-wmux read-screen [--lines N] | trigger-flash
+pandamux send <text> | send-key <key> [--ctrl] [--shift] [--alt]
+pandamux read-screen [--lines N] | trigger-flash
 
 # Browser (CDP)
-wmux browser open <url> | snapshot | click @eN | type @eN <text>
-wmux browser fill @eN <value> | get-text | screenshot | eval <js>
-wmux browser back | forward | reload
+pandamux browser open <url> | snapshot | click @eN | type @eN <text>
+pandamux browser fill @eN <value> | get-text | screenshot | eval <js>
+pandamux browser back | forward | reload
 
 # Agents
-wmux agent spawn [--cmd C] [--label L] [--cwd D] [--pane P]
-wmux agent spawn-batch --json '[...]' [--strategy distribute|stack|split]
-wmux agent status <id> | list | kill <id>
+pandamux agent spawn [--cmd C] [--label L] [--cwd D] [--pane P]
+pandamux agent spawn-batch --json '[...]' [--strategy distribute|stack|split]
+pandamux agent status <id> | list | kill <id>
 
 # Notifications & Sidebar
-wmux notify <text> | list-notifications | clear-notifications
-wmux set-status <key> <value> | set-progress <val> [--label L]
-wmux log <level> <message> | sidebar-state
+pandamux notify <text> | list-notifications | clear-notifications
+pandamux set-status <key> <value> | set-progress <val> [--label L]
+pandamux log <level> <message> | sidebar-state
 
 # Hooks
-wmux hook --event <type> --tool <name> [--agent <id>]
+pandamux hook --event <type> --tool <name> [--agent <id>]
 ```
 
 ---
@@ -414,15 +414,15 @@ Scripts in `src/shell-integration/` (deployed to `resources/shell-integration/`)
 
 | Script | Reports |
 |--------|---------|
-| `wmux-powershell-integration.ps1` | cwd, git branch/dirty, shell state, PR polling (45s) |
-| `wmux-bash-integration.sh` | cwd, git branch/dirty, shell state, ports |
-| `wmux-cmd-integration.cmd` | Basic OSC 9 escape sequences |
+| `pandamux-powershell-integration.ps1` | cwd, git branch/dirty, shell state, PR polling (45s) |
+| `pandamux-bash-integration.sh` | cwd, git branch/dirty, shell state, ports |
+| `pandamux-cmd-integration.cmd` | Basic OSC 9 escape sequences |
 
-Env vars set by wmux in spawned shells: `WMUX=1`, `WMUX_SURFACE_ID`, `WMUX_PIPE`, `WMUX_CLI`.
+Env vars set by pandamux in spawned shells: `PANDAMUX=1`, `PANDAMUX_SURFACE_ID`, `PANDAMUX_PIPE`, `PANDAMUX_CLI`.
 
 ---
 
-## Website (wmux.org)
+## Website (pandamux.boardpandas.ai)
 
 Static site in `site/`. Deployed to Netlify (`netlify.toml` at repo root).
 

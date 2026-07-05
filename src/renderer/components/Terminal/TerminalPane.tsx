@@ -52,11 +52,11 @@ export default function TerminalPane({
     };
     const onNext = () => cycle(true);
     const onPrev = () => cycle(false);
-    document.addEventListener('wmux:find-next', onNext);
-    document.addEventListener('wmux:find-prev', onPrev);
+    document.addEventListener('pandamux:find-next', onNext);
+    document.addEventListener('pandamux:find-prev', onPrev);
     return () => {
-      document.removeEventListener('wmux:find-next', onNext);
-      document.removeEventListener('wmux:find-prev', onPrev);
+      document.removeEventListener('pandamux:find-next', onNext);
+      document.removeEventListener('pandamux:find-prev', onPrev);
     };
   }, [searchAddonRef]);
 

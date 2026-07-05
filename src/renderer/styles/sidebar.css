@@ -697,7 +697,7 @@
 }
 
 /* ─── Orchestration Panel ─────────────────────────────────────────────── */
-/* Live cockpit for wmux-orchestrator runs. Pushed from main via IPC. */
+/* Live cockpit for pandamux-orchestrator runs. Pushed from main via IPC. */
 
 .orch-panel {
   flex-shrink: 0;

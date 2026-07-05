@@ -8,31 +8,31 @@ import { Language, detectDefaultLanguage } from '../i18n/core';
 // theme/font/shortcut customizations (issue #15) feel broken.
 //
 // Settings used to live in renderer localStorage, but localStorage is scoped to
-// the page origin. wmux ships as a portable zip extracted to a new folder per
+// the page origin. pandamux ships as a portable zip extracted to a new folder per
 // version, so the production `file://` origin changes between versions and
 // Chromium buckets storage by that path — font/theme customizations appeared to
 // reset on every update (issue #19). We now persist through the main process to
-// %APPDATA%\wmux\settings.json (stable across updates), and migrate any existing
+// %APPDATA%\pandamux\settings.json (stable across updates), and migrate any existing
 // localStorage values forward on first launch.
 
 const STORAGE_KEYS = {
-  workspacePrefs:    'wmux-workspace-prefs',
-  terminalPrefs:     'wmux-terminal-prefs',
-  sidebarPrefs:      'wmux-sidebar-prefs',
-  notificationPrefs: 'wmux-notification-prefs',
-  browserPrefs:      'wmux-browser-prefs',
-  shortcuts:         'wmux-shortcuts',
-  quickLaunchProfiles: 'wmux-quick-launch-profiles',
-  language:          'wmux-language',
-  appearancePrefs:   'wmux-appearance-prefs',
+  workspacePrefs:    'pandamux-workspace-prefs',
+  terminalPrefs:     'pandamux-terminal-prefs',
+  sidebarPrefs:      'pandamux-sidebar-prefs',
+  notificationPrefs: 'pandamux-notification-prefs',
+  browserPrefs:      'pandamux-browser-prefs',
+  shortcuts:         'pandamux-shortcuts',
+  quickLaunchProfiles: 'pandamux-quick-launch-profiles',
+  language:          'pandamux-language',
+  appearancePrefs:   'pandamux-appearance-prefs',
 } as const;
 
 // Read the whole settings file once at module load (synchronous IPC). The
-// preload runs before this module, so window.wmux is already available. In
+// preload runs before this module, so window.pandamux is already available. In
 // non-Electron contexts (tests) this is absent and we fall back to localStorage.
 function readFileSnapshot(): Record<string, any> {
   try {
-    const snap = (globalThis as any).window?.wmux?.settings?.getAllSync?.();
+    const snap = (globalThis as any).window?.pandamux?.settings?.getAllSync?.();
     return snap && typeof snap === 'object' ? snap : {};
   } catch {
     return {};
@@ -51,7 +51,7 @@ function loadPersisted<T>(key: string): Partial<T> {
     if (!raw) return {};
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === 'object') {
-      try { (globalThis as any).window?.wmux?.settings?.set?.(key, parsed); } catch { /* no-op */ }
+      try { (globalThis as any).window?.pandamux?.settings?.set?.(key, parsed); } catch { /* no-op */ }
       return parsed;
     }
     return {};
@@ -70,7 +70,7 @@ function loadPersistedArray<T>(key: string): T[] {
     if (ls) {
       const parsed = JSON.parse(ls);
       if (Array.isArray(parsed)) {
-        try { (globalThis as any).window?.wmux?.settings?.set?.(key, parsed); } catch { /* no-op */ }
+        try { (globalThis as any).window?.pandamux?.settings?.set?.(key, parsed); } catch { /* no-op */ }
         return parsed as T[];
       }
     }
@@ -89,7 +89,7 @@ function loadPersistedLanguage(): Language {
       const ls = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEYS.language) : null;
       if (ls) {
         candidate = ls;
-        try { (globalThis as any).window?.wmux?.settings?.set?.(STORAGE_KEYS.language, ls); } catch { /* no-op */ }
+        try { (globalThis as any).window?.pandamux?.settings?.set?.(STORAGE_KEYS.language, ls); } catch { /* no-op */ }
       }
     } catch { /* localStorage unavailable */ }
   }
@@ -98,7 +98,7 @@ function loadPersistedLanguage(): Language {
 }
 
 function persist<T>(key: string, value: T): void {
-  try { (globalThis as any).window?.wmux?.settings?.set?.(key, value); } catch { /* no-op */ }
+  try { (globalThis as any).window?.pandamux?.settings?.set?.(key, value); } catch { /* no-op */ }
   // Keep a localStorage mirror as a harmless dev/non-Electron fallback.
   try {
     if (typeof localStorage !== 'undefined') {
@@ -368,7 +368,7 @@ export interface AppearancePrefs {
 }
 
 export const DEFAULT_APPEARANCE_PREFS: AppearancePrefs = {
-  // Defaults to 'dark' rather than 'system' — wmux shipped dark-only up to
+  // Defaults to 'dark' rather than 'system' — pandamux shipped dark-only up to
   // 0.14.0, so existing users' chrome must not change color on first launch
   // after upgrading. New users can switch to 'system'/'light' in Settings.
   uiTheme: 'dark',

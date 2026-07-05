@@ -33,7 +33,7 @@ export interface SurfaceRef {
  * Quick-launch profile (issue #32): a one-click tab preset surfaced in the `+`
  * caret dropdown. Lets a user open a terminal that auto-`cd`s and runs startup
  * commands, picks a specific shell, or opens a browser tab at a fixed URL.
- * Two scopes: `global` (user settings) and `project` (committed `.wmux.json`).
+ * Two scopes: `global` (user settings) and `project` (committed `.pandamux.json`).
  */
 export interface QuickLaunchProfile {
   id: string;
@@ -323,7 +323,7 @@ export const IPC_CHANNELS = {
   DIFF_UPDATE: 'diff:update',
   // Markdown viewer (issue #54) — file picker for the manual "open markdown" UI
   MARKDOWN_OPEN_FILE: 'markdown:open-file',
-  // Orchestration (wmux-orchestrator plugin state broadcast)
+  // Orchestration (pandamux-orchestrator plugin state broadcast)
   ORCHESTRATION_UPDATE: 'orchestration:update',
   ORCHESTRATION_CLEAR: 'orchestration:clear',
   // App update notification (GitHub releases polling — opens OS browser on click)
@@ -332,8 +332,8 @@ export const IPC_CHANNELS = {
   UPDATE_OPEN_RELEASE: 'update:open-release',
 } as const;
 
-// ─── Orchestration state (wmux-orchestrator plugin) ────────────────────────
-// Mirrors the shape written by the plugin into {TMPDIR}/wmux-orch-*/state.json.
+// ─── Orchestration state (pandamux-orchestrator plugin) ────────────────────────
+// Mirrors the shape written by the plugin into {TMPDIR}/pandamux-orch-*/state.json.
 
 export type OrchAgentStatus = 'pending' | 'running' | 'exited' | 'failed';
 export type OrchWaveStatus = 'pending' | 'running' | 'complete' | 'failed';

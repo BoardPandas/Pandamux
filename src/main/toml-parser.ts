@@ -1,7 +1,7 @@
 /**
  * toml-parser.ts — Minimal TOML parser.
  *
- * Supports the subset we need for ~/.wmux/config.toml:
+ * Supports the subset we need for ~/.pandamux/config.toml:
  *   [table], [nested.table], [with."quoted.segment"]
  *   key = "string" | 'literal' | number | true | false | [array]
  *   # comments (ignored; preserved inside strings)

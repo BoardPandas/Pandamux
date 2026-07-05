@@ -303,10 +303,10 @@
 .pane-drop-zone--top:hover    { border-bottom-color: #89b4fa; }
 .pane-drop-zone--bottom:hover { border-top-color: #89b4fa; }
 
-body.wmux-dragging .pane-drop-zone--left:hover,
-body.wmux-dragging .pane-drop-zone--right:hover,
-body.wmux-dragging .pane-drop-zone--top:hover,
-body.wmux-dragging .pane-drop-zone--bottom:hover {
+body.pandamux-dragging .pane-drop-zone--left:hover,
+body.pandamux-dragging .pane-drop-zone--right:hover,
+body.pandamux-dragging .pane-drop-zone--top:hover,
+body.pandamux-dragging .pane-drop-zone--bottom:hover {
   background: transparent;
   border-color: transparent;
 }
@@ -316,8 +316,8 @@ body.wmux-dragging .pane-drop-zone--bottom:hover {
   border-color: #a6e3a1;
 }
 
-body.wmux-dragging,
-body.wmux-dragging * {
+body.pandamux-dragging,
+body.pandamux-dragging * {
   cursor: grabbing !important;
 }
 

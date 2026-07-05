@@ -82,7 +82,7 @@ export default function CommandPalette({ onClose, onAction }: CommandPaletteProp
 
     // Category: Commands — one-off actions not bound to a shortcut.
     // "Open Markdown File…" picks a file via a native dialog and renders it in a
-    // new markdown view (issue #54) — the manual counterpart to `wmux markdown <file>`.
+    // new markdown view (issue #54) — the manual counterpart to `pandamux markdown <file>`.
     items.push({
       id: 'command:open-markdown-file',
       label: t('palette.openMarkdown'),
@@ -91,9 +91,9 @@ export default function CommandPalette({ onClose, onAction }: CommandPaletteProp
         onClose();
         void (async () => {
           try {
-            const res = await (window as any).wmux?.markdown?.openFile?.();
+            const res = await (window as any).pandamux?.markdown?.openFile?.();
             if (!res || res.canceled || res.error || !res.content) return;
-            const created = (window as any).__wmux_createSurface?.({ type: 'markdown' });
+            const created = (window as any).__pandamux_createSurface?.({ type: 'markdown' });
             const surfaceId = created?.surfaceId as string | undefined;
             if (surfaceId) {
               useStore.getState().setMarkdownContent(surfaceId as SurfaceId, res.content);
@@ -128,7 +128,7 @@ export default function CommandPalette({ onClose, onAction }: CommandPaletteProp
         label: theme,
         category: t('palette.category.themes'),
         action: () => {
-          console.log(`[wmux] Switch theme: ${theme}`);
+          console.log(`[pandamux] Switch theme: ${theme}`);
           onClose();
         },
       });

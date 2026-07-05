@@ -210,14 +210,14 @@ function sanitizeProfile(raw: any, index: number, source: 'global' | 'project'):
 }
 
 /**
- * Read project-level quick-launch profiles from `<cwd>/.wmux.json` (mirrors
+ * Read project-level quick-launch profiles from `<cwd>/.pandamux.json` (mirrors
  * cmux's `cmux.json`). Shape: `{ "profiles": [ { name, type, cwd, startupCommands, ... } ] }`.
  * Returns [] when the file is absent or malformed — never throws.
  */
 export function loadProjectProfiles(cwd: string): QuickLaunchProfile[] {
   try {
     if (!cwd || typeof cwd !== 'string') return [];
-    const file = path.join(cwd, '.wmux.json');
+    const file = path.join(cwd, '.pandamux.json');
     if (!fs.existsSync(file)) return [];
     const parsed = JSON.parse(fs.readFileSync(file, 'utf-8'));
     const list = Array.isArray(parsed) ? parsed : parsed?.profiles;

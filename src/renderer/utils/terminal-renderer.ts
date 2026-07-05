@@ -40,7 +40,7 @@ export function attachVisibleRenderer(terminal: Terminal): RendererHandle {
     webgl = new WebglAddon();
     terminal.loadAddon(webgl);
   } catch (err) {
-    console.warn('[wmux] WebGL renderer unavailable, falling back to Canvas:', err);
+    console.warn('[pandamux] WebGL renderer unavailable, falling back to Canvas:', err);
     return attachCanvasRenderer(terminal);
   }
   activeWebglCount++;
@@ -63,7 +63,7 @@ export function attachVisibleRenderer(terminal: Terminal): RendererHandle {
   webgl.onContextLoss(() => {
     // GPU evicted this context (driver reset, context pressure elsewhere…).
     // Downgrade this terminal to Canvas instead of leaving it frozen.
-    console.warn('[wmux] WebGL context lost, downgrading terminal to Canvas renderer');
+    console.warn('[pandamux] WebGL context lost, downgrading terminal to Canvas renderer');
     release();
     try { webgl.dispose(); } catch { /* no-op */ }
     const fallback = attachCanvasRenderer(terminal);
@@ -86,7 +86,7 @@ export function attachCanvasRenderer(terminal: Terminal): RendererHandle {
       },
     };
   } catch (err) {
-    console.warn('[wmux] Canvas renderer unavailable, staying on DOM renderer:', err);
+    console.warn('[pandamux] Canvas renderer unavailable, staying on DOM renderer:', err);
     try { canvas.dispose(); } catch { /* never activated */ }
     return { kind: 'dom', dispose: () => { /* default renderer, nothing to release */ } };
   }

@@ -24,7 +24,7 @@ export function useUiTheme(): void {
     // pre-0.15 shipped appearance so there's no light-mode flash on launch.
     root.dataset.uiTheme = 'dark';
 
-    const sys = (window as any).wmux?.system;
+    const sys = (window as any).pandamux?.system;
     if (!sys?.getShouldUseDarkColors) return;
 
     let cancelled = false;

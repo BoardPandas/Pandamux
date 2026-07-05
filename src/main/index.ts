@@ -43,7 +43,7 @@ function resolveAgentAssignments(strategy: string, count: number, paneLoads: any
     return Array.from({ length: count }, () => sorted[0].paneId);
   }
   if (strategy !== 'distribute') {
-    console.warn('[wmux] split strategy not yet implemented, falling back to distribute');
+    console.warn('[pandamux] split strategy not yet implemented, falling back to distribute');
   }
   return distributeAgents(count, paneLoads);
 }
@@ -79,9 +79,9 @@ function spawnAgentBatch(
 const windowManager = new WindowManager();
 // Per-instance secret that authenticates privileged (V2) pipe requests.
 // Generated/persisted once per APPDATA dir and injected into spawned shells
-// as WMUX_PIPE_TOKEN so the CLI and hooks can authenticate.
+// as PANDAMUX_PIPE_TOKEN so the CLI and hooks can authenticate.
 const pipeToken = ensurePipeToken();
-process.env.WMUX_PIPE_TOKEN = pipeToken;
+process.env.PANDAMUX_PIPE_TOKEN = pipeToken;
 const pipeServer = new PipeServer(getPipePath(), pipeToken);
 const portScanner = new PortScanner();
 const gitPoller = new GitPoller();
@@ -140,7 +140,7 @@ async function resolvePtySurface(
     if (!win || win.isDestroyed()) return { ok: false, error: 'No window' };
     try {
       surfaceId = await win.webContents.executeJavaScript(
-        `window.__wmux_getActiveSurfaceId?.()`
+        `window.__pandamux_getActiveSurfaceId?.()`
       );
     } catch (err: any) {
       return { ok: false, error: `Could not resolve active surface: ${err.message}` };
@@ -200,18 +200,18 @@ function translateKeyName(key: string, shift: boolean): string | null {
 }
 
 // Set Windows AppUserModelId so taskbar pinning uses the correct icon & identity
-app.setAppUserModelId('com.wmux.app');
+app.setAppUserModelId('com.pandamux.app');
 
 // Auto-strip MOTW on startup so users never see security warnings or pinning failures
 stripMotw();
 
-// Single-instance lock (issue #32). Outside a wmux-spawned shell, `wmux` on PATH
-// resolves to the GUI exe rather than the CLI, so `wmux browser open <url>` (and
+// Single-instance lock (issue #32). Outside a pandamux-spawned shell, `pandamux` on PATH
+// resolves to the GUI exe rather than the CLI, so `pandamux browser open <url>` (and
 // any stray re-launch) would otherwise spawn a SECOND window and ignore its args.
 // Holding the lock makes the second launch hand off to the running instance,
-// which just focuses its window. Named instances (WMUX_INSTANCE) point Electron's
+// which just focuses its window. Named instances (PANDAMUX_INSTANCE) point Electron's
 // userData at their own dir so the lock is per-instance and dev/prod still coexist.
-if (process.env.WMUX_INSTANCE?.trim()) {
+if (process.env.PANDAMUX_INSTANCE?.trim()) {
   app.setPath('userData', getAppDataDir());
 }
 const gotInstanceLock = app.requestSingleInstanceLock();
@@ -277,7 +277,7 @@ app.whenReady().then(() => {
   // A losing second instance is already quitting; don't run startup side effects.
   if (!gotInstanceLock) return;
   hardenWebContents();
-  // Inject wmux instructions into ~/.claude/CLAUDE.md for Claude Code awareness
+  // Inject pandamux instructions into ~/.claude/CLAUDE.md for Claude Code awareness
   ensureClaudeContext();
   ensureClaudeHooks();
   ensureChromeDevtoolsConfig();
@@ -333,7 +333,7 @@ app.whenReady().then(() => {
   pipeServer.start();
   cdpProxy.start().catch(() => {}); // CDP proxy is optional — don't crash if ports are busy
 
-  // Watch TMPDIR for wmux-orchestrator runs and push state to the sidebar.
+  // Watch TMPDIR for pandamux-orchestrator runs and push state to the sidebar.
   startOrchestrationWatcher();
 
   portScanner.onResults((portsByPid) => {
@@ -394,7 +394,7 @@ app.whenReady().then(() => {
 
     switch (request.method) {
       case 'system.identify':
-        respond({ name: 'wmux', version: '0.5.0', platform: 'win32' });
+        respond({ name: 'pandamux', version: '0.5.0', platform: 'win32' });
         break;
       case 'system.capabilities':
         respond({ protocols: ['v1', 'v2'], features: ['workspaces', 'splits', 'notifications'] });
@@ -408,12 +408,12 @@ app.whenReady().then(() => {
             if (!win || win.isDestroyed()) { respondError(-32000, 'No window'); return; }
             // Get pane's first surface and focus it
             const panes = await win.webContents.executeJavaScript(
-              `window.__wmux_listPanes?.(${JSON.stringify(request.params?.workspaceId)})`
+              `window.__pandamux_listPanes?.(${JSON.stringify(request.params?.workspaceId)})`
             );
             const pane = (panes || []).find((p: any) => p.paneId === (request.params?.id || request.params?.paneId));
             if (pane && pane.surfaces.length > 0) {
               await win.webContents.executeJavaScript(
-                `window.__wmux_focusSurface?.(${JSON.stringify(pane.surfaces[0].id)})`
+                `window.__pandamux_focusSurface?.(${JSON.stringify(pane.surfaces[0].id)})`
               );
             }
             respond({ ok: true });
@@ -438,7 +438,7 @@ app.whenReady().then(() => {
             const scheme = request.params?.colorScheme ?? request.params?.scheme ?? null;
             if (!surfaceId) { respondError(-32602, 'surfaceId required'); return; }
             const result = await win.webContents.executeJavaScript(
-              `window.__wmux_setSurfaceColorScheme?.(${JSON.stringify(surfaceId)}, ${JSON.stringify(scheme)})`
+              `window.__pandamux_setSurfaceColorScheme?.(${JSON.stringify(surfaceId)}, ${JSON.stringify(scheme)})`
             );
             respond(result || { ok: true });
           } catch (err: any) { respondError(-32000, err.message); }
@@ -459,7 +459,7 @@ app.whenReady().then(() => {
         break;
       }
       case 'config.get': {
-        // Expose the current ~/.wmux/config.toml state (incl. parse errors).
+        // Expose the current ~/.pandamux/config.toml state (incl. parse errors).
         (async () => {
           try {
             const { loadUserConfig } = await import('./user-config');
@@ -469,7 +469,7 @@ app.whenReady().then(() => {
         break;
       }
       case 'config.reload': {
-        // Re-read ~/.wmux/config.toml and live-apply to every open window.
+        // Re-read ~/.pandamux/config.toml and live-apply to every open window.
         (async () => {
           try {
             const { loadUserConfig } = await import('./user-config');
@@ -576,7 +576,7 @@ app.whenReady().then(() => {
             const win = BrowserWindow.getAllWindows()[0];
             if (!win || win.isDestroyed()) { respondError(-32000, 'No window'); return; }
             await win.webContents.executeJavaScript(
-              `window.__wmux_setMarkdownContent?.(${JSON.stringify(request.params?.surfaceId || '')}, ${JSON.stringify(content)})`
+              `window.__pandamux_setMarkdownContent?.(${JSON.stringify(request.params?.surfaceId || '')}, ${JSON.stringify(content)})`
             );
             respond({ ok: true, length: content.length });
           } catch (err: any) { respondError(-32000, err.message); }
@@ -593,11 +593,11 @@ app.whenReady().then(() => {
             if (!win || win.isDestroyed()) { respondError(-32000, 'No window'); return; }
             if (request.params?.all) {
               await win.webContents.executeJavaScript(
-                `window.__wmux_clearAllNotifications?.()`
+                `window.__pandamux_clearAllNotifications?.()`
               );
             } else {
               await win.webContents.executeJavaScript(
-                `window.__wmux_clearNotification?.(${JSON.stringify(request.params?.id || '')})`
+                `window.__pandamux_clearNotification?.(${JSON.stringify(request.params?.id || '')})`
               );
             }
             respond({ ok: true });
@@ -654,7 +654,7 @@ app.whenReady().then(() => {
             const win = BrowserWindow.getAllWindows()[0];
             if (!win || win.isDestroyed()) { respond({ state: null }); return; }
             const workspaces = await win.webContents.executeJavaScript(
-              `window.__wmux_listWorkspaces?.()`
+              `window.__pandamux_listWorkspaces?.()`
             );
             respond({ workspaces: workspaces || [] });
           } catch (err: any) { respondError(-32000, err.message); }
@@ -671,14 +671,14 @@ app.whenReady().then(() => {
             if (!workspaceId) {
               const wins = BrowserWindow.getAllWindows();
               if (wins.length > 0) {
-                workspaceId = await wins[0].webContents.executeJavaScript('window.__wmux_getActiveWorkspaceId?.()');
+                workspaceId = await wins[0].webContents.executeJavaScript('window.__pandamux_getActiveWorkspaceId?.()');
               }
             }
             if (!workspaceId) { respondError(-32000, 'No active workspace'); return; }
 
             let paneId = params.paneId;
             if (!paneId) {
-              const paneLoads = await BrowserWindow.getAllWindows()[0]?.webContents.executeJavaScript('window.__wmux_getPaneLoads?.()');
+              const paneLoads = await BrowserWindow.getAllWindows()[0]?.webContents.executeJavaScript('window.__pandamux_getPaneLoads?.()');
               if (paneLoads && paneLoads.length > 0) paneId = distributeAgents(1, paneLoads)[0];
             }
             if (!paneId) { respondError(-32000, 'No panes available'); return; }
@@ -707,11 +707,11 @@ app.whenReady().then(() => {
             let workspaceId = wsId;
             if (!workspaceId) {
               const wins = BrowserWindow.getAllWindows();
-              if (wins.length > 0) workspaceId = await wins[0].webContents.executeJavaScript('window.__wmux_getActiveWorkspaceId?.()');
+              if (wins.length > 0) workspaceId = await wins[0].webContents.executeJavaScript('window.__pandamux_getActiveWorkspaceId?.()');
             }
             if (!workspaceId) { respondError(-32000, 'No active workspace'); return; }
 
-            const paneLoads = await BrowserWindow.getAllWindows()[0]?.webContents.executeJavaScript('window.__wmux_getPaneLoads?.()') || [];
+            const paneLoads = await BrowserWindow.getAllWindows()[0]?.webContents.executeJavaScript('window.__pandamux_getPaneLoads?.()') || [];
             if (paneLoads.length === 0) { respondError(-32000, 'No panes available'); return; }
 
             const assignments = resolveAgentAssignments(strategy, agentParams.length, paneLoads);

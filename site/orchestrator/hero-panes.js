@@ -1,6 +1,6 @@
 /* hero-panes.js — Wave 2, agent-c
  *
- * Renders a live 4-pane wmux mockup inside .hero__panes[data-mount].
+ * Renders a live 4-pane PandaMUX mockup inside .hero__panes[data-mount].
  * Pure DOM, no dependencies, no external assets. The whole module is
  * an IIFE; nothing is exported.
  *

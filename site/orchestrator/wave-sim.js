@@ -1,7 +1,7 @@
 /**
- * wave-sim.js — interactive wave simulator for the wmux-orchestrator page.
+ * wave-sim.js — interactive wave simulator for the pandamux-orchestrator page.
  *
- * Mounts inside #wave-sim-root and renders a faux wmux window with wave lanes
+ * Mounts inside #wave-sim-root and renders a faux PandaMUX window with wave lanes
  * and agent panes. When the user clicks "Orchestrate" the simulator runs a
  * scripted two-wave orchestration followed by a reviewer card. Everything is
  * driven by setTimeout + requestAnimationFrame — no real agents.

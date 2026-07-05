@@ -2,7 +2,7 @@
  * v2-browser.ts — Per-caller browser routing for V2 pipe handlers (issue #62).
  *
  * Each distinct caller (an agent's terminal surface, identified by its
- * WMUX_SURFACE_ID and sent as `params.caller`) is bound to its OWN browser
+ * PANDAMUX_SURFACE_ID and sent as `params.caller`) is bound to its OWN browser
  * surface, created in that caller's workspace. The CDPBridge tracks every
  * attached browser independently, so concurrent agents no longer share — and
  * clobber — a single browser window. With no caller (manual human use) we fall
@@ -28,7 +28,7 @@ async function ensureBrowserPanel(): Promise<boolean> {
   const win = firstWindow();
   if (!win) return false;
   await win.webContents.executeJavaScript(
-    `window.__wmux_splitPane?.({ direction: 'horizontal', type: 'browser' })`,
+    `window.__pandamux_splitPane?.({ direction: 'horizontal', type: 'browser' })`,
   );
   const deadline = Date.now() + 5000;
   while (!cdpBridge.isAttached && Date.now() < deadline) {
@@ -77,19 +77,19 @@ async function resolveBrowserWcId(caller?: string): Promise<number | null> {
   }
 
   const workspaceId: string | null = await win.webContents.executeJavaScript(
-    `window.__wmux_getWorkspaceIdForSurface?.(${JSON.stringify(caller)}) ?? null`,
+    `window.__pandamux_getWorkspaceIdForSurface?.(${JSON.stringify(caller)}) ?? null`,
   );
   if (!workspaceId) return legacyWcId();
 
   // Adopt an existing unowned browser surface in the workspace (e.g. one the user
   // opened manually); otherwise spawn a fresh browser pane in that workspace.
   const existing: string[] = await win.webContents.executeJavaScript(
-    `window.__wmux_listBrowserSurfaces?.(${JSON.stringify(workspaceId)}) ?? []`,
+    `window.__pandamux_listBrowserSurfaces?.(${JSON.stringify(workspaceId)}) ?? []`,
   );
   let browserSurfaceId = existing.find((id) => !boundBrowserSurfaces.has(id)) ?? null;
   if (!browserSurfaceId) {
     const created = await win.webContents.executeJavaScript(
-      `window.__wmux_splitPane?.({ direction: 'horizontal', type: 'browser', workspaceId: ${JSON.stringify(workspaceId)} }) ?? null`,
+      `window.__pandamux_splitPane?.({ direction: 'horizontal', type: 'browser', workspaceId: ${JSON.stringify(workspaceId)} }) ?? null`,
     );
     browserSurfaceId = created?.surfaceId ?? null;
   }

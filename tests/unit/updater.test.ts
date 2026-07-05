@@ -49,10 +49,10 @@ describe('isMissingChannelFileError', () => {
 });
 
 describe('isUpdaterDisabled', () => {
-  it('is disabled only when WMUX_DISABLE_UPDATER is exactly "1"', () => {
-    expect(isUpdaterDisabled({ WMUX_DISABLE_UPDATER: '1' } as NodeJS.ProcessEnv)).toBe(true);
-    expect(isUpdaterDisabled({ WMUX_DISABLE_UPDATER: 'true' } as NodeJS.ProcessEnv)).toBe(false);
-    expect(isUpdaterDisabled({ WMUX_DISABLE_UPDATER: '0' } as NodeJS.ProcessEnv)).toBe(false);
+  it('is disabled only when PANDAMUX_DISABLE_UPDATER is exactly "1"', () => {
+    expect(isUpdaterDisabled({ PANDAMUX_DISABLE_UPDATER: '1' } as NodeJS.ProcessEnv)).toBe(true);
+    expect(isUpdaterDisabled({ PANDAMUX_DISABLE_UPDATER: 'true' } as NodeJS.ProcessEnv)).toBe(false);
+    expect(isUpdaterDisabled({ PANDAMUX_DISABLE_UPDATER: '0' } as NodeJS.ProcessEnv)).toBe(false);
     expect(isUpdaterDisabled({} as NodeJS.ProcessEnv)).toBe(false);
   });
 });

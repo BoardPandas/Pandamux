@@ -37,12 +37,12 @@ export default function Titlebar({
       <div className="titlebar__left">
         <img
           src={logoSrc}
-          alt="wmux"
+          alt="PandaMUX Everywhere"
           className="titlebar__logo"
           draggable={false}
           style={{ cursor: 'pointer' }}
-          onClick={() => window.wmux?.system?.openExternal?.('https://wmux.org') }
-          title="wmux.org"
+          onClick={() => window.pandamux?.system?.openExternal?.('https://pandamux.boardpandas.ai') }
+          title="pandamux.boardpandas.ai"
         />
         <button className="titlebar__btn" onClick={onHelpClick} title={t('titlebar.help')}>?</button>
         <button className="titlebar__btn" onClick={onDevToolsClick} title={t('titlebar.devtools')}>&lt;/&gt;</button>

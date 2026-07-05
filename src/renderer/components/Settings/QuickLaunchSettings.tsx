@@ -20,7 +20,7 @@ export default function QuickLaunchSettings() {
   const add = () => setProfiles([...profiles, blankProfile()]);
 
   const importFromWT = async () => {
-    const imported: QuickLaunchProfile[] = (await window.wmux?.config?.importWindowsTerminalProfiles?.()) || [];
+    const imported: QuickLaunchProfile[] = (await window.pandamux?.config?.importWindowsTerminalProfiles?.()) || [];
     if (imported.length === 0) {
       setImportNote('No Windows Terminal profiles found.');
       return;
@@ -39,7 +39,7 @@ export default function QuickLaunchSettings() {
         One-click tab presets shown in the <strong>+</strong> dropdown next to each pane. A terminal
         profile can pick a shell, auto-<code>cd</code> into a directory and run startup commands; a
         browser profile opens a fixed URL. Project-specific profiles can also live in a committed
-        <code> .wmux.json</code> at a workspace root.
+        <code> .pandamux.json</code> at a workspace root.
       </p>
 
       <div className="settings-row">

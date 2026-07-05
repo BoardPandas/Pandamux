@@ -157,7 +157,7 @@ export const createSurfaceSlice: StateCreator<SliceState, [], [], SurfaceSlice> 
 
     // Remember the closed surface so Ctrl+Shift+T can bring it back (issue #64),
     // then reap its shell. Killing here — at the state transition — is what fixes
-    // the leak (issue #65): Ctrl+W and `wmux close-surface` both funnel through
+    // the leak (issue #65): Ctrl+W and `pandamux close-surface` both funnel through
     // this action, and neither used to kill the PTY (only the tab-× button did).
     const closing = leaf.surfaces.find((s) => s.id === surfaceId);
     if (closing) {

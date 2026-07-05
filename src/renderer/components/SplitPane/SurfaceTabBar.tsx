@@ -139,8 +139,8 @@ export default function SurfaceTabBar({
   useEffect(() => {
     if (!isFocused) return;
     const handler = () => startRename();
-    document.addEventListener('wmux:rename-surface', handler);
-    return () => document.removeEventListener('wmux:rename-surface', handler);
+    document.addEventListener('pandamux:rename-surface', handler);
+    return () => document.removeEventListener('pandamux:rename-surface', handler);
   }, [isFocused, startRename]);
 
   // Auto-focus rename input
@@ -230,8 +230,8 @@ export default function SurfaceTabBar({
         const savedInsertIndex = insertIndex;
         setInsertIndex(null);
         setDraggingSurfaceId(null);
-        document.body.classList.remove('wmux-dragging');
-        const data = e.dataTransfer.getData('application/wmux-surface');
+        document.body.classList.remove('pandamux-dragging');
+        const data = e.dataTransfer.getData('application/pandamux-surface');
         if (!data) {
           onSurfaceDragEnd?.();
           return;
@@ -292,19 +292,19 @@ export default function SurfaceTabBar({
               draggable={!isRenaming}
               onDragStart={(e) => {
                 e.dataTransfer.setData(
-                  'application/wmux-surface',
+                  'application/pandamux-surface',
                   JSON.stringify({ sourcePaneId: paneId, surfaceId: surface.id })
                 );
                 e.dataTransfer.effectAllowed = 'move';
                 setDraggingSurfaceId(surface.id);
                 onSurfaceDragStart?.(surface.id);
-                document.body.classList.add('wmux-dragging');
+                document.body.classList.add('pandamux-dragging');
               }}
               onDragEnd={() => {
                 setDraggingSurfaceId(null);
                 setInsertIndex(null);
                 onSurfaceDragEnd?.();
-                document.body.classList.remove('wmux-dragging');
+                document.body.classList.remove('pandamux-dragging');
               }}
               onDragOver={(e) => {
                 e.preventDefault();
@@ -454,7 +454,7 @@ export default function SurfaceTabBar({
                       role="menuitem"
                       className="surface-tab-menu__profile"
                       onClick={() => pickProfile(profile)}
-                      title={profile.source === 'project' ? 'Project profile (.wmux.json)' : 'Global profile'}
+                      title={profile.source === 'project' ? 'Project profile (.pandamux.json)' : 'Global profile'}
                     >
                       <span className="surface-tab-menu__icon">
                         {profile.icon || surfaceIcon(profile.type, false)}

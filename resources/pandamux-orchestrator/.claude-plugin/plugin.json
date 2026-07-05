@@ -1,0 +1,13 @@
+{
+  "name": "pandamux-orchestrator",
+  "description": "Multi-agent task orchestration with visual terminal panes. Decomposes complex dev tasks into parallel Claude Code instances coordinated through dependency-aware waves.",
+  "version": "0.1.1",
+  "author": {
+    "name": "BoardPandas",
+    "email": "hello@pandamux.boardpandas.ai"
+  },
+  "homepage": "https://pandamux.boardpandas.ai",
+  "repository": "https://github.com/BoardPandas/Pandamux",
+  "license": "MIT",
+  "keywords": ["orchestration", "multi-agent", "parallel", "terminal", "pandamux"]
+}

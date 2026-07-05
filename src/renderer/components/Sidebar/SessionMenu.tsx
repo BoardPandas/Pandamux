@@ -24,7 +24,7 @@ export default function SessionMenu({ onLoad, onClose }: SessionMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    window.wmux?.session?.list().then(setSessions);
+    window.pandamux?.session?.list().then(setSessions);
   }, []);
 
   useEffect(() => {
@@ -37,7 +37,7 @@ export default function SessionMenu({ onLoad, onClose }: SessionMenuProps) {
 
   const handleDelete = async (name: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    await window.wmux?.session?.delete(name);
+    await window.pandamux?.session?.delete(name);
     setSessions(prev => prev.filter(s => s.name !== name));
   };
 

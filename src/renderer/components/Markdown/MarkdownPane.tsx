@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from 'react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import { openInWmuxBrowser } from '../../utils/open-in-browser';
+import { openInPandaMUXBrowser } from '../../utils/open-in-browser';
 import '../../styles/markdown.css';
 
 interface MarkdownPaneProps {
@@ -11,7 +11,7 @@ interface MarkdownPaneProps {
 
 export default function MarkdownPane({ content = '', surfaceId }: MarkdownPaneProps) {
   const html = useMemo(() => {
-    if (!content) return '<p style="opacity: 0.5">No content. Use wmux markdown set to add content.</p>';
+    if (!content) return '<p style="opacity: 0.5">No content. Use pandamux markdown set to add content.</p>';
 
     marked.setOptions({
       gfm: true,
@@ -36,7 +36,7 @@ export default function MarkdownPane({ content = '', surfaceId }: MarkdownPanePr
 
     event.preventDefault();
     const forceExternal = event.ctrlKey || event.metaKey;
-    openInWmuxBrowser(anchor.href, { forceExternal });
+    openInPandaMUXBrowser(anchor.href, { forceExternal });
   }, []);
 
   return (

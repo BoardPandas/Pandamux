@@ -2,8 +2,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 
-const START_MARKER = '<!-- wmux:start';
-const END_MARKER = '<!-- wmux:end -->';
+const START_MARKER = '<!-- pandamux:start';
+const END_MARKER = '<!-- pandamux:end -->';
 
 function getInstructionsPath(): string {
   try {
@@ -23,21 +23,21 @@ function getClaudeMdPath(): string {
 }
 
 /**
- * Ensures the user's global ~/.claude/CLAUDE.md contains the wmux section.
+ * Ensures the user's global ~/.claude/CLAUDE.md contains the pandamux section.
  * - Creates ~/.claude/ and CLAUDE.md if they don't exist
- * - Inserts the wmux block if not present
- * - Updates the wmux block if it's outdated
- * - Never touches content outside the <!-- wmux:start --> / <!-- wmux:end --> markers
+ * - Inserts the pandamux block if not present
+ * - Updates the pandamux block if it's outdated
+ * - Never touches content outside the <!-- pandamux:start --> / <!-- pandamux:end --> markers
  */
 export function ensureClaudeContext(): void {
   try {
     const instructionsPath = getInstructionsPath();
     if (!fs.existsSync(instructionsPath)) {
-      console.warn('[wmux] claude-instructions.md not found at', instructionsPath);
+      console.warn('[pandamux] claude-instructions.md not found at', instructionsPath);
       return;
     }
 
-    const wmuxBlock = fs.readFileSync(instructionsPath, 'utf-8');
+    const pandamuxBlock = fs.readFileSync(instructionsPath, 'utf-8');
     const claudeMdPath = getClaudeMdPath();
     const claudeDir = path.dirname(claudeMdPath);
 
@@ -47,50 +47,50 @@ export function ensureClaudeContext(): void {
     }
 
     if (!fs.existsSync(claudeMdPath)) {
-      // No CLAUDE.md yet — create with just the wmux block
-      fs.writeFileSync(claudeMdPath, wmuxBlock, 'utf-8');
-      console.log('[wmux] Created ~/.claude/CLAUDE.md with wmux context');
+      // No CLAUDE.md yet — create with just the pandamux block
+      fs.writeFileSync(claudeMdPath, pandamuxBlock, 'utf-8');
+      console.log('[pandamux] Created ~/.claude/CLAUDE.md with pandamux context');
       return;
     }
 
-    // CLAUDE.md exists — check for existing wmux block
+    // CLAUDE.md exists — check for existing pandamux block
     const existing = fs.readFileSync(claudeMdPath, 'utf-8');
     const startIdx = existing.indexOf(START_MARKER);
     const endIdx = existing.indexOf(END_MARKER);
 
     if (startIdx === -1) {
-      // No wmux block — append it
+      // No pandamux block — append it
       const separator = existing.endsWith('\n') ? '\n' : '\n\n';
-      fs.writeFileSync(claudeMdPath, existing + separator + wmuxBlock, 'utf-8');
-      console.log('[wmux] Appended wmux context to ~/.claude/CLAUDE.md');
+      fs.writeFileSync(claudeMdPath, existing + separator + pandamuxBlock, 'utf-8');
+      console.log('[pandamux] Appended pandamux context to ~/.claude/CLAUDE.md');
       return;
     }
 
     if (endIdx === -1) {
       // Broken markers — replace from start marker to end of file
       const before = existing.substring(0, startIdx);
-      fs.writeFileSync(claudeMdPath, before + wmuxBlock, 'utf-8');
-      console.log('[wmux] Fixed and updated wmux context in ~/.claude/CLAUDE.md');
+      fs.writeFileSync(claudeMdPath, before + pandamuxBlock, 'utf-8');
+      console.log('[pandamux] Fixed and updated pandamux context in ~/.claude/CLAUDE.md');
       return;
     }
 
     // Both markers found — replace the block
     const currentBlock = existing.substring(startIdx, endIdx + END_MARKER.length);
-    if (currentBlock.trim() === wmuxBlock.trim()) {
+    if (currentBlock.trim() === pandamuxBlock.trim()) {
       // Already up to date
       return;
     }
 
     const before = existing.substring(0, startIdx);
     const after = existing.substring(endIdx + END_MARKER.length);
-    fs.writeFileSync(claudeMdPath, before + wmuxBlock + after, 'utf-8');
-    console.log('[wmux] Updated wmux context in ~/.claude/CLAUDE.md');
+    fs.writeFileSync(claudeMdPath, before + pandamuxBlock + after, 'utf-8');
+    console.log('[pandamux] Updated pandamux context in ~/.claude/CLAUDE.md');
   } catch (err) {
-    console.warn('[wmux] Failed to update Claude context:', err);
+    console.warn('[pandamux] Failed to update Claude context:', err);
   }
 }
 
-const HOOK_MARKER = 'wmux-hook';
+const HOOK_MARKER = 'pandamux-hook';
 
 function getSettingsPath(): string {
   return path.join(os.homedir(), '.claude', 'settings.json');
@@ -101,24 +101,24 @@ function getCliAbsolutePath(): string {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { app } = require('electron') as typeof import('electron');
     if (app.isPackaged) {
-      return path.join(process.resourcesPath, 'cli', 'wmux.js');
+      return path.join(process.resourcesPath, 'cli', 'pandamux.js');
     }
   } catch {}
-  return path.resolve(path.join(__dirname, '../cli/wmux.js'));
+  return path.resolve(path.join(__dirname, '../cli/pandamux.js'));
 }
 
 /** Tools tracked via PostToolUse hooks for the sidebar/diff view. */
 const TRACKED_TOOLS = ['Bash', 'Read', 'Write', 'Edit', 'Grep', 'Glob', 'Agent', 'WebSearch', 'WebFetch', 'Skill'];
 
 /**
- * Pure builder for the wmux hook blocks. Given the parsed settings object and
- * the absolute path to wmux-hook.js, returns a new settings object whose
- * `hooks` contains fresh wmux PostToolUse/Notification/Stop entries, with any
- * prior wmux entries replaced and all non-wmux (user) hooks preserved.
+ * Pure builder for the pandamux hook blocks. Given the parsed settings object and
+ * the absolute path to pandamux-hook.js, returns a new settings object whose
+ * `hooks` contains fresh pandamux PostToolUse/Notification/Stop entries, with any
+ * prior pandamux entries replaced and all non-pandamux (user) hooks preserved.
  * Extracted so the merge logic is unit-testable without touching the fs
  * (issue #53).
  */
-export function applyWmuxHooks(settings: any, hookScript: string): any {
+export function applyPandaMUXHooks(settings: any, hookScript: string): any {
   const next = { ...(settings || {}) };
   next.hooks = { ...(next.hooks || {}) };
 
@@ -127,16 +127,16 @@ export function applyWmuxHooks(settings: any, hookScript: string): any {
   const makeToolCmd = (tool: string) => `node "${hookScript}" ${tool} 2>/dev/null || true`;
   const makeEventCmd = (event: string) => `node "${hookScript}" --event ${event} 2>/dev/null || true`;
 
-  // Drop any prior wmux entry from a hook array, preserving user hooks.
-  const stripWmux = (entries: any): any[] =>
+  // Drop any prior pandamux entry from a hook array, preserving user hooks.
+  const stripPandaMUX = (entries: any): any[] =>
     (Array.isArray(entries) ? entries : []).filter((e: any) => {
       if (!Array.isArray(e.hooks)) return true;
-      return !e.hooks.some((h: any) => h.command?.includes('wmux-hook'));
+      return !e.hooks.some((h: any) => h.command?.includes('pandamux-hook'));
     });
 
   // PostToolUse — one entry per tracked tool for specific sidebar tracking.
   next.hooks.PostToolUse = [
-    ...stripWmux(next.hooks.PostToolUse),
+    ...stripPandaMUX(next.hooks.PostToolUse),
     ...TRACKED_TOOLS.map(tool => ({
       matcher: tool,
       hooks: [{ type: 'command', command: makeToolCmd(tool) }],
@@ -145,13 +145,13 @@ export function applyWmuxHooks(settings: any, hookScript: string): any {
 
   // Notification — Claude Code is asking for input/permission (waiting on you).
   next.hooks.Notification = [
-    ...stripWmux(next.hooks.Notification),
+    ...stripPandaMUX(next.hooks.Notification),
     { hooks: [{ type: 'command', command: makeEventCmd('Notification') }] },
   ];
 
   // Stop — Claude Code finished its turn and is back at the prompt.
   next.hooks.Stop = [
-    ...stripWmux(next.hooks.Stop),
+    ...stripPandaMUX(next.hooks.Stop),
     { hooks: [{ type: 'command', command: makeEventCmd('Stop') }] },
   ];
 
@@ -159,11 +159,11 @@ export function applyWmuxHooks(settings: any, hookScript: string): any {
 }
 
 /**
- * Ensures Claude Code's ~/.claude/settings.json has the wmux hooks:
+ * Ensures Claude Code's ~/.claude/settings.json has the pandamux hooks:
  *  - PostToolUse  → drives the sidebar/diff view (tool activity)
- *  - Notification → fires a wmux notification when the agent needs input/permission
- *  - Stop         → fires a wmux notification when the agent finishes its turn
- * Uses absolute CLI paths (not env var). Never touches non-wmux hook entries
+ *  - Notification → fires a pandamux notification when the agent needs input/permission
+ *  - Stop         → fires a pandamux notification when the agent finishes its turn
+ * Uses absolute CLI paths (not env var). Never touches non-pandamux hook entries
  * (issue #53): existing user hooks in each array are preserved.
  */
 export function ensureClaudeHooks(): void {
@@ -183,27 +183,27 @@ export function ensureClaudeHooks(): void {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const { app } = require('electron') as typeof import('electron');
       if (app.isPackaged) {
-        hookScript = path.join(process.resourcesPath, 'cli', 'wmux-hook.js');
+        hookScript = path.join(process.resourcesPath, 'cli', 'pandamux-hook.js');
       } else {
-        hookScript = path.resolve(path.join(__dirname, '../../resources/cli/wmux-hook.js'));
+        hookScript = path.resolve(path.join(__dirname, '../../resources/cli/pandamux-hook.js'));
       }
     } catch {
-      hookScript = path.resolve(path.join(__dirname, '../../resources/cli/wmux-hook.js'));
+      hookScript = path.resolve(path.join(__dirname, '../../resources/cli/pandamux-hook.js'));
     }
     hookScript = hookScript.split(path.sep).join('/');
 
-    const updated = applyWmuxHooks(settings, hookScript);
+    const updated = applyPandaMUXHooks(settings, hookScript);
     fs.writeFileSync(settingsPath, JSON.stringify(updated, null, 2), 'utf-8');
-    console.log('[wmux] Configured PostToolUse/Notification/Stop hooks in ~/.claude/settings.json');
+    console.log('[pandamux] Configured PostToolUse/Notification/Stop hooks in ~/.claude/settings.json');
   } catch (err) {
-    console.warn('[wmux] Failed to update Claude hooks:', err);
+    console.warn('[pandamux] Failed to update Claude hooks:', err);
   }
 }
 
 /**
- * Configures chrome-devtools-mcp to connect to wmux's CDP proxy on localhost:9222.
+ * Configures chrome-devtools-mcp to connect to pandamux's CDP proxy on localhost:9222.
  * Disables the plugin version and adds a custom MCP server in settings.json with
- * --browserUrl pointing to wmux. This is more reliable than modifying the plugin cache.
+ * --browserUrl pointing to pandamux. This is more reliable than modifying the plugin cache.
  */
 export function ensureChromeDevtoolsConfig(): void {
   try {
@@ -236,10 +236,10 @@ export function ensureChromeDevtoolsConfig(): void {
 
     if (changed) {
       fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
-      console.log('[wmux] Configured chrome-devtools-mcp as custom MCP server → localhost:9222');
+      console.log('[pandamux] Configured chrome-devtools-mcp as custom MCP server → localhost:9222');
     }
   } catch (err) {
-    console.warn('[wmux] Failed to configure chrome-devtools-mcp:', err);
+    console.warn('[pandamux] Failed to configure chrome-devtools-mcp:', err);
   }
 }
 
@@ -262,8 +262,8 @@ function copyDirSync(src: string, dest: string): void {
 }
 
 /**
- * Auto-installs the wmux-orchestrator plugin into Claude Code's plugin cache.
- * - Copies resources/wmux-orchestrator/ → ~/.claude/plugins/cache/wmux-orchestrator/{version}/
+ * Auto-installs the pandamux-orchestrator plugin into Claude Code's plugin cache.
+ * - Copies resources/pandamux-orchestrator/ → ~/.claude/plugins/cache/pandamux-orchestrator/{version}/
  * - Registers in ~/.claude/plugins/installed_plugins.json
  * - Enables in ~/.claude/settings.json
  * Skips if already installed at the same version.
@@ -276,17 +276,17 @@ export function ensureOrchestratorPlugin(): void {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const { app } = require('electron') as typeof import('electron');
       if (app.isPackaged) {
-        pluginSrcDir = path.join(process.resourcesPath, 'wmux-orchestrator');
+        pluginSrcDir = path.join(process.resourcesPath, 'pandamux-orchestrator');
       } else {
-        pluginSrcDir = path.resolve(path.join(__dirname, '../../resources/wmux-orchestrator'));
+        pluginSrcDir = path.resolve(path.join(__dirname, '../../resources/pandamux-orchestrator'));
       }
     } catch {
-      pluginSrcDir = path.resolve(path.join(__dirname, '../../resources/wmux-orchestrator'));
+      pluginSrcDir = path.resolve(path.join(__dirname, '../../resources/pandamux-orchestrator'));
     }
 
     const pluginJsonSrc = path.join(pluginSrcDir, '.claude-plugin', 'plugin.json');
     if (!fs.existsSync(pluginJsonSrc)) {
-      console.warn('[wmux] wmux-orchestrator plugin not found at', pluginSrcDir);
+      console.warn('[pandamux] pandamux-orchestrator plugin not found at', pluginSrcDir);
       return;
     }
 
@@ -295,14 +295,14 @@ export function ensureOrchestratorPlugin(): void {
     try {
       pluginMeta = JSON.parse(fs.readFileSync(pluginJsonSrc, 'utf-8'));
     } catch {
-      console.warn('[wmux] Failed to parse wmux-orchestrator plugin.json');
+      console.warn('[pandamux] Failed to parse pandamux-orchestrator plugin.json');
       return;
     }
     const version: string = pluginMeta.version || '0.0.0';
 
-    // 3. Copy to ~/.claude/plugins/cache/wmux-orchestrator/{version}/
+    // 3. Copy to ~/.claude/plugins/cache/pandamux-orchestrator/{version}/
     const claudeDir = path.join(os.homedir(), '.claude');
-    const cacheDir = path.join(claudeDir, 'plugins', 'cache', 'wmux-orchestrator', version);
+    const cacheDir = path.join(claudeDir, 'plugins', 'cache', 'pandamux-orchestrator', version);
     const targetPluginJson = path.join(cacheDir, '.claude-plugin', 'plugin.json');
 
     // Check if already installed at same version
@@ -326,12 +326,12 @@ export function ensureOrchestratorPlugin(): void {
 
     // Copy entire plugin directory
     copyDirSync(pluginSrcDir, cacheDir);
-    console.log(`[wmux] Installed wmux-orchestrator v${version} to plugin cache`);
+    console.log(`[pandamux] Installed pandamux-orchestrator v${version} to plugin cache`);
 
     // 4–5. Register and enable
     ensurePluginRegistered(cacheDir, version, claudeDir);
   } catch (err) {
-    console.warn('[wmux] Failed to install wmux-orchestrator plugin:', err);
+    console.warn('[pandamux] Failed to install pandamux-orchestrator plugin:', err);
   }
 }
 
@@ -339,7 +339,7 @@ export function ensureOrchestratorPlugin(): void {
  * Registers the orchestrator plugin in installed_plugins.json and enables it in settings.json.
  */
 function ensurePluginRegistered(installPath: string, version: string, claudeDir: string): void {
-  const pluginKey = 'wmux-orchestrator@wmux';
+  const pluginKey = 'pandamux-orchestrator@pandamux';
 
   // Register in installed_plugins.json
   try {
@@ -362,10 +362,10 @@ function ensurePluginRegistered(installPath: string, version: string, claudeDir:
         lastUpdated: now,
       };
       fs.writeFileSync(installedPath, JSON.stringify(installed, null, 2), 'utf-8');
-      console.log('[wmux] Registered wmux-orchestrator in installed_plugins.json');
+      console.log('[pandamux] Registered pandamux-orchestrator in installed_plugins.json');
     }
   } catch (err) {
-    console.warn('[wmux] Failed to register plugin in installed_plugins.json:', err);
+    console.warn('[pandamux] Failed to register plugin in installed_plugins.json:', err);
   }
 
   // Enable in settings.json
@@ -381,9 +381,9 @@ function ensurePluginRegistered(installPath: string, version: string, claudeDir:
     if (settings.enabledPlugins[pluginKey] !== true) {
       settings.enabledPlugins[pluginKey] = true;
       fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
-      console.log('[wmux] Enabled wmux-orchestrator in settings.json');
+      console.log('[pandamux] Enabled pandamux-orchestrator in settings.json');
     }
   } catch (err) {
-    console.warn('[wmux] Failed to enable plugin in settings.json:', err);
+    console.warn('[pandamux] Failed to enable plugin in settings.json:', err);
   }
 }

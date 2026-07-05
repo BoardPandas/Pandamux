@@ -73,5 +73,5 @@ export function playNotificationSound(): void {
  * them. Called once at renderer startup.
  */
 export function initNotificationSound(): void {
-  window.wmux?.notification?.onPlaySound?.(playNotificationSound);
+  window.pandamux?.notification?.onPlaySound?.(playNotificationSound);
 }

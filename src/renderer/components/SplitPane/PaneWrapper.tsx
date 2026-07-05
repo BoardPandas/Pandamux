@@ -153,7 +153,7 @@ export default function PaneWrapper({
   // ─── Global drag tracking ─────────────────────────────────────────────────
   useEffect(() => {
     const handleDragStart = (e: DragEvent) => {
-      if (e.dataTransfer?.types.includes('application/wmux-surface')) {
+      if (e.dataTransfer?.types.includes('application/pandamux-surface')) {
         setDragActive(true);
       }
     };
@@ -255,16 +255,16 @@ export default function PaneWrapper({
     }
   };
 
-  // Load project-level quick-launch profiles from <workspace cwd>/.wmux.json
+  // Load project-level quick-launch profiles from <workspace cwd>/.pandamux.json
   // (issue #32, mirrors cmux's cmux.json). Reloads when the workspace cwd changes.
   useEffect(() => {
     let cancelled = false;
     const dir = workspace?.cwd;
-    if (!dir || !window.wmux?.config?.getProjectProfiles) {
+    if (!dir || !window.pandamux?.config?.getProjectProfiles) {
       setProjectProfiles([]);
       return;
     }
-    window.wmux.config.getProjectProfiles(dir)
+    window.pandamux.config.getProjectProfiles(dir)
       .then((profiles: QuickLaunchProfile[]) => {
         if (!cancelled) setProjectProfiles(Array.isArray(profiles) ? profiles : []);
       })
@@ -274,7 +274,7 @@ export default function PaneWrapper({
 
   // Fetch available shells once on mount for the shell picker dropdown
   useEffect(() => {
-    window.wmux?.system?.getShells?.()
+    window.pandamux?.system?.getShells?.()
       .then((shells: ShellInfo[]) => setAvailableShells(Array.isArray(shells) ? shells : []))
       .catch(() => {});
   }, []);
@@ -295,7 +295,7 @@ export default function PaneWrapper({
 
   const handleNewSurfaceProfile = (profile: QuickLaunchProfile) => {
     if (!activeWorkspaceId) return;
-    // Relative profile cwd (e.g. "./server" in a project .wmux.json) resolves
+    // Relative profile cwd (e.g. "./server" in a project .pandamux.json) resolves
     // against the workspace cwd; otherwise node-pty would resolve it against the
     // app directory. Absolute paths (drive-letter, UNC, or POSIX root) pass through.
     const resolveCwd = (cwd?: string): string | undefined => {
@@ -345,7 +345,7 @@ export default function PaneWrapper({
   const handleCloseSurface = (surfaceId: SurfaceId) => {
     if (activeWorkspaceId) {
       // PTY teardown now lives in the store's closeSurface action (issue #65), so
-      // every close route — this tab-× button, Ctrl+W, and `wmux close-surface` —
+      // every close route — this tab-× button, Ctrl+W, and `pandamux close-surface` —
       // reaps the shell through the same chokepoint.
       closeSurface(activeWorkspaceId, paneId, surfaceId);
     }
@@ -378,7 +378,7 @@ export default function PaneWrapper({
     // Kill all PTYs in this pane first
     for (const surface of surfaces) {
       if (surface.type === 'terminal') {
-        window.wmux?.pty?.kill(surface.id);
+        window.pandamux?.pty?.kill(surface.id);
       }
     }
     // Remove the pane atomically (not surface-by-surface, which corrupts state)
@@ -412,8 +412,8 @@ export default function PaneWrapper({
   const handleEdgeDrop = (e: React.DragEvent, direction: 'left' | 'right' | 'up' | 'down') => {
     e.preventDefault();
     setDragActive(false);
-    document.body.classList.remove('wmux-dragging');
-    const data = e.dataTransfer.getData('application/wmux-surface');
+    document.body.classList.remove('pandamux-dragging');
+    const data = e.dataTransfer.getData('application/pandamux-surface');
     if (!data || !activeWorkspaceId) {
       onSurfaceDragEnd();
       return;
@@ -453,8 +453,8 @@ export default function PaneWrapper({
   const handleCenterDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragActive(false);
-    document.body.classList.remove('wmux-dragging');
-    const data = e.dataTransfer.getData('application/wmux-surface');
+    document.body.classList.remove('pandamux-dragging');
+    const data = e.dataTransfer.getData('application/pandamux-surface');
     if (!data || !activeWorkspaceId) {
       onSurfaceDragEnd();
       return;

@@ -60,10 +60,10 @@ export default function Sidebar({
   useEffect(() => {
     let polling = false;
     const interval = setInterval(async () => {
-      if (polling || !window.wmux?.agent?.list) return;
+      if (polling || !window.pandamux?.agent?.list) return;
       polling = true;
       try {
-        const agents = await window.wmux.agent.list();
+        const agents = await window.pandamux.agent.list();
         const counts: Record<string, number> = {};
         for (const agent of agents || []) {
           if (agent.status === 'running') {
@@ -78,12 +78,12 @@ export default function Sidebar({
   }, []);
 
   // ── Orchestration IPC subscription ──────────────────────────────────────
-  // Main process pushes wmux-orchestrator state.json updates; we mirror them
+  // Main process pushes pandamux-orchestrator state.json updates; we mirror them
   // in the Zustand store so OrchestrationPanel re-renders on each change.
   useEffect(() => {
     const setOrchestration = useStore.getState().setOrchestration;
     const clearOrchestration = useStore.getState().clearOrchestration;
-    const api = (window as any).wmux?.orchestration;
+    const api = (window as any).pandamux?.orchestration;
     if (!api) return;
     const offUpdate = api.onUpdate?.((state: any) => {
       if (state) setOrchestration(state);

@@ -236,7 +236,7 @@ export function useKeyboardShortcuts(
       // clipboard here: navigator.clipboard.readText() garbles non-UTF-8 Windows
       // formats and a raw pty.write strips bracketed-paste markers.
       if (activeSurf?.type === 'terminal') {
-        document.dispatchEvent(new CustomEvent('wmux:paste-terminal', { detail: { surfaceId: activeSurf.id } }));
+        document.dispatchEvent(new CustomEvent('pandamux:paste-terminal', { detail: { surfaceId: activeSurf.id } }));
       }
     };
 
@@ -265,7 +265,7 @@ export function useKeyboardShortcuts(
 
     const openFolderAsWorkspace = () => {
       void (async () => {
-        const res = await window.wmux?.system?.pickFolder?.();
+        const res = await window.pandamux?.system?.pickFolder?.();
         if (!res || res.canceled || !res.path) return;
         const segments = String(res.path).split(/[\\/]/).filter(Boolean);
         createWorkspace({ cwd: res.path, title: segments[segments.length - 1] || res.path });
@@ -280,15 +280,15 @@ export function useKeyboardShortcuts(
     //    PaneWrapper level and short-circuited before this lookup. ─────────────
     const handlers: Partial<Record<ShortcutAction, () => void>> = {
       newWorkspace: () => createWorkspace(),
-      newWindow: () => window.wmux?.window?.create?.(),
+      newWindow: () => window.pandamux?.window?.create?.(),
       closeWorkspace: () => { if (activeWorkspaceId) closeWorkspace(activeWorkspaceId); },
       closeWindow: () => window.close(),
       openFolder: openFolderAsWorkspace,
       toggleSidebar: () => toggleSidebar(),
       nextWorkspace: () => cycleWorkspace(1),
       prevWorkspace: () => cycleWorkspace(-1),
-      renameSurface: () => fire('wmux:rename-surface'),
-      renameWorkspace: () => fire('wmux:rename-workspace'),
+      renameSurface: () => fire('pandamux:rename-surface'),
+      renameWorkspace: () => fire('pandamux:rename-workspace'),
       splitRight: () => doSplit('terminal', 'horizontal'),
       splitDown: () => doSplit('terminal', 'vertical'),
       splitBrowserRight: () => doSplit('browser', 'horizontal'),
@@ -304,10 +304,10 @@ export function useKeyboardShortcuts(
       prevSurface: () => { if (activeWorkspaceId && focusedPaneId) prevSurface(activeWorkspaceId, focusedPaneId); },
       jumpToUnread,
       showNotifications: () => onToggleNotifications?.(),
-      flashFocused: () => { if (focusedPaneId) fire('wmux:trigger-flash', { paneId: focusedPaneId }); },
+      flashFocused: () => { if (focusedPaneId) fire('pandamux:trigger-flash', { paneId: focusedPaneId }); },
       openBrowser: () => onToggleBrowser?.(),
-      browserDevTools: () => window.wmux?.system?.toggleDevTools?.(),
-      browserConsole: () => window.wmux?.system?.toggleDevTools?.(),
+      browserDevTools: () => window.pandamux?.system?.toggleDevTools?.(),
+      browserConsole: () => window.pandamux?.system?.toggleDevTools?.(),
       copy: copySelection,
       paste: pasteIntoFocusedTerminal,
       fontSizeIncrease: () => adjustFontSize((s) => Math.min(32, s + 1)),
@@ -320,8 +320,8 @@ export function useKeyboardShortcuts(
       commandPalette: () => {},
       // ── issue #64 additions ──────────────────────────────────────────────
       reopenClosedSurface: () => { if (activeWorkspaceId && focusedPaneId) useStore.getState().reopenClosedSurface(activeWorkspaceId, focusedPaneId); },
-      findNext: () => fire('wmux:find-next'),
-      findPrevious: () => fire('wmux:find-prev'),
+      findNext: () => fire('pandamux:find-next'),
+      findPrevious: () => fire('pandamux:find-prev'),
       resizePaneLeft: () => doResize('horizontal', -0.05),
       resizePaneRight: () => doResize('horizontal', 0.05),
       resizePaneUp: () => doResize('vertical', -0.05),
@@ -329,7 +329,7 @@ export function useKeyboardShortcuts(
       broadcastInput: () => useStore.getState().toggleBroadcastInput(),
       togglePinWorkspace,
       markWorkspaceRead,
-      toggleShortcutCheatSheet: () => fire('wmux:toggle-cheatsheet'),
+      toggleShortcutCheatSheet: () => fire('pandamux:toggle-cheatsheet'),
     };
 
     function handleKeyDown(e: KeyboardEvent): void {

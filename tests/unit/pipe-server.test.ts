@@ -5,7 +5,7 @@ import { PipeServer } from '../../src/main/pipe-server';
 // Each test gets a unique pipe name to avoid reuse conflicts on Windows
 let testCounter = 0;
 function uniquePipe(): string {
-  return `\\\\.\\pipe\\wmux-test-${process.pid}-${++testCounter}`;
+  return `\\\\.\\pipe\\pandamux-test-${process.pid}-${++testCounter}`;
 }
 
 function connectAndSend(pipePath: string, message: string): Promise<string> {
@@ -154,7 +154,7 @@ describe('PipeServer', () => {
     const pipe = uniquePipe();
     server = new PipeServer(pipe, 'secret');
     server.on('v2', (req, respond) => {
-      if (req.method === 'system.identify') respond({ name: 'wmux' });
+      if (req.method === 'system.identify') respond({ name: 'pandamux' });
     });
     server.start();
     await new Promise(r => setTimeout(r, 200));
@@ -165,7 +165,7 @@ describe('PipeServer', () => {
       id: 6,
     }));
     const parsed = JSON.parse(response);
-    expect(parsed.result.name).toBe('wmux');
+    expect(parsed.result.name).toBe('pandamux');
   });
 
   it('still accepts unauthenticated V1 telemetry', async () => {

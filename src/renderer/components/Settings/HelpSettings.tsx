@@ -7,7 +7,7 @@ import { useT } from '../../i18n';
 // rather than a hardcoded literal.
 const REPO_URL = 'https://github.com/BoardPandas/Pandamux';
 const ISSUES_URL = `${REPO_URL}/issues`;
-const WEBSITE_URL = 'https://wmux.org';
+const WEBSITE_URL = 'https://pandamux.boardpandas.ai';
 
 export default function HelpSettings() {
   const t = useT();
@@ -15,7 +15,7 @@ export default function HelpSettings() {
 
   useEffect(() => {
     let cancelled = false;
-    Promise.resolve(window.wmux?.system?.getVersion?.())
+    Promise.resolve(window.pandamux?.system?.getVersion?.())
       .then((v?: string) => {
         if (!cancelled && typeof v === 'string') setVersion(v);
       })
@@ -27,7 +27,7 @@ export default function HelpSettings() {
     };
   }, []);
 
-  const openExternal = (url: string) => window.wmux?.system?.openExternal?.(url);
+  const openExternal = (url: string) => window.pandamux?.system?.openExternal?.(url);
 
   return (
     <div className="settings-section">
@@ -35,7 +35,7 @@ export default function HelpSettings() {
 
       <div className="settings-row">
         <label className="settings-label">{t('settings.help.version')}</label>
-        <span>wmux{version ? ` v${version}` : ''}</span>
+        <span>PandaMUX Everywhere{version ? ` v${version}` : ''}</span>
       </div>
 
       <div className="settings-row">

@@ -1,4 +1,4 @@
-// ─── wmux UI internationalization — pure core (issue #56) ────────────────────
+// ─── pandamux UI internationalization — pure core (issue #56) ────────────────────
 // Types, dictionaries and pure helpers with NO store dependency. The settings
 // slice imports from here (for the default-language detection at store-creation
 // time); keeping this module store-free avoids a circular import between the
@@ -60,7 +60,7 @@ const en: Dict = {
   'titlebar.settings': 'Settings (Ctrl+,)',
   // Settings — Help / About panel
   'settings.tab.help': 'Help',
-  'settings.help.about': 'About wmux',
+  'settings.help.about': 'About PandaMUX Everywhere',
   'settings.help.version': 'Version',
   'settings.help.reportIssue': 'Report an Issue',
   'settings.help.website': 'Website',
@@ -113,7 +113,7 @@ const fr: Dict = {
   'titlebar.devtools': 'Afficher/Masquer les outils de développement',
   'titlebar.settings': 'Paramètres (Ctrl+,)',
   'settings.tab.help': 'Aide',
-  'settings.help.about': 'À propos de wmux',
+  'settings.help.about': 'À propos de PandaMUX Everywhere',
   'settings.help.version': 'Version',
   'settings.help.reportIssue': 'Signaler un problème',
   'settings.help.website': 'Site web',
@@ -163,7 +163,7 @@ const zh: Dict = {
   'titlebar.devtools': '切换开发者工具',
   'titlebar.settings': '设置 (Ctrl+,)',
   'settings.tab.help': '帮助',
-  'settings.help.about': '关于 wmux',
+  'settings.help.about': '关于 PandaMUX Everywhere',
   'settings.help.version': '版本',
   'settings.help.reportIssue': '报告问题',
   'settings.help.website': '网站',

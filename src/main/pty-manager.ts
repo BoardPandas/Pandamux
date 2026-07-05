@@ -47,7 +47,7 @@ function resolveShell(shell: string | undefined): string {
     return shell;
   }
   if (shell) {
-    console.warn(`[wmux] Shell not found: "${shell}", falling back to ${getDefaultShell()}`);
+    console.warn(`[pandamux] Shell not found: "${shell}", falling back to ${getDefaultShell()}`);
   }
   return getDefaultShell();
 }
@@ -70,12 +70,12 @@ function getCliPath(): string {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { app } = require('electron') as typeof import('electron');
     if (app.isPackaged) {
-      return path.join(process.resourcesPath, 'cli', 'wmux.js');
+      return path.join(process.resourcesPath, 'cli', 'pandamux.js');
     }
   } catch {
     // Not running in Electron
   }
-  return path.join(__dirname, '../cli/wmux.js');
+  return path.join(__dirname, '../cli/pandamux.js');
 }
 
 function getShellType(shell: string): 'powershell' | 'cmd' | 'wsl' | 'unknown' {
@@ -104,26 +104,26 @@ function buildShellArgs(
   cwd: string | undefined,
 ): string[] {
   if (shellType === 'powershell') {
-    const script = path.join(integrationDir, 'wmux-powershell-integration.ps1');
+    const script = path.join(integrationDir, 'pandamux-powershell-integration.ps1');
     if (fs.existsSync(script)) {
-      env.WMUX_PS1_SCRIPT = script;
-      return ['-NoLogo', '-ExecutionPolicy', 'Bypass', '-NoExit', '-Command', '. $env:WMUX_PS1_SCRIPT'];
+      env.PANDAMUX_PS1_SCRIPT = script;
+      return ['-NoLogo', '-ExecutionPolicy', 'Bypass', '-NoExit', '-Command', '. $env:PANDAMUX_PS1_SCRIPT'];
     }
-    console.warn(`[wmux] shell-integration not found at: ${script} — starting PowerShell without integration`);
+    console.warn(`[pandamux] shell-integration not found at: ${script} — starting PowerShell without integration`);
     return ['-NoLogo'];
   }
   if (shellType === 'cmd') {
-    return ['/K', path.join(integrationDir, 'wmux-cmd-integration.cmd')];
+    return ['/K', path.join(integrationDir, 'pandamux-cmd-integration.cmd')];
   }
   if (shellType === 'wsl') {
-    env.WMUX_INTEGRATION = '1';
-    // Propagate WMUX_* vars into the WSL distro (issue #60). Without WSLENV, WSL
+    env.PANDAMUX_INTEGRATION = '1';
+    // Propagate PANDAMUX_* vars into the WSL distro (issue #60). Without WSLENV, WSL
     // strips every Windows env var, so the notification framework, sidebar and
-    // `wmux` CLI inside WSL can't reach the host. /u = pass through, /up = pass
+    // `pandamux` CLI inside WSL can't reach the host. /u = pass through, /up = pass
     // through AND translate the Windows path to a WSL mount (/mnt/c/...).
-    const wmuxWslEnv =
-      'WMUX/u:WMUX_SURFACE_ID/u:WMUX_CLI/up:WMUX_PIPE/u:WMUX_PIPE_TOKEN/u:WMUX_INTEGRATION/u';
-    env.WSLENV = env.WSLENV ? `${env.WSLENV}:${wmuxWslEnv}` : wmuxWslEnv;
+    const pandamuxWslEnv =
+      'PANDAMUX/u:PANDAMUX_SURFACE_ID/u:PANDAMUX_CLI/up:PANDAMUX_PIPE/u:PANDAMUX_PIPE_TOKEN/u:PANDAMUX_INTEGRATION/u';
+    env.WSLENV = env.WSLENV ? `${env.WSLENV}:${pandamuxWslEnv}` : pandamuxWslEnv;
     // A restored WSL/POSIX cwd (issue #60) can't be a Win32 process cwd (error
     // 267). Open it INSIDE the distro via --cd instead; the Win32-side cwd is
     // sanitized to a valid Windows dir by the caller.
@@ -231,11 +231,11 @@ export class PtyManager {
     const env: { [key: string]: string } = {
       ...processEnvClean,
       ...options.env,
-      WMUX: '1',
-      WMUX_SURFACE_ID: id,
-      WMUX_PIPE: getPipePath(),
-      WMUX_PIPE_TOKEN: readPipeToken(),
-      WMUX_CLI: cliPath,
+      PANDAMUX: '1',
+      PANDAMUX_SURFACE_ID: id,
+      PANDAMUX_PIPE: getPipePath(),
+      PANDAMUX_PIPE_TOKEN: readPipeToken(),
+      PANDAMUX_CLI: cliPath,
     };
 
     const args = buildShellArgs(shellType, env, integrationDir, options.cwd);
@@ -249,7 +249,7 @@ export class PtyManager {
     // writing `\x1b[?62;4;9;22c` onto the shell's stdin. If that response landed
     // on the prompt the same instant our injected `<cmd>\r` arrived, PSReadLine
     // merged them into one bogus executed line (e.g. `62;4;9;22ccls`). Baking the
-    // commands into the integration script (via WMUX_STARTUP_COMMANDS) removes
+    // commands into the integration script (via PANDAMUX_STARTUP_COMMANDS) removes
     // the race: they run during init and the first prompt render — the only one
     // that triggers the leaky query — happens afterward, exactly as it does for a
     // plain terminal that shows no junk.
@@ -257,10 +257,10 @@ export class PtyManager {
       (cmd): cmd is string => typeof cmd === 'string' && cmd.trim().length > 0,
     );
     let startupCommandsConsumed = false;
-    if (startupCommands.length > 0 && shellType === 'powershell' && env.WMUX_PS1_SCRIPT) {
+    if (startupCommands.length > 0 && shellType === 'powershell' && env.PANDAMUX_PS1_SCRIPT) {
       // Newlines survive the env block; the integration script trims each line
       // (so a stray CR is harmless) and runs it via Invoke-Expression.
-      env.WMUX_STARTUP_COMMANDS = startupCommands.join('\n');
+      env.PANDAMUX_STARTUP_COMMANDS = startupCommands.join('\n');
       startupCommandsConsumed = true;
     }
 
@@ -287,7 +287,7 @@ export class PtyManager {
     try {
       ptyProcess = pty.spawn(shell, args, spawnOptions);
     } catch (err) {
-      console.warn('[wmux] spawn with bundled conpty.dll failed, retrying with inbox ConPTY:', err);
+      console.warn('[pandamux] spawn with bundled conpty.dll failed, retrying with inbox ConPTY:', err);
       ptyProcess = pty.spawn(shell, args, { ...spawnOptions, useConptyDll: false });
     }
 

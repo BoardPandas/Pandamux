@@ -3,12 +3,12 @@ import path from 'path';
 import { getAppDataDir } from '../shared/instance';
 
 // User settings (issue #19). Previously these lived only in renderer
-// localStorage, which is scoped to the page origin. Because wmux ships as a
+// localStorage, which is scoped to the page origin. Because pandamux ships as a
 // portable zip that users extract to a *new folder per version*, the
 // production `file://` origin changes between versions and Chromium buckets
 // localStorage by that path — so font/theme/shortcut customizations appeared
 // to reset on every update. We now persist settings to a JSON file in the
-// stable %APPDATA%\wmux directory (the same place session.json lives, and
+// stable %APPDATA%\pandamux directory (the same place session.json lives, and
 // which handleVersionChange never touches), so they survive updates.
 
 const SETTINGS_FILE = path.join(getAppDataDir(), 'settings.json');

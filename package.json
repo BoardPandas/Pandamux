@@ -1,11 +1,11 @@
 {
-  "name": "wmux",
-  "version": "0.15.4",
-  "description": "Windows terminal multiplexer for AI agents",
+  "name": "pandamux",
+  "version": "0.15.5",
+  "description": "PandaMUX Everywhere: Windows terminal multiplexer for AI agents",
   "license": "MIT",
   "main": "dist/main/index.js",
   "bin": {
-    "wmux": "dist/cli/wmux.js"
+    "pandamux": "dist/cli/pandamux.js"
   },
   "scripts": {
     "dev": "concurrently \"vite --port 5199\" \"wait-on http://localhost:5199 && electron .\"",

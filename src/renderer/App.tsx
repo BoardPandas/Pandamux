@@ -36,7 +36,7 @@ function findLeafFromTree(node: SplitNode, paneId: PaneId): (SplitNode & { type:
   return findLeafFromTree(node.children[0], paneId) || findLeafFromTree(node.children[1], paneId);
 }
 
-/** Apply `~/.wmux/config.toml`'s `[terminal]` section onto the terminal prefs slice. */
+/** Apply `~/.pandamux/config.toml`'s `[terminal]` section onto the terminal prefs slice. */
 function applyUserConfigTerminal(state: ReturnType<typeof useStore.getState>, terminal: any): void {
   if (!terminal) return;
   const patch: Partial<typeof state.terminalPrefs> = {};
@@ -87,7 +87,7 @@ function fireNotification(
   if (workspaceId) {
     addNotification({ surfaceId: (surfaceId || '') as SurfaceId, workspaceId, text });
   }
-  window.wmux?.notification?.fire({ surfaceId: surfaceId || '', text, title: 'wmux' });
+  window.pandamux?.notification?.fire({ surfaceId: surfaceId || '', text, title: 'PandaMUX' });
 }
 
 /** Resolve the workspace that owns a surface, or undefined. */
@@ -106,7 +106,7 @@ function handlePortsUpdate(cmd: any, updateWorkspaceMetadata: StoreAction): void
       const ws = useStore.getState().workspaces.find(w => w.id === currentWs);
       // Only auto-navigate the browser to a NEW dev port.
       if (currentWs && !(ws?.ports || []).includes(devPorts[0])) {
-        window.wmux?.browser?.navigate?.(`browser-${currentWs}`, `http://localhost:${devPorts[0]}`);
+        window.pandamux?.browser?.navigate?.(`browser-${currentWs}`, `http://localhost:${devPorts[0]}`);
       }
     }
     for (const ws of useStore.getState().workspaces) {
@@ -115,7 +115,7 @@ function handlePortsUpdate(cmd: any, updateWorkspaceMetadata: StoreAction): void
   } catch {}
 }
 
-/** `wmux notify <text>` — works even outside a pane (falls back to active workspace). */
+/** `pandamux notify <text>` — works even outside a pane (falls back to active workspace). */
 function handleNotifyCommand(cmd: any, addNotification: StoreAction): void {
   const text = (cmd.args || []).join(' ').trim() || 'Notification';
   const ws = workspaceForSurface(cmd.surfaceId);
@@ -263,12 +263,12 @@ export default function App() {
   const [focusedPaneId, setFocusedPaneId] = useState<PaneId | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
-  // Shortcut cheat-sheet overlay (issue #64, toggled by F1 via wmux:toggle-cheatsheet).
+  // Shortcut cheat-sheet overlay (issue #64, toggled by F1 via pandamux:toggle-cheatsheet).
   const [cheatSheetOpen, setCheatSheetOpen] = useState(false);
   useEffect(() => {
     const toggle = () => setCheatSheetOpen((open) => !open);
-    document.addEventListener('wmux:toggle-cheatsheet', toggle);
-    return () => document.removeEventListener('wmux:toggle-cheatsheet', toggle);
+    document.addEventListener('pandamux:toggle-cheatsheet', toggle);
+    return () => document.removeEventListener('pandamux:toggle-cheatsheet', toggle);
   }, []);
   // Broadcast-input mode banner (issue #64): mirror the runtime store flag.
   const broadcastInputActive = useStore((s) => s.broadcastInputActive);
@@ -317,13 +317,13 @@ export default function App() {
   // Settings (issue #22). The "seen" flag still prevents re-showing it.
   useEffect(() => {
     const showWelcome = useStore.getState().workspacePrefs.showWelcomeScreen;
-    if (showWelcome && !localStorage.getItem('wmux-tutorial-seen')) {
+    if (showWelcome && !localStorage.getItem('pandamux-tutorial-seen')) {
       setTutorialOpen(true);
     }
   }, []);
 
   const handleTutorialClose = useCallback(() => {
-    localStorage.setItem('wmux-tutorial-seen', '1');
+    localStorage.setItem('pandamux-tutorial-seen', '1');
     setTutorialOpen(false);
   }, []);
 
@@ -335,7 +335,7 @@ export default function App() {
   useEffect(() => {
     (async () => {
       try {
-        const autoSaved = await window.wmux?.session?.loadAuto?.();
+        const autoSaved = await window.pandamux?.session?.loadAuto?.();
         if (autoSaved && Array.isArray(autoSaved.workspaces) && autoSaved.workspaces.length > 0) {
           const { replaceAllWorkspaces } = useStore.getState();
           replaceAllWorkspaces(autoSaved.workspaces, autoSaved.activeIndex);
@@ -344,9 +344,9 @@ export default function App() {
         }
       } catch {}
       try {
-        const sessions = await window.wmux?.session?.list();
+        const sessions = await window.pandamux?.session?.list();
         if (sessions && sessions.length > 0) {
-          const session = await window.wmux?.session?.load(sessions[0].name);
+          const session = await window.pandamux?.session?.load(sessions[0].name);
           if (session) {
             const { replaceAllWorkspaces } = useStore.getState();
             replaceAllWorkspaces(session.workspaces);
@@ -367,8 +367,8 @@ export default function App() {
 
   // Expose helpers for main process queries + pipe bridge
   useEffect(() => {
-    (window as any).__wmux_getActiveWorkspaceId = () => useStore.getState().activeWorkspaceId;
-    (window as any).__wmux_getPaneLoads = () => {
+    (window as any).__pandamux_getActiveWorkspaceId = () => useStore.getState().activeWorkspaceId;
+    (window as any).__pandamux_getPaneLoads = () => {
       const state = useStore.getState();
       const ws = state.workspaces.find((w) => w.id === state.activeWorkspaceId);
       if (!ws) return [];
@@ -380,16 +380,16 @@ export default function App() {
     // Initialize pipe bridge — exposes store operations for V2 pipe handlers
     initPipeBridge();
     return () => {
-      delete (window as any).__wmux_getActiveWorkspaceId;
-      delete (window as any).__wmux_getPaneLoads;
+      delete (window as any).__pandamux_getActiveWorkspaceId;
+      delete (window as any).__pandamux_getPaneLoads;
     };
   }, []);
 
-  // Load ~/.wmux/config.toml on startup and listen for `wmux reload-config`.
+  // Load ~/.pandamux/config.toml on startup and listen for `pandamux reload-config`.
   // File-wins-at-startup, app-wins-at-runtime: file values are applied over
   // persisted Zustand state, then in-app edits take over until reload/restart.
   useEffect(() => {
-    const cfg = (window as any).wmux?.config;
+    const cfg = (window as any).pandamux?.config;
     if (!cfg?.getUserConfig) return;
 
     const apply = (result: any) => {
@@ -408,8 +408,8 @@ export default function App() {
 
   // Listen for agent spawn events from main process
   useEffect(() => {
-    if (!window.wmux?.agent?.onUpdate) return;
-    const unsub = window.wmux.agent.onUpdate((event: any) => {
+    if (!window.pandamux?.agent?.onUpdate) return;
+    const unsub = window.pandamux.agent.onUpdate((event: any) => {
       if (event.type === 'spawned') {
         const { surfaceId, paneId, workspaceId, label } = event;
         const state = useStore.getState();
@@ -434,9 +434,9 @@ export default function App() {
 
   // Listen for real-time metadata updates from shell integration (pipe server → IPC → here)
   useEffect(() => {
-    if (!window.wmux?.metadata?.onUpdate) return;
+    if (!window.pandamux?.metadata?.onUpdate) return;
     const deps: MetaDeps = { updateWorkspaceMetadata, addNotification, runningStartTimes };
-    const unsub = window.wmux.metadata.onUpdate((cmd: any) => {
+    const unsub = window.pandamux.metadata.onUpdate((cmd: any) => {
       if (!cmd) return;
       // ports_update and notify have no (required) surfaceId — handle globally.
       if (cmd.command === 'ports_update') { handlePortsUpdate(cmd, updateWorkspaceMetadata); return; }
@@ -452,8 +452,8 @@ export default function App() {
   // Listen for Claude Code hook events — tie to active workspace
   // Also auto-create diff surface when Edit/Write tools fire
   useEffect(() => {
-    if (!window.wmux?.hook?.onEvent) return;
-    const unsub = window.wmux.hook.onEvent((event: any) => {
+    if (!window.pandamux?.hook?.onEvent) return;
+    const unsub = window.pandamux.hook.onEvent((event: any) => {
       // Agent lifecycle (issue #53): Notification = agent needs input/permission,
       // Stop = agent finished its turn. These have no `tool`, so handle first.
       if (event?.event === 'Notification' || event?.event === 'Stop') {
@@ -511,8 +511,8 @@ export default function App() {
 
   // Listen for Claude Code activity parsed from terminal output
   useEffect(() => {
-    if (!window.wmux?.claudeActivity?.onUpdate) return;
-    const unsub = window.wmux.claudeActivity.onUpdate((data: any) => {
+    if (!window.pandamux?.claudeActivity?.onUpdate) return;
+    const unsub = window.pandamux.claudeActivity.onUpdate((data: any) => {
       if (!data?.surfaceId || !data?.activity) return;
       setClaudeActivity(prev => ({ ...prev, [data.surfaceId]: data.activity }));
     });
@@ -521,8 +521,8 @@ export default function App() {
 
   // Respond to main process auto-save requests (30s timer + on quit)
   useEffect(() => {
-    if (!window.wmux?.session?.onAutoSaveRequest) return;
-    const unsub = window.wmux.session.onAutoSaveRequest(() => {
+    if (!window.pandamux?.session?.onAutoSaveRequest) return;
+    const unsub = window.pandamux.session.onAutoSaveRequest(() => {
       const state = useStore.getState();
       const data = {
         version: 1,
@@ -543,7 +543,7 @@ export default function App() {
           })),
         }],
       };
-      window.wmux.session.pushAutoSave(data);
+      window.pandamux.session.pushAutoSave(data);
     });
     return unsub;
   }, [sidebarWidth]);
@@ -605,12 +605,12 @@ export default function App() {
       sidebarWidth,
       terminalPrefs: { ...state.terminalPrefs },
     };
-    await window.wmux?.session?.save(session);
-    window.wmux?.notification?.fire({ surfaceId: '', text: `Session "${name}" saved`, title: 'wmux' });
+    await window.pandamux?.session?.save(session);
+    window.pandamux?.notification?.fire({ surfaceId: '', text: `Session "${name}" saved`, title: 'PandaMUX' });
   }, [sidebarWidth]);
 
   const handleLoadSession = useCallback(async (name: string) => {
-    const session = await window.wmux?.session?.load(name);
+    const session = await window.pandamux?.session?.load(name);
     if (!session) return;
     const { replaceAllWorkspaces, setTerminalPrefs } = useStore.getState();
     replaceAllWorkspaces(session.workspaces);
@@ -630,7 +630,7 @@ export default function App() {
   }, []);
 
   const handlePaletteAction = useCallback((action: string) => {
-    console.log(`[wmux] Command palette action: ${action}`);
+    console.log(`[pandamux] Command palette action: ${action}`);
     setCommandPaletteOpen(false);
   }, []);
 
@@ -711,7 +711,7 @@ export default function App() {
     surfaceDragPreviewRef.current = null;
     setSurfaceDrag(null);
     setSurfaceDragPreview(null);
-    document.body.classList.remove('wmux-dragging');
+    document.body.classList.remove('pandamux-dragging');
   }, []);
 
   const handleSurfaceDragPreviewTarget = useCallback((targetPaneId: PaneId, target: SurfaceDragPreviewTarget) => {
@@ -762,7 +762,7 @@ export default function App() {
     surfaceDragPreviewRef.current = null;
     setSurfaceDrag(null);
     setSurfaceDragPreview(null);
-    document.body.classList.remove('wmux-dragging');
+    document.body.classList.remove('pandamux-dragging');
   }, []);
 
   useEffect(() => {
@@ -795,7 +795,7 @@ export default function App() {
       <Titlebar
         title={titlebarText}
         onHelpClick={() => setTutorialOpen(true)}
-        onDevToolsClick={() => window.wmux?.system?.toggleDevTools?.()}
+        onDevToolsClick={() => window.pandamux?.system?.toggleDevTools?.()}
         onSettingsClick={() => setSettingsOpen(true)}
         notifications={notifications}
         workspaceNames={workspaceNames}

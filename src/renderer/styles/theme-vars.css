@@ -4,7 +4,7 @@
  * palette — NOT the terminal pane itself, which keeps its own independently
  * configurable color scheme (see TerminalPrefs).
  *
- * Dark values below are the exact colors wmux shipped with pre-0.15 (no
+ * Dark values below are the exact colors pandamux shipped with pre-0.15 (no
  * regression for existing users, who default to uiTheme: 'dark'). Light
  * values are a new equivalent palette, applied by giving <html> a
  * `data-ui-theme="light"` attribute (see hooks/useUiTheme.ts).

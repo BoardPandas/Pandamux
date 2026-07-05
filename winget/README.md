@@ -1,24 +1,24 @@
 # Winget distribution (issue #32)
 
-These manifests publish wmux to the [Windows Package Manager](https://learn.microsoft.com/windows/package-manager/),
+These manifests publish PandaMUX Everywhere to the [Windows Package Manager](https://learn.microsoft.com/windows/package-manager/),
 so users can install/upgrade with:
 
 ```powershell
-winget install BoardPandas.wmux
-winget upgrade BoardPandas.wmux
+winget install BoardPandas.PandaMUX
+winget upgrade BoardPandas.PandaMUX
 ```
 
-> **Status:** the manifests (`BoardPandas.wmux.*.yaml`) and
-> `.github/workflows/winget.yml` are repointed to the `BoardPandas.wmux`
+> **Status:** the manifests (`BoardPandas.PandaMUX.*.yaml`) and
+> `.github/workflows/winget.yml` are repointed to the `BoardPandas.PandaMUX`
 > identifier and the `BoardPandas/Pandamux` repo, but the package has **not**
 > been bootstrapped in `microsoft/winget-pkgs` yet, so `winget install` will not
 > work until the one-time submission below is done. The version and
 > `InstallerSha256` pinned in the manifests are stale placeholders from the
 > upstream fork; regenerate them against the real release zip at bootstrap.
 
-wmux ships as a **portable zip** (no code-signing — an unsigned NSIS installer
+PandaMUX Everywhere ships as a **portable zip** (no code-signing — an unsigned NSIS installer
 trips SmartScreen *harder* than a zip extraction), so the manifest models it as
-`InstallerType: zip` + `NestedInstallerType: portable`, exposing a `wmux`
+`InstallerType: zip` + `NestedInstallerType: portable`, exposing a `pandamux`
 command alias on PATH that launches the app.
 
 > ⚠️ Winget improves install **UX**, not **trust**: an unsigned binary still
@@ -30,9 +30,9 @@ command alias on PATH that launches the app.
 
 | File | Winget `ManifestType` |
 |------|-----------------------|
-| `BoardPandas.wmux.yaml` | `version` |
-| `BoardPandas.wmux.installer.yaml` | `installer` |
-| `BoardPandas.wmux.locale.en-US.yaml` | `defaultLocale` |
+| `BoardPandas.PandaMUX.yaml` | `version` |
+| `BoardPandas.PandaMUX.installer.yaml` | `installer` |
+| `BoardPandas.PandaMUX.locale.en-US.yaml` | `defaultLocale` |
 
 ## Bootstrap (one-time)
 
@@ -41,15 +41,15 @@ must be submitted by hand:
 
 1. Fork [`microsoft/winget-pkgs`](https://github.com/microsoft/winget-pkgs).
 2. Copy these three files (with the real `InstallerSha256`, see below) into
-   `manifests/b/BoardPandas/wmux/<version>/`.
-3. Validate locally: `winget validate --manifest manifests/b/BoardPandas/wmux/<version>`
+   `manifests/b/BoardPandas/PandaMUX/<version>/`.
+3. Validate locally: `winget validate --manifest manifests/b/BoardPandas/PandaMUX/<version>`
    and `winget install --manifest ...` in a sandbox.
 4. Open a PR to `microsoft/winget-pkgs`.
 
 Compute the installer hash from the release zip:
 
 ```powershell
-(Get-FileHash .\wmux-0.8.6-win-x64.zip -Algorithm SHA256).Hash
+(Get-FileHash .\pandamux-0.8.6-win-x64.zip -Algorithm SHA256).Hash
 ```
 
 ## Ongoing releases

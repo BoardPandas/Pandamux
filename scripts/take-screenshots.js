@@ -36,7 +36,7 @@ app.whenReady().then(async () => {
   // Mark tutorial as seen so we get the clean app view first
   win.loadURL('http://localhost:5199');
   await new Promise(r => setTimeout(r, 4000));
-  await win.webContents.executeJavaScript("localStorage.setItem('wmux-tutorial-seen', '1')");
+  await win.webContents.executeJavaScript("localStorage.setItem('pandamux-tutorial-seen', '1')");
   win.reload();
 
   // Wait for terminals to fully render with PS prompts
@@ -46,26 +46,26 @@ app.whenReady().then(async () => {
   console.log('Capturing screenshots:');
 
   // 1. Full app (no tutorial)
-  await capture(win, 'wmux-full');
+  await capture(win, 'pandamux-full');
 
   // 2. Sidebar crop
-  await capture(win, 'wmux-sidebar', { x: 0, y: 0, width: 260, height: 900 });
+  await capture(win, 'pandamux-sidebar', { x: 0, y: 0, width: 260, height: 900 });
 
   // 3. Terminal area
-  await capture(win, 'wmux-terminals', { x: 260, y: 0, width: 720, height: 900 });
+  await capture(win, 'pandamux-terminals', { x: 260, y: 0, width: 720, height: 900 });
 
   // 4. Browser panel
-  await capture(win, 'wmux-browser', { x: 960, y: 0, width: 440, height: 900 });
+  await capture(win, 'pandamux-browser', { x: 960, y: 0, width: 440, height: 900 });
 
   // 5. Now show tutorial
-  await win.webContents.executeJavaScript("localStorage.removeItem('wmux-tutorial-seen')");
+  await win.webContents.executeJavaScript("localStorage.removeItem('pandamux-tutorial-seen')");
   win.reload();
   await new Promise(r => setTimeout(r, 5000));
-  await capture(win, 'wmux-tutorial');
+  await capture(win, 'pandamux-tutorial');
 
   // 6. Close tutorial and take one more clean shot
   await win.webContents.executeJavaScript(`
-    localStorage.setItem('wmux-tutorial-seen', '1');
+    localStorage.setItem('pandamux-tutorial-seen', '1');
     document.querySelector('.tutorial-overlay')?.remove();
   `);
   await new Promise(r => setTimeout(r, 1000));

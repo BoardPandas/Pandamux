@@ -103,7 +103,7 @@ export function registerIpcHandlers(windowManager: WindowManager, cdpProxyInstan
 
   // App UI theme (issue #67): report the Windows light/dark setting so the
   // renderer can follow it when appearance mode is "system", and push updates
-  // when the user flips it in Windows Settings while wmux is running.
+  // when the user flips it in Windows Settings while pandamux is running.
   ipcMain.handle(IPC_CHANNELS.SYSTEM_GET_SHOULD_USE_DARK_COLORS, () => nativeTheme.shouldUseDarkColors);
   nativeTheme.on('updated', () => {
     for (const win of BrowserWindow.getAllWindows()) {
@@ -133,7 +133,7 @@ export function registerIpcHandlers(windowManager: WindowManager, cdpProxyInstan
     return parseGhosttyConfig();
   });
 
-  // Quick-launch profiles (issue #32): read project `.wmux.json` and import WT profiles.
+  // Quick-launch profiles (issue #32): read project `.pandamux.json` and import WT profiles.
   ipcMain.handle('config:getProjectProfiles', async (_event, cwd: string) => {
     return loadProjectProfiles(cwd);
   });
@@ -141,7 +141,7 @@ export function registerIpcHandlers(windowManager: WindowManager, cdpProxyInstan
     return importWindowsTerminalProfiles();
   });
 
-  // User config (~/.wmux/config.toml) — read on startup, reloadable at runtime.
+  // User config (~/.pandamux/config.toml) — read on startup, reloadable at runtime.
   ipcMain.handle(IPC_CHANNELS.CONFIG_GET_USER_CONFIG, async () => {
     return loadUserConfig();
   });
@@ -163,7 +163,7 @@ export function registerIpcHandlers(windowManager: WindowManager, cdpProxyInstan
   ipcMain.on(IPC_CHANNELS.NOTIFICATION_FIRE, (_event, data: { surfaceId: string; text: string; title?: string }) => {
     const window = BrowserWindow.fromWebContents(_event.sender);
     // Show toast
-    notificationManager.showToast(data.title || 'wmux', data.text, () => {
+    notificationManager.showToast(data.title || 'PandaMUX', data.text, () => {
       if (window && !window.isDestroyed()) {
         window.focus();
         window.webContents.send('notification:focus-surface', data.surfaceId);
@@ -237,7 +237,7 @@ export function registerIpcHandlers(windowManager: WindowManager, cdpProxyInstan
   ipcMain.handle('clipboard:paste-image', async () => {
     const img = clipboard.readImage();
     if (img.isEmpty()) return null;
-    const tmpDir = path.join(os.tmpdir(), 'wmux');
+    const tmpDir = path.join(os.tmpdir(), 'pandamux');
     fs.mkdirSync(tmpDir, { recursive: true });
     const filePath = path.join(tmpDir, `screenshot-${Date.now()}.png`);
     fs.writeFileSync(filePath, img.toPNG());
@@ -271,7 +271,7 @@ export function registerIpcHandlers(windowManager: WindowManager, cdpProxyInstan
       activeIndex: activeIndex >= 0 ? activeIndex : 0,
     };
   });
-  // Settings persistence (issue #19) — file-backed in %APPDATA%\wmux so prefs
+  // Settings persistence (issue #19) — file-backed in %APPDATA%\pandamux so prefs
   // survive portable-zip updates. get-all is synchronous so the renderer's
   // Zustand settings slice can hydrate at module-load time (no async flash).
   ipcMain.on('settings:get-all-sync', (event) => {

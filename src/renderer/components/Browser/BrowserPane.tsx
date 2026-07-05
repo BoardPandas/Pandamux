@@ -74,9 +74,9 @@ export default function BrowserPane({ initialUrl = 'https://github.com/BoardPand
   // workspace so main can route per-caller browser commands here (issues #27, #62).
   const claimCdp = useCallback(() => {
     const wcId = webviewRef.current?.getWebContentsId?.();
-    if (wcId && window.wmux?.cdp?.attach) {
+    if (wcId && window.pandamux?.cdp?.attach) {
       wcIdRef.current = wcId;
-      window.wmux.cdp.attach(wcId, surfaceId, workspaceId ?? null);
+      window.pandamux.cdp.attach(wcId, surfaceId, workspaceId ?? null);
     }
   }, [surfaceId, workspaceId]);
   useEffect(() => {
@@ -87,7 +87,7 @@ export default function BrowserPane({ initialUrl = 'https://github.com/BoardPand
       wv.removeEventListener('dom-ready', claimCdp);
       // Only detach if this pane still owns the connection — closing a split-tree
       // browser pane must not kill another open pane's CDP (issue #27).
-      if (wcIdRef.current !== null) window.wmux?.cdp?.detach?.(wcIdRef.current);
+      if (wcIdRef.current !== null) window.pandamux?.cdp?.detach?.(wcIdRef.current);
     };
   }, [claimCdp]);
 
@@ -98,8 +98,8 @@ export default function BrowserPane({ initialUrl = 'https://github.com/BoardPand
       const targetId = detail?.surfaceId;
       if (detail?.url && (!targetId || targetId === surfaceId)) navigate(detail.url);
     };
-    window.addEventListener('wmux:browser-navigate', handler);
-    return () => window.removeEventListener('wmux:browser-navigate', handler);
+    window.addEventListener('pandamux:browser-navigate', handler);
+    return () => window.removeEventListener('pandamux:browser-navigate', handler);
   }, [navigate, surfaceId]);
 
   return (

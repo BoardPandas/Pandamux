@@ -10,13 +10,13 @@ import { useStore } from '../store';
 import { collectActiveTerminalSurfaceIds } from '../store/split-utils';
 import { SplitNode, ThemeConfig } from '../../shared/types';
 import { UserColorScheme } from '../store/settings-slice';
-import { openInWmuxBrowser } from '../utils/open-in-browser';
+import { openInPandaMUXBrowser } from '../utils/open-in-browser';
 import { attachVisibleRenderer, RendererHandle } from '../utils/terminal-renderer';
 import '@xterm/xterm/css/xterm.css';
 
 declare global {
   interface Window {
-    wmux: any;
+    pandamux: any;
   }
 }
 
@@ -171,13 +171,13 @@ function writeWheelToPty(
   } else {
     seq = count < 0 ? '\x1b[A' : '\x1b[B'; // arrow keys for non-mouse pagers
   }
-  for (let i = 0; i < Math.abs(count); i++) window.wmux.pty.write(ptyId, seq);
+  for (let i = 0; i < Math.abs(count); i++) window.pandamux.pty.write(ptyId, seq);
 }
 
 // Capture-phase wheel handler. We always take ownership (xterm's own forwarding
 // is unreliable after the WebGL context swap, #41, and an adjacent <webview>
 // compositor otherwise steals un-prevented wheel events, #47):
-//   normal buffer + plain shell     → scroll wmux's own scrollback
+//   normal buffer + plain shell     → scroll pandamux's own scrollback
 //   alt buffer OR mouse-tracking app → forward to the PTY
 // surfaceMouseEnabled (survives remounts) is the reliable mouse-active signal,
 // since tmux doesn't re-send its DECSET enables on SIGWINCH after a remount.
@@ -221,7 +221,7 @@ function scheduleInitialResize(
   fit();
   const dims = fitAddon.proposeDimensions();
   if (dims) {
-    window.wmux.pty.resize(ptyId, dims.cols, dims.rows);
+    window.pandamux.pty.resize(ptyId, dims.cols, dims.rows);
   } else if (attempt < 8) {
     requestAnimationFrame(() => {
       if (ptyIdRef.current === ptyId) scheduleInitialResize(ptyId, fit, fitAddon, ptyIdRef, attempt + 1);
@@ -250,7 +250,7 @@ async function fetchTheme(name: string): Promise<ThemeConfig> {
   const cached = themeCache.get(name);
   if (cached) return cached;
   try {
-    const theme: ThemeConfig = await (window as any).wmux.config.getTheme(name);
+    const theme: ThemeConfig = await (window as any).pandamux.config.getTheme(name);
     themeCache.set(name, theme);
     return theme;
   } catch {
@@ -330,7 +330,7 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
     const fitAddon = new FitAddon();
     const webLinksAddon = new WebLinksAddon((event, uri) => {
       const forceExternal = !!(event as MouseEvent)?.ctrlKey || !!(event as MouseEvent)?.metaKey;
-      openInWmuxBrowser(uri, { forceExternal });
+      openInPandaMUXBrowser(uri, { forceExternal });
     });
     const searchAddon = new SearchAddon();
     const unicode11Addon = new Unicode11Addon();
@@ -385,7 +385,7 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
     // own forwarding is unreliable after the WebGL context swap, #41, and an
     // adjacent <webview> compositor otherwise steals un-prevented wheel events,
     // #47). Two outcomes, decided per surface:
-    //   normal buffer + plain shell      → scroll wmux's own scrollback
+    //   normal buffer + plain shell      → scroll pandamux's own scrollback
     //   alt buffer OR mouse-tracking app  → forward to the PTY (SGR wheel reports
     //                                        if mouse tracking is on, else arrows)
     //
@@ -406,7 +406,7 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
     // DEFAULT drop action is to navigate the window to file:///… which would unload
     // the whole app, so we preventDefault on BOTH dragover (to mark a valid drop
     // target) and drop. Electron 33 removed File.path, so paths come from the
-    // preload-exposed webUtils bridge (window.wmux.shell.getPathForFile). Paths
+    // preload-exposed webUtils bridge (window.pandamux.shell.getPathForFile). Paths
     // are routed through terminal.paste() so bracketed-paste mode is honored,
     // matching the Ctrl+V / image-paste handlers below.
     const dropHost = terminalRef.current;
@@ -421,7 +421,7 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
       if (!files || files.length === 0) return;
       ev.preventDefault();
       ev.stopPropagation();
-      const getPath = window.wmux?.shell?.getPathForFile;
+      const getPath = window.pandamux?.shell?.getPathForFile;
       if (!getPath) return;
       const parts: string[] = [];
       for (let i = 0; i < files.length; i++) {
@@ -476,7 +476,7 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
     // Register OSC notification handlers
     // OSC 9: basic notification (iTerm2 style)
     terminal.parser.registerOscHandler(9, (data) => {
-      window.wmux.notification.fire({
+      window.pandamux.notification.fire({
         surfaceId: ptyIdRef.current || '',
         text: data,
       });
@@ -491,7 +491,7 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
         const [k, ...v] = part.split('=');
         if (k && v.length) params[k.trim()] = v.join('=').trim();
       });
-      window.wmux.notification.fire({
+      window.pandamux.notification.fire({
         surfaceId: ptyIdRef.current || '',
         text: params.body || params.d || data,
         title: params.title || params.t,
@@ -503,7 +503,7 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
     terminal.parser.registerOscHandler(777, (data) => {
       const parts = data.split(';');
       if (parts[0] === 'notify' && parts.length >= 3) {
-        window.wmux.notification.fire({
+        window.pandamux.notification.fire({
           surfaceId: ptyIdRef.current || '',
           text: parts.slice(2).join(';'),
           title: parts[1],
@@ -522,7 +522,7 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
       const now = Date.now();
       if (now - lastBellAt < 3000) return;
       lastBellAt = now;
-      window.wmux.notification.fire({
+      window.pandamux.notification.fire({
         surfaceId: ptyIdRef.current || '',
         text: 'Terminal bell',
       });
@@ -544,7 +544,7 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
           // multi-byte chars (em dash E2 80 94) become mojibake (â€").
           const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
           const text = new TextDecoder('utf-8').decode(bytes);
-          if (text) window.wmux?.clipboard?.writeText?.(text);
+          if (text) window.pandamux?.clipboard?.writeText?.(text);
         } catch {}
       }
       return true;
@@ -581,8 +581,8 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
         (async () => {
           // Check for image first
           let handled = false;
-          if (window.wmux?.clipboard?.pasteImage) {
-            const filePath = await window.wmux.clipboard.pasteImage();
+          if (window.pandamux?.clipboard?.pasteImage) {
+            const filePath = await window.pandamux.clipboard.pasteImage();
             if (filePath && ptyIdRef.current) {
               // Route through terminal.paste so bracketed-paste markers wrap
               // the path when the app (e.g. Claude Code) has bracketed paste on.
@@ -594,7 +594,7 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
           // can return garbled bytes on Windows when the source wrote a non-UTF-8 format.
           if (!handled && ptyIdRef.current) {
             try {
-              const text = await window.wmux.clipboard.readText();
+              const text = await window.pandamux.clipboard.readText();
               if (text) terminal.paste(text);
             } catch {}
           }
@@ -616,7 +616,7 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
       ptyIdRef.current = id;
 
       // Wire PTY data → xterm
-      const unsubData = window.wmux.pty.onData(id, (data: string) => {
+      const unsubData = window.pandamux.pty.onData(id, (data: string) => {
         if (disposed) return;
         // Track SGR/button mouse enable (?1006h, ?1000h, ?1002h, ?1003h) and disable
         // so the wheel handler can distinguish tmux from a plain shell after remount.
@@ -627,7 +627,7 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
       });
 
       // Wire PTY exit → inform user
-      const unsubExit = window.wmux.pty.onExit(id, (_code: number) => {
+      const unsubExit = window.pandamux.pty.onExit(id, (_code: number) => {
         terminal.writeln('\r\n\x1b[2m[process exited]\x1b[0m');
       });
 
@@ -635,7 +635,7 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
 
       // Flush any resize that arrived before this PTY was ready
       if (pendingResizeDims) {
-        window.wmux.pty.resize(id, pendingResizeDims.cols, pendingResizeDims.rows);
+        window.pandamux.pty.resize(id, pendingResizeDims.cols, pendingResizeDims.rows);
         pendingResizeDims = null;
       } else {
         // Initial resize, retried until the renderer has laid out (see helper).
@@ -662,7 +662,7 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
       setTimeout(() => {
         for (const cmd of cmds) {
           if (typeof cmd === 'string' && cmd.length > 0) {
-            window.wmux.pty.write(id, cmd + '\r');
+            window.pandamux.pty.write(id, cmd + '\r');
           }
         }
       }, 600);
@@ -690,13 +690,13 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
     } catch { /* element not measurable yet — fall back to PTY default */ }
 
     // If surfaceId is given AND a PTY already exists for it (agent spawn or re-mount), attach to it
-    if (surfaceId && window.wmux.pty.has) {
-      window.wmux.pty.has(surfaceId).then((exists: boolean) => {
+    if (surfaceId && window.pandamux.pty.has) {
+      window.pandamux.pty.has(surfaceId).then((exists: boolean) => {
         if (exists) {
           attachToPty(surfaceId!);
         } else {
           // No existing PTY — create a new one, passing surfaceId so PTY ID = Surface ID
-          window.wmux.pty.create({ shell: effectiveShell, cwd: cwd ?? '', env: {}, surfaceId, startupCommands: startupCommandsRef.current, cols: initialCols, rows: initialRows })
+          window.pandamux.pty.create({ shell: effectiveShell, cwd: cwd ?? '', env: {}, surfaceId, startupCommands: startupCommandsRef.current, cols: initialCols, rows: initialRows })
             .then((created: { id: string; shell: string; startupCommandsConsumed?: boolean }) => {
               // PTY persists (keep-alive); a remount re-attaches via pty.has.
               if (disposed) return;
@@ -709,7 +709,7 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
       });
     } else {
       // No surfaceId hint — always create new PTY
-      window.wmux.pty.create({ shell: effectiveShell, cwd: cwd ?? '', env: {}, startupCommands: startupCommandsRef.current, cols: initialCols, rows: initialRows })
+      window.pandamux.pty.create({ shell: effectiveShell, cwd: cwd ?? '', env: {}, startupCommands: startupCommandsRef.current, cols: initialCols, rows: initialRows })
         .then((created: { id: string; shell: string; startupCommandsConsumed?: boolean }) => {
           if (disposed) return;
           setResolvedShellForSurface(surfaceId, created.shell);
@@ -730,12 +730,12 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
         const ws = st.workspaces.find((w) => treeHasSurface(w.splitTree, surfaceId));
         if (ws) {
           for (const id of collectActiveTerminalSurfaceIds(ws.splitTree)) {
-            window.wmux.pty.write(id, data);
+            window.pandamux.pty.write(id, data);
           }
           return;
         }
       }
-      window.wmux.pty.write(ptyIdRef.current, data);
+      window.pandamux.pty.write(ptyIdRef.current, data);
     });
 
     // ResizeObserver to auto-fit and relay size to PTY (debounced to prevent IPC spam)
@@ -748,7 +748,7 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
         const dims = fitAddon.proposeDimensions();
         if (dims) {
           if (ptyIdRef.current) {
-            window.wmux.pty.resize(ptyIdRef.current, dims.cols, dims.rows);
+            window.pandamux.pty.resize(ptyIdRef.current, dims.cols, dims.rows);
           } else {
             // PTY not attached yet — stash so attachToPty can flush it
             pendingResizeDims = { cols: dims.cols, rows: dims.rows };
@@ -832,12 +832,12 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
       const term = xtermRef.current;
       if (!term || !ptyIdRef.current) return;
       try {
-        const text = await window.wmux.clipboard.readText();
+        const text = await window.pandamux.clipboard.readText();
         if (text) term.paste(text);
       } catch {}
     };
-    document.addEventListener('wmux:paste-terminal', handler);
-    return () => document.removeEventListener('wmux:paste-terminal', handler);
+    document.addEventListener('pandamux:paste-terminal', handler);
+    return () => document.removeEventListener('pandamux:paste-terminal', handler);
   }, [surfaceId]);
 
   // Apply theme + font whenever the resolved scheme or prefs change.
@@ -889,7 +889,7 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
           fit();
           const dims = fitAddonRef.current?.proposeDimensions();
           if (dims && ptyIdRef.current) {
-            window.wmux.pty.resize(ptyIdRef.current, dims.cols, dims.rows);
+            window.pandamux.pty.resize(ptyIdRef.current, dims.cols, dims.rows);
           }
           try { term.refresh(0, term.rows - 1); } catch { /* no-op */ }
           if (focused) {

@@ -38,7 +38,7 @@ export class PipeServer extends EventEmitter {
   private pipePath: string;
   private authToken: string;
 
-  constructor(pipePath = '\\\\.\\pipe\\wmux', authToken = '') {
+  constructor(pipePath = '\\\\.\\pipe\\pandamux', authToken = '') {
     super();
     this.pipePath = pipePath;
     this.authToken = authToken;
@@ -80,7 +80,7 @@ export class PipeServer extends EventEmitter {
     });
 
     this.server.listen(this.pipePath, () => {
-      console.log(`wmux pipe server listening on ${this.pipePath}`);
+      console.log(`pandamux pipe server listening on ${this.pipePath}`);
     });
 
     this.server.on('error', (err: NodeJS.ErrnoException) => {

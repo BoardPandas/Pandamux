@@ -24,8 +24,8 @@ import { SplitNode, SurfaceRef } from '../../shared/types';
 export function killSurfacePty(surface: Pick<SurfaceRef, 'id' | 'type'>): void {
   if (surface.type !== 'terminal') return;
   try {
-    (globalThis as { window?: { wmux?: { pty?: { kill?: (id: string) => void } } } }).window
-      ?.wmux?.pty?.kill?.(surface.id);
+    (globalThis as { window?: { pandamux?: { pty?: { kill?: (id: string) => void } } } }).window
+      ?.pandamux?.pty?.kill?.(surface.id);
   } catch {
     /* preload/window unavailable (tests) — nothing to reap */
   }

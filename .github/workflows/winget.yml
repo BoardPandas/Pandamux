@@ -1,9 +1,9 @@
-# Auto-publish each wmux release to the Windows Package Manager (winget).
+# Auto-publish each PandaMUX Everywhere release to the Windows Package Manager (winget).
 # Issue #32: lowest-friction distribution win — no code-signing required.
 #
 # ONE-TIME SETUP (owner):
 #   1. Manually submit winget/*.yaml to https://github.com/microsoft/winget-pkgs
-#      once (fork → add manifests/b/BoardPandas/wmux/<version>/ → PR) to bootstrap
+#      once (fork → add manifests/b/BoardPandas/PandaMUX/<version>/ → PR) to bootstrap
 #      the package. `winget-releaser` only UPDATES an existing package.
 #   2. Fork microsoft/winget-pkgs under your account.
 #   3. Create a classic PAT with `public_repo` scope and save it as the repo
@@ -26,8 +26,8 @@ jobs:
         if: ${{ env.WINGET_TOKEN != '' }}
         uses: vedantmgoyal9/winget-releaser@v2
         with:
-          identifier: BoardPandas.wmux
-          installers-regex: 'wmux-.*-win-x64\.zip$'
+          identifier: BoardPandas.PandaMUX
+          installers-regex: 'pandamux-.*-win-x64\.zip$'
           token: ${{ secrets.WINGET_TOKEN }}
         env:
           WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}

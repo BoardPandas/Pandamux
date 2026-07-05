@@ -4,7 +4,7 @@ import { SplitNode, SurfaceRef, SurfaceId, PaneId } from '../../src/shared/types
 
 // Regression coverage for issue #65: PTY teardown must run on every destructive
 // close transition. These helpers are the shared reaping primitives the store
-// actions call. They read window.wmux.pty.kill, which we mock here.
+// actions call. They read window.pandamux.pty.kill, which we mock here.
 
 const term = (id: string): SurfaceRef => ({ id: id as SurfaceId, type: 'terminal' });
 const browser = (id: string): SurfaceRef => ({ id: id as SurfaceId, type: 'browser' });
@@ -20,7 +20,7 @@ describe('pty-teardown', () => {
 
   beforeEach(() => {
     kill = vi.fn();
-    (globalThis as any).window = { wmux: { pty: { kill } } };
+    (globalThis as any).window = { pandamux: { pty: { kill } } };
   });
 
   afterEach(() => {

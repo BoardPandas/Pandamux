@@ -5,7 +5,7 @@ import * as path from 'path';
 import { loadUserConfig } from '../../src/main/user-config';
 
 function writeTmp(contents: string): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-cfg-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pandamux-cfg-'));
   const p = path.join(dir, 'config.toml');
   fs.writeFileSync(p, contents, 'utf-8');
   return p;

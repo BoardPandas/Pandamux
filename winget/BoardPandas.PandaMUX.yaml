@@ -1,0 +1,10 @@
+# Winget version manifest (issue #32).
+# Submitted to microsoft/winget-pkgs under
+#   manifests/b/BoardPandas/PandaMUX/<version>/
+# After the first manual submission, .github/workflows/winget.yml keeps it
+# updated automatically on every GitHub release.
+PackageIdentifier: BoardPandas.PandaMUX
+PackageVersion: 0.8.6
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.6.0

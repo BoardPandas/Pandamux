@@ -11,22 +11,22 @@ export default function UpdateBadge() {
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
 
   useEffect(() => {
-    const wmux = (window as any).wmux;
-    if (!wmux?.update) return;
+    const pandamux = (window as any).pandamux;
+    if (!pandamux?.update) return;
 
     // Pick up an update that may have been detected before this window mounted.
-    wmux.update.getLatest().then((info: UpdateInfo | null) => {
+    pandamux.update.getLatest().then((info: UpdateInfo | null) => {
       if (info) setUpdate(info);
     }).catch(() => {});
 
-    const unsub = wmux.update.onAvailable((info: UpdateInfo) => setUpdate(info));
+    const unsub = pandamux.update.onAvailable((info: UpdateInfo) => setUpdate(info));
     return unsub;
   }, []);
 
   if (!update) return null;
 
   const handleClick = () => {
-    (window as any).wmux?.update?.openRelease?.(update.url);
+    (window as any).pandamux?.update?.openRelease?.(update.url);
   };
 
   return (

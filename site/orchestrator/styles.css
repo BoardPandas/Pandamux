@@ -1,5 +1,5 @@
 /* ==========================================================================
-   wmux-orchestrator — marketing site
+   pandamux-orchestrator — marketing site
    Editorial · Terminal-native · Motion-first · Dramatic
    ========================================================================== */
 
@@ -554,7 +554,7 @@ html { scrollbar-color: var(--border) var(--bg); scrollbar-width: thin; }
   pointer-events: none;
 }
 .hero__panes:empty::after {
-  content: "wmux panes";
+  content: "PandaMUX panes";
   position: absolute;
   inset: 0;
   display: flex;

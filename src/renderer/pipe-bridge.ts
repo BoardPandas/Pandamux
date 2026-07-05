@@ -1,5 +1,5 @@
 /**
- * pipe-bridge.ts — Exposes Zustand store operations as window.__wmux_* globals
+ * pipe-bridge.ts — Exposes Zustand store operations as window.__pandamux_* globals
  * so the main process can call them via executeJavaScript from V2 pipe handlers.
  */
 import { useStore } from './store';
@@ -13,7 +13,7 @@ export function initPipeBridge(): void {
 
   // ─── Workspace ──────────────────────────────────────────────────────────────
 
-  w.__wmux_createWorkspace = (params?: { title?: string; shell?: string; cwd?: string }) => {
+  w.__pandamux_createWorkspace = (params?: { title?: string; shell?: string; cwd?: string }) => {
     const store = useStore.getState();
     const id = store.createWorkspace({
       title: params?.title,
@@ -23,19 +23,19 @@ export function initPipeBridge(): void {
     return { workspaceId: id };
   };
 
-  w.__wmux_closeWorkspace = (id: string) => {
+  w.__pandamux_closeWorkspace = (id: string) => {
     useStore.getState().closeWorkspace(id as WorkspaceId);
   };
 
-  w.__wmux_selectWorkspace = (id: string) => {
+  w.__pandamux_selectWorkspace = (id: string) => {
     useStore.getState().selectWorkspace(id as WorkspaceId);
   };
 
-  w.__wmux_renameWorkspace = (id: string, title: string) => {
+  w.__pandamux_renameWorkspace = (id: string, title: string) => {
     useStore.getState().renameWorkspace(id as WorkspaceId, title);
   };
 
-  w.__wmux_listWorkspaces = () => {
+  w.__pandamux_listWorkspaces = () => {
     const store = useStore.getState();
     return store.workspaces.map(ws => ({
       id: ws.id,
@@ -49,7 +49,7 @@ export function initPipeBridge(): void {
   // Which workspace owns a given surface? Used by main to route browser commands
   // to a browser pane in the *caller agent's* workspace (issue #62). Returns the
   // active workspace id as a fallback when the surface isn't found.
-  w.__wmux_getWorkspaceIdForSurface = (surfaceId: string) => {
+  w.__pandamux_getWorkspaceIdForSurface = (surfaceId: string) => {
     const store = useStore.getState();
     for (const ws of store.workspaces) {
       for (const paneId of getAllPaneIds(ws.splitTree)) {
@@ -62,7 +62,7 @@ export function initPipeBridge(): void {
 
   // All browser surface ids in a workspace. Main adopts an unbound one for a
   // caller (or creates a fresh pane) so each agent gets its own browser (#62).
-  w.__wmux_listBrowserSurfaces = (workspaceId: string) => {
+  w.__pandamux_listBrowserSurfaces = (workspaceId: string) => {
     const store = useStore.getState();
     const ws = store.workspaces.find(x => x.id === workspaceId);
     if (!ws) return [];
@@ -78,7 +78,7 @@ export function initPipeBridge(): void {
 
   // ─── Pane ───────────────────────────────────────────────────────────────────
 
-  w.__wmux_splitPane = (params?: { direction?: string; type?: string; workspaceId?: string; colorScheme?: string }) => {
+  w.__pandamux_splitPane = (params?: { direction?: string; type?: string; workspaceId?: string; colorScheme?: string }) => {
     const store = useStore.getState();
     const wsId = (params?.workspaceId || store.activeWorkspaceId) as WorkspaceId;
     if (!wsId) return null;
@@ -101,7 +101,7 @@ export function initPipeBridge(): void {
     const surfaceId = newLeaf?.surfaces?.[0]?.id || null;
 
     // Apply a per-pane color scheme override to the freshly-created surface
-    // so `wmux split --color-scheme prod` takes effect immediately.
+    // so `pandamux split --color-scheme prod` takes effect immediately.
     if (params?.colorScheme && surfaceId && newLeaf) {
       store.updateSurface(wsId, newPaneId, surfaceId as SurfaceId, { colorScheme: params.colorScheme });
     }
@@ -109,14 +109,14 @@ export function initPipeBridge(): void {
     return { paneId: newPaneId, surfaceId };
   };
 
-  w.__wmux_closePane = (paneId: string, workspaceId?: string) => {
+  w.__pandamux_closePane = (paneId: string, workspaceId?: string) => {
     const store = useStore.getState();
     const wsId = (workspaceId || store.activeWorkspaceId) as WorkspaceId;
     if (!wsId) return;
     const ws = store.workspaces.find(w => w.id === wsId);
     if (!ws) return;
 
-    // Reap the pane's shells before removing it (issue #65). `wmux close-pane`
+    // Reap the pane's shells before removing it (issue #65). `pandamux close-pane`
     // dropped the leaf without killing any PTY (mirrors PaneWrapper.handleClosePane,
     // the UI path that always did kill its terminals).
     const leaf = findLeaf(ws.splitTree, paneId as PaneId);
@@ -130,7 +130,7 @@ export function initPipeBridge(): void {
     }
   };
 
-  w.__wmux_layoutGrid = (params: { count: number; type?: string; anchorSurfaceId?: string; anchorPaneId?: string; workspaceId?: string }) => {
+  w.__pandamux_layoutGrid = (params: { count: number; type?: string; anchorSurfaceId?: string; anchorPaneId?: string; workspaceId?: string }) => {
     const store = useStore.getState();
     const wsId = (params?.workspaceId || store.activeWorkspaceId) as WorkspaceId;
     if (!wsId) return null;
@@ -174,7 +174,7 @@ export function initPipeBridge(): void {
     return { newPaneIds, newPanes, anchorPaneId, cols: Math.ceil(Math.sqrt(count)), rows: Math.ceil(count / Math.ceil(Math.sqrt(count))) };
   };
 
-  w.__wmux_listPanes = (workspaceId?: string) => {
+  w.__pandamux_listPanes = (workspaceId?: string) => {
     const store = useStore.getState();
     const wsId = (workspaceId || store.activeWorkspaceId) as WorkspaceId;
     const ws = store.workspaces.find(w => w.id === wsId);
@@ -194,7 +194,7 @@ export function initPipeBridge(): void {
 
   // ─── Surface ────────────────────────────────────────────────────────────────
 
-  w.__wmux_createSurface = (params?: { type?: string; paneId?: string; workspaceId?: string; colorScheme?: string }) => {
+  w.__pandamux_createSurface = (params?: { type?: string; paneId?: string; workspaceId?: string; colorScheme?: string }) => {
     const store = useStore.getState();
     const wsId = (params?.workspaceId || store.activeWorkspaceId) as WorkspaceId;
     if (!wsId) return null;
@@ -216,9 +216,9 @@ export function initPipeBridge(): void {
 
   /**
    * Update an existing surface's color scheme. Lets users switch a running
-   * pane to "prod" mid-session via `wmux surface set-color-scheme <id> prod`.
+   * pane to "prod" mid-session via `pandamux surface set-color-scheme <id> prod`.
    */
-  w.__wmux_setSurfaceColorScheme = (surfaceId: string, colorScheme: string | null) => {
+  w.__pandamux_setSurfaceColorScheme = (surfaceId: string, colorScheme: string | null) => {
     const store = useStore.getState();
     for (const ws of store.workspaces) {
       const paneIds = getAllPaneIds(ws.splitTree);
@@ -235,7 +235,7 @@ export function initPipeBridge(): void {
     return { ok: false, error: 'Surface not found' };
   };
 
-  w.__wmux_closeSurface = (surfaceId: string, workspaceId?: string) => {
+  w.__pandamux_closeSurface = (surfaceId: string, workspaceId?: string) => {
     const store = useStore.getState();
     const wsId = (workspaceId || store.activeWorkspaceId) as WorkspaceId;
     if (!wsId) return;
@@ -251,7 +251,7 @@ export function initPipeBridge(): void {
     }
   };
 
-  w.__wmux_focusSurface = (surfaceId: string, workspaceId?: string) => {
+  w.__pandamux_focusSurface = (surfaceId: string, workspaceId?: string) => {
     const store = useStore.getState();
     const wsId = (workspaceId || store.activeWorkspaceId) as WorkspaceId;
     if (!wsId) return;
@@ -270,7 +270,7 @@ export function initPipeBridge(): void {
     }
   };
 
-  w.__wmux_listSurfaces = (workspaceId?: string) => {
+  w.__pandamux_listSurfaces = (workspaceId?: string) => {
     const store = useStore.getState();
     const wsId = (workspaceId || store.activeWorkspaceId) as WorkspaceId;
     const ws = store.workspaces.find(w => w.id === wsId);
@@ -294,7 +294,7 @@ export function initPipeBridge(): void {
     return surfaces;
   };
 
-  w.__wmux_getActiveSurfaceId = () => {
+  w.__pandamux_getActiveSurfaceId = () => {
     const store = useStore.getState();
     const wsId = store.activeWorkspaceId;
     if (!wsId) return null;
@@ -310,9 +310,9 @@ export function initPipeBridge(): void {
 
   // ─── Markdown ───────────────────────────────────────────────────────────────
 
-  w.__wmux_setMarkdownContent = (surfaceId: string, markdown: string) => {
+  w.__pandamux_setMarkdownContent = (surfaceId: string, markdown: string) => {
     // Persist into the store so MarkdownPane (re)renders the content. The old
-    // `wmux:markdown-update` CustomEvent had no listener, so content never
+    // `pandamux:markdown-update` CustomEvent had no listener, so content never
     // displayed (issue #54).
     useStore.getState().setMarkdownContent(surfaceId as SurfaceId, markdown ?? '');
     return { ok: true };
@@ -320,21 +320,21 @@ export function initPipeBridge(): void {
 
   // ─── Notifications ──────────────────────────────────────────────────────────
 
-  w.__wmux_listNotifications = () => {
+  w.__pandamux_listNotifications = () => {
     return useStore.getState().notifications || [];
   };
 
-  w.__wmux_clearNotification = (id: string) => {
+  w.__pandamux_clearNotification = (id: string) => {
     useStore.getState().clearNotification(id);
   };
 
-  w.__wmux_clearAllNotifications = () => {
+  w.__pandamux_clearAllNotifications = () => {
     useStore.getState().clearAll();
   };
 
   // ─── Tree ───────────────────────────────────────────────────────────────────
 
-  w.__wmux_getTree = (workspaceId?: string) => {
+  w.__pandamux_getTree = (workspaceId?: string) => {
     const store = useStore.getState();
     const wsId = (workspaceId || store.activeWorkspaceId) as WorkspaceId;
     if (!wsId) return null;

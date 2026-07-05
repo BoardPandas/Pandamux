@@ -3,22 +3,22 @@
   command = "echo 'Static site, no build needed'"
 
 # ============================================================================
-# wmux-orchestrator (plugin.wmux.org)
-# Explicit-URL rewrite: serve site/orchestrator/ under plugin.wmux.org
+# pandamux-orchestrator (plugin.pandamux.boardpandas.ai)
+# Explicit-URL rewrite: serve site/orchestrator/ under plugin.pandamux.boardpandas.ai
 # Note: Netlify [redirects.conditions] does NOT support Host matching, so we
 # match the host directly inside the `from` field as a full URL pattern.
 # ============================================================================
 
-# Root: plugin.wmux.org/ → serve /orchestrator/index.html (silent rewrite)
+# Root: plugin.pandamux.boardpandas.ai/ → serve /orchestrator/index.html (silent rewrite)
 [[redirects]]
-  from = "https://plugin.wmux.org/"
+  from = "https://plugin.pandamux.boardpandas.ai/"
   to = "/orchestrator/index.html"
   status = 200
   force = true
 
-# Everything else under plugin.wmux.org → orchestrator/:splat
+# Everything else under plugin.pandamux.boardpandas.ai → orchestrator/:splat
 [[redirects]]
-  from = "https://plugin.wmux.org/*"
+  from = "https://plugin.pandamux.boardpandas.ai/*"
   to = "/orchestrator/:splat"
   status = 200
   force = true
@@ -28,8 +28,8 @@
 # ============================================================================
 
 # Self-hosted Geist Mono woff2 — immutable, far-future cache
-# (Two patterns: /orchestrator/* matches direct hits on wmux.org/orchestrator/,
-#  /assets/* matches plugin.wmux.org requests after the host rewrite — Netlify
+# (Two patterns: /orchestrator/* matches direct hits on pandamux.boardpandas.ai/orchestrator/,
+#  /assets/* matches plugin.pandamux.boardpandas.ai requests after the host rewrite — Netlify
 #  evaluates headers against the incoming URL, not the rewritten file path.)
 [[headers]]
   for = "/orchestrator/assets/fonts/*"
@@ -77,7 +77,7 @@
     Cache-Control = "public, max-age=3600, must-revalidate"
 
 # ============================================================================
-# Security headers — site-wide (applies to wmux.org and plugin.wmux.org)
+# Security headers — site-wide (applies to pandamux.boardpandas.ai and plugin.pandamux.boardpandas.ai)
 # ============================================================================
 
 [[headers]]

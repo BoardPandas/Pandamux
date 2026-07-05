@@ -1,20 +1,20 @@
-<!-- wmux:start — AUTO-MANAGED BY wmux. Do not edit this section manually. -->
+<!-- pandamux:start — AUTO-MANAGED BY PandaMUX Everywhere. Do not edit this section manually. -->
 
-# wmux Environment
+# PandaMUX Everywhere Environment
 
-You are running inside **wmux**, a terminal multiplexer with an embedded browser panel and sub-agent support. You can control the browser and spawn agent terminals using the `wmux` CLI.
+You are running inside **PandaMUX Everywhere**, a terminal multiplexer with an embedded browser panel and sub-agent support. You can control the browser and spawn agent terminals using the `pandamux` CLI.
 
-## wmux CLI
+## PandaMUX CLI
 
 ```bash
-node "$WMUX_CLI" <command> [args]
+node "$PANDAMUX_CLI" <command> [args]
 ```
 
-The `WMUX_CLI` env var points to the CLI script. You can verify you're in wmux by checking `WMUX=1`.
+The `PANDAMUX_CLI` env var points to the CLI script. You can verify you're in PandaMUX Everywhere by checking `PANDAMUX=1`.
 
 ## Browser Control
 
-wmux has a browser panel on the right side. You can control it — the user sees every action in real-time.
+PandaMUX Everywhere has a browser panel on the right side. You can control it — the user sees every action in real-time.
 
 **Always snapshot first to get element refs, then interact.**
 
@@ -47,28 +47,28 @@ If the browser panel is closed, ask the user to open it with `Ctrl+Shift+I`.
 Spawn visible sub-agent terminals distributed across panes:
 
 ```bash
-node "$WMUX_CLI" agent spawn --cmd "claude --resume abc" --label "Research"
-node "$WMUX_CLI" agent spawn-batch --json '[{"cmd":"...","label":"A1"},{"cmd":"...","label":"A2"}]'
-node "$WMUX_CLI" agent list
-node "$WMUX_CLI" agent status <agentId>
-node "$WMUX_CLI" agent kill <agentId>
+node "$PANDAMUX_CLI" agent spawn --cmd "claude --resume abc" --label "Research"
+node "$PANDAMUX_CLI" agent spawn-batch --json '[{"cmd":"...","label":"A1"},{"cmd":"...","label":"A2"}]'
+node "$PANDAMUX_CLI" agent list
+node "$PANDAMUX_CLI" agent status <agentId>
+node "$PANDAMUX_CLI" agent kill <agentId>
 ```
 
 ## Notifications & Status
 
 ```bash
-node "$WMUX_CLI" notify --body "Done!"
-node "$WMUX_CLI" set-status build "passing"
-node "$WMUX_CLI" set-progress 0.75 --label "Deploying..."
-node "$WMUX_CLI" log info "Migration finished"
+node "$PANDAMUX_CLI" notify --body "Done!"
+node "$PANDAMUX_CLI" set-status build "passing"
+node "$PANDAMUX_CLI" set-progress 0.75 --label "Deploying..."
+node "$PANDAMUX_CLI" log info "Migration finished"
 ```
 
 ## Terminal
 
 ```bash
-node "$WMUX_CLI" read-screen        # Read visible terminal content
-node "$WMUX_CLI" send "npm test"    # Send text to active terminal
-node "$WMUX_CLI" send-key Enter     # Send a keypress
+node "$PANDAMUX_CLI" read-screen        # Read visible terminal content
+node "$PANDAMUX_CLI" send "npm test"    # Send text to active terminal
+node "$PANDAMUX_CLI" send-key Enter     # Send a keypress
 ```
 
-<!-- wmux:end -->
+<!-- pandamux:end -->

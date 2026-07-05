@@ -71,8 +71,8 @@ export default function WorkspaceRow({
       setIsRenaming(true);
       setRenameValue(workspace.title);
     };
-    document.addEventListener('wmux:rename-workspace', handler);
-    return () => document.removeEventListener('wmux:rename-workspace', handler);
+    document.addEventListener('pandamux:rename-workspace', handler);
+    return () => document.removeEventListener('pandamux:rename-workspace', handler);
   }, [isActive, workspace.title]);
 
   const activeBackground = workspace.customColor ?? '#0091FF';

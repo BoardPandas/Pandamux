@@ -5,7 +5,7 @@ import os from 'os';
 import type { SessionData } from '../../src/main/session-persistence';
 
 // Use a temp directory for tests
-const TEST_DIR = path.join(os.tmpdir(), 'wmux-test-sessions-' + process.pid);
+const TEST_DIR = path.join(os.tmpdir(), 'pandamux-test-sessions-' + process.pid);
 
 describe('session-persistence', () => {
   beforeEach(() => {
@@ -85,14 +85,14 @@ describe('session-persistence', () => {
 // auto session.json is reset. The module computes its storage paths from
 // %APPDATA% at import time, so we override APPDATA and re-import per test.
 describe('handleVersionChange (issue #35)', () => {
-  const APPDATA_OVERRIDE = path.join(os.tmpdir(), 'wmux-vc-test-' + process.pid);
+  const APPDATA_OVERRIDE = path.join(os.tmpdir(), 'pandamux-vc-test-' + process.pid);
   let mod: typeof import('../../src/main/session-persistence');
   let savedAppData: string | undefined;
 
   beforeEach(async () => {
     savedAppData = process.env.APPDATA;
     process.env.APPDATA = APPDATA_OVERRIDE;
-    delete process.env.WMUX_INSTANCE;
+    delete process.env.PANDAMUX_INSTANCE;
     vi.resetModules();
     mod = await import('../../src/main/session-persistence');
     mod.ensureDirectories();
