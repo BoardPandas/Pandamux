@@ -2,7 +2,7 @@ import * as pty from 'node-pty';
 import * as path from 'path';
 import * as fs from 'fs';
 import { execFileSync, spawn } from 'child_process';
-import { v4 as uuidv4 } from 'uuid';
+import { uuid as uuidv4 } from '../shared/id';
 import { SurfaceId } from '../shared/types';
 import { getPipePath, readPipeToken } from '../shared/instance';
 

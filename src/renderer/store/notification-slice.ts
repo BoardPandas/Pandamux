@@ -1,5 +1,5 @@
 import { StateCreator } from 'zustand';
-import { v4 as uuid } from 'uuid';
+import { uuid } from '../../shared/id';
 import { NotificationInfo, SurfaceId, WorkspaceId } from '../../shared/types';
 import { WorkspaceSlice } from './workspace-slice';
 

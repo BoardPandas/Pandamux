@@ -3,7 +3,7 @@ import { useStore } from '../store';
 import { ShortcutBinding, ShortcutAction } from '../store/settings-slice';
 import { splitNode, removeLeaf, getAllPaneIds, findLeaf, adjustPaneRatio } from '../store/split-utils';
 import { PaneId, SplitNode } from '../../shared/types';
-import { v4 as uuid } from 'uuid';
+import { uuid } from '../../shared/id';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 

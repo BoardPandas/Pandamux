@@ -1,5 +1,5 @@
 import { StateCreator } from 'zustand';
-import { v4 as uuid } from 'uuid';
+import { uuid } from '../../shared/id';
 import { WorkspaceId, PaneId, SurfaceId, SurfaceRef, SurfaceType } from '../../shared/types';
 import { findLeaf, removeLeaf, splitNode, getAllPaneIds } from './split-utils';
 import { killSurfacePty } from './pty-teardown';

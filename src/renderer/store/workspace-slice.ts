@@ -1,5 +1,5 @@
 import { StateCreator } from 'zustand';
-import { v4 as uuid } from 'uuid';
+import { uuid } from '../../shared/id';
 import { WorkspaceId, WorkspaceInfo, SplitNode } from '../../shared/types';
 import { createLeaf } from './split-utils';
 import { killTreeTerminalPtys } from './pty-teardown';

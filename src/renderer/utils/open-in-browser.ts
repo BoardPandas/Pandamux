@@ -1,7 +1,7 @@
 import { useStore } from '../store';
 import { splitNode, getAllPaneIds } from '../store/split-utils';
 import { PaneId, SplitNode, SurfaceRef, WorkspaceId } from '../../shared/types';
-import { v4 as uuid } from 'uuid';
+import { uuid } from '../../shared/id';
 
 function findLeaf(tree: SplitNode, paneId: PaneId): (SplitNode & { type: 'leaf' }) | null {
   if (tree.type === 'leaf') return tree.paneId === paneId ? tree : null;

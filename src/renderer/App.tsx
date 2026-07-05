@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { v4 as uuid } from 'uuid';
+import { uuid } from '../shared/id';
 import { useStore } from './store';
 import { PaneId, SurfaceId, WorkspaceId, WorkspaceInfo, SplitNode } from '../shared/types';
 import SplitContainer from './components/SplitPane/SplitContainer';

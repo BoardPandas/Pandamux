@@ -1,4 +1,4 @@
-import { v4 as uuid } from 'uuid';
+import { uuid } from '../shared/id';
 import { PtyManager } from './pty-manager';
 import { AgentId, AgentInfo, AgentSpawnParams, PaneId, SurfaceId, WorkspaceId } from '../shared/types';
 

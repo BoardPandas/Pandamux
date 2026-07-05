@@ -1,5 +1,5 @@
 import { BrowserWindow, nativeImage, screen } from 'electron';
-import { v4 as uuid } from 'uuid';
+import { uuid } from '../shared/id';
 import path from 'path';
 import type { WindowId } from '../shared/types';
 

@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Marked Phase 1 (pnpm migration) complete in the rewrite plan (`tasks/plan-repo.md`) and reconciled its steps to the as-built implementation.
 - Expanded `.gitignore` with language, IDE, OS, and secret-file patterns plus Claude Code local files.
 - Migrated the build toolchain from npm to pnpm (Phase 1 of the Rust rewrite plan). Pinned pnpm 11.10.0 + Node 24.18.0 (24 LTS) via the `packageManager` and `engines` fields; added `pnpm-workspace.yaml` (hoisted `node_modules` for node-pty/ASAR, plus `allowBuilds` approvals for node-pty/electron/esbuild since pnpm 11 blocks dependency build scripts by default, and a `packages: [.]` entry so `pnpm run` works at the repo root without `-w`), `.nvmrc`/`.node-version`, and converted the lockfile to `pnpm-lock.yaml`. Updated the Release CI workflow and the documented release process to use pnpm. Developers should run `corepack enable pnpm` and use `pnpm` commands (e.g. `pnpm install`, `pnpm run dev`).
+- Updated runtime dependencies to their current releases: `react`/`react-dom` 19.2.7, `zustand` 5.0.14, `electron-updater` 6.8.9, `marked` 18.0.5, and dev tooling `@typescript-eslint/*` 8.62.1, `@types/react` 19.2.17.
+- Replaced the `uuid` package with the platform-native `crypto.randomUUID()` via a small `src/shared/id.ts` helper (used in both the main process and the renderer). `uuid` went ESM-only in v12, which would break the CommonJS main-process build; the built-in generator produces the same RFC 4122 v4 IDs with no dependency. Dropped `uuid` and `@types/uuid`; moved `@types/ws` from `dependencies` to `devDependencies` where it belongs.
+
+### Security
+
+- Updated `ws` to 8.21.0, closing a memory-exhaustion denial-of-service advisory (GHSA, high) and an uninitialized-memory disclosure advisory (moderate) that affected the shipped renderer/CDP WebSocket usage.
 
 ### Fixed
 

@@ -6,7 +6,7 @@ import { useStore } from './store';
 import { splitNode, removeLeaf, getAllPaneIds, findLeaf, buildGridLayout } from './store/split-utils';
 import { killSurfacePty } from './store/pty-teardown';
 import { PaneId, SurfaceId, WorkspaceId, SurfaceType } from '../shared/types';
-import { v4 as uuid } from 'uuid';
+import { uuid } from '../shared/id';
 
 export function initPipeBridge(): void {
   const w = window as any;

@@ -1,4 +1,4 @@
-import { v4 as uuid } from 'uuid';
+import { uuid } from '../../shared/id';
 import { SplitNode, PaneId, SurfaceId, SurfaceType } from '../../shared/types';
 
 // ─── Leaf factory ────────────────────────────────────────────────────────────
