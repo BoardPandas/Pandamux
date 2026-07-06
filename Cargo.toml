@@ -1,0 +1,22 @@
+[workspace]
+members = [
+  "crates/pandamux-core",
+  "crates/pandamux-term",
+  "crates/pandamux-ui",
+  "crates/pandamux-app",
+  "crates/pandamux-cli",
+]
+resolver = "3"
+exclude = ["spikes/phase2-native-terminal"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/BoardPandas/Pandamux"
+rust-version = "1.88"
+
+[workspace.dependencies]
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.145"
+tokio = { version = "=1.52.3", features = ["io-util", "macros", "net", "rt-multi-thread", "sync"] }
+uuid = { version = "=1.19.0", features = ["v4"] }

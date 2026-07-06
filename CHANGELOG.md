@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.16]
+
+### Added
+
+- Added the Phase 3 native Rust workspace scaffold with `pandamux-core`, `pandamux-term`, `pandamux-ui`, `pandamux-app`, and `pandamux-cli`.
+- Added backend-owned workspace, pane, surface, split tree, zoom, and layout grid state with Rust tests.
+- Added a native Windows named-pipe server and Rust CLI parity for the foundational system, workspace, pane, surface, layout, and terminal I/O commands.
+- Added portable-pty session management, Alacritty-backed screen text capture, live PTY smoke tests, and live Iced terminal snapshots.
+- Added feature-gated Iced shell rendering, periodic refresh, shell controls for splits and tabs, noninteractive shell smoke coverage, and an interactive shell launch path.
+- Added Windows Rust CI for formatting, crate boundary checks, tests, shell smoke, and native binary builds.
+
+### Changed
+
+- Updated `tasks/plan-repo.md` with Phase 3 implementation progress, validation evidence, and the interactive Iced smoke result.
+- Bumped the app version to `0.15.16`.
+
 ## [0.15.15]
 
 ### Added
