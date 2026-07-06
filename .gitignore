@@ -81,3 +81,6 @@ temp/
 
 # Skill-creator eval scaffolding (transient: fixtures, iteration outputs, review HTML)
 .claude/skills/*-workspace/
+.agents/skills/*-workspace/**/.git/
+.agents/skills/*-workspace/fixtures/sample-app/
+.agents/skills/*-workspace/**/outputs/repo/

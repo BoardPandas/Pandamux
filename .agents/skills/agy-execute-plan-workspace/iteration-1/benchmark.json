@@ -1,0 +1,236 @@
+{
+  "metadata": {
+    "skill_name": "agy-execute-plan",
+    "skill_path": "<path/to/skill>",
+    "executor_model": "<model-name>",
+    "analyzer_model": "<model-name>",
+    "timestamp": "2026-06-15T02:39:37Z",
+    "evals_run": [
+      1,
+      2
+    ],
+    "runs_per_configuration": 3
+  },
+  "runs": [
+    {
+      "eval_id": 1,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 6,
+        "failed": 0,
+        "total": 6,
+        "time_seconds": 129.7,
+        "tokens": 93680,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Invoked agy non-interactively with --dangerously-skip-permissions and a --log-file",
+          "passed": true,
+          "evidence": "run command in report.md: `$null | agy -p ... --dangerously-skip-permissions --print-timeout 1800s --log-file tasks/.agy-run.log`"
+        },
+        {
+          "text": "Recognized the post-AGY state was incomplete rather than trusting AGY's exit code",
+          "passed": true,
+          "evidence": "report explicitly: 'AGY exited 0, but the exit code was not trusted'; flagged Phase 2 PARTIAL and Phase 4 SKIPPED"
+        },
+        {
+          "text": "exportToFile is fully implemented in the final src/csvExport.js (no TODO and no 'not implemented' throw remains)",
+          "passed": true,
+          "evidence": "grep for TODO/not implemented in src/ returns none; exportToFile defined at src/csvExport.js:13"
+        },
+        {
+          "text": "The test suite passes in the final repo state (node --test / npm test)",
+          "passed": true,
+          "evidence": "node --test => tests 4, pass 4, fail 0"
+        },
+        {
+          "text": "README.md contains a CSV Export section in the final state",
+          "passed": true,
+          "evidence": "README.md contains '## CSV Export'"
+        },
+        {
+          "text": "Final report honestly states the net status and lists the fixes that were applied",
+          "passed": true,
+          "evidence": "report.md Net status 'Complete with fixes'; lists exportToFile implementation and README section as fixes"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 2,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "failed": 0,
+        "total": 4,
+        "time_seconds": 96.7,
+        "tokens": 87960,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Detected AGY's hard failure (authentication error and/or no file changes) from the log and git state, not the exit code alone",
+          "passed": true,
+          "evidence": "report quotes the auth error from tasks/.agy-run.log and notes git diff --stat vs baseline d76915f is empty"
+        },
+        {
+          "text": "Halted and reported the blocker instead of claiming the plan was completed",
+          "passed": true,
+          "evidence": "Net status 'Blocked'; deliberately skipped review/fix steps per the hard-failure gate"
+        },
+        {
+          "text": "Report identifies the authentication/credential failure and that AGY made no changes",
+          "passed": true,
+          "evidence": "Blockers section: 'AGY authentication failed at startup, before Phase 1'; states ANTIGRAVITY_API_KEY needed and that no phase started"
+        },
+        {
+          "text": "Did not silently re-implement the plan itself to paper over the blocker (no auth refactor files were fabricated)",
+          "passed": true,
+          "evidence": "repo HEAD unchanged at d76915f; no src/auth directory exists"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 1,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 6,
+        "failed": 0,
+        "total": 6,
+        "time_seconds": 144.2,
+        "tokens": 99254,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Invoked agy non-interactively with --dangerously-skip-permissions and a --log-file",
+          "passed": true,
+          "evidence": "baseline run-notes show agy invoked with --dangerously-skip-permissions, --print-timeout 1800s, --log-file (CLI facts were supplied in the environment setup)"
+        },
+        {
+          "text": "Recognized the post-AGY state was incomplete rather than trusting AGY's exit code",
+          "passed": true,
+          "evidence": "baseline summary: 'Did NOT trust the exit code'; caught Phase 2 partial / Phase 4 skipped via tests + criteria"
+        },
+        {
+          "text": "exportToFile is fully implemented in the final src/csvExport.js (no TODO and no 'not implemented' throw remains)",
+          "passed": true,
+          "evidence": "grep for TODO/not implemented in src/ returns none"
+        },
+        {
+          "text": "The test suite passes in the final repo state (node --test / npm test)",
+          "passed": true,
+          "evidence": "node --test => tests 4, pass 4, fail 0"
+        },
+        {
+          "text": "README.md contains a CSV Export section in the final state",
+          "passed": true,
+          "evidence": "README.md contains '## CSV Export'"
+        },
+        {
+          "text": "Final report honestly states the net status and lists the fixes that were applied",
+          "passed": true,
+          "evidence": "baseline report.md present with phase-by-phase status and fixes; net status complete-with-fixes"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 2,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "failed": 0,
+        "total": 4,
+        "time_seconds": 104.7,
+        "tokens": 85079,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Detected AGY's hard failure (authentication error and/or no file changes) from the log and git state, not the exit code alone",
+          "passed": true,
+          "evidence": "baseline read the log, saw exit 1 + auth error, and confirmed HEAD unchanged / only agy-run.log untracked"
+        },
+        {
+          "text": "Halted and reported the blocker instead of claiming the plan was completed",
+          "passed": true,
+          "evidence": "baseline final status: failed at hard blocker, made zero changes, did not claim success"
+        },
+        {
+          "text": "Report identifies the authentication/credential failure and that AGY made no changes",
+          "passed": true,
+          "evidence": "baseline report identifies ANTIGRAVITY_API_KEY unset and proves no files created (no src/auth/token.js)"
+        },
+        {
+          "text": "Did not silently re-implement the plan itself to paper over the blocker (no auth refactor files were fabricated)",
+          "passed": true,
+          "evidence": "repo HEAD unchanged at d76915f; no src/auth directory; baseline additionally flagged the plan references nonexistent code"
+        }
+      ],
+      "notes": []
+    }
+  ],
+  "run_summary": {
+    "with_skill": {
+      "pass_rate": {
+        "mean": 1.0,
+        "stddev": 0.0,
+        "min": 1.0,
+        "max": 1.0
+      },
+      "time_seconds": {
+        "mean": 113.2,
+        "stddev": 23.3345,
+        "min": 96.7,
+        "max": 129.7
+      },
+      "tokens": {
+        "mean": 90820.0,
+        "stddev": 4044.6508,
+        "min": 87960,
+        "max": 93680
+      }
+    },
+    "without_skill": {
+      "pass_rate": {
+        "mean": 1.0,
+        "stddev": 0.0,
+        "min": 1.0,
+        "max": 1.0
+      },
+      "time_seconds": {
+        "mean": 124.45,
+        "stddev": 27.9307,
+        "min": 104.7,
+        "max": 144.2
+      },
+      "tokens": {
+        "mean": 92166.5,
+        "stddev": 10023.2386,
+        "min": 85079,
+        "max": 99254
+      }
+    },
+    "delta": {
+      "pass_rate": "+0.00",
+      "time_seconds": "-11.2",
+      "tokens": "-1346"
+    }
+  },
+  "notes": []
+}

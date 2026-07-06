@@ -60,68 +60,12 @@ jobs:
             echo "tag=v$VER" >> "$GITHUB_OUTPUT"
           fi
 
-      # ── Sign exe with SignPath (disabled — waiting for OSS approval) ──
-      # Uncomment the 3 steps below once SignPath OSS quota is available:
-      #
-      # - name: Submit exe to SignPath for Authenticode signing
-      #   id: sign-submit
-      #   shell: bash
-      #   run: |
-      #     HTTP_RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" \
-      #       -X POST \
-      #       -H "Authorization: Bearer ${{ secrets.SIGNPATH_API_TOKEN }}" \
-      #       -F "projectSlug=pandamux" \
-      #       -F "signingPolicySlug=pandamux" \
-      #       -F "artifactConfigurationSlug=initial" \
-      #       -F "description=CI release v${{ steps.version.outputs.version }}" \
-      #       -F "artifact=@release/win-unpacked/pandamux.exe" \
-      #       -D headers.txt \
-      #       "https://app.signpath.io/api/v1/${{ secrets.SIGNPATH_ORGANIZATION_ID }}/SigningRequests/SubmitWithArtifact")
-      #     HTTP_CODE=$(echo "$HTTP_RESPONSE" | grep "HTTP_CODE:" | cut -d: -f2)
-      #     echo "HTTP status: $HTTP_CODE"
-      #     if [ "$HTTP_CODE" != "201" ]; then
-      #       echo "::error::SignPath submission failed (HTTP $HTTP_CODE)"
-      #       echo "$HTTP_RESPONSE"
-      #       exit 1
-      #     fi
-      #     LOCATION=$(grep -i "^location:" headers.txt | tr -d '\r')
-      #     SIGNING_REQUEST_ID=$(echo "$LOCATION" | grep -oE '[0-9a-f-]{36}$')
-      #     echo "Signing request ID: $SIGNING_REQUEST_ID"
-      #     echo "signing_request_id=$SIGNING_REQUEST_ID" >> "$GITHUB_OUTPUT"
-      #
-      # - name: Wait for signing to complete
-      #   id: sign-wait
-      #   shell: bash
-      #   run: |
-      #     ORG="${{ secrets.SIGNPATH_ORGANIZATION_ID }}"
-      #     TOKEN="${{ secrets.SIGNPATH_API_TOKEN }}"
-      #     REQ_ID="${{ steps.sign-submit.outputs.signing_request_id }}"
-      #     API="https://app.signpath.io/api/v1/$ORG/SigningRequests/$REQ_ID"
-      #     for i in $(seq 1 60); do
-      #       RESPONSE=$(curl -s -H "Authorization: Bearer $TOKEN" "$API")
-      #       STATUS=$(echo "$RESPONSE" | jq -r '.status')
-      #       echo "[$i/60] Status: $STATUS"
-      #       if [ "$STATUS" = "Completed" ]; then
-      #         echo "Signing completed successfully!"
-      #         exit 0
-      #       elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Denied" ] || [ "$STATUS" = "Canceled" ]; then
-      #         echo "::error::Signing request $STATUS"
-      #         echo "$RESPONSE" | jq .
-      #         exit 1
-      #       fi
-      #       sleep 10
-      #     done
-      #     echo "::error::Signing timed out after 10 minutes"
-      #     exit 1
-      #
-      # - name: Download signed exe
-      #   shell: bash
-      #   run: |
-      #     curl -s \
-      #       -H "Authorization: Bearer ${{ secrets.SIGNPATH_API_TOKEN }}" \
-      #       -o "release/win-unpacked/pandamux.exe" \
-      #       "https://app.signpath.io/api/v1/${{ secrets.SIGNPATH_ORGANIZATION_ID }}/SigningRequests/${{ steps.sign-submit.outputs.signing_request_id }}/SignedArtifact"
-      #     echo "Signed exe downloaded, size: $(wc -c < release/win-unpacked/pandamux.exe) bytes"
+      # ── Code signing note ──────────────────────────────────
+      # Signing runs AFTER the rcedit step below, not here. rcedit rewrites the
+      # exe (icon + version metadata), and any modification to a binary after
+      # it is signed invalidates the Authenticode signature. So signing must be
+      # the last mutation of pandamux.exe before it is zipped. See the Azure
+      # Trusted Signing steps after "Embed icon and version metadata".
 
       # ── Embed icon + metadata into exe (rcedit) ───────────
       - name: Embed icon and version metadata
@@ -146,6 +90,34 @@ jobs:
           "
         env:
           VER: ${{ steps.version.outputs.version }}
+
+      # ── Sign pandamux.exe with Azure Trusted Signing ───────
+      # Credentials come from Doppler (project pandamux, config prd) via the
+      # single DOPPLER_TOKEN repo secret. The pandamux-ci-signing service
+      # principal (Wellforce tenant) holds the Artifact Signing Certificate
+      # Profile Signer role on the SupportForge profile of the HDBtrustedsigning
+      # account. Runs after rcedit so the signature stays valid.
+      - name: Fetch signing secrets from Doppler
+        uses: dopplerhq/secrets-fetch-action@v2.0.0
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN }}
+          inject-env-vars: true
+
+      - name: Sign pandamux.exe (Azure Trusted Signing)
+        uses: azure/trusted-signing-action@v2.0.0
+        with:
+          azure-tenant-id: ${{ env.AZURE_TENANT_ID }}
+          azure-client-id: ${{ env.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ env.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ env.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ env.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ env.AZURE_TRUSTED_SIGNING_CERT_PROFILE_NAME }}
+          files-folder: ${{ github.workspace }}\release\win-unpacked
+          files-folder-filter: exe
+          files-folder-recurse: false
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
 
       # ── Create release zip ─────────────────────────────────
       - name: Create release zip

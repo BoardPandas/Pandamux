@@ -1,0 +1,19 @@
+[package]
+name = "phase2-native-terminal"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+alacritty_terminal = "=0.26.0"
+anyhow = "=1.0.100"
+cosmic-text = "=0.19.0"
+glyphon = "=0.11.0"
+iced = { version = "=0.14.0", features = ["canvas", "tokio"] }
+pollster = "=0.4.0"
+portable-pty = "=0.9.0"
+russh = { version = "=0.62.2", default-features = false, features = ["ring"] }
+swash = "=0.2.9"
+tokio = { version = "=1.52.3", features = ["net", "rt-multi-thread", "time"] }
+wgpu = "=30.0.0"
+wgpu_glyphon = { package = "wgpu", version = "=29.0.4" }

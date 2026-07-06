@@ -1,0 +1,23 @@
+{
+  "skill_name": "agy-execute-plan",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I've got a plan written up in tasks/add-csv-export.md for adding a CSV export endpoint. Have Antigravity run it end to end, then make sure it actually did everything the plan says before you tell me it's done.",
+      "expected_output": "Skill triggers. Preflight finds the plan, extracts acceptance criteria, records git baseline. Invokes agy with --dangerously-skip-permissions, --print-timeout, --log-file, empty stdin. Triages the run from log + git diff (not exit code). Reviews against the four lenses, fixes gaps, and returns the structured report with honest net status.",
+      "files": ["tasks/add-csv-export.md"]
+    },
+    {
+      "id": 2,
+      "prompt": "Run the plan in tasks/refactor-auth.md with agy. If it gets stuck or the tests don't pass afterward, I want to know exactly where, don't just say it worked.",
+      "expected_output": "Skill triggers. Emphasis on the blocker gate and on running tests during review. If AGY stops early or tests fail and cannot be fixed, the skill halts and reports the exact phase/task and reason rather than claiming success.",
+      "files": ["tasks/refactor-auth.md"]
+    },
+    {
+      "id": 3,
+      "prompt": "Let Antigravity build out the dashboard widgets plan (it's in the tasks folder), then review the diff for anything half-finished and clean it up.",
+      "expected_output": "Skill triggers without an explicit path; it locates the plan in tasks/. Runs AGY, then does a diff review specifically looking for half-finished work and stubs, fixes them, re-verifies, and reports.",
+      "files": []
+    }
+  ]
+}

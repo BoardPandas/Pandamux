@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.15]
+
+### Added
+
+- Completed the Phase 2 native Rust de-risk spike in `spikes/phase2-native-terminal`: Iced terminal viewport, Alacritty grid and PTY smokes, glyphon/wgpu visual QA artifact, Galahad russh PTY/tmux/Claude validation, and direct key, Windows OpenSSH agent, 1Password-compatible agent, and password auth paths.
+- Added repo-local Codex and agent configuration under `.codex/`, `.agents/`, and `AGENTS.md` for the PandaMUX workflow.
+- Added `tasks/prd-doppler-secrets.md` documenting the Doppler-backed release secret plan.
+
+### Changed
+
+- Wired the release workflow to fetch signing secrets from Doppler and sign `pandamux.exe` with Azure Trusted Signing after rcedit metadata embedding.
+- Updated `tasks/plan-repo.md` to mark Phase 2 complete and move the Rust rewrite to Phase 3 foundation work.
+- Bumped the app version to `0.15.15`.
+
 ### Changed
 
 - **Replaced the app icon and logo across the board with the new BoardPandas bear badge.** Regenerated every icon/logo asset from the new artwork: the Windows app icon (`resources/icons/icon.ico`, multi-size), the runtime window icon (`resources/icon.png`), the titlebar logo (`src/renderer/assets/logo.png`), the marketing-site favicon and logo, and the docs logos. The placeholder `icon.svg` (previously a blue "w") now carries the bear badge.

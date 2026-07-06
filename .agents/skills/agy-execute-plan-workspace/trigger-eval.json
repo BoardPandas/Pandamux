@@ -1,0 +1,23 @@
+[
+  {"query": "have antigravity run the plan in tasks/checkout-flow.md and make sure it's actually done before you tell me it's finished", "should_trigger": true},
+  {"query": "can you kick off agy on tasks/migrate-db.md end to end and then sanity check what it built", "should_trigger": true},
+  {"query": "let antigravity build out the spec we wrote, then review the diff and fix anything it botched", "should_trigger": true},
+  {"query": "run my plan through agy all phases and tell me if it hits any blockers", "should_trigger": true},
+  {"query": "i've got a plan in /tasks for the notifications feature, get AGY to implement the whole thing and verify it after", "should_trigger": true},
+  {"query": "use the antigravity cli to execute tasks/refactor-payments.md, then check the tests still pass", "should_trigger": true},
+  {"query": "hand this plan off to agy to do, then go through and clean up whatever's half finished", "should_trigger": true},
+  {"query": "have the antigravity agent knock out tasks/search-revamp.md and ping me when it's verified", "should_trigger": true},
+  {"query": "agy the plan in tasks then double-check it for me", "should_trigger": true},
+  {"query": "execute the implementation plan with antigravity end-to-end and report back what works and what doesn't", "should_trigger": true},
+
+  {"query": "write a detailed plan for adding CSV export and save it to tasks/csv.md", "should_trigger": false},
+  {"query": "implement the plan in tasks/auth.md yourself, don't hand it off to anything", "should_trigger": false},
+  {"query": "review the diff on my current branch for correctness bugs", "should_trigger": false},
+  {"query": "run the test suite and tell me which tests are failing", "should_trigger": false},
+  {"query": "what is the antigravity CLI and how do I install agy on windows?", "should_trigger": false},
+  {"query": "set up a cron job to run agy against our backlog every night", "should_trigger": false},
+  {"query": "spec out a new user onboarding feature with clarifying questions", "should_trigger": false},
+  {"query": "use agy to answer a quick research question about rust async runtimes", "should_trigger": false},
+  {"query": "merge all my worktrees into main and push", "should_trigger": false},
+  {"query": "explain how the gravity simulation works in my physics engine", "should_trigger": false}
+]
