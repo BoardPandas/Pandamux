@@ -1,19 +1,25 @@
-use iced::{Element, Subscription, Theme, application, time};
+use iced::{Element, Size, Subscription, Task, Theme, application, keyboard, time, window};
 use pandamux_core::{
     AppIntent, AppState, PaneIntent, SplitNode, SplitPaneParams, SurfaceId, SurfaceIntent,
-    SurfaceType,
+    SurfaceType, get_all_pane_ids,
 };
 use pandamux_term::{GridSize, PtyCommand, PtySessionManager};
 use pandamux_ui::{
-    ShellMessage, ShellViewModel, TerminalSnapshot, project_workspace_shell, shell_view,
+    ChromeState, RailItem, ShellKind, ShellMessage, ShellViewModel, TerminalSnapshot, UiTheme,
+    app_view, project_workspace_shell, shell_view,
 };
 use std::collections::HashSet;
 use std::time::Duration;
+
+/// Ticks between block-cursor blinks (~1.1s at a 100ms tick).
+const CURSOR_BLINK_TICKS: u64 = 11;
 
 pub struct NativeShellRuntime {
     app_state: AppState,
     ptys: PtySessionManager,
     live_ptys: bool,
+    chrome: ChromeState,
+    tick: u64,
     view_model: ShellViewModel,
     terminals: Vec<TerminalSnapshot>,
     last_error: Option<String>,
@@ -28,11 +34,15 @@ impl Default for NativeShellRuntime {
 impl NativeShellRuntime {
     pub fn new(live_ptys: bool) -> Self {
         let app_state = AppState::default();
+        let chrome = ChromeState::default();
+        let view_model = build_view_model(&app_state, &[], &chrome, true);
         let mut runtime = Self {
             app_state,
             ptys: PtySessionManager::new(),
             live_ptys,
-            view_model: empty_view_model(),
+            chrome,
+            tick: 0,
+            view_model,
             terminals: Vec::new(),
             last_error: None,
         };
@@ -44,68 +54,121 @@ impl NativeShellRuntime {
         &self.view_model
     }
 
-    pub fn update_shell(&mut self, message: ShellMessage) {
-        if message == ShellMessage::Tick {
-            self.refresh_terminal_snapshots();
-            return;
-        }
+    fn cursor_on(&self) -> bool {
+        (self.tick / CURSOR_BLINK_TICKS).is_multiple_of(2)
+    }
 
-        let result = match message {
-            ShellMessage::Tick => unreachable!("tick messages return before core intent routing"),
-            ShellMessage::PaneFocused(pane_id) => {
-                self.app_state.apply(AppIntent::Pane(PaneIntent::Focus {
-                    workspace_id: None,
-                    pane_id,
-                }))
+    /// Handle a chrome/window message directly (returns a window [`Task`] when
+    /// the message targets the OS window), or route everything else through the
+    /// core-intent path.
+    pub fn update(&mut self, message: ShellMessage) -> Task<ShellMessage> {
+        match message {
+            ShellMessage::WindowDragStarted => window::latest().and_then(window::drag),
+            ShellMessage::WindowMinimizePressed => {
+                window::latest().and_then(|id| window::minimize(id, true))
             }
+            ShellMessage::WindowMaximizeToggled => {
+                window::latest().and_then(window::toggle_maximize)
+            }
+            ShellMessage::WindowClosePressed => window::latest().and_then(window::close),
+            other => {
+                self.update_shell(other);
+                Task::none()
+            }
+        }
+    }
+
+    pub fn update_shell(&mut self, message: ShellMessage) {
+        match message {
+            ShellMessage::Tick => {
+                self.tick = self.tick.wrapping_add(1);
+                self.refresh_terminal_snapshots();
+                return;
+            }
+            ShellMessage::Noop
+            | ShellMessage::WindowDragStarted
+            | ShellMessage::WindowMinimizePressed
+            | ShellMessage::WindowMaximizeToggled
+            | ShellMessage::WindowClosePressed => {
+                // Window actions are handled by `update`; nothing to do here.
+                return;
+            }
+            ShellMessage::RailSelected(item) => {
+                self.chrome.active_rail = item;
+            }
+            ShellMessage::OverlayRequested(item) => {
+                // Overlays (palette/notifications/settings/quick-launch) land in
+                // Phases 4-5. For now we reflect the request in the rail
+                // highlight and clear the notification badge when opened.
+                self.chrome.active_rail = item;
+                if item == RailItem::Notifications {
+                    self.chrome.unread_notifications = false;
+                }
+                self.refresh_terminal_snapshots();
+                return;
+            }
+            ShellMessage::ToggleStatusBar => {
+                self.chrome.show_status_bar = !self.chrome.show_status_bar;
+            }
+            ShellMessage::ToggleTheme => {
+                self.chrome.ui_theme = self.chrome.ui_theme.toggled();
+            }
+            ShellMessage::CycleAccent => {
+                self.chrome.accent = self.chrome.accent.next();
+            }
+            core_message => {
+                let result = self.apply_core_message(core_message);
+                self.last_error = result.err();
+            }
+        }
+        self.refresh_terminal_snapshots();
+    }
+
+    fn apply_core_message(&mut self, message: ShellMessage) -> Result<(), String> {
+        let intent = match message {
+            ShellMessage::PaneFocused(pane_id) => AppIntent::Pane(PaneIntent::Focus {
+                workspace_id: None,
+                pane_id,
+            }),
             ShellMessage::PaneSplit { pane_id, direction } => {
-                self.app_state
-                    .apply(AppIntent::Pane(PaneIntent::Split(SplitPaneParams {
-                        workspace_id: None,
-                        target_pane_id: Some(pane_id),
-                        target_surface_id: None,
-                        direction,
-                        surface_type: SurfaceType::Terminal,
-                    })))
-            }
-            ShellMessage::PaneClosed(pane_id) => {
-                self.app_state.apply(AppIntent::Pane(PaneIntent::Close {
+                AppIntent::Pane(PaneIntent::Split(SplitPaneParams {
                     workspace_id: None,
-                    pane_id,
+                    target_pane_id: Some(pane_id),
+                    target_surface_id: None,
+                    direction,
+                    surface_type: SurfaceType::Terminal,
                 }))
             }
-            ShellMessage::PaneZoomToggled(pane_id) => {
-                self.app_state.apply(AppIntent::Pane(PaneIntent::Zoom {
+            ShellMessage::PaneClosed(pane_id) => AppIntent::Pane(PaneIntent::Close {
+                workspace_id: None,
+                pane_id,
+            }),
+            ShellMessage::PaneZoomToggled(pane_id) => AppIntent::Pane(PaneIntent::Zoom {
+                workspace_id: None,
+                pane_id: Some(pane_id),
+            }),
+            ShellMessage::TerminalSurfaceCreated(pane_id) => {
+                AppIntent::Surface(SurfaceIntent::Create {
                     workspace_id: None,
                     pane_id: Some(pane_id),
-                }))
+                    surface_type: SurfaceType::Terminal,
+                })
             }
-            ShellMessage::TerminalSurfaceCreated(pane_id) => {
-                self.app_state
-                    .apply(AppIntent::Surface(SurfaceIntent::Create {
-                        workspace_id: None,
-                        pane_id: Some(pane_id),
-                        surface_type: SurfaceType::Terminal,
-                    }))
-            }
-            ShellMessage::SurfaceFocused(surface_id) => {
-                self.app_state
-                    .apply(AppIntent::Surface(SurfaceIntent::Focus {
-                        workspace_id: None,
-                        surface_id,
-                    }))
-            }
-            ShellMessage::SurfaceClosed(surface_id) => {
-                self.app_state
-                    .apply(AppIntent::Surface(SurfaceIntent::Close {
-                        workspace_id: None,
-                        surface_id,
-                    }))
+            ShellMessage::SurfaceFocused(surface_id) => AppIntent::Surface(SurfaceIntent::Focus {
+                workspace_id: None,
+                surface_id,
+            }),
+            ShellMessage::SurfaceClosed(surface_id) => AppIntent::Surface(SurfaceIntent::Close {
+                workspace_id: None,
+                surface_id,
+            }),
+            unexpected => {
+                return Err(format!(
+                    "non-core shell message routed to core: {unexpected:?}"
+                ));
             }
         };
-
-        self.last_error = result.err();
-        self.refresh_terminal_snapshots();
+        self.app_state.apply(intent).map(|_| ())
     }
 
     pub fn last_error(&self) -> Option<&str> {
@@ -121,7 +184,26 @@ impl NativeShellRuntime {
                 self.last_error = Some(error);
                 fallback_terminal_snapshots(&self.app_state)
             });
-        self.view_model = build_view_model(&self.app_state, &self.terminals);
+        self.rebuild_chrome();
+        self.view_model = build_view_model(
+            &self.app_state,
+            &self.terminals,
+            &self.chrome,
+            self.cursor_on(),
+        );
+    }
+
+    /// Refresh the chrome view state derived from canonical state (session/pane
+    /// counts, active shell/session). Pollers (git/ports) fill the rest later.
+    fn rebuild_chrome(&mut self) {
+        self.chrome.session_count = self.app_state.workspaces.len();
+        self.chrome.version = env!("CARGO_PKG_VERSION").to_string();
+        if let Some(workspace) = self.app_state.active_workspace() {
+            self.chrome.pane_count = get_all_pane_ids(&workspace.split_tree).len();
+            self.chrome.shell_label = workspace.shell.clone();
+            self.chrome.shell_kind = ShellKind::classify(&workspace.shell);
+            self.chrome.active_session_name = workspace.title.clone();
+        }
     }
 
     fn sync_terminal_sessions(&mut self) -> Result<(), String> {
@@ -165,7 +247,14 @@ pub fn run_iced_shell() -> Result<(), Box<dyn std::error::Error>> {
         update_iced_shell,
         view_iced_shell,
     )
-    .title("PandaMUX Native")
+    .title("PandaMUX Everywhere")
+    .window(window::Settings {
+        size: Size::new(1280.0, 800.0),
+        min_size: Some(Size::new(760.0, 480.0)),
+        decorations: false,
+        transparent: true,
+        ..window::Settings::default()
+    })
     .subscription(subscription_iced_shell)
     .theme(theme_iced_shell)
     .run()
@@ -186,25 +275,61 @@ pub fn run_iced_shell_smoke() -> Result<(), String> {
     if model.terminals.is_empty() {
         return Err("native shell smoke found no terminal snapshots".to_string());
     }
-    let _view = shell_view(model);
+    let _app = app_view(model);
+    let _workspace = shell_view(model);
     println!("PANDAMUX_ICED_SHELL_SMOKE_OK");
     Ok(())
 }
 
-fn update_iced_shell(state: &mut NativeShellRuntime, message: ShellMessage) {
-    state.update_shell(message);
+fn update_iced_shell(state: &mut NativeShellRuntime, message: ShellMessage) -> Task<ShellMessage> {
+    state.update(message)
 }
 
 fn view_iced_shell(state: &NativeShellRuntime) -> Element<'_, ShellMessage> {
-    shell_view(state.view_model())
+    app_view(state.view_model())
 }
 
 fn subscription_iced_shell(_state: &NativeShellRuntime) -> Subscription<ShellMessage> {
-    time::every(Duration::from_millis(100)).map(|_| ShellMessage::Tick)
+    Subscription::batch([
+        time::every(Duration::from_millis(100)).map(|_| ShellMessage::Tick),
+        keyboard::listen().map(map_key_event),
+    ])
 }
 
-fn theme_iced_shell(_state: &NativeShellRuntime) -> Theme {
-    Theme::Dark
+fn map_key_event(event: keyboard::Event) -> ShellMessage {
+    use keyboard::{Event, Key};
+    if let Event::KeyPressed { key, modifiers, .. } = event
+        && let Key::Character(character) = key.as_ref()
+    {
+        return shortcut_for(
+            modifiers.control(),
+            modifiers.shift(),
+            &character.to_ascii_lowercase(),
+        );
+    }
+    ShellMessage::Noop
+}
+
+/// Pure shortcut table (Ctrl-based). Kept separate from event decoding so it is
+/// unit-testable without constructing a full keyboard event.
+fn shortcut_for(ctrl: bool, shift: bool, character: &str) -> ShellMessage {
+    if !ctrl {
+        return ShellMessage::Noop;
+    }
+    match (shift, character) {
+        (false, "b") => ShellMessage::ToggleStatusBar,
+        (true, "t") => ShellMessage::ToggleTheme,
+        (true, "a") => ShellMessage::CycleAccent,
+        (false, "k") => ShellMessage::OverlayRequested(RailItem::CommandPalette),
+        _ => ShellMessage::Noop,
+    }
+}
+
+fn theme_iced_shell(state: &NativeShellRuntime) -> Theme {
+    match state.chrome.ui_theme {
+        UiTheme::Dark => Theme::Dark,
+        UiTheme::Light => Theme::Light,
+    }
 }
 
 fn terminal_snapshots(
@@ -246,18 +371,21 @@ fn terminal_snapshots(
     Ok(snapshots)
 }
 
-fn build_view_model(app_state: &AppState, terminals: &[TerminalSnapshot]) -> ShellViewModel {
+fn build_view_model(
+    app_state: &AppState,
+    terminals: &[TerminalSnapshot],
+    chrome: &ChromeState,
+    cursor_on: bool,
+) -> ShellViewModel {
     let workspace = app_state
         .active_workspace()
         .expect("default app state should always have an active workspace");
     ShellViewModel {
         projection: project_workspace_shell(workspace),
         terminals: terminals.to_vec(),
+        chrome: chrome.clone(),
+        cursor_on,
     }
-}
-
-fn empty_view_model() -> ShellViewModel {
-    build_view_model(&AppState::default(), &[])
 }
 
 fn fallback_terminal_snapshots(app_state: &AppState) -> Vec<TerminalSnapshot> {
@@ -266,8 +394,8 @@ fn fallback_terminal_snapshots(app_state: &AppState) -> Vec<TerminalSnapshot> {
 
 fn fallback_lines() -> Vec<String> {
     vec![
-        "PandaMUX Native".to_string(),
-        "Runtime shell wiring is active.".to_string(),
+        "PandaMUX Everywhere".to_string(),
+        "Native shell runtime is active.".to_string(),
     ]
 }
 
@@ -311,7 +439,9 @@ mod tests {
         assert_eq!(model.projection.visible_panes.len(), 1);
         assert_eq!(model.terminals.len(), 1);
         assert_eq!(model.terminals[0].lines, fallback_lines());
-        let _view = shell_view(&model);
+        assert_eq!(model.chrome.session_count, 1);
+        assert_eq!(model.chrome.pane_count, 1);
+        let _view = app_view(model);
     }
 
     #[test]
@@ -379,6 +509,7 @@ mod tests {
         });
 
         assert_eq!(runtime.view_model().projection.visible_panes.len(), 2);
+        assert_eq!(runtime.view_model().chrome.pane_count, 2);
         assert_eq!(runtime.last_error(), None);
     }
 
@@ -436,6 +567,41 @@ mod tests {
 
         assert_eq!(runtime.view_model().projection.visible_panes.len(), 1);
         assert_eq!(runtime.last_error(), None);
+    }
+
+    #[test]
+    fn toggles_chrome_view_state() {
+        let mut runtime = NativeShellRuntime::default();
+        assert!(runtime.view_model().chrome.show_status_bar);
+        runtime.update_shell(ShellMessage::ToggleStatusBar);
+        assert!(!runtime.view_model().chrome.show_status_bar);
+
+        assert_eq!(runtime.view_model().chrome.ui_theme, UiTheme::Dark);
+        runtime.update_shell(ShellMessage::ToggleTheme);
+        assert_eq!(runtime.view_model().chrome.ui_theme, UiTheme::Light);
+
+        runtime.update_shell(ShellMessage::RailSelected(RailItem::NewSession));
+        assert_eq!(
+            runtime.view_model().chrome.active_rail,
+            RailItem::NewSession
+        );
+        assert_eq!(runtime.last_error(), None);
+    }
+
+    #[test]
+    fn maps_known_keyboard_shortcuts() {
+        assert_eq!(
+            shortcut_for(true, false, "b"),
+            ShellMessage::ToggleStatusBar
+        );
+        assert_eq!(shortcut_for(true, true, "t"), ShellMessage::ToggleTheme);
+        assert_eq!(shortcut_for(true, true, "a"), ShellMessage::CycleAccent);
+        assert_eq!(
+            shortcut_for(true, false, "k"),
+            ShellMessage::OverlayRequested(RailItem::CommandPalette)
+        );
+        assert_eq!(shortcut_for(false, false, "b"), ShellMessage::Noop);
+        assert_eq!(shortcut_for(true, false, "z"), ShellMessage::Noop);
     }
 
     #[test]

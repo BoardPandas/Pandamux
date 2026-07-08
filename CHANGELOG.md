@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0]
+
+### Added
+
+- Completed the Phase 3 native Rust UI design build-out, replicating the design handoff's chrome in Iced: a central theme module (`pandamux-ui::theme`) encoding every design token (dark and light chrome palettes, configurable accent set, typography scale, radii, shadows, spacing, and the fixed-dark terminal scheme).
+- Added a frameless window with a 40px custom titlebar (logo mark, session-switcher pill, notification bell with unread dot, settings, and min/max/close controls) with the whole bar as a drag region.
+- Added the 52px icon rail (Sessions, command palette, new session, notifications, and bottom-pinned settings) with active and hover states.
+- Added a toggleable 26px status bar showing the shell indicator, git branch and ahead-count, ports, session and pane counts, encoding, and version.
+- Styled the pane workspace to spec: column layout with 8px gaps and 10px padding, a 36px per-pane tab bar (shell glyph, label, close, split-right/split-down, and zoom controls), focus ring, pane shadow, and radii.
+- Wired the terminal pane's fixed-dark color scheme to the canvas grid widget with a block cursor that blinks on a ~1.1s cadence for the focused pane.
+- Added a column-view projection that renders the binary split tree as the design's 2-level column layout, with a graceful fallback that never drops panes for arbitrary-depth (CLI/orchestrator) trees.
+- Added keyboard shortcuts for toggling the status bar (Ctrl+B), switching the chrome theme (Ctrl+Shift+T), cycling the accent (Ctrl+Shift+A), and requesting the command palette (Ctrl+K).
+
+### Changed
+
+- The native Iced runtime now composes the full chrome via `app_view`, owns chrome view state derived from canonical state (session/pane counts, active shell/session), selects the Iced theme from the chosen chrome theme, and routes window controls through window tasks.
+- Bumped the app version to `0.16.0`.
+
 ## [0.15.17]
 
 ### Added
