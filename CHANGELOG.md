@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.1]
+
+### Changed
+
+- The native pipe server and CLI now reject `browser.*` methods and the `browser` command with a clear "not supported in the native build; use Claude Code's browser tooling" message instead of a generic error, matching the parity contract's dropped-browser decision (plan Section 4.1). The Rust CLI already exposes no browser subcommands and `system.capabilities` already reports `browser: false`; rewriting the shared Electron-facing docs and injected instructions is deferred to the Phase 7 Electron-deprecation boundary since the Electron build still ships the browser pane.
+- Bumped the app version to `0.21.1`.
+
 ## [0.21.0]
 
 ### Added

@@ -131,6 +131,16 @@ fn dispatch(
         return Ok(result);
     }
 
+    // Browser automation is intentionally dropped in the native build (plan
+    // Section 4.1). Reject it with a clear message instead of a generic
+    // "method not found" so agents/CLI callers get actionable feedback.
+    if request.method.starts_with("browser.") || request.method == "cdp" {
+        return Err((
+            -32601,
+            "browser automation is not supported in the native build; use Claude Code's browser tooling".to_string(),
+        ));
+    }
+
     let intent = intent_for_request(request)?;
     let delta = app.apply(intent).map_err(|message| (-32000, message))?;
     sync_terminal_sessions(app, ptys, spawn_ptys).map_err(|message| (-32000, message))?;
@@ -914,6 +924,22 @@ mod tests {
             ),
         );
         assert_eq!(renamed["result"]["ok"], true);
+    }
+
+    #[test]
+    fn rejects_browser_methods_with_clear_message() {
+        let mut backend = Backend::new(false);
+        let parsed = handle(
+            &mut backend,
+            r#"{"method":"browser.open","params":{"url":"https://example.com"},"id":30}"#,
+        );
+        assert_eq!(parsed["error"]["code"], -32601);
+        assert!(
+            parsed["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("not supported")
+        );
     }
 
     #[test]

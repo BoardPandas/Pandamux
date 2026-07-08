@@ -84,6 +84,12 @@ async fn run() -> Result<(), Box<dyn Error>> {
         "layout" if args.get(1).map(String::as_str) == Some("grid") => {
             print_json(send_v2("layout.grid", layout_grid_params(&args[2..])?).await?);
         }
+        "browser" => {
+            return Err(
+                "browser automation is not supported in the native build; use Claude Code's browser tooling"
+                    .into(),
+            );
+        }
         _ => {
             print_usage();
             return Err(format!("unknown command: {command}").into());
