@@ -69,6 +69,15 @@ pub enum ShellMessage {
     },
     SettingsSectionSelected(SettingsSection),
     AccentSelected(Accent),
+    // Status-bar pollers (git / ports)
+    /// Timer tick asking the runtime to kick off a background poll.
+    PollRequested,
+    /// A completed poll's results (git branch/ahead + listening ports).
+    PollUpdate {
+        git_branch: Option<String>,
+        git_ahead: u32,
+        ports: Vec<u16>,
+    },
     ToggleStatusBar,
     ToggleTheme,
     CycleAccent,

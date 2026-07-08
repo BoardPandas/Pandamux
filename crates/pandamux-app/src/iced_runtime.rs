@@ -272,6 +272,13 @@ impl NativeShellRuntime {
                 window::latest().and_then(window::toggle_maximize)
             }
             ShellMessage::WindowClosePressed => window::latest().and_then(window::close),
+            ShellMessage::PollRequested => Task::perform(crate::pollers::poll_all(), |result| {
+                ShellMessage::PollUpdate {
+                    git_branch: result.git_branch,
+                    git_ahead: result.git_ahead,
+                    ports: result.ports,
+                }
+            }),
             other => {
                 self.update_shell(other);
                 Task::none()
@@ -360,6 +367,19 @@ impl NativeShellRuntime {
             }
             ShellMessage::AccentSelected(accent) => {
                 self.chrome.accent = accent;
+            }
+            ShellMessage::PollRequested => {
+                // Kicked off from `update` as a Task; nothing to do here.
+                return;
+            }
+            ShellMessage::PollUpdate {
+                git_branch,
+                git_ahead,
+                ports,
+            } => {
+                self.chrome.git_branch = git_branch;
+                self.chrome.git_ahead = git_ahead;
+                self.chrome.ports = ports;
             }
             ShellMessage::OverlayRequested(item) => {
                 self.chrome.active_rail = item;
@@ -794,6 +814,9 @@ fn subscription_iced_shell(state: &NativeShellRuntime) -> Subscription<ShellMess
             },
             pipe_subscription,
         ));
+        // Poll git/ports for the status bar every few seconds.
+        subscriptions
+            .push(time::every(Duration::from_secs(5)).map(|_| ShellMessage::PollRequested));
     }
     Subscription::batch(subscriptions)
 }
@@ -1440,6 +1463,33 @@ mod tests {
         );
         runtime.update_shell(ShellMessage::OverlayDismissed);
         assert_eq!(runtime.view_model().chrome.active_overlay, Overlay::None);
+    }
+
+    #[test]
+    fn poll_update_populates_status_bar_chrome() {
+        let mut runtime = NativeShellRuntime::default();
+        assert!(runtime.view_model().chrome.git_branch.is_none());
+        assert!(runtime.view_model().chrome.ports.is_empty());
+
+        runtime.update_shell(ShellMessage::PollUpdate {
+            git_branch: Some("master".to_string()),
+            git_ahead: 2,
+            ports: vec![5173, 8080],
+        });
+
+        assert_eq!(
+            runtime.view_model().chrome.git_branch.as_deref(),
+            Some("master")
+        );
+        assert_eq!(runtime.view_model().chrome.git_ahead, 2);
+        assert_eq!(runtime.view_model().chrome.ports, vec![5173, 8080]);
+
+        // A later refresh (e.g. a tick) keeps the polled values.
+        runtime.update_shell(ShellMessage::Tick);
+        assert_eq!(
+            runtime.view_model().chrome.git_branch.as_deref(),
+            Some("master")
+        );
     }
 
     #[test]

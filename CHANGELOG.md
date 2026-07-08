@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0]
+
+### Added
+
+- Added background status-bar pollers to the native shell: a git poller (branch + ahead-count, run in the process working directory) and a localhost dev-port scanner, both driven off the Iced timer via async `tokio` I/O and surfaced in the status bar's git and ports segments. Per-session cwd scoping arrives with shell-integration OSC reporting.
+
+### Changed
+
+- Bumped the app version to `0.21.0`.
+
 ## [0.20.0]
 
 ### Added
