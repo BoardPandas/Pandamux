@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.17]
+
+### Added
+
+- Adopted the high-fidelity Iced UI design handoff (`design_handoff_pandamux_ui/`) as the authoritative visual spec for the native Rust rewrite, to be replicated across Phases 3-5.
+
+### Changed
+
+- Updated `tasks/plan-repo.md` with a new UI Design Replication section (exact design tokens, drag-drop interaction spec, and the build decisions to keep the binary split tree with a column-view projection and to keep both workspace and session concepts), plus per-phase design deliverables for Phases 3, 4, and 5.
+- Bumped the app version to `0.15.17`.
+
 ## [0.15.16]
 
 ### Added

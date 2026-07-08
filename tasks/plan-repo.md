@@ -21,6 +21,7 @@ Updated: 2026-07-06 (Phase 3 live Iced PTY slice): replaced the Iced runtime lau
 Updated: 2026-07-06 (Phase 3 Iced refresh and smoke slice): added a timer subscription for periodic terminal snapshot refreshes, a noninteractive `--iced-shell-smoke` app path, and CI coverage for constructing the native shell view.
 Updated: 2026-07-06 (Phase 3 Iced shell controls slice): added runtime-routed Iced controls for split horizontal, split vertical, new terminal tab, close tab, close pane, focus, and zoom.
 Updated: 2026-07-06 (Phase 3 interactive Iced smoke): fixed the nested Tokio runtime startup panic and manually validated `cargo run -p pandamux-app --features iced-runtime -- --iced-shell`; the interactive shell opened and controls looked good.
+Updated: 2026-07-08 (UI design handoff adopted): a high-fidelity Iced UI design (Claude-designed, delivered as `design_handoff_pandamux_ui/`) is now the authoritative visual spec for the rewrite, to be replicated across Phases 3-5 with the same look and feel. Added **Section 12 (UI Design Replication)** with exact tokens, per-phase surface deliverables, and the two build decisions: (1) keep the binary split tree as canonical, with the design's 2-level column layout rendered as a UI-only projection; (2) keep both workspace and session concepts. Phases 3, 4, and 5 below are annotated with their design deliverables.
 
 ---
 
@@ -293,6 +294,15 @@ Status: **DONE 2026-07-06.** The disposable spike lives at `spikes/phase2-native
 - [x] Periodic Iced shell refresh and smoke coverage: timer ticks refresh terminal snapshots, and `--iced-shell-smoke` constructs the native shell view in CI without opening a long-running window.
 - [x] Multi-pane/multi-tab terminal shell in Iced: splits, tabs, focus, zoom, close tab, and close pane route through core intents.
 
+Design deliverables (per Section 12; the static chrome shell that makes the running window already read as the mockup):
+- [ ] Central theme module in `pandamux-ui` encoding every Section 12 token: dark + light chrome palettes, the configurable accent set, typography scale (Segoe UI + JetBrains Mono, bundle the latter), radii, shadows, spacing. Everything downstream consumes this; no hardcoded colors in widgets.
+- [ ] Frameless window + 40px custom titlebar: logo, session-switcher pill (opens palette), bell with unread dot, settings icon, min/max/close hit areas, whole-bar drag region.
+- [ ] 52px icon rail (Sessions / palette / new / notifications / settings-pinned-bottom) with active + hover states.
+- [ ] 26px toggleable status bar (shell indicator, git branch + ahead-count, ports, session/pane counts, encoding, version).
+- [ ] Pane workspace frame styled to spec: column layout with 8px gaps / 10px padding, 36px per-pane tab bar (shell glyphs + close + split-right/split-down buttons + SSH context chip), focus ring, pane shadow, radii.
+- [ ] Terminal pane fixed-dark scheme wired to the canvas grid widget (block cursor 7x15, 1.1s blink), independent of chrome theme.
+- [ ] Column-view projection: extend `project_workspace_shell` to render the binary split tree as the design's `Vec<Column>` layout, with a graceful fallback for arbitrary-depth (CLI-created) trees.
+
 ### Phase 4: Terminal-adjacent parity
 The terminal engine and everything that lives close to the grid.
 - Hand-built terminal search, serialize (read-screen), link detection, exercised through the headless grid harness.
@@ -301,6 +311,11 @@ The terminal engine and everything that lives close to the grid.
 - Session persistence (auto-save 30s, named sessions, version-change handling).
 - Notifications (OS toast, flash, bell, panel, max 200), notification ring.
 - Exit criteria: a keyboard-driven multi-pane terminal is fully usable for daily work with search, copy mode, and persistence.
+
+Design deliverables (per Section 12; the terminal-adjacent surfaces):
+- Find bar, copy mode, and links UI styled to the chrome token system.
+- Notifications panel: 320px right-side slide-over (160ms from +24px) between titlebar and status bar, "Clear all" action, source-dotted cards (builds/agent/deploy/ports), plus the titlebar bell unread dot and the notification ring. Lands alongside the notification backend.
+- Session status plumbing: running (accent, 2.4s pulse) / busy-agent (gold, 1.2s pulse) / idle dots, fed by the PTY layer + agent observer (mirrors the Electron `shellState` + Claude-activity TTL logic).
 
 ### Phase 5: Peripheral UI and integrations parity
 The rest of the Section 4 checklist.
@@ -311,6 +326,14 @@ The rest of the Section 4 checklist.
 - Remove browser/CDP assumptions from injected Claude instructions, CLI help, README examples, docs, capability output, and shell-integration comments. Point browser work to Claude Code's native browser tooling instead.
 - Custom titlebar, AppUserModelId grouping.
 - Exit criteria: every Section 4 box checked or explicitly waived; parity declared.
+
+Design deliverables (per Section 12; the signature navigation, overlays, and interactions that make the app feel like the mockup):
+- Session panel (264px, compact 216px): the 3-segment Project / Type / Host grouping switcher (live regroup), pinned-first groups, session rows (shell badge / name+meta / status dot), "+ New session" dashed footer. Wires the workspace+session model (Section 12.2): sessions are shell contexts indexed across workspaces; confirm the select-session behavior (focus/activate vs load-layout) with the owner before building.
+- Command palette (Ctrl+K / Ctrl+Shift+P): 560px centered, live substring filtering over commands + session-switch + theme-switch, glyph/label/shortcut rows, fade+rise entrance.
+- Quick-launch popover (300px): shell profiles (PowerShell 7 / 5.1, CMD, WSL distros, SSH hosts importable from `~/.ssh/config`), anchored to trigger.
+- Settings modal (640x440 on scrim): left nav (General/Terminal/Keyboard/Notifications/Quick launch), control rows with toggles/selects/kbd chips. Includes UI theme (dark/light chrome), accent selection, vibrancy, show-status-bar.
+- Drag-and-drop pane splitting (Section 12.3): 6px drag threshold, dimmed source tab, accent ghost chip, position-based drop zones (x<25% left / x>75% right / y<30% top / y>70% bottom / else center), 100ms zone overlay with label, and the split/move drop semantics. UI-initiated splits stay 2-level so the column projection round-trips.
+- Chrome theme switching, accent config, vibrancy, and the 51+ keyboard shortcuts (the full designed set, not just the two prototyped).
 
 ### Phase 6: New features
 - F1 OSC 52 copy/paste + bracketed paste.
@@ -392,3 +415,44 @@ Route durable discoveries to the LL-G knowledge base per repo rules.
 ## 11. Open items to verify before locking pins
 
 The version specifics in this plan (iced 0.14, alacritty_terminal API shape, russh 0.62.2, glyphon 0.11, Azure Artifact Signing GA/eligibility, whether the GPUI GPL-contamination issue zed#55470 has resolved) should be re-checked against current release state at Phase 2/Phase 3 start. The architectural decisions above are version-independent; the exact pins are not.
+
+---
+
+## 12. UI Design Replication (authoritative visual spec)
+
+Source of truth for look and feel: the high-fidelity design handoff `design_handoff_pandamux_ui/` (Claude-designed, delivered 2026-07-08). Bundle contents: `PandaMUX Everywhere.dc.html` (main workspace + command palette, quick-launch, notifications, settings overlays), `Drag Split Panes.dc.html` (drag-split interaction prototype), `README.md` (exact tokens), `assets/pandamux_logo.png`. The prototypes are HTML/React `dc-runtime` references, not code; the task is to recreate them in Iced idioms. **Fidelity is high: colors, spacing, typography, radii, and interaction timings are final and matched closely.** The design is replicated across Phases 3-5 (deliverables listed under each phase in Section 7).
+
+### 12.1 Build decisions (owner-approved 2026-07-08)
+
+1. **Canonical layout stays the binary split tree.** The design expresses a 2-level `Vec<Column>{ Vec<Pane> }` layout; that is rendered as a **UI-only projection** over the existing `pandamux-core` split tree (no core rework). UI-initiated splits/drops are constrained to keep the tree 2-level so the projection round-trips faithfully; the projection must still render arbitrary-depth trees the CLI/orchestrator can create (graceful fallback, never drop panes). Keeps CLI/`layout grid`/orchestrator parity intact.
+2. **Workspace and session are both kept.** Workspace = the on-screen split layout of panes. Session = a named shell context (project . host . shell . status . branch/activity meta) that the 264px panel indexes and groups by Project/Type/Host. Open nuance to confirm before Phase 5 session-panel work: does selecting a session "load its pane layout" (workspace-like) or just focus/activate an existing shell context. Current lean: sessions are shell contexts surfaced across workspaces; selecting focuses its pane (opening it if unplaced).
+
+### 12.2 Design tokens (exact; encode in the Phase 3 theme module)
+
+Terminal panes stay dark in **both** chrome themes (terminal color scheme is independent of chrome theme, as in the Electron app). `overlay` (`ov`) is the tint rgb used for all hover/border fills as `rgba(ov, a)`.
+
+Chrome palette - dark (default): `bg-base` `#0c1114`->`#0a0e11` vertical gradient; bg glow 1 radial 75%/-10% `rgba(67,217,201,0.07)`; bg glow 2 radial -5%/110% `rgba(216,180,94,0.05)`; `ov` `255,255,255`; text `t1` `#dbe6e6` / `t2` `#8fa0a3` / `t3` `#7d8d90` / `t4` `#55666a`; `bgc` knockout `#0d1215`; `inset` `rgba(0,0,0,0.25)`; `panel` `rgba(20,27,31,0.92)`+blur24; `panel2` `rgba(18,25,29,0.95)`+blur28; `scrim` `rgba(5,8,10,0.5)`+blur3-4.
+
+Chrome palette - light: `ov` `0,0,0`; text `t1` `#1c2527` / `t2` `#3f5054` / `t3` `#5c6c70` / `t4` `#8a9a9e`; `bgc` `#eef2f2`; `inset` `rgba(0,0,0,0.07)`; `panel` `rgba(250,252,252,0.94)` / `panel2` `rgba(252,253,253,0.97)`; `scrim` `rgba(90,102,106,0.35)`; bg `#f2f5f5`->`#e7ecec`, teal glow `rgba(67,217,201,0.12)`, gold `rgba(216,180,94,0.08)`.
+
+Accent + shell colors (dark / light): accent `#43d9c9` (both); PowerShell `#43d9c9` / `#0e9a8c`; SSH `#d8b45e` / `#a17e22`; WSL `#7fd88f` / `#3d9a50`; CMD `#9aa7b0` / `#5c6c70`. Shell badge chips: `bg rgba(<shell>,0.10-0.12)`, `border 1px rgba(<shell>,0.25-0.35)`, radius 7-8px. Accent is user-configurable; alternates: `#d8b45e`, `#4d9fff`, `#b48ead`.
+
+Terminal pane scheme (fixed, both themes): surface `rgba(13,19,22,0.8)` (~`#10171b`), text `#b7c6c6`, dim `#6b7c80`, success `#7fd88f`, warn/gold `#d8b45e`, prompt = accent. Cursor 7x15px block in prompt color, blink 1.1s step-end.
+
+Typography: UI Segoe UI / system-ui (13px titles/600, 12-12.5px body/400-500, 11px secondary, 10.5px group headers/600 uppercase ls 0.8-1.2px); Mono JetBrains Mono/400-500-600 (terminal 12-12.5px lh 1.7-1.75; metadata 10px; kbd 10-10.5px; status bar 10.5px). Bundle JetBrains Mono.
+
+Radii: panes 12px, overlay panels 14-16px, rows/tabs 7-9px, chips 4-6px, rail buttons 10px. Shadows: pane `0 8px 30px rgba(0,0,0,0.25)`; focused pane border `1px rgba(67,217,201,0.35)` + `0 0 0 1px rgba(67,217,201,0.12)` + `0 0 24px rgba(67,217,201,0.07)`; overlays `0 20-30px 60-90px rgba(0,0,0,0.35-0.65)`.
+
+Spacing: workspace padding 10px, pane/column gap 8px, session panel 264px (compact 216px), rail 52px, titlebar 40px, tab bar 34-36px, status bar 26px, session rows padding 7-8px gap 10px badge 30px.
+
+Transitions: hover/background 120ms; pane focus ring 150ms; palette/launch fade+rise 140-150ms; notifications slide 160ms; drop-zone fade 100ms. Overlays close on backdrop click; one overlay at a time.
+
+Glass note: Iced has no `backdrop-filter` blur; approximate with layered translucent fills + borders (the token rgba values carry the look; blur is nice-to-have). `vibrancy` prop (0-1) maps to blur 6-24px where a blur backend is available.
+
+### 12.3 Drag-and-drop pane splitting (exact interaction)
+
+Core prototype: `Drag Split Panes.dc.html`. Sequence: pointer-down on a tab, 6px threshold -> drag starts (source tab dims to 35%, grab cursor). Accent ghost chip follows at +10/+8px offset (`rgba(20,27,31,0.95)` bg, `rgba(67,217,201,0.45)` border, `0 0 16px rgba(67,217,201,0.15)` glow, radius 8px). Drop zone from relative position: `x<0.25` left, `x>0.75` right, `y<0.30` top, `y>0.70` bottom, else center. Zone overlay on hovered pane (100ms fade, 4px margin, radius 10px): `rgba(67,217,201,0.13)` fill, 1.5px dashed `rgba(67,217,201,0.55)` border, centered label chip. Drop semantics: center -> append tab to target pane (active); top/bottom -> insert pane above/below within column; left/right -> insert new single-pane column beside target's column; always remove tab from source, prune empty panes/columns, move focus to destination; no-op dropping a pane's only tab back onto itself. These map to `pandamux-core` split-tree intents (split H/V + move surface), kept 2-level per 12.1.
+
+### 12.4 Assets
+
+`assets/pandamux_logo.png` (also `docs/assets/pandamux_logo.png` in-repo). Icons are 1.2-1.4px-stroke line glyphs (terminal, search, plus, bell, sliders, folder, chip, globe, split-right, split-down, git graph); recreate as SVG / Iced canvas, no icon font. Fonts: JetBrains Mono (bundle), Segoe UI (system).
