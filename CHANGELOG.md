@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.2]
+
+### Changed
+
+- Updated `tasks/plan-repo.md` to record Phase 5 as in progress: marked the delivered slices (pipe/UI unification, session panel, command palette + quick-launch + settings, git/port pollers, browser-method rejection), enumerated the remaining Phase 5 work as explicit tracked to-dos, and added the Phase 5 implementation gotchas (Iced subscription pipe bridge, `run_with` Hash trick, boxed-stream coercion, poller async-only rule, overlay/scrim composition, session-projection model) to Section 10.
+- Bumped the app version to `0.21.2`.
+
 ## [0.21.1]
 
 ### Changed
