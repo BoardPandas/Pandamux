@@ -304,7 +304,7 @@ Design deliverables (per Section 12; the static chrome shell that makes the runn
 - [x] Terminal pane fixed-dark scheme wired to the canvas grid widget (block cursor 7x15, ~1.1s blink for the focused pane), independent of chrome theme.
 - [x] Column-view projection: extended `project_workspace_shell` with a `columns: Vec<ColumnProjection>` layout (root horizontal split -> side-by-side columns; vertical split -> stacked panes), with a graceful fallback that flattens arbitrary-depth (CLI/orchestrator) trees into column stacks and never drops panes.
 
-Honestly-deferred sub-items (not blocking Phase 3 exit; noted for later passes): bundling the JetBrains Mono TTF bytes (named-font fallback in place); replacing the unicode glyph placeholders with 1.2-1.4px-stroke line icons (canvas/SVG); the background gradient + radial glows (solid `bg_base` in place, per the handoff's "translucency + borders carry the look" note); backdrop-filter blur (Iced has no equivalent).
+Four sub-items were intentionally deferred from Phase 3 (visual polish and assets only; each renders with a faithful fallback today, and none affects layout, sizing, or interaction fidelity, which is what Phase 3 gates). They are not dropped: each is tracked as an explicit `[ ]` item under Phase 5's design deliverables ("Deferred from Phase 3 (visual polish / assets)" list), and the backdrop-filter-blur limitation also has a row in the Section 9 risk table.
 
 ### Phase 4: Terminal-adjacent parity
 The terminal engine and everything that lives close to the grid.
@@ -338,9 +338,16 @@ Design deliverables (per Section 12; the signature navigation, overlays, and int
 - Drag-and-drop pane splitting (Section 12.3): 6px drag threshold, dimmed source tab, accent ghost chip, position-based drop zones (x<25% left / x>75% right / y<30% top / y>70% bottom / else center), 100ms zone overlay with label, and the split/move drop semantics. UI-initiated splits stay 2-level so the column projection round-trips.
 - Chrome theme switching, accent config, vibrancy, and the 51+ keyboard shortcuts (the full designed set, not just the two prototyped).
 
+Deferred from Phase 3 (visual polish / assets carried forward; each has a working fallback in place now, tracked here for completion):
+- [ ] Bundle the JetBrains Mono TTF and register it via the application font list, replacing the named-font fallback (single reference point `pandamux-ui::theme::MONO_FONT`, currently `Font::with_name("JetBrains Mono")` -> system monospace). Single-file asset drop-in plus font registration in the Iced app settings.
+- [ ] Replace the unicode glyph placeholders (titlebar, icon rail, tab bar, and status bar icons in `pandamux-ui::chrome` and `iced_shell`) with the design's 1.2-1.4px-stroke line icons drawn as Iced canvas/SVG paths. No icon font.
+- [ ] Background gradient + radial glows: the `bg-base` vertical gradient plus the teal (top-right) and gold (bottom-left) radial ambiences from Section 12.2, replacing the current solid `bg_base`. The vertical gradient maps to `iced::gradient::Linear`; the radial glows have no Iced primitive, so approximate with layered translucent shapes or a pre-rendered backing image.
+- [ ] Backdrop-filter "glass" blur on panels and overlays (`vibrancy` 0-1 -> blur 6-24px). Currently approximated by layered translucent fills + borders (the `panel`/`panel2`/`scrim` tokens). Do this only if/when Iced gains a blur backend; see the Section 9 risk row. Keep the translucency approximation as the permanent fallback.
+
 ### Phase 6: New features
 - F1 OSC 52 copy/paste + bracketed paste.
 - F2 SSH connection manager + remote surfaces + tmux durability + reconnect (with the reset-on-reattach reconciliation from Section 5).
+  - [ ] Optional Pageant agent bridge (deferred from the Phase 2 auth matrix; not required for any user, since direct key-file, password, and Windows OpenSSH-compatible agent auth already pass). Add only if a user needs Pageant-specific auth.
 - F3 SFTP image paste/drop.
 
 ### Phase 7: Ship
@@ -374,6 +381,7 @@ Design deliverables (per Section 12; the signature navigation, overlays, and int
 | tmux assumed present on remote for durability | Documented prerequisite; defined degraded behavior (plain PTY, no durability, surfaced to the user) when tmux is absent; specify reset-on-reattach reconciliation |
 | Accessibility regression vs web | Track Iced AccessKit progress; budget explicit a11y pass pre-1.0 |
 | cosmic-text HarfRust recency | Exercise CJK/RTL/emoji in Phase 2 |
+| Iced 0.14 has no backdrop-filter blur (design "glass") | Approximate with layered translucent fills + borders (the `panel`/`panel2`/`scrim` tokens carry the look); the translucency stays as the permanent fallback. Tracked as a Phase 5 deferred item; wire real blur only if/when Iced gains a blur backend. Not a shipping blocker |
 | Velopack + dist interplay unknown | Small packaging spike at Phase 7 start; Velopack alone is sufficient if they conflict |
 | pnpm junction deletion on Windows | Hoisted linker; verify zero reparse points in staging dirs before recursive deletes |
 | Orchestrator plugin breakage | Pipe protocol kept wire-compatible; regression-test the plugin's scripts against the Rust pipe server in Phase 5 |

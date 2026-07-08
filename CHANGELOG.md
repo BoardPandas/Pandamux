@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.1]
+
+### Changed
+
+- Promoted the four visual-polish/asset sub-items deferred during the Phase 3 UI build-out (JetBrains Mono TTF bundling, line-icon artwork, background gradient + radial glows, and backdrop-filter blur) from prose notes into explicit tracked `[ ]` to-do items under the Phase 5 design deliverables, so they cannot get lost.
+- Added a Section 9 risk-table row for the Iced 0.14 backdrop-filter-blur limitation, and a tracked Phase 6 checkbox for the optional Pageant SSH agent bridge.
+- Bumped the app version to `0.16.1`.
+
 ## [0.16.0]
 
 ### Added
