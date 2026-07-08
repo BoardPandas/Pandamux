@@ -58,6 +58,14 @@ pub enum ShellMessage {
     NotificationsToggled,
     NotificationCleared(String),
     NotificationsClearedAll,
+    /// A line arrived on the named pipe (CLI / agents / orchestrator). The
+    /// runtime dispatches `payload` against canonical state on the single-writer
+    /// path and completes the reply keyed by `id`. This is what makes a
+    /// CLI-driven `split`/`notify`/`read-screen` reach the live UI.
+    PipeRequest {
+        id: u64,
+        payload: String,
+    },
     /// No-op (e.g. an unmapped key press); ignored by the runtime.
     Noop,
 }

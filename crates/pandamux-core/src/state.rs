@@ -688,10 +688,10 @@ fn resolve_anchor_pane_id(
         return None;
     }
 
-    if let Some(fallback_pane_id) = fallback_pane_id {
-        if find_leaf(tree, &fallback_pane_id).is_some() {
-            return Some(fallback_pane_id);
-        }
+    if let Some(fallback_pane_id) = fallback_pane_id
+        && find_leaf(tree, &fallback_pane_id).is_some()
+    {
+        return Some(fallback_pane_id);
     }
 
     get_all_pane_ids(tree).into_iter().next()

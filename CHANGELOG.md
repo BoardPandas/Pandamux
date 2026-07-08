@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0]
+
+### Added
+
+- Began Phase 5 of the native Rust rewrite by unifying the named-pipe server and the live Iced UI onto a single-writer state path (plan Section 6.2). When the native shell is running it now embeds the pipe server as an Iced subscription, so a CLI-, agent-, or orchestrator-driven command (`split`, `notify`, `read-screen`, workspace/pane/surface changes) applies to the same canonical state the UI owns and shows up live in the window.
+- Added `notify`, `list-notifications`, and `clear-notifications` CLI commands (backed by new `notification.raise`/`notification.list`/`notification.clear` pipe methods), so notifications raised from the command line reach the running UI's bell and panel.
+
+### Changed
+
+- Extracted the pipe dispatcher into a single shared, synchronous `pandamux-app::backend` module used by both the standalone pipe server and the live runtime, replacing the previously duplicated dispatch logic so a CLI-driven and a UI-driven mutation are indistinguishable at the state layer.
+- Bumped the app version to `0.18.0`.
+
 ## [0.17.0]
 
 ### Added

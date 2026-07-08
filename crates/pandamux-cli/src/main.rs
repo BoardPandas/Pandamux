@@ -72,6 +72,15 @@ async fn run() -> Result<(), Box<dyn Error>> {
         "trigger-flash" => {
             print_json(send_v2("surface.trigger_flash", optional_surface_param(&args[1..])?).await?)
         }
+        "notify" => print_json(send_v2("notification.raise", notify_params(&args[1..])?).await?),
+        "list-notifications" => print_json(send_v2("notification.list", json!({})).await?),
+        "clear-notifications" => print_json(
+            send_v2(
+                "notification.clear",
+                clear_notifications_params(&args[1..])?,
+            )
+            .await?,
+        ),
         "layout" if args.get(1).map(String::as_str) == Some("grid") => {
             print_json(send_v2("layout.grid", layout_grid_params(&args[2..])?).await?);
         }
@@ -508,6 +517,48 @@ fn layout_grid_params(args: &[String]) -> Result<Value, Box<dyn Error>> {
     Ok(Value::Object(params))
 }
 
+fn notify_params(args: &[String]) -> Result<Value, Box<dyn Error>> {
+    let mut params = serde_json::Map::new();
+    let mut text_parts = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--body" => {
+                params.insert(
+                    "body".to_string(),
+                    json!(args.get(index + 1).ok_or("--body requires a value")?),
+                );
+                index += 2;
+            }
+            "--source" => {
+                params.insert(
+                    "source".to_string(),
+                    json!(args.get(index + 1).ok_or("--source requires a value")?),
+                );
+                index += 2;
+            }
+            value => {
+                text_parts.push(value.to_string());
+                index += 1;
+            }
+        }
+    }
+
+    if text_parts.is_empty() {
+        return Err("notify requires a title/message".into());
+    }
+    params.insert("title".to_string(), json!(text_parts.join(" ")));
+    Ok(Value::Object(params))
+}
+
+fn clear_notifications_params(args: &[String]) -> Result<Value, Box<dyn Error>> {
+    let mut params = serde_json::Map::new();
+    if let Some(id) = args.first() {
+        params.insert("id".to_string(), json!(id));
+    }
+    Ok(Value::Object(params))
+}
+
 async fn send_v1(message: &str) -> Result<String, Box<dyn Error>> {
     let reply = send_line(&(message.to_string() + "\n")).await?;
     Ok(reply.trim().to_string())
@@ -567,7 +618,7 @@ fn print_json(value: Value) {
 
 fn print_usage() {
     println!(
-        "Usage: pandamux <command>\n\nCommands:\n  ping\n  identify\n  capabilities\n  tree\n  new-workspace [--title <title>] [--shell <shell>]\n  list-workspaces\n  select-workspace <id>\n  rename-workspace <id> <title>\n  close-workspace <id>\n  split [--down] [--type terminal|markdown|diff] [--pane <id>] [--surface <id>] [--workspace <id>]\n  close-pane <id> [--workspace <id>]\n  focus-pane <id> [--workspace <id>]\n  zoom-pane [id] [--workspace <id>]\n  new-surface [--type terminal|markdown|diff] [--pane <id>] [--workspace <id>]\n  focus-surface <id> [--workspace <id>]\n  close-surface <id> [--workspace <id>]\n  list-panes [--workspace <id>]\n  list-surfaces [--workspace <id>] [--pane <id>]\n  send <text> [--surface <id>] [--workspace <id>]\n  send-key <key> [--ctrl] [--shift] [--alt] [--surface <id>] [--workspace <id>]\n  read-screen [--lines <N>] [--surface <id>] [--workspace <id>]\n  trigger-flash [surfaceId]\n  layout grid --count <N> [--type terminal|markdown|diff] [--anchor-pane <id>] [--anchor-surface <id>] [--workspace <id>]"
+        "Usage: pandamux <command>\n\nCommands:\n  ping\n  identify\n  capabilities\n  tree\n  new-workspace [--title <title>] [--shell <shell>]\n  list-workspaces\n  select-workspace <id>\n  rename-workspace <id> <title>\n  close-workspace <id>\n  split [--down] [--type terminal|markdown|diff] [--pane <id>] [--surface <id>] [--workspace <id>]\n  close-pane <id> [--workspace <id>]\n  focus-pane <id> [--workspace <id>]\n  zoom-pane [id] [--workspace <id>]\n  new-surface [--type terminal|markdown|diff] [--pane <id>] [--workspace <id>]\n  focus-surface <id> [--workspace <id>]\n  close-surface <id> [--workspace <id>]\n  list-panes [--workspace <id>]\n  list-surfaces [--workspace <id>] [--pane <id>]\n  send <text> [--surface <id>] [--workspace <id>]\n  send-key <key> [--ctrl] [--shift] [--alt] [--surface <id>] [--workspace <id>]\n  read-screen [--lines <N>] [--surface <id>] [--workspace <id>]\n  trigger-flash [surfaceId]\n  notify <message> [--body <text>] [--source build|agent|deploy|port|generic]\n  list-notifications\n  clear-notifications [id]\n  layout grid --count <N> [--type terminal|markdown|diff] [--anchor-pane <id>] [--anchor-surface <id>] [--workspace <id>]"
     );
 }
 

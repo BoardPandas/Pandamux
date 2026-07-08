@@ -1,5 +1,6 @@
 use crate::persistence::SessionStore;
-use iced::{Element, Size, Subscription, Task, Theme, application, keyboard, time, window};
+use iced::futures::SinkExt;
+use iced::{Element, Size, Subscription, Task, Theme, application, keyboard, stream, time, window};
 use pandamux_core::{
     AppIntent, AppState, NewNotification, NotificationSource, Notifications, PaneIntent, SplitNode,
     SplitPaneParams, SurfaceId, SurfaceIntent, SurfaceType, get_all_pane_ids,
@@ -12,8 +13,18 @@ use pandamux_ui::{
     SessionActivity, ShellKind, ShellMessage, ShellViewModel, TerminalSnapshot, UiTheme, app_view,
     project_workspace_shell, shell_view,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::sync::oneshot;
+
+/// Pending replies for embedded pipe requests, keyed by correlation id. The
+/// subscription task inserts a one-shot sender before emitting a `PipeRequest`;
+/// the runtime removes and completes it after dispatching on the single-writer
+/// path.
+type PipeRegistry = Arc<StdMutex<HashMap<u64, oneshot::Sender<String>>>>;
 
 /// Ticks between block-cursor blinks (~1.1s at a 100ms tick).
 const CURSOR_BLINK_TICKS: u64 = 11;
@@ -36,6 +47,12 @@ pub struct NativeShellRuntime {
     view_model: ShellViewModel,
     terminals: Vec<TerminalSnapshot>,
     last_error: Option<String>,
+    /// Named pipe the embedded server binds (only when `live_ptys`).
+    pipe_name: String,
+    /// Pending embedded-pipe replies, shared with the subscription task.
+    pipe_registry: PipeRegistry,
+    /// Correlation-id source for embedded pipe requests.
+    pipe_seq: Arc<AtomicU64>,
 }
 
 impl Default for NativeShellRuntime {
@@ -78,6 +95,10 @@ impl NativeShellRuntime {
             view_model,
             terminals: Vec::new(),
             last_error: None,
+            pipe_name: std::env::var("PANDAMUX_PIPE")
+                .unwrap_or_else(|_| r"\\.\pipe\pandamux".to_string()),
+            pipe_registry: Arc::new(StdMutex::new(HashMap::new())),
+            pipe_seq: Arc::new(AtomicU64::new(1)),
         };
         if live_ptys {
             runtime.raise_notification(NewNotification {
@@ -306,6 +327,27 @@ impl NativeShellRuntime {
             ShellMessage::NotificationsClearedAll => {
                 self.notifications.clear_all();
             }
+            ShellMessage::PipeRequest { id, payload } => {
+                // Single-writer path: CLI / agent / orchestrator lines apply to
+                // the same canonical state the UI mutates, via the same
+                // dispatcher the standalone server uses. Then the UI repaints
+                // (falls through to refresh below), so a CLI-driven split or
+                // `notify` shows up live.
+                let reply = crate::backend::handle_line(
+                    &payload,
+                    &mut self.app_state,
+                    &mut self.ptys,
+                    &mut self.notifications,
+                    &mut self.notif_seq,
+                    now_ms(),
+                    self.live_ptys,
+                );
+                if let Ok(mut registry) = self.pipe_registry.lock()
+                    && let Some(tx) = registry.remove(&id)
+                {
+                    let _ = tx.send(reply);
+                }
+            }
             core_message => {
                 let result = self.apply_core_message(core_message);
                 self.last_error = result.err();
@@ -496,11 +538,138 @@ fn view_iced_shell(state: &NativeShellRuntime) -> Element<'_, ShellMessage> {
     app_view(state.view_model())
 }
 
-fn subscription_iced_shell(_state: &NativeShellRuntime) -> Subscription<ShellMessage> {
-    Subscription::batch([
+fn subscription_iced_shell(state: &NativeShellRuntime) -> Subscription<ShellMessage> {
+    let mut subscriptions = vec![
         time::every(Duration::from_millis(100)).map(|_| ShellMessage::Tick),
         keyboard::listen().map(map_key_event),
-    ])
+    ];
+    // Only the live app embeds the pipe server (headless smoke/tests never bind
+    // a pipe). This is what unifies the CLI/agents/orchestrator with the running
+    // UI onto the single-writer path.
+    if state.live_ptys {
+        subscriptions.push(Subscription::run_with(
+            PipeServerConfig {
+                pipe_name: state.pipe_name.clone(),
+                registry: state.pipe_registry.clone(),
+                seq: state.pipe_seq.clone(),
+            },
+            pipe_subscription,
+        ));
+    }
+    Subscription::batch(subscriptions)
+}
+
+/// Identity + shared handles for the embedded pipe-server subscription. Only
+/// `pipe_name` participates in the subscription's identity hash; the `Arc`
+/// handles are captured by the running stream and must not change it (so the
+/// server is spawned exactly once and survives view rebuilds).
+struct PipeServerConfig {
+    pipe_name: String,
+    registry: PipeRegistry,
+    seq: Arc<AtomicU64>,
+}
+
+impl Hash for PipeServerConfig {
+    fn hash<H: Hasher>(&self, hasher: &mut H) {
+        "pandamux-embedded-pipe".hash(hasher);
+        self.pipe_name.hash(hasher);
+    }
+}
+
+// A concrete (boxed) return type is required so this coerces to the `fn(&D) -> S`
+// pointer `Subscription::run_with` wants; an `impl Stream` return is treated as
+// borrowing `&config` and fails the coercion.
+type PipeStream = std::pin::Pin<Box<dyn iced::futures::Stream<Item = ShellMessage> + Send>>;
+
+fn pipe_subscription(config: &PipeServerConfig) -> PipeStream {
+    let pipe_name = config.pipe_name.clone();
+    let registry = config.registry.clone();
+    let seq = config.seq.clone();
+    Box::pin(stream::channel(64, move |output| async move {
+        run_embedded_pipe_server(pipe_name, registry, seq, output).await;
+    }))
+}
+
+/// The embedded named-pipe accept loop. Runs for the life of the app, spawning a
+/// task per connection that forwards the line into the Iced message loop and
+/// writes back the reply the runtime produces.
+async fn run_embedded_pipe_server(
+    pipe_name: String,
+    registry: PipeRegistry,
+    seq: Arc<AtomicU64>,
+    output: iced::futures::channel::mpsc::Sender<ShellMessage>,
+) {
+    #[cfg(windows)]
+    {
+        use tokio::net::windows::named_pipe::ServerOptions;
+        loop {
+            let server = match ServerOptions::new()
+                .first_pipe_instance(false)
+                .create(&pipe_name)
+            {
+                Ok(server) => server,
+                Err(error) => {
+                    eprintln!("embedded pipe server bind error: {error}");
+                    return;
+                }
+            };
+            if server.connect().await.is_err() {
+                continue;
+            }
+            let registry = registry.clone();
+            let seq = seq.clone();
+            let output = output.clone();
+            tokio::spawn(async move {
+                if let Err(error) = handle_embedded_connection(server, registry, seq, output).await
+                {
+                    eprintln!("embedded pipe connection error: {error}");
+                }
+            });
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (pipe_name, registry, seq, output);
+    }
+}
+
+async fn handle_embedded_connection<T>(
+    stream: T,
+    registry: PipeRegistry,
+    seq: Arc<AtomicU64>,
+    mut output: iced::futures::channel::mpsc::Sender<ShellMessage>,
+) -> std::io::Result<()>
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    reader.read_line(&mut line).await?;
+
+    let id = seq.fetch_add(1, Ordering::Relaxed);
+    let (tx, rx) = oneshot::channel();
+    if let Ok(mut registry) = registry.lock() {
+        registry.insert(id, tx);
+    }
+
+    let request = ShellMessage::PipeRequest {
+        id,
+        payload: line.trim().to_string(),
+    };
+    if output.send(request).await.is_err() {
+        if let Ok(mut registry) = registry.lock() {
+            registry.remove(&id);
+        }
+        return Ok(());
+    }
+
+    let reply = rx.await.unwrap_or_default();
+    let mut stream = reader.into_inner();
+    stream.write_all(reply.as_bytes()).await?;
+    stream.write_all(b"\n").await?;
+    stream.shutdown().await
 }
 
 fn map_key_event(event: keyboard::Event) -> ShellMessage {
@@ -884,6 +1053,50 @@ mod tests {
         assert!(!runtime.view_model().copy_mode);
         runtime.update_shell(ShellMessage::CopyModeToggled);
         assert!(runtime.view_model().copy_mode);
+    }
+
+    #[test]
+    fn pipe_request_routes_through_single_writer_and_replies() {
+        // A line that would arrive on the named pipe (as a CLI `notify`) applies
+        // to the same canonical state the UI owns, shows up in the live view
+        // model, and the reply is delivered to the waiting connection.
+        let mut runtime = NativeShellRuntime::default();
+        let (tx, rx) = oneshot::channel();
+        let id = 42;
+        runtime.pipe_registry.lock().unwrap().insert(id, tx);
+
+        runtime.update_shell(ShellMessage::PipeRequest {
+            id,
+            payload: r#"{"method":"notification.raise","params":{"title":"CLI ping","source":"agent"},"id":1}"#
+                .to_string(),
+        });
+
+        assert_eq!(runtime.view_model().notifications.cards.len(), 1);
+        assert_eq!(
+            runtime.view_model().notifications.cards[0].title,
+            "CLI ping"
+        );
+
+        let reply = rx.blocking_recv().expect("reply should be delivered");
+        let parsed: serde_json::Value = serde_json::from_str(&reply).expect("valid json");
+        assert_eq!(parsed["result"]["ok"], true);
+    }
+
+    #[test]
+    fn pipe_request_split_shows_in_live_projection() {
+        let mut runtime = NativeShellRuntime::default();
+        let (tx, rx) = oneshot::channel();
+        runtime.pipe_registry.lock().unwrap().insert(7, tx);
+
+        runtime.update_shell(ShellMessage::PipeRequest {
+            id: 7,
+            payload: r#"{"method":"pane.split","params":{"paneId":"pane-default","direction":"right"},"id":1}"#
+                .to_string(),
+        });
+
+        assert_eq!(runtime.view_model().projection.visible_panes.len(), 2);
+        let reply = rx.blocking_recv().expect("reply should be delivered");
+        assert!(reply.contains("paneId"));
     }
 
     #[test]

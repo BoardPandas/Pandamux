@@ -1,3 +1,4 @@
+mod backend;
 #[cfg(feature = "iced-runtime")]
 mod iced_runtime;
 // The runtime uses the auto-session half now; the named-session API (save/load/
