@@ -84,6 +84,21 @@ async fn run() -> Result<(), Box<dyn Error>> {
         "layout" if args.get(1).map(String::as_str) == Some("grid") => {
             print_json(send_v2("layout.grid", layout_grid_params(&args[2..])?).await?);
         }
+        "agent" => match args.get(1).map(String::as_str) {
+            Some("spawn") => {
+                print_json(send_v2("agent.spawn", agent_spawn_params(&args[2..])?).await?)
+            }
+            Some("spawn-batch") => {
+                print_json(send_v2("agent.spawn_batch", agent_batch_params(&args[2..])?).await?)
+            }
+            Some("status") => print_json(send_v2("agent.status", id_param(&args[2..])?).await?),
+            Some("list") => print_json(send_v2("agent.list", json!({})).await?),
+            Some("kill") => print_json(send_v2("agent.kill", id_param(&args[2..])?).await?),
+            _ => {
+                print_usage();
+                return Err("usage: pandamux agent <spawn|spawn-batch|status|list|kill>".into());
+            }
+        },
         "browser" => {
             return Err(
                 "browser automation is not supported in the native build; use Claude Code's browser tooling"
@@ -557,6 +572,76 @@ fn notify_params(args: &[String]) -> Result<Value, Box<dyn Error>> {
     Ok(Value::Object(params))
 }
 
+fn agent_spawn_params(args: &[String]) -> Result<Value, Box<dyn Error>> {
+    let mut params = serde_json::Map::new();
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--cmd" => {
+                params.insert(
+                    "cmd".to_string(),
+                    json!(args.get(index + 1).ok_or("--cmd requires a value")?),
+                );
+                index += 2;
+            }
+            "--label" => {
+                params.insert(
+                    "label".to_string(),
+                    json!(args.get(index + 1).ok_or("--label requires a value")?),
+                );
+                index += 2;
+            }
+            "--cwd" => {
+                params.insert(
+                    "cwd".to_string(),
+                    json!(args.get(index + 1).ok_or("--cwd requires a value")?),
+                );
+                index += 2;
+            }
+            "--pane" => {
+                params.insert(
+                    "paneId".to_string(),
+                    json!(args.get(index + 1).ok_or("--pane requires a value")?),
+                );
+                index += 2;
+            }
+            unknown => return Err(format!("unknown agent spawn option: {unknown}").into()),
+        }
+    }
+    if !params.contains_key("cmd") {
+        return Err("agent spawn requires --cmd <command>".into());
+    }
+    Ok(Value::Object(params))
+}
+
+fn agent_batch_params(args: &[String]) -> Result<Value, Box<dyn Error>> {
+    let mut params = serde_json::Map::new();
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--json" => {
+                params.insert(
+                    "json".to_string(),
+                    json!(args.get(index + 1).ok_or("--json requires a value")?),
+                );
+                index += 2;
+            }
+            "--strategy" => {
+                params.insert(
+                    "strategy".to_string(),
+                    json!(args.get(index + 1).ok_or("--strategy requires a value")?),
+                );
+                index += 2;
+            }
+            unknown => return Err(format!("unknown agent spawn-batch option: {unknown}").into()),
+        }
+    }
+    if !params.contains_key("json") {
+        return Err("agent spawn-batch requires --json '[...]'".into());
+    }
+    Ok(Value::Object(params))
+}
+
 fn clear_notifications_params(args: &[String]) -> Result<Value, Box<dyn Error>> {
     let mut params = serde_json::Map::new();
     if let Some(id) = args.first() {
@@ -624,7 +709,7 @@ fn print_json(value: Value) {
 
 fn print_usage() {
     println!(
-        "Usage: pandamux <command>\n\nCommands:\n  ping\n  identify\n  capabilities\n  tree\n  new-workspace [--title <title>] [--shell <shell>]\n  list-workspaces\n  select-workspace <id>\n  rename-workspace <id> <title>\n  close-workspace <id>\n  split [--down] [--type terminal|markdown|diff] [--pane <id>] [--surface <id>] [--workspace <id>]\n  close-pane <id> [--workspace <id>]\n  focus-pane <id> [--workspace <id>]\n  zoom-pane [id] [--workspace <id>]\n  new-surface [--type terminal|markdown|diff] [--pane <id>] [--workspace <id>]\n  focus-surface <id> [--workspace <id>]\n  close-surface <id> [--workspace <id>]\n  list-panes [--workspace <id>]\n  list-surfaces [--workspace <id>] [--pane <id>]\n  send <text> [--surface <id>] [--workspace <id>]\n  send-key <key> [--ctrl] [--shift] [--alt] [--surface <id>] [--workspace <id>]\n  read-screen [--lines <N>] [--surface <id>] [--workspace <id>]\n  trigger-flash [surfaceId]\n  notify <message> [--body <text>] [--source build|agent|deploy|port|generic]\n  list-notifications\n  clear-notifications [id]\n  layout grid --count <N> [--type terminal|markdown|diff] [--anchor-pane <id>] [--anchor-surface <id>] [--workspace <id>]"
+        "Usage: pandamux <command>\n\nCommands:\n  ping\n  identify\n  capabilities\n  tree\n  new-workspace [--title <title>] [--shell <shell>]\n  list-workspaces\n  select-workspace <id>\n  rename-workspace <id> <title>\n  close-workspace <id>\n  split [--down] [--type terminal|markdown|diff] [--pane <id>] [--surface <id>] [--workspace <id>]\n  close-pane <id> [--workspace <id>]\n  focus-pane <id> [--workspace <id>]\n  zoom-pane [id] [--workspace <id>]\n  new-surface [--type terminal|markdown|diff] [--pane <id>] [--workspace <id>]\n  focus-surface <id> [--workspace <id>]\n  close-surface <id> [--workspace <id>]\n  list-panes [--workspace <id>]\n  list-surfaces [--workspace <id>] [--pane <id>]\n  send <text> [--surface <id>] [--workspace <id>]\n  send-key <key> [--ctrl] [--shift] [--alt] [--surface <id>] [--workspace <id>]\n  read-screen [--lines <N>] [--surface <id>] [--workspace <id>]\n  trigger-flash [surfaceId]\n  notify <message> [--body <text>] [--source build|agent|deploy|port|generic]\n  list-notifications\n  clear-notifications [id]\n  agent spawn --cmd <command> [--label <name>] [--cwd <dir>] [--pane <id>]\n  agent spawn-batch --json '[...]' [--strategy distribute|stack|split]\n  agent status <id> | agent list | agent kill <id>\n  layout grid --count <N> [--type terminal|markdown|diff] [--anchor-pane <id>] [--anchor-surface <id>] [--workspace <id>]"
     );
 }
 

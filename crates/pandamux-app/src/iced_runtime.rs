@@ -2,8 +2,8 @@ use crate::persistence::SessionStore;
 use iced::futures::SinkExt;
 use iced::{Element, Size, Subscription, Task, Theme, application, keyboard, stream, time, window};
 use pandamux_core::{
-    AppIntent, AppState, NewNotification, NotificationSource, Notifications, PaneIntent,
-    SplitDirection, SplitNode, SplitPaneParams, SurfaceId, SurfaceIntent, SurfaceType,
+    AgentRegistry, AppIntent, AppState, NewNotification, NotificationSource, Notifications,
+    PaneIntent, SplitDirection, SplitNode, SplitPaneParams, SurfaceId, SurfaceIntent, SurfaceType,
     WorkspaceIntent, get_all_pane_ids,
 };
 use pandamux_term::{
@@ -46,6 +46,8 @@ pub struct NativeShellRuntime {
     notifications: Notifications,
     notifications_open: bool,
     notif_seq: u64,
+    /// Live agents spawned via the pipe (CLI / orchestrator).
+    agents: AgentRegistry,
     copy_mode: bool,
     /// Command-palette state (query + selection persist across refreshes; items
     /// are rebuilt each refresh).
@@ -99,6 +101,7 @@ impl NativeShellRuntime {
             notifications: Notifications::new(),
             notifications_open: false,
             notif_seq: 0,
+            agents: AgentRegistry::new(),
             copy_mode: false,
             palette: PaletteViewState::default(),
             settings_section: SettingsSection::default(),
@@ -442,6 +445,7 @@ impl NativeShellRuntime {
                     &mut self.ptys,
                     &mut self.notifications,
                     &mut self.notif_seq,
+                    &mut self.agents,
                     now_ms(),
                     self.live_ptys,
                 );
@@ -699,9 +703,11 @@ impl NativeShellRuntime {
         self.chrome.session_count = self.app_state.workspaces.len();
         self.chrome.version = env!("CARGO_PKG_VERSION").to_string();
         self.chrome.unread_notifications = self.notifications.unread_count(None) > 0;
-        // Running when live shells are attached; busy-agent detection lands with
-        // the Phase 5 agent observer.
-        self.chrome.activity = if self.live_ptys {
+        // Gold busy-agent dot when agents are registered, else running when live
+        // shells are attached, else idle.
+        self.chrome.activity = if !self.agents.is_empty() {
+            SessionActivity::BusyAgent
+        } else if self.live_ptys {
             SessionActivity::Running
         } else {
             SessionActivity::Idle

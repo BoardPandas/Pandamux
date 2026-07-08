@@ -12,6 +12,7 @@ pub type PtyResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 pub struct PtyCommand {
     pub program: String,
     pub args: Vec<String>,
+    pub cwd: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -25,6 +26,7 @@ impl PtyCommand {
         Self {
             program: program.into(),
             args: Vec::new(),
+            cwd: None,
         }
     }
 
@@ -33,9 +35,17 @@ impl PtyCommand {
         self
     }
 
+    pub fn with_cwd(mut self, cwd: Option<String>) -> Self {
+        self.cwd = cwd;
+        self
+    }
+
     pub(crate) fn to_builder(&self) -> CommandBuilder {
         let mut command = CommandBuilder::new(&self.program);
         command.args(self.args.iter().map(String::as_str));
+        if let Some(cwd) = &self.cwd {
+            command.cwd(cwd);
+        }
         command
     }
 }

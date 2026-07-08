@@ -236,6 +236,15 @@ impl PtySessionManager {
     pub fn session_ids(&self) -> Vec<String> {
         self.sessions.keys().cloned().collect()
     }
+
+    /// Whether a session's child process is still running. Returns `false` for an
+    /// unknown session or one whose child has exited. Used for agent status.
+    pub fn is_running(&mut self, session_id: &str) -> bool {
+        match self.sessions.get_mut(session_id) {
+            Some(session) => matches!(session.child.try_wait(), Ok(None)),
+            None => false,
+        }
+    }
 }
 
 impl Default for PtySessionManager {

@@ -1,9 +1,11 @@
+pub mod agent;
 pub mod ids;
 pub mod notification;
 pub mod protocol;
 pub mod split_tree;
 pub mod state;
 
+pub use agent::{AgentInfo, AgentRegistry, AgentStatus, SpawnStrategy};
 pub use ids::{PaneId, SurfaceId, WindowId, WorkspaceId};
 pub use notification::{NewNotification, NotificationInfo, NotificationSource, Notifications};
 pub use protocol::{RpcError, RpcRequest, RpcResponse};

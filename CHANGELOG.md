@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0]
+
+### Added
+
+- Added the native agent manager: `agent spawn` / `agent spawn-batch` / `agent status` / `agent list` / `agent kill` CLI commands (and the matching `agent.*` pipe methods). An agent is a terminal surface running a given command; spawning creates the surface, starts a PTY with the command in the target cwd, and registers it. `spawn-batch` distributes across panes round-robin, stacks as tabs, or splits a pane per agent. This is what the pandamux-orchestrator plugin drives (together with the already-present `layout grid`).
+- The status-bar activity dot now turns gold (busy-agent) while agents are registered.
+- Added an optional working directory to `PtyCommand` (agents launch in their `cwd`).
+
+### Changed
+
+- The shared backend dispatcher now owns an `AgentRegistry` (in `pandamux-core::agent`), threaded through the single-writer path so CLI/orchestrator-spawned agents appear live in the running UI.
+- Bumped the app version to `0.22.0`.
+
 ## [0.21.2]
 
 ### Changed

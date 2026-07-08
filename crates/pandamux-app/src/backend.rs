@@ -12,9 +12,11 @@
 //! two divergent dispatchers.
 
 use pandamux_core::{
-    AppDelta, AppIntent, AppState, LayoutGridParams, NewNotification, NotificationSource,
-    Notifications, PaneIntent, RpcRequest, RpcResponse, SplitDirection, SplitNode, SplitPaneParams,
-    SurfaceId, SurfaceIntent, SurfaceType, SystemIntent, WorkspaceIntent, find_leaf,
+    AgentInfo, AgentRegistry, AgentStatus, AppDelta, AppIntent, AppState, LayoutGridParams,
+    NewNotification, NotificationSource, Notifications, PaneId, PaneIntent, RpcRequest,
+    RpcResponse, SpawnStrategy, SplitDirection, SplitNode, SplitPaneParams, SurfaceId,
+    SurfaceIntent, SurfaceType, SystemIntent, WorkspaceId, WorkspaceIntent, find_leaf,
+    get_all_pane_ids,
 };
 use pandamux_term::{GridSize, PtyCommand, PtySessionManager};
 use serde_json::{Value, json};
@@ -29,6 +31,7 @@ pub struct Backend {
     pub ptys: PtySessionManager,
     pub notifications: Notifications,
     pub notif_seq: u64,
+    pub agents: AgentRegistry,
     pub spawn_ptys: bool,
 }
 
@@ -39,6 +42,7 @@ impl Backend {
             ptys: PtySessionManager::new(),
             notifications: Notifications::new(),
             notif_seq: 0,
+            agents: AgentRegistry::new(),
             spawn_ptys,
         }
     }
@@ -51,6 +55,7 @@ impl Backend {
             &mut self.ptys,
             &mut self.notifications,
             &mut self.notif_seq,
+            &mut self.agents,
             now_ms(),
             self.spawn_ptys,
         )
@@ -75,6 +80,7 @@ pub fn handle_line(
     ptys: &mut PtySessionManager,
     notifications: &mut Notifications,
     notif_seq: &mut u64,
+    agents: &mut AgentRegistry,
     now_ms: u64,
     spawn_ptys: bool,
 ) -> String {
@@ -105,6 +111,7 @@ pub fn handle_line(
         ptys,
         notifications,
         notif_seq,
+        agents,
         now_ms,
         spawn_ptys,
     ) {
@@ -120,10 +127,15 @@ fn dispatch(
     ptys: &mut PtySessionManager,
     notifications: &mut Notifications,
     notif_seq: &mut u64,
+    agents: &mut AgentRegistry,
     now_ms: u64,
     spawn_ptys: bool,
 ) -> Result<Value, (i32, String)> {
     if let Some(result) = dispatch_notifications(request, notifications, notif_seq, now_ms)? {
+        return Ok(result);
+    }
+
+    if let Some(result) = dispatch_agents(request, app, ptys, agents, spawn_ptys)? {
         return Ok(result);
     }
 
@@ -206,6 +218,261 @@ fn parse_source(source: Option<&str>) -> NotificationSource {
         Some("port") => NotificationSource::Port,
         _ => NotificationSource::Generic,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Agents
+// ---------------------------------------------------------------------------
+
+/// Where an agent's surface is placed.
+enum Placement {
+    /// A new tab in an existing (or the focused) pane.
+    InPane(Option<PaneId>),
+    /// A fresh split pane.
+    NewSplit,
+}
+
+fn dispatch_agents(
+    request: &RpcRequest,
+    app: &mut AppState,
+    ptys: &mut PtySessionManager,
+    agents: &mut AgentRegistry,
+    spawn_ptys: bool,
+) -> Result<Option<Value>, (i32, String)> {
+    match request.method.as_str() {
+        "agent.spawn" => {
+            let params = &request.params;
+            let command = opt_string(params, "cmd")
+                .or_else(|| opt_string(params, "command"))
+                .ok_or_else(|| (-32602, "agent.spawn requires cmd".to_string()))?;
+            let label = opt_string(params, "label").unwrap_or_else(|| "agent".to_string());
+            let cwd = opt_string(params, "cwd");
+            let placement =
+                Placement::InPane(opt_id(params, "pane").or_else(|| opt_id(params, "paneId")));
+            let info = spawn_agent(
+                app, ptys, agents, label, command, cwd, placement, spawn_ptys,
+            )?;
+            Ok(Some(agent_json(&info)))
+        }
+        "agent.spawn_batch" => {
+            let strategy = SpawnStrategy::parse(
+                opt_string(&request.params, "strategy")
+                    .as_deref()
+                    .unwrap_or("distribute"),
+            );
+            let specs = batch_specs(&request.params)?;
+            if specs.is_empty() {
+                return Err((-32602, "agent.spawn_batch requires agents".to_string()));
+            }
+
+            // Distribute round-robins across the panes that exist up front.
+            let workspace_id = app.active_workspace_id.clone();
+            let panes = app
+                .workspace(&workspace_id)
+                .map(|workspace| get_all_pane_ids(&workspace.split_tree))
+                .unwrap_or_default();
+
+            let mut spawned = Vec::new();
+            for (index, spec) in specs.iter().enumerate() {
+                let command = spec
+                    .get("cmd")
+                    .or_else(|| spec.get("command"))
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| (-32602, "each agent requires cmd".to_string()))?
+                    .to_string();
+                let label = spec
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .unwrap_or("agent")
+                    .to_string();
+                let cwd = spec.get("cwd").and_then(Value::as_str).map(str::to_string);
+                let placement = match strategy {
+                    SpawnStrategy::Split => Placement::NewSplit,
+                    SpawnStrategy::Stack => Placement::InPane(None),
+                    SpawnStrategy::Distribute => {
+                        Placement::InPane(panes.get(index % panes.len().max(1)).cloned())
+                    }
+                };
+                let info = spawn_agent(
+                    app, ptys, agents, label, command, cwd, placement, spawn_ptys,
+                )?;
+                spawned.push(agent_json(&info));
+            }
+            Ok(Some(json!({ "agents": spawned })))
+        }
+        "agent.status" => {
+            let id = opt_string(&request.params, "id")
+                .ok_or_else(|| (-32602, "agent.status requires id".to_string()))?;
+            refresh_agent_status(ptys, agents, spawn_ptys);
+            let info = agents
+                .get(&id)
+                .ok_or_else(|| (-32000, format!("agent not found: {id}")))?;
+            Ok(Some(agent_json(info)))
+        }
+        "agent.list" => {
+            refresh_agent_status(ptys, agents, spawn_ptys);
+            Ok(Some(json!({ "agents": agents.list() })))
+        }
+        "agent.kill" => {
+            let id = opt_string(&request.params, "id")
+                .ok_or_else(|| (-32602, "agent.kill requires id".to_string()))?;
+            let removed = agents
+                .remove(&id)
+                .ok_or_else(|| (-32000, format!("agent not found: {id}")))?;
+            if spawn_ptys && ptys.has(removed.surface_id.as_str()) {
+                let _ = ptys.kill(removed.surface_id.as_str());
+            }
+            // Close the agent's surface too, ignoring the "last surface" guard.
+            let _ = app.apply(AppIntent::Surface(SurfaceIntent::Close {
+                workspace_id: Some(removed.workspace_id.clone()),
+                surface_id: removed.surface_id.clone(),
+            }));
+            Ok(Some(json!({ "ok": true })))
+        }
+        _ => Ok(None),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_agent(
+    app: &mut AppState,
+    ptys: &mut PtySessionManager,
+    agents: &mut AgentRegistry,
+    label: String,
+    command: String,
+    cwd: Option<String>,
+    placement: Placement,
+    spawn_ptys: bool,
+) -> Result<AgentInfo, (i32, String)> {
+    let (workspace_id, pane_id, surface_id): (WorkspaceId, PaneId, SurfaceId) = match placement {
+        Placement::InPane(pane_id) => {
+            let delta = app
+                .apply(AppIntent::Surface(SurfaceIntent::Create {
+                    workspace_id: None,
+                    pane_id,
+                    surface_type: SurfaceType::Terminal,
+                }))
+                .map_err(|message| (-32000, message))?;
+            match delta {
+                AppDelta::SurfaceCreated {
+                    workspace_id,
+                    pane_id,
+                    surface,
+                } => (workspace_id, pane_id, surface.id),
+                _ => return Err((-32000, "agent surface was not created".to_string())),
+            }
+        }
+        Placement::NewSplit => {
+            let delta = app
+                .apply(AppIntent::Pane(PaneIntent::Split(SplitPaneParams {
+                    workspace_id: None,
+                    target_pane_id: None,
+                    target_surface_id: None,
+                    direction: SplitDirection::Horizontal,
+                    surface_type: SurfaceType::Terminal,
+                })))
+                .map_err(|message| (-32000, message))?;
+            match delta {
+                AppDelta::PaneSplit {
+                    workspace_id,
+                    pane_id,
+                    surface_id,
+                    ..
+                } => (workspace_id, pane_id, surface_id),
+                _ => return Err((-32000, "agent pane was not created".to_string())),
+            }
+        }
+    };
+
+    if spawn_ptys {
+        let pty_command = parse_command(&command, cwd.clone());
+        ptys.spawn(surface_id.to_string(), &pty_command, GridSize::new(120, 30))
+            .map_err(|error| (-32000, error.to_string()))?;
+    }
+
+    let info = AgentInfo {
+        id: agents.next_id(),
+        label,
+        command,
+        cwd,
+        workspace_id,
+        pane_id,
+        surface_id,
+        status: AgentStatus::Starting,
+    };
+    agents.add(info.clone());
+    Ok(info)
+}
+
+/// Parse a command line into a `PtyCommand` (naive whitespace split; quoting is
+/// not yet honored). Empty falls back to the default shell.
+fn parse_command(command: &str, cwd: Option<String>) -> PtyCommand {
+    let mut parts = command.split_whitespace();
+    match parts.next() {
+        Some(program) => PtyCommand::new(program)
+            .with_args(parts.map(str::to_string))
+            .with_cwd(cwd),
+        None => PtyCommand::new(default_shell()).with_cwd(cwd),
+    }
+}
+
+fn default_shell() -> &'static str {
+    if cfg!(windows) { "pwsh" } else { "sh" }
+}
+
+/// Mark agents running/exited from their PTY child state (only meaningful when
+/// PTYs are live).
+fn refresh_agent_status(
+    ptys: &mut PtySessionManager,
+    agents: &mut AgentRegistry,
+    spawn_ptys: bool,
+) {
+    if !spawn_ptys {
+        return;
+    }
+    let updates: Vec<(String, AgentStatus)> = agents
+        .list()
+        .iter()
+        .map(|agent| {
+            let status = if ptys.is_running(agent.surface_id.as_str()) {
+                AgentStatus::Running
+            } else {
+                AgentStatus::Exited
+            };
+            (agent.id.clone(), status)
+        })
+        .collect();
+    for (id, status) in updates {
+        agents.set_status(&id, status);
+    }
+}
+
+fn batch_specs(params: &Value) -> Result<Vec<Value>, (i32, String)> {
+    // Accept either an inline array (`agents`/`json`) or a JSON string (`json`).
+    if let Some(array) = params
+        .get("agents")
+        .or_else(|| params.get("json"))
+        .and_then(Value::as_array)
+    {
+        return Ok(array.clone());
+    }
+    if let Some(text) = opt_string(params, "json") {
+        return serde_json::from_str::<Vec<Value>>(&text)
+            .map_err(|error| (-32602, format!("invalid agents json: {error}")));
+    }
+    Ok(Vec::new())
+}
+
+fn agent_json(info: &AgentInfo) -> Value {
+    json!({
+        "id": info.id,
+        "label": info.label,
+        "workspaceId": info.workspace_id,
+        "paneId": info.pane_id,
+        "surfaceId": info.surface_id,
+        "status": info.status,
+        "command": info.command,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -924,6 +1191,71 @@ mod tests {
             ),
         );
         assert_eq!(renamed["result"]["ok"], true);
+    }
+
+    #[test]
+    fn spawns_lists_and_kills_an_agent() {
+        let mut backend = Backend::new(false);
+        let spawn = handle(
+            &mut backend,
+            r#"{"method":"agent.spawn","params":{"cmd":"claude --dangerously","label":"worker"},"id":40}"#,
+        );
+        assert_eq!(spawn["result"]["label"], "worker");
+        assert_eq!(spawn["result"]["status"], "starting");
+        let id = spawn["result"]["id"]
+            .as_str()
+            .expect("agent id")
+            .to_string();
+        // The agent created a real terminal surface in the tree.
+        assert!(spawn["result"]["surfaceId"].as_str().is_some());
+
+        let list = handle(
+            &mut backend,
+            r#"{"method":"agent.list","params":{},"id":41}"#,
+        );
+        assert_eq!(list["result"]["agents"].as_array().unwrap().len(), 1);
+
+        let status = handle(
+            &mut backend,
+            &format!(r#"{{"method":"agent.status","params":{{"id":"{id}"}},"id":42}}"#),
+        );
+        assert_eq!(status["result"]["id"], id);
+
+        let kill = handle(
+            &mut backend,
+            &format!(r#"{{"method":"agent.kill","params":{{"id":"{id}"}},"id":43}}"#),
+        );
+        assert_eq!(kill["result"]["ok"], true);
+        let list = handle(
+            &mut backend,
+            r#"{"method":"agent.list","params":{},"id":44}"#,
+        );
+        assert!(list["result"]["agents"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn spawns_a_batch_of_agents() {
+        let mut backend = Backend::new(false);
+        let batch = handle(
+            &mut backend,
+            r#"{"method":"agent.spawn_batch","params":{"strategy":"split","json":"[{\"cmd\":\"claude a\",\"label\":\"a\"},{\"cmd\":\"claude b\",\"label\":\"b\"}]"},"id":45}"#,
+        );
+        assert_eq!(batch["result"]["agents"].as_array().unwrap().len(), 2);
+        let list = handle(
+            &mut backend,
+            r#"{"method":"agent.list","params":{},"id":46}"#,
+        );
+        assert_eq!(list["result"]["agents"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn agent_spawn_requires_cmd() {
+        let mut backend = Backend::new(false);
+        let parsed = handle(
+            &mut backend,
+            r#"{"method":"agent.spawn","params":{"label":"x"},"id":47}"#,
+        );
+        assert_eq!(parsed["error"]["code"], -32602);
     }
 
     #[test]
