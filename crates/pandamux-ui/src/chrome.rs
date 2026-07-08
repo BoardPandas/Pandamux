@@ -86,6 +86,9 @@ pub struct ChromeState {
     pub pane_count: usize,
     pub encoding: String,
     pub version: String,
+    /// Sidebar progress bar `(percent, label)` set via the pipe, shown in the
+    /// status bar when present.
+    pub sidebar_progress: Option<(u8, String)>,
 }
 
 impl Default for ChromeState {
@@ -110,6 +113,7 @@ impl Default for ChromeState {
             pane_count: 1,
             encoding: "UTF-8".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
+            sidebar_progress: None,
         }
     }
 }
@@ -360,6 +364,16 @@ pub fn status_bar<'a>(chrome: &ChromeState, palette: Palette) -> Element<'a, She
             .join(" \u{00b7} ");
         left = left.push(fixed_space(8.0));
         left = left.push(mono_label(&format!("ports {ports}"), palette.t3));
+    }
+
+    if let Some((percent, label)) = &chrome.sidebar_progress {
+        left = left.push(fixed_space(8.0));
+        let text = if label.is_empty() {
+            format!("{percent}%")
+        } else {
+            format!("{label} {percent}%")
+        };
+        left = left.push(mono_label(&text, palette.accent));
     }
 
     let right = row![

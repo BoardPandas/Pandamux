@@ -14,8 +14,8 @@
 use pandamux_core::{
     AgentInfo, AgentRegistry, AgentStatus, AppDelta, AppIntent, AppState, LayoutGridParams,
     NewNotification, NotificationSource, Notifications, PaneId, PaneIntent, RpcRequest,
-    RpcResponse, SpawnStrategy, SplitDirection, SplitNode, SplitPaneParams, SurfaceId,
-    SurfaceIntent, SurfaceType, SystemIntent, WorkspaceId, WorkspaceIntent, find_leaf,
+    RpcResponse, SidebarState, SpawnStrategy, SplitDirection, SplitNode, SplitPaneParams,
+    SurfaceId, SurfaceIntent, SurfaceType, SystemIntent, WorkspaceId, WorkspaceIntent, find_leaf,
     get_all_pane_ids,
 };
 use pandamux_term::{GridSize, PtyCommand, PtySessionManager};
@@ -32,6 +32,7 @@ pub struct Backend {
     pub notifications: Notifications,
     pub notif_seq: u64,
     pub agents: AgentRegistry,
+    pub sidebar: SidebarState,
     pub spawn_ptys: bool,
 }
 
@@ -43,6 +44,7 @@ impl Backend {
             notifications: Notifications::new(),
             notif_seq: 0,
             agents: AgentRegistry::new(),
+            sidebar: SidebarState::new(),
             spawn_ptys,
         }
     }
@@ -56,6 +58,7 @@ impl Backend {
             &mut self.notifications,
             &mut self.notif_seq,
             &mut self.agents,
+            &mut self.sidebar,
             now_ms(),
             self.spawn_ptys,
         )
@@ -81,6 +84,7 @@ pub fn handle_line(
     notifications: &mut Notifications,
     notif_seq: &mut u64,
     agents: &mut AgentRegistry,
+    sidebar: &mut SidebarState,
     now_ms: u64,
     spawn_ptys: bool,
 ) -> String {
@@ -112,6 +116,7 @@ pub fn handle_line(
         notifications,
         notif_seq,
         agents,
+        sidebar,
         now_ms,
         spawn_ptys,
     ) {
@@ -128,10 +133,15 @@ fn dispatch(
     notifications: &mut Notifications,
     notif_seq: &mut u64,
     agents: &mut AgentRegistry,
+    sidebar: &mut SidebarState,
     now_ms: u64,
     spawn_ptys: bool,
 ) -> Result<Value, (i32, String)> {
     if let Some(result) = dispatch_notifications(request, notifications, notif_seq, now_ms)? {
+        return Ok(result);
+    }
+
+    if let Some(result) = dispatch_sidebar(request, sidebar)? {
         return Ok(result);
     }
 
@@ -217,6 +227,43 @@ fn parse_source(source: Option<&str>) -> NotificationSource {
         Some("deploy") => NotificationSource::Deploy,
         Some("port") => NotificationSource::Port,
         _ => NotificationSource::Generic,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sidebar (status / progress / log)
+// ---------------------------------------------------------------------------
+
+fn dispatch_sidebar(
+    request: &RpcRequest,
+    sidebar: &mut SidebarState,
+) -> Result<Option<Value>, (i32, String)> {
+    match request.method.as_str() {
+        "sidebar.set_status" => {
+            let key = opt_string(&request.params, "key")
+                .ok_or_else(|| (-32602, "sidebar.set_status requires key".to_string()))?;
+            let value = opt_string(&request.params, "value").unwrap_or_default();
+            sidebar.set_status(key, value);
+            Ok(Some(json!({ "ok": true })))
+        }
+        "sidebar.set_progress" => {
+            let value = request
+                .params
+                .get("value")
+                .and_then(Value::as_f64)
+                .ok_or_else(|| (-32602, "sidebar.set_progress requires value".to_string()))?;
+            let label = opt_string(&request.params, "label");
+            sidebar.set_progress(value.round().clamp(0.0, 255.0) as u8, label);
+            Ok(Some(json!({ "ok": true })))
+        }
+        "sidebar.log" => {
+            let level = opt_string(&request.params, "level").unwrap_or_else(|| "info".to_string());
+            let message = opt_string(&request.params, "message").unwrap_or_default();
+            sidebar.log(level, message);
+            Ok(Some(json!({ "ok": true })))
+        }
+        "sidebar.get_state" => Ok(Some(serde_json::to_value(&*sidebar).unwrap_or(json!({})))),
+        _ => Ok(None),
     }
 }
 
@@ -1191,6 +1238,34 @@ mod tests {
             ),
         );
         assert_eq!(renamed["result"]["ok"], true);
+    }
+
+    #[test]
+    fn sidebar_status_progress_log_and_get_state() {
+        let mut backend = Backend::new(false);
+        handle(
+            &mut backend,
+            r#"{"method":"sidebar.set_status","params":{"key":"branch","value":"master"},"id":50}"#,
+        );
+        handle(
+            &mut backend,
+            r#"{"method":"sidebar.set_progress","params":{"value":42,"label":"wave 1"},"id":51}"#,
+        );
+        handle(
+            &mut backend,
+            r#"{"method":"sidebar.log","params":{"level":"info","message":"spawned"},"id":52}"#,
+        );
+
+        let state = handle(
+            &mut backend,
+            r#"{"method":"sidebar.get_state","params":{},"id":53}"#,
+        );
+        let result = &state["result"];
+        assert_eq!(result["statuses"][0]["key"], "branch");
+        assert_eq!(result["statuses"][0]["value"], "master");
+        assert_eq!(result["progress"]["value"], 42);
+        assert_eq!(result["progress"]["label"], "wave 1");
+        assert_eq!(result["logs"][0]["message"], "spawned");
     }
 
     #[test]

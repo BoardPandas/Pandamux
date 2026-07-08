@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.0]
+
+### Added
+
+- Added the native sidebar status/progress/log surface: `set-status <key> <value>`, `set-progress <value> [--label]`, `log <level> <message>`, and `sidebar-state` CLI commands (with `sidebar.set_status`/`set_progress`/`log`/`get_state` pipe methods), backed by a `pandamux-core::sidebar` store (key/value statuses, a 0-100 progress bar, and a 200-line capped log). This is the other half of what the orchestrator drives to report wave progress.
+- The status bar now shows the sidebar progress (`label NN%`) in the accent color when set.
+
+### Changed
+
+- Threaded the sidebar store through the shared single-writer dispatcher so CLI/orchestrator progress reports reach the running UI.
+- Bumped the app version to `0.23.0`.
+
 ## [0.22.0]
 
 ### Added

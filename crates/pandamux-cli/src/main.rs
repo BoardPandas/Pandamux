@@ -99,6 +99,14 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 return Err("usage: pandamux agent <spawn|spawn-batch|status|list|kill>".into());
             }
         },
+        "set-status" => {
+            print_json(send_v2("sidebar.set_status", set_status_params(&args[1..])?).await?)
+        }
+        "set-progress" => {
+            print_json(send_v2("sidebar.set_progress", set_progress_params(&args[1..])?).await?)
+        }
+        "log" => print_json(send_v2("sidebar.log", log_params(&args[1..])?).await?),
+        "sidebar-state" => print_json(send_v2("sidebar.get_state", json!({})).await?),
         "browser" => {
             return Err(
                 "browser automation is not supported in the native build; use Claude Code's browser tooling"
@@ -642,6 +650,46 @@ fn agent_batch_params(args: &[String]) -> Result<Value, Box<dyn Error>> {
     Ok(Value::Object(params))
 }
 
+fn set_status_params(args: &[String]) -> Result<Value, Box<dyn Error>> {
+    let key = args.first().ok_or("set-status requires <key>")?;
+    let value = args.get(1).cloned().unwrap_or_default();
+    Ok(json!({ "key": key, "value": value }))
+}
+
+fn set_progress_params(args: &[String]) -> Result<Value, Box<dyn Error>> {
+    let mut params = serde_json::Map::new();
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--label" => {
+                params.insert(
+                    "label".to_string(),
+                    json!(args.get(index + 1).ok_or("--label requires a value")?),
+                );
+                index += 2;
+            }
+            value if !params.contains_key("value") => {
+                params.insert("value".to_string(), json!(value.parse::<f64>()?));
+                index += 1;
+            }
+            unknown => return Err(format!("unknown set-progress option: {unknown}").into()),
+        }
+    }
+    if !params.contains_key("value") {
+        return Err("set-progress requires <value>".into());
+    }
+    Ok(Value::Object(params))
+}
+
+fn log_params(args: &[String]) -> Result<Value, Box<dyn Error>> {
+    let level = args.first().ok_or("log requires <level> <message>")?;
+    let message = args[1..].join(" ");
+    if message.is_empty() {
+        return Err("log requires a message".into());
+    }
+    Ok(json!({ "level": level, "message": message }))
+}
+
 fn clear_notifications_params(args: &[String]) -> Result<Value, Box<dyn Error>> {
     let mut params = serde_json::Map::new();
     if let Some(id) = args.first() {
@@ -709,7 +757,7 @@ fn print_json(value: Value) {
 
 fn print_usage() {
     println!(
-        "Usage: pandamux <command>\n\nCommands:\n  ping\n  identify\n  capabilities\n  tree\n  new-workspace [--title <title>] [--shell <shell>]\n  list-workspaces\n  select-workspace <id>\n  rename-workspace <id> <title>\n  close-workspace <id>\n  split [--down] [--type terminal|markdown|diff] [--pane <id>] [--surface <id>] [--workspace <id>]\n  close-pane <id> [--workspace <id>]\n  focus-pane <id> [--workspace <id>]\n  zoom-pane [id] [--workspace <id>]\n  new-surface [--type terminal|markdown|diff] [--pane <id>] [--workspace <id>]\n  focus-surface <id> [--workspace <id>]\n  close-surface <id> [--workspace <id>]\n  list-panes [--workspace <id>]\n  list-surfaces [--workspace <id>] [--pane <id>]\n  send <text> [--surface <id>] [--workspace <id>]\n  send-key <key> [--ctrl] [--shift] [--alt] [--surface <id>] [--workspace <id>]\n  read-screen [--lines <N>] [--surface <id>] [--workspace <id>]\n  trigger-flash [surfaceId]\n  notify <message> [--body <text>] [--source build|agent|deploy|port|generic]\n  list-notifications\n  clear-notifications [id]\n  agent spawn --cmd <command> [--label <name>] [--cwd <dir>] [--pane <id>]\n  agent spawn-batch --json '[...]' [--strategy distribute|stack|split]\n  agent status <id> | agent list | agent kill <id>\n  layout grid --count <N> [--type terminal|markdown|diff] [--anchor-pane <id>] [--anchor-surface <id>] [--workspace <id>]"
+        "Usage: pandamux <command>\n\nCommands:\n  ping\n  identify\n  capabilities\n  tree\n  new-workspace [--title <title>] [--shell <shell>]\n  list-workspaces\n  select-workspace <id>\n  rename-workspace <id> <title>\n  close-workspace <id>\n  split [--down] [--type terminal|markdown|diff] [--pane <id>] [--surface <id>] [--workspace <id>]\n  close-pane <id> [--workspace <id>]\n  focus-pane <id> [--workspace <id>]\n  zoom-pane [id] [--workspace <id>]\n  new-surface [--type terminal|markdown|diff] [--pane <id>] [--workspace <id>]\n  focus-surface <id> [--workspace <id>]\n  close-surface <id> [--workspace <id>]\n  list-panes [--workspace <id>]\n  list-surfaces [--workspace <id>] [--pane <id>]\n  send <text> [--surface <id>] [--workspace <id>]\n  send-key <key> [--ctrl] [--shift] [--alt] [--surface <id>] [--workspace <id>]\n  read-screen [--lines <N>] [--surface <id>] [--workspace <id>]\n  trigger-flash [surfaceId]\n  notify <message> [--body <text>] [--source build|agent|deploy|port|generic]\n  list-notifications\n  clear-notifications [id]\n  agent spawn --cmd <command> [--label <name>] [--cwd <dir>] [--pane <id>]\n  agent spawn-batch --json '[...]' [--strategy distribute|stack|split]\n  agent status <id> | agent list | agent kill <id>\n  set-status <key> <value>\n  set-progress <value> [--label <text>]\n  log <level> <message>\n  sidebar-state\n  layout grid --count <N> [--type terminal|markdown|diff] [--anchor-pane <id>] [--anchor-surface <id>] [--workspace <id>]"
     );
 }
 
@@ -811,6 +859,38 @@ mod tests {
         let read = read_screen_params(&["--lines".to_string(), "12".to_string()])
             .expect("read params should parse");
         assert_eq!(read["lines"], 12);
+    }
+
+    #[test]
+    fn parses_sidebar_params() {
+        let status =
+            set_status_params(&["branch".to_string(), "master".to_string()]).expect("status");
+        assert_eq!(status["key"], "branch");
+        assert_eq!(status["value"], "master");
+
+        let progress =
+            set_progress_params(&["42".to_string(), "--label".to_string(), "wave".to_string()])
+                .expect("progress");
+        assert_eq!(progress["value"], 42.0);
+        assert_eq!(progress["label"], "wave");
+
+        let log = log_params(&["info".to_string(), "hello".to_string(), "world".to_string()])
+            .expect("log");
+        assert_eq!(log["level"], "info");
+        assert_eq!(log["message"], "hello world");
+    }
+
+    #[test]
+    fn parses_agent_spawn_params() {
+        let params = agent_spawn_params(&[
+            "--cmd".to_string(),
+            "claude --foo".to_string(),
+            "--label".to_string(),
+            "worker".to_string(),
+        ])
+        .expect("agent spawn");
+        assert_eq!(params["cmd"], "claude --foo");
+        assert_eq!(params["label"], "worker");
     }
 
     #[test]

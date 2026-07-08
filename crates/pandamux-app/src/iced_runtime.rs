@@ -3,8 +3,8 @@ use iced::futures::SinkExt;
 use iced::{Element, Size, Subscription, Task, Theme, application, keyboard, stream, time, window};
 use pandamux_core::{
     AgentRegistry, AppIntent, AppState, NewNotification, NotificationSource, Notifications,
-    PaneIntent, SplitDirection, SplitNode, SplitPaneParams, SurfaceId, SurfaceIntent, SurfaceType,
-    WorkspaceIntent, get_all_pane_ids,
+    PaneIntent, SidebarState, SplitDirection, SplitNode, SplitPaneParams, SurfaceId, SurfaceIntent,
+    SurfaceType, WorkspaceIntent, get_all_pane_ids,
 };
 use pandamux_term::{
     GridSize, PtyCommand, PtySessionManager, SearchOptions, detect_links, search_lines,
@@ -48,6 +48,8 @@ pub struct NativeShellRuntime {
     notif_seq: u64,
     /// Live agents spawned via the pipe (CLI / orchestrator).
     agents: AgentRegistry,
+    /// Sidebar status/progress/log written via the pipe (CLI / orchestrator).
+    sidebar: SidebarState,
     copy_mode: bool,
     /// Command-palette state (query + selection persist across refreshes; items
     /// are rebuilt each refresh).
@@ -102,6 +104,7 @@ impl NativeShellRuntime {
             notifications_open: false,
             notif_seq: 0,
             agents: AgentRegistry::new(),
+            sidebar: SidebarState::new(),
             copy_mode: false,
             palette: PaletteViewState::default(),
             settings_section: SettingsSection::default(),
@@ -446,6 +449,7 @@ impl NativeShellRuntime {
                     &mut self.notifications,
                     &mut self.notif_seq,
                     &mut self.agents,
+                    &mut self.sidebar,
                     now_ms(),
                     self.live_ptys,
                 );
@@ -703,6 +707,11 @@ impl NativeShellRuntime {
         self.chrome.session_count = self.app_state.workspaces.len();
         self.chrome.version = env!("CARGO_PKG_VERSION").to_string();
         self.chrome.unread_notifications = self.notifications.unread_count(None) > 0;
+        self.chrome.sidebar_progress = self
+            .sidebar
+            .progress
+            .as_ref()
+            .map(|progress| (progress.value, progress.label.clone().unwrap_or_default()));
         // Gold busy-agent dot when agents are registered, else running when live
         // shells are attached, else idle.
         self.chrome.activity = if !self.agents.is_empty() {
