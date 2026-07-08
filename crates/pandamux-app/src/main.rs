@@ -1,5 +1,10 @@
 #[cfg(feature = "iced-runtime")]
 mod iced_runtime;
+// The runtime uses the auto-session half now; the named-session API (save/load/
+// list/delete) is a complete, tested surface the Phase 5 command palette and
+// session panel will call, so its as-yet-unwired items are allowed to be idle.
+#[allow(dead_code)]
+mod persistence;
 mod pipe_server;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

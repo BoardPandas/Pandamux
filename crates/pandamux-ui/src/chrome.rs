@@ -36,6 +36,17 @@ pub enum RailItem {
     Settings,
 }
 
+/// Activity state of the focused session, driving the status-bar dot color
+/// (running = accent, busy-agent = gold, idle = dim), mirroring the Electron
+/// `shellState` + Claude-activity signal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum SessionActivity {
+    #[default]
+    Idle,
+    Running,
+    BusyAgent,
+}
+
 /// All chrome-facing view state. Populated by the runtime from `AppState` plus
 /// the (future) pollers; terminal/pane state stays in the projection.
 #[derive(Clone, Debug, PartialEq)]
@@ -46,6 +57,7 @@ pub struct ChromeState {
     pub active_rail: RailItem,
     pub active_session_name: String,
     pub unread_notifications: bool,
+    pub activity: SessionActivity,
     pub shell_kind: ShellKind,
     pub shell_label: String,
     pub git_branch: Option<String>,
@@ -66,6 +78,7 @@ impl Default for ChromeState {
             active_rail: RailItem::Sessions,
             active_session_name: "Workspace".to_string(),
             unread_notifications: false,
+            activity: SessionActivity::Idle,
             shell_kind: ShellKind::PowerShell,
             shell_label: "pwsh".to_string(),
             git_branch: None,
@@ -298,7 +311,7 @@ fn rail_button<'a>(
 
 pub fn status_bar<'a>(chrome: &ChromeState, palette: Palette) -> Element<'a, ShellMessage> {
     let mut left = row![
-        status_dot(palette.accent),
+        status_dot(activity_color(chrome.activity, palette)),
         mono_label(&chrome.shell_label, palette.t3),
     ]
     .spacing(6)
@@ -412,6 +425,14 @@ fn status_dot<'a>(color: Color) -> Element<'a, ShellMessage> {
             ..Default::default()
         })
         .into()
+}
+
+fn activity_color(activity: SessionActivity, palette: Palette) -> Color {
+    match activity {
+        SessionActivity::Running => palette.accent,
+        SessionActivity::BusyAgent => palette.shell_ssh, // gold
+        SessionActivity::Idle => palette.ov(0.16),
+    }
 }
 
 fn titlebar_icon_button<'a>(

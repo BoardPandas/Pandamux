@@ -1,5 +1,8 @@
 use crate::grid::{GridSize, TerminalGrid};
+use crate::links::DetectedLink;
 use crate::pty::{PtyCommand, PtyResult};
+use crate::search::{SearchMatch, SearchOptions};
+use crate::shell;
 use portable_pty::{PtySize, native_pty_system};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -12,6 +15,7 @@ pub struct PtySessionManager {
 
 struct PtySession {
     grid: TerminalGrid,
+    size: GridSize,
     _master: Box<dyn portable_pty::MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
@@ -73,6 +77,7 @@ impl PtySessionManager {
             session_id,
             PtySession {
                 grid: TerminalGrid::new(size),
+                size,
                 _master: pair.master,
                 writer,
                 child,
@@ -88,27 +93,45 @@ impl PtySessionManager {
         self.sessions.contains_key(session_id)
     }
 
+    /// Write to the PTY, chunking long writes into ConPTY-friendly pieces so a
+    /// single large paste cannot outrun the input pipe (see `shell::chunk_write`).
     pub fn write_all(&mut self, session_id: &str, bytes: &[u8]) -> PtyResult<()> {
         let session = self
             .sessions
             .get_mut(session_id)
             .ok_or_else(|| format!("pty session not found: {session_id}"))?;
-        session.writer.write_all(bytes)?;
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        if bytes.len() <= shell::CHUNK_THRESHOLD {
+            session.writer.write_all(bytes)?;
+        } else {
+            for chunk in shell::chunk_write(bytes, shell::CHUNK_SIZE) {
+                session.writer.write_all(chunk)?;
+                session.writer.flush()?;
+            }
+        }
         session.writer.flush()?;
         Ok(())
     }
 
+    /// Resize the PTY. A same-size resize is dropped: forwarding it still makes
+    /// the shell redraw its prompt for no reason (a doubled-prompt cause).
     pub fn resize(&mut self, session_id: &str, size: GridSize) -> PtyResult<()> {
         let session = self
             .sessions
             .get_mut(session_id)
             .ok_or_else(|| format!("pty session not found: {session_id}"))?;
+        if session.size == size {
+            return Ok(());
+        }
         session._master.resize(PtySize {
             rows: size.rows as u16,
             cols: size.columns as u16,
             pixel_width: 0,
             pixel_height: 0,
         })?;
+        session.size = size;
         session.grid = TerminalGrid::new(size);
         Ok(())
     }
@@ -149,11 +172,63 @@ impl PtySessionManager {
         Ok(String::from_utf8_lossy(&session.output).to_string())
     }
 
+    /// Full serialization (scrollback + visible) of the session's grid, the
+    /// native equivalent of the xterm serialize addon.
+    pub fn serialize(&mut self, session_id: &str) -> PtyResult<String> {
+        self.poll(session_id)?;
+        let session = self
+            .sessions
+            .get(session_id)
+            .ok_or_else(|| format!("pty session not found: {session_id}"))?;
+        Ok(session.grid.serialize())
+    }
+
+    /// Search the session's scrollback + visible buffer.
+    pub fn search(
+        &mut self,
+        session_id: &str,
+        query: &str,
+        options: SearchOptions,
+    ) -> PtyResult<Vec<SearchMatch>> {
+        self.poll(session_id)?;
+        let session = self
+            .sessions
+            .get(session_id)
+            .ok_or_else(|| format!("pty session not found: {session_id}"))?;
+        Ok(session.grid.search(query, options))
+    }
+
+    /// Detect links on the session's visible screen.
+    pub fn links(&mut self, session_id: &str) -> PtyResult<Vec<DetectedLink>> {
+        self.poll(session_id)?;
+        let session = self
+            .sessions
+            .get(session_id)
+            .ok_or_else(|| format!("pty session not found: {session_id}"))?;
+        Ok(session.grid.links())
+    }
+
+    /// The session's write-cursor position as (row, column).
+    pub fn cursor(&mut self, session_id: &str) -> PtyResult<(usize, usize)> {
+        self.poll(session_id)?;
+        let session = self
+            .sessions
+            .get(session_id)
+            .ok_or_else(|| format!("pty session not found: {session_id}"))?;
+        Ok(session.grid.cursor())
+    }
+
+    /// Kill the session, tree-killing the shell's whole process subtree first on
+    /// Windows so grandchildren (e.g. Claude Code's persistent backend) do not
+    /// orphan when the pseudoconsole closes.
     pub fn kill(&mut self, session_id: &str) -> PtyResult<()> {
         let mut session = self
             .sessions
             .remove(session_id)
             .ok_or_else(|| format!("pty session not found: {session_id}"))?;
+        if let Some(pid) = session.child.process_id() {
+            tree_kill(pid);
+        }
         session.child.kill()?;
         Ok(())
     }
@@ -176,10 +251,16 @@ impl PtySession {
                 Ok(chunk) => {
                     self.grid.advance(&chunk);
                     self.output.extend_from_slice(&chunk);
-                    if !self.cpr_answered
-                        && self.output.windows(4).any(|window| window == b"\x1b[6n")
-                    {
-                        self.writer.write_all(b"\x1b[1;1R")?;
+                    // Answer DA1 (Primary Device Attributes) probes in-process so
+                    // oh-my-posh / PSReadLine never stall or leak the reply onto
+                    // the prompt.
+                    if shell::contains_da1_query(&chunk) {
+                        self.writer.write_all(shell::DA1_REPLY)?;
+                        self.writer.flush()?;
+                    }
+                    // Answer the first CPR query so a bounded probe does not hang.
+                    if !self.cpr_answered && shell::contains_cpr_query(&self.output) {
+                        self.writer.write_all(shell::CPR_REPLY)?;
                         self.writer.flush()?;
                         self.cpr_answered = true;
                     }
@@ -188,6 +269,33 @@ impl PtySession {
             }
         }
         Ok(())
+    }
+}
+
+/// Force-kill a process subtree. On Windows this walks the parent->child
+/// snapshot with `taskkill /T /F`, spawned detached and best-effort, before the
+/// pseudoconsole closes. A no-op on other platforms (portable-pty's own kill
+/// already signals the process group there).
+fn tree_kill(pid: u32) {
+    #[cfg(windows)]
+    {
+        use std::path::Path;
+        use std::process::{Command, Stdio};
+        let system_root = std::env::var("SystemRoot")
+            .or_else(|_| std::env::var("windir"))
+            .unwrap_or_else(|_| "C:\\Windows".to_string());
+        let taskkill = Path::new(&system_root)
+            .join("System32")
+            .join("taskkill.exe");
+        let _ = Command::new(taskkill)
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = pid;
     }
 }
 

@@ -1,18 +1,24 @@
+use crate::persistence::SessionStore;
 use iced::{Element, Size, Subscription, Task, Theme, application, keyboard, time, window};
 use pandamux_core::{
-    AppIntent, AppState, PaneIntent, SplitNode, SplitPaneParams, SurfaceId, SurfaceIntent,
-    SurfaceType, get_all_pane_ids,
+    AppIntent, AppState, NewNotification, NotificationSource, Notifications, PaneIntent, SplitNode,
+    SplitPaneParams, SurfaceId, SurfaceIntent, SurfaceType, get_all_pane_ids,
 };
-use pandamux_term::{GridSize, PtyCommand, PtySessionManager};
+use pandamux_term::{
+    GridSize, PtyCommand, PtySessionManager, SearchOptions, detect_links, search_lines,
+};
 use pandamux_ui::{
-    ChromeState, RailItem, ShellKind, ShellMessage, ShellViewModel, TerminalSnapshot, UiTheme,
-    app_view, project_workspace_shell, shell_view,
+    ChromeState, FindViewState, LinkSpan, NotificationCard, NotificationsViewState, RailItem,
+    SessionActivity, ShellKind, ShellMessage, ShellViewModel, TerminalSnapshot, UiTheme, app_view,
+    project_workspace_shell, shell_view,
 };
 use std::collections::HashSet;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Ticks between block-cursor blinks (~1.1s at a 100ms tick).
 const CURSOR_BLINK_TICKS: u64 = 11;
+/// Ticks between session autosaves (~30s at a 100ms tick).
+const AUTOSAVE_TICKS: u64 = 300;
 
 pub struct NativeShellRuntime {
     app_state: AppState,
@@ -20,6 +26,13 @@ pub struct NativeShellRuntime {
     live_ptys: bool,
     chrome: ChromeState,
     tick: u64,
+    store: SessionStore,
+    find: FindViewState,
+    find_matches: Vec<(usize, usize, usize)>,
+    notifications: Notifications,
+    notifications_open: bool,
+    notif_seq: u64,
+    copy_mode: bool,
     view_model: ShellViewModel,
     terminals: Vec<TerminalSnapshot>,
     last_error: Option<String>,
@@ -33,19 +46,49 @@ impl Default for NativeShellRuntime {
 
 impl NativeShellRuntime {
     pub fn new(live_ptys: bool) -> Self {
-        let app_state = AppState::default();
+        let store = SessionStore::new(SessionStore::default_dir());
+        // Only the real (live) app touches disk. Tests/smoke use default state so
+        // they stay hermetic. On a version change the volatile auto-session is
+        // cleared, so we start clean; otherwise restore the last layout.
+        let app_state = if live_ptys {
+            let version_changed = store.handle_version_change(env!("CARGO_PKG_VERSION"));
+            if version_changed {
+                AppState::default()
+            } else {
+                store.load_session().unwrap_or_default()
+            }
+        } else {
+            AppState::default()
+        };
         let chrome = ChromeState::default();
-        let view_model = build_view_model(&app_state, &[], &chrome, true);
+        let view_model = initial_view_model(&app_state, &chrome);
         let mut runtime = Self {
             app_state,
             ptys: PtySessionManager::new(),
             live_ptys,
             chrome,
             tick: 0,
+            store,
+            find: FindViewState::default(),
+            find_matches: Vec::new(),
+            notifications: Notifications::new(),
+            notifications_open: false,
+            notif_seq: 0,
+            copy_mode: false,
             view_model,
             terminals: Vec::new(),
             last_error: None,
         };
+        if live_ptys {
+            runtime.raise_notification(NewNotification {
+                workspace_id: None,
+                surface_id: None,
+                title: "PandaMUX Everywhere is running".to_string(),
+                body: "Native shell ready. Ctrl+F to find, Ctrl+B to toggle the status bar."
+                    .to_string(),
+                source: NotificationSource::Build,
+            });
+        }
         runtime.refresh_terminal_snapshots();
         runtime
     }
@@ -56,6 +99,123 @@ impl NativeShellRuntime {
 
     fn cursor_on(&self) -> bool {
         (self.tick / CURSOR_BLINK_TICKS).is_multiple_of(2)
+    }
+
+    /// Raise a notification with a generated id and wall-clock timestamp.
+    pub fn raise_notification(&mut self, note: NewNotification) {
+        self.notif_seq += 1;
+        let id = format!("notif-{}", self.notif_seq);
+        self.notifications.push(note, id, now_ms());
+    }
+
+    fn toggle_notifications(&mut self) {
+        self.notifications_open = !self.notifications_open;
+        if self.notifications_open {
+            self.notifications.mark_all_read(None);
+        }
+    }
+
+    /// Advance the current find match by `delta`, wrapping around.
+    fn find_step(&mut self, delta: i64) {
+        let count = self.find.match_count as i64;
+        if count == 0 {
+            return;
+        }
+        let index0 = (self.find.current as i64 - 1 + delta).rem_euclid(count);
+        self.find.current = index0 as usize + 1;
+    }
+
+    /// Recompute find matches against the focused terminal's visible lines.
+    /// Preserves the current index (only clamping it) so next/prev keep working.
+    fn recompute_find_matches(&mut self) {
+        self.find_matches.clear();
+        if !self.find.open || self.find.query.is_empty() {
+            self.find.match_count = 0;
+            self.find.current = 0;
+            self.find.current_match = None;
+            return;
+        }
+        let lines = self.focused_terminal_lines();
+        let options = SearchOptions {
+            case_sensitive: self.find.case_sensitive,
+            whole_word: false,
+        };
+        self.find_matches = search_lines(&lines, &self.find.query, options)
+            .into_iter()
+            .map(|hit| (hit.line, hit.start, hit.end))
+            .collect();
+        self.find.match_count = self.find_matches.len();
+        if self.find.match_count == 0 {
+            self.find.current = 0;
+            self.find.current_match = None;
+        } else {
+            if self.find.current == 0 || self.find.current > self.find.match_count {
+                self.find.current = 1;
+            }
+            self.find.current_match = self.find_matches.get(self.find.current - 1).copied();
+        }
+    }
+
+    /// The visible lines of the focused pane's active terminal snapshot.
+    fn focused_terminal_lines(&self) -> Vec<String> {
+        let Some(focused) = self
+            .app_state
+            .active_workspace()
+            .and_then(|workspace| workspace.focused_pane_id.clone())
+        else {
+            return Vec::new();
+        };
+        let projection = self
+            .app_state
+            .active_workspace()
+            .map(project_workspace_shell);
+        let Some(surface_id) = projection.and_then(|projection| {
+            projection
+                .visible_panes
+                .into_iter()
+                .find(|pane| pane.id == focused)
+                .and_then(|pane| pane.active_surface_id)
+        }) else {
+            return Vec::new();
+        };
+        self.terminals
+            .iter()
+            .find(|snapshot| snapshot.surface_id == surface_id)
+            .map(|snapshot| snapshot.lines.clone())
+            .unwrap_or_default()
+    }
+
+    fn notifications_view(&self) -> NotificationsViewState {
+        let now = now_ms();
+        let cards = self
+            .notifications
+            .list()
+            .iter()
+            .rev()
+            .map(|note| NotificationCard {
+                id: note.id.clone(),
+                title: note.title.clone(),
+                body: note.body.clone(),
+                source: note.source,
+                read: note.read,
+                age: relative_age(now, note.timestamp_ms),
+            })
+            .collect();
+        NotificationsViewState {
+            open: self.notifications_open,
+            cards,
+        }
+    }
+
+    /// Persist the auto-restore session every [`AUTOSAVE_TICKS`] ticks (~30s),
+    /// but only for the live app (tests/smoke never touch disk).
+    fn autosave_if_due(&mut self) {
+        if self.live_ptys
+            && self.tick.is_multiple_of(AUTOSAVE_TICKS)
+            && let Err(error) = self.store.save_session(&self.app_state)
+        {
+            self.last_error = Some(format!("autosave failed: {error}"));
+        }
     }
 
     /// Handle a chrome/window message directly (returns a window [`Task`] when
@@ -82,6 +242,7 @@ impl NativeShellRuntime {
         match message {
             ShellMessage::Tick => {
                 self.tick = self.tick.wrapping_add(1);
+                self.autosave_if_due();
                 self.refresh_terminal_snapshots();
                 return;
             }
@@ -97,12 +258,12 @@ impl NativeShellRuntime {
                 self.chrome.active_rail = item;
             }
             ShellMessage::OverlayRequested(item) => {
-                // Overlays (palette/notifications/settings/quick-launch) land in
-                // Phases 4-5. For now we reflect the request in the rail
-                // highlight and clear the notification badge when opened.
+                // The notifications rail/bell opens the slide-over; the other
+                // overlays (palette/settings/quick-launch) land in Phase 5 and
+                // just reflect the request in the rail highlight for now.
                 self.chrome.active_rail = item;
                 if item == RailItem::Notifications {
-                    self.chrome.unread_notifications = false;
+                    self.toggle_notifications();
                 }
                 self.refresh_terminal_snapshots();
                 return;
@@ -115,6 +276,35 @@ impl NativeShellRuntime {
             }
             ShellMessage::CycleAccent => {
                 self.chrome.accent = self.chrome.accent.next();
+            }
+            ShellMessage::FindOpened => {
+                self.find.open = true;
+                if self.find.current == 0 {
+                    self.find.current = 1;
+                }
+            }
+            ShellMessage::FindClosed => {
+                self.find.open = false;
+                self.find.current_match = None;
+            }
+            ShellMessage::FindQueryChanged(query) => {
+                self.find.query = query;
+                self.find.current = 1;
+            }
+            ShellMessage::FindNext => self.find_step(1),
+            ShellMessage::FindPrev => self.find_step(-1),
+            ShellMessage::FindCaseToggled => {
+                self.find.case_sensitive = !self.find.case_sensitive;
+            }
+            ShellMessage::CopyModeToggled => {
+                self.copy_mode = !self.copy_mode;
+            }
+            ShellMessage::NotificationsToggled => self.toggle_notifications(),
+            ShellMessage::NotificationCleared(id) => {
+                self.notifications.clear(&id);
+            }
+            ShellMessage::NotificationsClearedAll => {
+                self.notifications.clear_all();
             }
             core_message => {
                 let result = self.apply_core_message(core_message);
@@ -184,20 +374,37 @@ impl NativeShellRuntime {
                 self.last_error = Some(error);
                 fallback_terminal_snapshots(&self.app_state)
             });
+        self.recompute_find_matches();
         self.rebuild_chrome();
-        self.view_model = build_view_model(
-            &self.app_state,
-            &self.terminals,
-            &self.chrome,
-            self.cursor_on(),
-        );
+        self.view_model = ShellViewModel {
+            projection: self
+                .app_state
+                .active_workspace()
+                .map(project_workspace_shell)
+                .expect("default app state always has an active workspace"),
+            terminals: self.terminals.clone(),
+            chrome: self.chrome.clone(),
+            cursor_on: self.cursor_on(),
+            find: self.find.clone(),
+            notifications: self.notifications_view(),
+            copy_mode: self.copy_mode,
+        };
     }
 
     /// Refresh the chrome view state derived from canonical state (session/pane
-    /// counts, active shell/session). Pollers (git/ports) fill the rest later.
+    /// counts, active shell/session, activity, unread badge). Pollers (git/ports)
+    /// fill the rest later.
     fn rebuild_chrome(&mut self) {
         self.chrome.session_count = self.app_state.workspaces.len();
         self.chrome.version = env!("CARGO_PKG_VERSION").to_string();
+        self.chrome.unread_notifications = self.notifications.unread_count(None) > 0;
+        // Running when live shells are attached; busy-agent detection lands with
+        // the Phase 5 agent observer.
+        self.chrome.activity = if self.live_ptys {
+            SessionActivity::Running
+        } else {
+            SessionActivity::Idle
+        };
         if let Some(workspace) = self.app_state.active_workspace() {
             self.chrome.pane_count = get_all_pane_ids(&workspace.split_tree).len();
             self.chrome.shell_label = workspace.shell.clone();
@@ -321,6 +528,8 @@ fn shortcut_for(ctrl: bool, shift: bool, character: &str) -> ShellMessage {
         (true, "t") => ShellMessage::ToggleTheme,
         (true, "a") => ShellMessage::CycleAccent,
         (false, "k") => ShellMessage::OverlayRequested(RailItem::CommandPalette),
+        (false, "f") => ShellMessage::FindOpened,
+        (false, "n") => ShellMessage::NotificationsToggled,
         _ => ShellMessage::Noop,
     }
 }
@@ -360,31 +569,63 @@ fn terminal_snapshots(
             } else {
                 fallback_lines()
             };
+            let links = detect_links(&lines)
+                .into_iter()
+                .map(|link| LinkSpan {
+                    line: link.line,
+                    start: link.start,
+                    end: link.end,
+                })
+                .collect();
             Some(TerminalSnapshot {
                 surface_id,
                 lines,
                 columns: 120,
                 rows: 30,
+                links,
             })
         })
         .collect();
     Ok(snapshots)
 }
 
-fn build_view_model(
-    app_state: &AppState,
-    terminals: &[TerminalSnapshot],
-    chrome: &ChromeState,
-    cursor_on: bool,
-) -> ShellViewModel {
+/// A minimal view model for construction time; overwritten by the first
+/// `refresh_terminal_snapshots` call.
+fn initial_view_model(app_state: &AppState, chrome: &ChromeState) -> ShellViewModel {
     let workspace = app_state
         .active_workspace()
         .expect("default app state should always have an active workspace");
     ShellViewModel {
         projection: project_workspace_shell(workspace),
-        terminals: terminals.to_vec(),
+        terminals: Vec::new(),
         chrome: chrome.clone(),
-        cursor_on,
+        cursor_on: true,
+        find: FindViewState::default(),
+        notifications: NotificationsViewState::default(),
+        copy_mode: false,
+    }
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Human relative age like "just now", "3m ago", "2h ago".
+fn relative_age(now_ms: u64, then_ms: u64) -> String {
+    let secs = now_ms.saturating_sub(then_ms) / 1000;
+    if secs < 5 {
+        "just now".to_string()
+    } else if secs < 60 {
+        format!("{secs}s ago")
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h ago", secs / 3600)
+    } else {
+        format!("{}d ago", secs / 86_400)
     }
 }
 
@@ -586,6 +827,63 @@ mod tests {
             RailItem::NewSession
         );
         assert_eq!(runtime.last_error(), None);
+    }
+
+    #[test]
+    fn find_matches_over_focused_terminal_and_steps() {
+        let mut runtime = NativeShellRuntime::default();
+        runtime.update_shell(ShellMessage::FindOpened);
+        // Fallback lines contain "shell" once ("Native shell runtime is active.").
+        runtime.update_shell(ShellMessage::FindQueryChanged("shell".to_string()));
+        let find = &runtime.view_model().find;
+        assert!(find.open);
+        assert_eq!(find.match_count, 1);
+        assert_eq!(find.current, 1);
+        assert!(find.current_match.is_some());
+
+        // Stepping wraps within a single match.
+        runtime.update_shell(ShellMessage::FindNext);
+        assert_eq!(runtime.view_model().find.current, 1);
+
+        // No matches clears the highlight.
+        runtime.update_shell(ShellMessage::FindQueryChanged("zzz".to_string()));
+        assert_eq!(runtime.view_model().find.match_count, 0);
+        assert!(runtime.view_model().find.current_match.is_none());
+
+        runtime.update_shell(ShellMessage::FindClosed);
+        assert!(!runtime.view_model().find.open);
+        assert_eq!(runtime.last_error(), None);
+    }
+
+    #[test]
+    fn notifications_raise_toggle_and_clear() {
+        let mut runtime = NativeShellRuntime::default();
+        // Non-live runtime starts with no notifications.
+        assert!(runtime.view_model().notifications.cards.is_empty());
+        assert!(!runtime.view_model().chrome.unread_notifications);
+
+        runtime.raise_notification(NewNotification::generic("Build done", "ok"));
+        runtime.update_shell(ShellMessage::Tick);
+        assert_eq!(runtime.view_model().notifications.cards.len(), 1);
+        assert!(runtime.view_model().chrome.unread_notifications);
+
+        // Opening the panel marks all read and clears the badge.
+        runtime.update_shell(ShellMessage::NotificationsToggled);
+        assert!(runtime.view_model().notifications.open);
+        assert!(!runtime.view_model().chrome.unread_notifications);
+
+        let id = runtime.view_model().notifications.cards[0].id.clone();
+        runtime.update_shell(ShellMessage::NotificationCleared(id));
+        assert!(runtime.view_model().notifications.cards.is_empty());
+        assert_eq!(runtime.last_error(), None);
+    }
+
+    #[test]
+    fn copy_mode_toggles() {
+        let mut runtime = NativeShellRuntime::default();
+        assert!(!runtime.view_model().copy_mode);
+        runtime.update_shell(ShellMessage::CopyModeToggled);
+        assert!(runtime.view_model().copy_mode);
     }
 
     #[test]

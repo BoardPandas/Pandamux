@@ -9,9 +9,10 @@
 //! actions. It never owns canonical state.
 
 use crate::chrome::{self, ChromeState, RailItem};
+use crate::overlays;
 use crate::shell_projection::{ColumnProjection, PaneProjection, SurfaceProjection};
 use crate::theme::{self, Palette, ShellKind};
-use iced::widget::{Space, button, canvas, column, container, mouse_area, row, text};
+use iced::widget::{Space, button, canvas, column, container, mouse_area, row, stack, text};
 use iced::{
     Alignment, Color, Element, Length, Padding, Pixels, Point, Rectangle, Renderer, Size, Theme,
     mouse,
@@ -44,8 +45,29 @@ pub enum ShellMessage {
     ToggleStatusBar,
     ToggleTheme,
     CycleAccent,
+    // Find-in-terminal
+    FindOpened,
+    FindClosed,
+    FindQueryChanged(String),
+    FindNext,
+    FindPrev,
+    FindCaseToggled,
+    // Copy mode
+    CopyModeToggled,
+    // Notifications
+    NotificationsToggled,
+    NotificationCleared(String),
+    NotificationsClearedAll,
     /// No-op (e.g. an unmapped key press); ignored by the runtime.
     Noop,
+}
+
+/// A detected-link span on a visible row (character offsets), for underlining.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LinkSpan {
+    pub line: usize,
+    pub start: usize,
+    pub end: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -54,6 +76,21 @@ pub struct TerminalSnapshot {
     pub lines: Vec<String>,
     pub columns: usize,
     pub rows: usize,
+    /// Detected link spans on the visible screen (underlined by the viewport).
+    pub links: Vec<LinkSpan>,
+}
+
+impl TerminalSnapshot {
+    /// Convenience constructor for snapshots without links (tests, placeholders).
+    pub fn new(surface_id: SurfaceId, lines: Vec<String>, columns: usize, rows: usize) -> Self {
+        Self {
+            surface_id,
+            lines,
+            columns,
+            rows,
+            links: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -63,6 +100,12 @@ pub struct ShellViewModel {
     pub chrome: ChromeState,
     /// Blink phase for the focused pane's block cursor (~1.1s cadence).
     pub cursor_on: bool,
+    /// Find-in-terminal overlay state.
+    pub find: crate::overlays::FindViewState,
+    /// Notifications slide-over state.
+    pub notifications: crate::overlays::NotificationsViewState,
+    /// Whether copy mode is active on the focused pane.
+    pub copy_mode: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -75,6 +118,8 @@ pub struct TerminalViewport {
     columns: usize,
     rows: usize,
     show_cursor: bool,
+    links: Vec<LinkSpan>,
+    highlight: Option<LinkSpan>,
 }
 
 impl TerminalViewport {
@@ -84,11 +129,23 @@ impl TerminalViewport {
             columns,
             rows,
             show_cursor: false,
+            links: Vec::new(),
+            highlight: None,
         }
     }
 
     pub fn with_cursor(mut self, show_cursor: bool) -> Self {
         self.show_cursor = show_cursor;
+        self
+    }
+
+    pub fn with_links(mut self, links: Vec<LinkSpan>) -> Self {
+        self.links = links;
+        self
+    }
+
+    pub fn with_highlight(mut self, highlight: Option<LinkSpan>) -> Self {
+        self.highlight = highlight;
         self
     }
 
@@ -128,6 +185,18 @@ impl<Message> canvas::Program<Message> for TerminalViewport {
         let cell_h = theme::term::CELL_HEIGHT;
         let cell_w = theme::term::CELL_WIDTH;
 
+        // Current find match highlight (drawn behind the text).
+        if let Some(span) = self.highlight
+            && span.line < self.rows
+            && span.end > span.start
+        {
+            let x = pad + span.start as f32 * cell_w;
+            let width = (span.end - span.start) as f32 * cell_w;
+            let y = pad + span.line as f32 * cell_h;
+            let rect = canvas::Path::rectangle(Point::new(x, y), Size::new(width.max(0.0), cell_h));
+            frame.fill(&rect, theme::with_alpha(theme::Accent::Gold.color(), 0.35));
+        }
+
         for (row_index, line) in self.lines.iter().take(self.rows).enumerate() {
             frame.fill_text(canvas::Text {
                 content: line.clone(),
@@ -140,6 +209,19 @@ impl<Message> canvas::Program<Message> for TerminalViewport {
                 shaping: iced::widget::text::Shaping::Advanced,
                 ..canvas::Text::default()
             });
+        }
+
+        // Underline detected links (accent, 1px) beneath their character span.
+        for link in self.links.iter().take(256) {
+            if link.line >= self.rows || link.end <= link.start {
+                continue;
+            }
+            let x = pad + link.start as f32 * cell_w;
+            let width = (link.end - link.start) as f32 * cell_w;
+            let y = pad + link.line as f32 * cell_h + cell_h - 2.0;
+            let underline =
+                canvas::Path::rectangle(Point::new(x, y), Size::new(width.max(0.0), 1.0));
+            frame.fill(&underline, theme::Accent::Teal.color());
         }
 
         if self.show_cursor {
@@ -192,14 +274,31 @@ pub fn app_view(model: &ShellViewModel) -> Element<'_, ShellMessage> {
         root = root.push(chrome::status_bar(&model.chrome, palette));
     }
 
-    container(root)
+    let base = container(root)
         .width(Length::Fill)
         .height(Length::Fill)
         .style(move |_theme| container::Style {
             background: Some(palette.bg_base.into()),
             ..Default::default()
-        })
-        .into()
+        });
+
+    // The notifications slide-over floats on the right, below the titlebar.
+    if model.notifications.open {
+        let overlay = container(overlays::notifications_panel(&model.notifications, palette))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Alignment::End)
+            .align_y(Alignment::Start)
+            .padding(Padding {
+                top: theme::TITLEBAR_HEIGHT + 8.0,
+                right: 8.0,
+                bottom: 8.0,
+                left: 8.0,
+            });
+        stack![base, overlay].into()
+    } else {
+        base.into()
+    }
 }
 
 /// The pane workspace only (used by tests and the headless smoke path).
@@ -209,6 +308,11 @@ pub fn shell_view(model: &ShellViewModel) -> Element<'_, ShellMessage> {
 
 fn workspace_view<'a>(model: &'a ShellViewModel, palette: Palette) -> Element<'a, ShellMessage> {
     let focused = model.projection.focused_pane_id.as_ref();
+    let find_highlight = if model.find.open {
+        model.find.current_match
+    } else {
+        None
+    };
     let mut columns = row![].spacing(theme::PANE_GAP);
     for col in &model.projection.columns {
         columns = columns.push(column_view(
@@ -217,9 +321,20 @@ fn workspace_view<'a>(model: &'a ShellViewModel, palette: Palette) -> Element<'a
             palette,
             focused,
             model.cursor_on,
+            find_highlight,
         ));
     }
-    container(columns.width(Length::Fill).height(Length::Fill))
+
+    let mut stacked = column![].spacing(theme::PANE_GAP);
+    if model.find.open {
+        stacked = stacked.push(overlays::find_bar(&model.find, palette));
+    }
+    if model.copy_mode {
+        stacked = stacked.push(overlays::copy_mode_indicator(palette));
+    }
+    stacked = stacked.push(columns.width(Length::Fill).height(Length::Fill));
+
+    container(stacked.width(Length::Fill).height(Length::Fill))
         .padding(theme::WORKSPACE_PADDING)
         .width(Length::Fill)
         .height(Length::Fill)
@@ -232,10 +347,18 @@ fn column_view<'a>(
     palette: Palette,
     focused: Option<&PaneId>,
     cursor_on: bool,
+    find_highlight: Option<(usize, usize, usize)>,
 ) -> Element<'a, ShellMessage> {
     let mut stacked = column![].spacing(theme::PANE_GAP);
     for pane in &col.panes {
-        stacked = stacked.push(pane_view(pane, terminals, palette, focused, cursor_on));
+        stacked = stacked.push(pane_view(
+            pane,
+            terminals,
+            palette,
+            focused,
+            cursor_on,
+            find_highlight,
+        ));
     }
     stacked.width(Length::Fill).height(Length::Fill).into()
 }
@@ -246,8 +369,14 @@ fn pane_view<'a>(
     palette: Palette,
     focused: Option<&PaneId>,
     cursor_on: bool,
+    find_highlight: Option<(usize, usize, usize)>,
 ) -> Element<'a, ShellMessage> {
     let is_focused = focused == Some(&pane.id);
+    let highlight = if is_focused {
+        find_highlight.map(|(line, start, end)| LinkSpan { line, start, end })
+    } else {
+        None
+    };
 
     let tab_bar = tab_bar_view(pane, palette);
 
@@ -258,7 +387,9 @@ fn pane_view<'a>(
     let viewport = match active_terminal {
         Some(snapshot) => canvas::Canvas::new(
             TerminalViewport::new(snapshot.lines.clone(), snapshot.columns, snapshot.rows)
-                .with_cursor(is_focused && cursor_on),
+                .with_cursor(is_focused && cursor_on)
+                .with_links(snapshot.links.clone())
+                .with_highlight(highlight),
         )
         .width(Length::Fill)
         .height(Length::Fill),
@@ -515,6 +646,9 @@ mod tests {
             terminals,
             chrome: ChromeState::default(),
             cursor_on: true,
+            find: crate::overlays::FindViewState::default(),
+            notifications: crate::overlays::NotificationsViewState::default(),
+            copy_mode: false,
         }
     }
 
@@ -528,12 +662,12 @@ mod tests {
             .expect("active surface id");
         let model = model_from(
             &state,
-            vec![TerminalSnapshot {
-                surface_id: active_surface_id,
-                lines: vec!["PANDAMUX_UI_VIEW_OK".to_string()],
-                columns: 80,
-                rows: 24,
-            }],
+            vec![TerminalSnapshot::new(
+                active_surface_id,
+                vec!["PANDAMUX_UI_VIEW_OK".to_string()],
+                80,
+                24,
+            )],
         );
 
         let _app = app_view(&model);

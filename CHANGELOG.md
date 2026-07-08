@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0]
+
+### Added
+
+- Completed the Phase 4 backend and terminal-adjacent UI for the native Rust rewrite.
+- Added a hand-built terminal engine in `pandamux-term`: case-insensitive/whole-word search over scrollback + visible buffer, full serialization (scrollback plus visible screen), and URL link detection, all with character-offset spans and headless grid-harness tests.
+- Ported the Electron PTY lifecycle semantics into `pandamux-term`: shell resolution (pwsh > powershell > cmd), ConPTY-friendly write chunking, DA1 and CPR query interception, same-size resize dropping, Windows process-tree kill (`taskkill /T /F`), and POSIX/WSL working-directory translation.
+- Added a backend notification store (`pandamux-core::notification`) holding up to 200 notifications with read-first eviction, plus a 320px notifications slide-over panel with source-dotted cards, a "Clear all" action, and a titlebar bell unread dot.
+- Added session persistence (`pandamux-app::persistence`): atomic auto-save of the session every ~30s, named sessions (save/load/list/delete), and version-change handling that clears only the volatile auto-session while preserving named sessions.
+- Added a find-in-terminal bar (query input, match count, next/prev, case toggle) with the current match highlighted in the terminal viewport, accent underlines for detected links, a copy-mode indicator, and a session-activity status dot (running/busy/idle).
+- Added keyboard shortcuts for find (Ctrl+F) and the notifications panel (Ctrl+N).
+
+### Changed
+
+- The native runtime now owns find state, the notification store, and copy-mode state, recomputing find matches against the focused terminal on each refresh and autosaving the session on a timer.
+- Bumped the app version to `0.17.0`.
+
 ## [0.16.1]
 
 ### Changed
