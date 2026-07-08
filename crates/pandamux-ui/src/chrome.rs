@@ -8,6 +8,7 @@
 //! the design spec.
 
 use crate::iced_shell::ShellMessage;
+use crate::session_panel::SessionGrouping;
 use crate::theme::{self, Accent, Palette, ShellKind, UiTheme};
 use iced::widget::{Space, button, column, container, mouse_area, row, text};
 use iced::{Alignment, Border, Color, Element, Length, Padding, Shadow, Vector};
@@ -56,6 +57,10 @@ pub struct ChromeState {
     pub show_status_bar: bool,
     pub active_rail: RailItem,
     pub active_session_name: String,
+    /// Whether the 264px session panel is shown (toggled by the Sessions rail).
+    pub session_panel_open: bool,
+    /// Current session-panel grouping (Project / Type / Host).
+    pub session_grouping: SessionGrouping,
     pub unread_notifications: bool,
     pub activity: SessionActivity,
     pub shell_kind: ShellKind,
@@ -77,6 +82,8 @@ impl Default for ChromeState {
             show_status_bar: true,
             active_rail: RailItem::Sessions,
             active_session_name: "Workspace".to_string(),
+            session_panel_open: true,
+            session_grouping: SessionGrouping::default(),
             unread_notifications: false,
             activity: SessionActivity::Idle,
             shell_kind: ShellKind::PowerShell,

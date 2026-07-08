@@ -4,6 +4,8 @@ pub mod chrome;
 pub mod iced_shell;
 #[cfg(feature = "iced-runtime")]
 pub mod overlays;
+#[cfg(feature = "iced-runtime")]
+pub mod session_panel;
 pub mod shell_projection;
 #[cfg(feature = "iced-runtime")]
 pub mod theme;
@@ -17,6 +19,10 @@ pub use iced_shell::{
 };
 #[cfg(feature = "iced-runtime")]
 pub use overlays::{FindViewState, NotificationCard, NotificationsViewState};
+#[cfg(feature = "iced-runtime")]
+pub use session_panel::{
+    SessionEntry, SessionGroup, SessionGrouping, SessionsViewState, project_sessions, session_panel,
+};
 pub use shell_projection::{
     ColumnProjection, PaneProjection, ShellNodeProjection, ShellProjection, SurfaceProjection,
     project_workspace_shell,

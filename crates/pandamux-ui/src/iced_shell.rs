@@ -10,6 +10,7 @@
 
 use crate::chrome::{self, ChromeState, RailItem};
 use crate::overlays;
+use crate::session_panel::{self, SessionGrouping, SessionsViewState};
 use crate::shell_projection::{ColumnProjection, PaneProjection, SurfaceProjection};
 use crate::theme::{self, Palette, ShellKind};
 use iced::widget::{Space, button, canvas, column, container, mouse_area, row, stack, text};
@@ -17,7 +18,7 @@ use iced::{
     Alignment, Color, Element, Length, Padding, Pixels, Point, Rectangle, Renderer, Size, Theme,
     mouse,
 };
-use pandamux_core::{PaneId, SplitDirection, SurfaceId, SurfaceType};
+use pandamux_core::{PaneId, SplitDirection, SurfaceId, SurfaceType, WorkspaceId};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ShellMessage {
@@ -42,6 +43,15 @@ pub enum ShellMessage {
     /// An overlay (palette, notifications, settings, quick-launch) was requested.
     /// Overlays land in Phases 4-5; the runtime records the request for now.
     OverlayRequested(RailItem),
+    // Session panel
+    /// Focus/activate a session (a shell context). Selects its workspace and
+    /// focuses its surface; never swaps the layout (plan Section 12.1 #2).
+    SessionSelected {
+        workspace_id: WorkspaceId,
+        surface_id: SurfaceId,
+    },
+    SessionGroupingChanged(SessionGrouping),
+    NewSessionRequested,
     ToggleStatusBar,
     ToggleTheme,
     CycleAccent,
@@ -114,6 +124,8 @@ pub struct ShellViewModel {
     pub notifications: crate::overlays::NotificationsViewState,
     /// Whether copy mode is active on the focused pane.
     pub copy_mode: bool,
+    /// Session-panel projection (sessions across all workspaces).
+    pub sessions: SessionsViewState,
 }
 
 // ---------------------------------------------------------------------------
@@ -267,12 +279,13 @@ pub fn terminal_viewport<'a, Message: 'a>(
 pub fn app_view(model: &ShellViewModel) -> Element<'_, ShellMessage> {
     let palette = model.chrome.palette();
 
-    let body = row![
-        chrome::icon_rail(&model.chrome, palette),
-        workspace_view(model, palette),
-    ]
-    .width(Length::Fill)
-    .height(Length::Fill);
+    let mut body = row![chrome::icon_rail(&model.chrome, palette)]
+        .width(Length::Fill)
+        .height(Length::Fill);
+    if model.sessions.open {
+        body = body.push(session_panel::session_panel(&model.sessions, palette));
+    }
+    body = body.push(workspace_view(model, palette));
 
     let mut root = column![chrome::titlebar(&model.chrome, palette), body]
         .width(Length::Fill)
@@ -657,6 +670,7 @@ mod tests {
             find: crate::overlays::FindViewState::default(),
             notifications: crate::overlays::NotificationsViewState::default(),
             copy_mode: false,
+            sessions: SessionsViewState::default(),
         }
     }
 

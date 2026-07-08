@@ -3,15 +3,15 @@ use iced::futures::SinkExt;
 use iced::{Element, Size, Subscription, Task, Theme, application, keyboard, stream, time, window};
 use pandamux_core::{
     AppIntent, AppState, NewNotification, NotificationSource, Notifications, PaneIntent, SplitNode,
-    SplitPaneParams, SurfaceId, SurfaceIntent, SurfaceType, get_all_pane_ids,
+    SplitPaneParams, SurfaceId, SurfaceIntent, SurfaceType, WorkspaceIntent, get_all_pane_ids,
 };
 use pandamux_term::{
     GridSize, PtyCommand, PtySessionManager, SearchOptions, detect_links, search_lines,
 };
 use pandamux_ui::{
     ChromeState, FindViewState, LinkSpan, NotificationCard, NotificationsViewState, RailItem,
-    SessionActivity, ShellKind, ShellMessage, ShellViewModel, TerminalSnapshot, UiTheme, app_view,
-    project_workspace_shell, shell_view,
+    SessionActivity, SessionsViewState, ShellKind, ShellMessage, ShellViewModel, TerminalSnapshot,
+    UiTheme, app_view, project_sessions, project_workspace_shell, shell_view,
 };
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -134,6 +134,19 @@ impl NativeShellRuntime {
         if self.notifications_open {
             self.notifications.mark_all_read(None);
         }
+    }
+
+    /// Create a new session (a fresh workspace + terminal) and make it active.
+    /// This is the target of both the rail "+" and the panel's "+ New session"
+    /// footer; the quick-launch profile picker refines it in a later slice.
+    fn create_new_session(&mut self) {
+        let result = self
+            .app_state
+            .apply(AppIntent::Workspace(WorkspaceIntent::Create {
+                title: None,
+                shell: None,
+            }));
+        self.last_error = result.err();
     }
 
     /// Advance the current find match by `delta`, wrapping around.
@@ -277,7 +290,38 @@ impl NativeShellRuntime {
             }
             ShellMessage::RailSelected(item) => {
                 self.chrome.active_rail = item;
+                match item {
+                    RailItem::Sessions => {
+                        self.chrome.session_panel_open = !self.chrome.session_panel_open;
+                    }
+                    RailItem::NewSession => self.create_new_session(),
+                    _ => {}
+                }
             }
+            ShellMessage::SessionSelected {
+                workspace_id,
+                surface_id,
+            } => {
+                // Focus/activate the shell context: select its workspace, then
+                // focus its surface. Never swaps the layout (plan 12.1 #2).
+                let result = self
+                    .app_state
+                    .apply(AppIntent::Workspace(WorkspaceIntent::Select {
+                        workspace_id: workspace_id.clone(),
+                    }))
+                    .and_then(|_| {
+                        self.app_state
+                            .apply(AppIntent::Surface(SurfaceIntent::Focus {
+                                workspace_id: Some(workspace_id),
+                                surface_id,
+                            }))
+                    });
+                self.last_error = result.err();
+            }
+            ShellMessage::SessionGroupingChanged(grouping) => {
+                self.chrome.session_grouping = grouping;
+            }
+            ShellMessage::NewSessionRequested => self.create_new_session(),
             ShellMessage::OverlayRequested(item) => {
                 // The notifications rail/bell opens the slide-over; the other
                 // overlays (palette/settings/quick-launch) land in Phase 5 and
@@ -418,6 +462,13 @@ impl NativeShellRuntime {
             });
         self.recompute_find_matches();
         self.rebuild_chrome();
+        let active_surface_id = self.active_surface_id();
+        let sessions = project_sessions(
+            &self.app_state,
+            self.chrome.session_grouping,
+            self.chrome.session_panel_open,
+            active_surface_id.as_ref(),
+        );
         self.view_model = ShellViewModel {
             projection: self
                 .app_state
@@ -430,7 +481,20 @@ impl NativeShellRuntime {
             find: self.find.clone(),
             notifications: self.notifications_view(),
             copy_mode: self.copy_mode,
+            sessions,
         };
+    }
+
+    /// The focused pane's active surface in the active workspace (the "active
+    /// session"), if any.
+    fn active_surface_id(&self) -> Option<SurfaceId> {
+        let workspace = self.app_state.active_workspace()?;
+        let focused = workspace.focused_pane_id.clone()?;
+        project_workspace_shell(workspace)
+            .visible_panes
+            .into_iter()
+            .find(|pane| pane.id == focused)
+            .and_then(|pane| pane.active_surface_id)
     }
 
     /// Refresh the chrome view state derived from canonical state (session/pane
@@ -772,6 +836,7 @@ fn initial_view_model(app_state: &AppState, chrome: &ChromeState) -> ShellViewMo
         find: FindViewState::default(),
         notifications: NotificationsViewState::default(),
         copy_mode: false,
+        sessions: SessionsViewState::default(),
     }
 }
 
@@ -1080,6 +1145,49 @@ mod tests {
         let reply = rx.blocking_recv().expect("reply should be delivered");
         let parsed: serde_json::Value = serde_json::from_str(&reply).expect("valid json");
         assert_eq!(parsed["result"]["ok"], true);
+    }
+
+    #[test]
+    fn session_panel_projects_selects_and_toggles() {
+        let mut runtime = NativeShellRuntime::default();
+        let original_ws = runtime.app_state.active_workspace_id.clone();
+        assert_eq!(runtime.view_model().sessions.total, 1);
+
+        // New session creates a workspace and switches to it.
+        runtime.update_shell(ShellMessage::NewSessionRequested);
+        assert_ne!(runtime.app_state.active_workspace_id, original_ws);
+        assert_eq!(runtime.view_model().sessions.total, 2);
+
+        // Selecting the original session activates its workspace (no layout swap).
+        let entry = runtime
+            .view_model()
+            .sessions
+            .groups
+            .iter()
+            .flat_map(|group| &group.entries)
+            .find(|entry| entry.workspace_id == original_ws)
+            .expect("original session")
+            .clone();
+        runtime.update_shell(ShellMessage::SessionSelected {
+            workspace_id: entry.workspace_id.clone(),
+            surface_id: entry.surface_id.clone(),
+        });
+        assert_eq!(runtime.app_state.active_workspace_id, original_ws);
+        assert_eq!(runtime.last_error(), None);
+
+        // Grouping switch is live.
+        runtime.update_shell(ShellMessage::SessionGroupingChanged(
+            pandamux_ui::SessionGrouping::Type,
+        ));
+        assert_eq!(
+            runtime.view_model().sessions.grouping,
+            pandamux_ui::SessionGrouping::Type
+        );
+
+        // The Sessions rail toggles the panel.
+        assert!(runtime.view_model().chrome.session_panel_open);
+        runtime.update_shell(ShellMessage::RailSelected(RailItem::Sessions));
+        assert!(!runtime.view_model().chrome.session_panel_open);
     }
 
     #[test]

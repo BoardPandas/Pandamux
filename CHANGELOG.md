@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0]
+
+### Added
+
+- Added the 264px session panel to the native shell: sessions are shell contexts projected across every workspace (each terminal surface is one session), grouped by a live Project / Type / Host segment switcher, with shell-badge/name+meta/status-dot rows, a pinned-first group holding the active session, a session count, and a "+ New session" footer.
+- Selecting a session focuses its pane and activates its workspace without swapping the on-screen layout (owner-confirmed session model, plan Section 12.1 #2). The Sessions rail button toggles the panel; the rail "+" and the panel footer create a new session.
+
+### Changed
+
+- The native runtime now builds a session projection into its view model each refresh and routes session select / regroup / new-session messages through core intents.
+- Bumped the app version to `0.19.0`.
+
 ## [0.18.0]
 
 ### Added
