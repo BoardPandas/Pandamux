@@ -2,16 +2,19 @@ use crate::persistence::SessionStore;
 use iced::futures::SinkExt;
 use iced::{Element, Size, Subscription, Task, Theme, application, keyboard, stream, time, window};
 use pandamux_core::{
-    AppIntent, AppState, NewNotification, NotificationSource, Notifications, PaneIntent, SplitNode,
-    SplitPaneParams, SurfaceId, SurfaceIntent, SurfaceType, WorkspaceIntent, get_all_pane_ids,
+    AppIntent, AppState, NewNotification, NotificationSource, Notifications, PaneIntent,
+    SplitDirection, SplitNode, SplitPaneParams, SurfaceId, SurfaceIntent, SurfaceType,
+    WorkspaceIntent, get_all_pane_ids,
 };
 use pandamux_term::{
     GridSize, PtyCommand, PtySessionManager, SearchOptions, detect_links, search_lines,
 };
 use pandamux_ui::{
-    ChromeState, FindViewState, LinkSpan, NotificationCard, NotificationsViewState, RailItem,
-    SessionActivity, SessionsViewState, ShellKind, ShellMessage, ShellViewModel, TerminalSnapshot,
-    UiTheme, app_view, project_sessions, project_workspace_shell, shell_view,
+    ChromeState, FindViewState, LinkSpan, NotificationCard, NotificationsViewState, Overlay,
+    PaletteItem, PaletteViewState, QuickLaunchViewState, RailItem, SessionActivity,
+    SessionsViewState, SettingsSection, SettingsViewState, ShellKind, ShellMessage, ShellViewModel,
+    TerminalSnapshot, UiTheme, app_view, filter_items, project_sessions, project_workspace_shell,
+    shell_view,
 };
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -44,6 +47,11 @@ pub struct NativeShellRuntime {
     notifications_open: bool,
     notif_seq: u64,
     copy_mode: bool,
+    /// Command-palette state (query + selection persist across refreshes; items
+    /// are rebuilt each refresh).
+    palette: PaletteViewState,
+    /// Which settings section is open.
+    settings_section: SettingsSection,
     view_model: ShellViewModel,
     terminals: Vec<TerminalSnapshot>,
     last_error: Option<String>,
@@ -92,6 +100,8 @@ impl NativeShellRuntime {
             notifications_open: false,
             notif_seq: 0,
             copy_mode: false,
+            palette: PaletteViewState::default(),
+            settings_section: SettingsSection::default(),
             view_model,
             terminals: Vec::new(),
             last_error: None,
@@ -136,17 +146,14 @@ impl NativeShellRuntime {
         }
     }
 
-    /// Create a new session (a fresh workspace + terminal) and make it active.
-    /// This is the target of both the rail "+" and the panel's "+ New session"
-    /// footer; the quick-launch profile picker refines it in a later slice.
-    fn create_new_session(&mut self) {
-        let result = self
-            .app_state
-            .apply(AppIntent::Workspace(WorkspaceIntent::Create {
-                title: None,
-                shell: None,
-            }));
-        self.last_error = result.err();
+    /// Open a centered overlay, closing any other. Opening the palette resets its
+    /// query and selection so it starts fresh.
+    fn open_overlay(&mut self, overlay: Overlay) {
+        if overlay == Overlay::CommandPalette {
+            self.palette.query.clear();
+            self.palette.selected = 0;
+        }
+        self.chrome.active_overlay = overlay;
     }
 
     /// Advance the current find match by `delta`, wrapping around.
@@ -294,7 +301,7 @@ impl NativeShellRuntime {
                     RailItem::Sessions => {
                         self.chrome.session_panel_open = !self.chrome.session_panel_open;
                     }
-                    RailItem::NewSession => self.create_new_session(),
+                    RailItem::NewSession => self.open_overlay(Overlay::QuickLaunch),
                     _ => {}
                 }
             }
@@ -321,14 +328,46 @@ impl NativeShellRuntime {
             ShellMessage::SessionGroupingChanged(grouping) => {
                 self.chrome.session_grouping = grouping;
             }
-            ShellMessage::NewSessionRequested => self.create_new_session(),
+            ShellMessage::NewSessionRequested => self.open_overlay(Overlay::QuickLaunch),
+            ShellMessage::OverlayDismissed => {
+                self.chrome.active_overlay = Overlay::None;
+            }
+            ShellMessage::PaletteQueryChanged(query) => {
+                self.palette.query = query;
+                self.palette.selected = 0;
+            }
+            ShellMessage::PaletteMoveSelection(delta) => {
+                let count = self.palette.items.len();
+                if count > 0 {
+                    let index = (self.palette.selected as i64 + delta as i64)
+                        .rem_euclid(count as i64) as usize;
+                    self.palette.selected = index;
+                }
+            }
+            ShellMessage::PaletteActivate => {
+                if let Some(item) = self.palette.items.get(self.palette.selected).cloned() {
+                    self.chrome.active_overlay = Overlay::None;
+                    self.update_shell(item.action);
+                    return;
+                }
+            }
+            ShellMessage::LaunchProfile { shell, title } => {
+                self.chrome.active_overlay = Overlay::None;
+                self.launch_session(Some(shell), Some(title));
+            }
+            ShellMessage::SettingsSectionSelected(section) => {
+                self.settings_section = section;
+            }
+            ShellMessage::AccentSelected(accent) => {
+                self.chrome.accent = accent;
+            }
             ShellMessage::OverlayRequested(item) => {
-                // The notifications rail/bell opens the slide-over; the other
-                // overlays (palette/settings/quick-launch) land in Phase 5 and
-                // just reflect the request in the rail highlight for now.
                 self.chrome.active_rail = item;
-                if item == RailItem::Notifications {
-                    self.toggle_notifications();
+                match item {
+                    RailItem::CommandPalette => self.open_overlay(Overlay::CommandPalette),
+                    RailItem::Settings => self.open_overlay(Overlay::Settings),
+                    RailItem::Notifications => self.toggle_notifications(),
+                    _ => {}
                 }
                 self.refresh_terminal_snapshots();
                 return;
@@ -469,6 +508,22 @@ impl NativeShellRuntime {
             self.chrome.session_panel_open,
             active_surface_id.as_ref(),
         );
+        // Rebuild the palette item list, then filter it by the live query and
+        // clamp the selection.
+        let all_items = self.build_palette_items(&sessions);
+        self.palette.items = filter_items(&all_items, &self.palette.query);
+        if self.palette.items.is_empty() {
+            self.palette.selected = 0;
+        } else if self.palette.selected >= self.palette.items.len() {
+            self.palette.selected = self.palette.items.len() - 1;
+        }
+        let settings = SettingsViewState {
+            section: self.settings_section,
+            ui_theme: self.chrome.ui_theme,
+            accent: self.chrome.accent,
+            show_status_bar: self.chrome.show_status_bar,
+            ..SettingsViewState::default()
+        };
         self.view_model = ShellViewModel {
             projection: self
                 .app_state
@@ -482,7 +537,127 @@ impl NativeShellRuntime {
             notifications: self.notifications_view(),
             copy_mode: self.copy_mode,
             sessions,
+            palette: self.palette.clone(),
+            quick_launch: QuickLaunchViewState::default(),
+            settings,
         };
+    }
+
+    /// Build the full command-palette item list (commands + pane actions +
+    /// session switches). The runtime then filters it against the live query.
+    fn build_palette_items(&self, sessions: &SessionsViewState) -> Vec<PaletteItem> {
+        let mut items = vec![
+            PaletteItem::new(
+                "+",
+                "New session",
+                Some("Ctrl T"),
+                ShellMessage::NewSessionRequested,
+            ),
+            PaletteItem::new(
+                "\u{1f50d}",
+                "Find in terminal",
+                Some("Ctrl F"),
+                ShellMessage::FindOpened,
+            ),
+            PaletteItem::new(
+                "\u{2699}",
+                "Open settings",
+                Some("Ctrl ,"),
+                ShellMessage::OverlayRequested(RailItem::Settings),
+            ),
+            PaletteItem::new(
+                "\u{1f514}",
+                "Toggle notifications",
+                Some("Ctrl N"),
+                ShellMessage::NotificationsToggled,
+            ),
+            PaletteItem::new(
+                "\u{2637}",
+                "Toggle status bar",
+                Some("Ctrl B"),
+                ShellMessage::ToggleStatusBar,
+            ),
+            PaletteItem::new(
+                "\u{25d1}",
+                "Toggle theme",
+                Some("Ctrl Shift T"),
+                ShellMessage::ToggleTheme,
+            ),
+            PaletteItem::new(
+                "\u{25c9}",
+                "Cycle accent",
+                Some("Ctrl Shift A"),
+                ShellMessage::CycleAccent,
+            ),
+        ];
+
+        if let Some(pane_id) = self
+            .app_state
+            .active_workspace()
+            .and_then(|workspace| workspace.focused_pane_id.clone())
+        {
+            items.push(PaletteItem::new(
+                "\u{25eb}",
+                "Split pane right",
+                Some("Ctrl D"),
+                ShellMessage::PaneSplit {
+                    pane_id: pane_id.clone(),
+                    direction: SplitDirection::Horizontal,
+                },
+            ));
+            items.push(PaletteItem::new(
+                "\u{2b12}",
+                "Split pane down",
+                Some("Ctrl Shift D"),
+                ShellMessage::PaneSplit {
+                    pane_id: pane_id.clone(),
+                    direction: SplitDirection::Vertical,
+                },
+            ));
+            items.push(PaletteItem::new(
+                "\u{2922}",
+                "Zoom pane",
+                Some("Ctrl Enter"),
+                ShellMessage::PaneZoomToggled(pane_id.clone()),
+            ));
+            items.push(PaletteItem::new(
+                "\u{00d7}",
+                "Close pane",
+                Some("Ctrl W"),
+                ShellMessage::PaneClosed(pane_id),
+            ));
+        }
+
+        for group in &sessions.groups {
+            for entry in &group.entries {
+                if entry.is_active {
+                    continue;
+                }
+                items.push(PaletteItem::new(
+                    entry.kind.abbreviation(),
+                    format!("Switch to {}", entry.name),
+                    None,
+                    ShellMessage::SessionSelected {
+                        workspace_id: entry.workspace_id.clone(),
+                        surface_id: entry.surface_id.clone(),
+                    },
+                ));
+            }
+        }
+
+        items
+    }
+
+    /// Create a new session (workspace + terminal) with the given shell and make
+    /// it active.
+    fn launch_session(&mut self, shell: Option<String>, title: Option<String>) {
+        let result = self
+            .app_state
+            .apply(AppIntent::Workspace(WorkspaceIntent::Create {
+                title,
+                shell,
+            }));
+        self.last_error = result.err();
     }
 
     /// The focused pane's active surface in the active workspace (the "active
@@ -737,15 +912,21 @@ where
 }
 
 fn map_key_event(event: keyboard::Event) -> ShellMessage {
+    use keyboard::key::Named;
     use keyboard::{Event, Key};
-    if let Event::KeyPressed { key, modifiers, .. } = event
-        && let Key::Character(character) = key.as_ref()
-    {
-        return shortcut_for(
-            modifiers.control(),
-            modifiers.shift(),
-            &character.to_ascii_lowercase(),
-        );
+    if let Event::KeyPressed { key, modifiers, .. } = event {
+        match key.as_ref() {
+            Key::Character(character) => {
+                return shortcut_for(
+                    modifiers.control(),
+                    modifiers.shift(),
+                    &character.to_ascii_lowercase(),
+                );
+            }
+            // Escape dismisses any open centered overlay (no-op otherwise).
+            Key::Named(Named::Escape) => return ShellMessage::OverlayDismissed,
+            _ => {}
+        }
     }
     ShellMessage::Noop
 }
@@ -761,6 +942,8 @@ fn shortcut_for(ctrl: bool, shift: bool, character: &str) -> ShellMessage {
         (true, "t") => ShellMessage::ToggleTheme,
         (true, "a") => ShellMessage::CycleAccent,
         (false, "k") => ShellMessage::OverlayRequested(RailItem::CommandPalette),
+        (false, "t") => ShellMessage::NewSessionRequested,
+        (false, ",") => ShellMessage::OverlayRequested(RailItem::Settings),
         (false, "f") => ShellMessage::FindOpened,
         (false, "n") => ShellMessage::NotificationsToggled,
         _ => ShellMessage::Noop,
@@ -837,6 +1020,9 @@ fn initial_view_model(app_state: &AppState, chrome: &ChromeState) -> ShellViewMo
         notifications: NotificationsViewState::default(),
         copy_mode: false,
         sessions: SessionsViewState::default(),
+        palette: PaletteViewState::default(),
+        quick_launch: QuickLaunchViewState::default(),
+        settings: SettingsViewState::default(),
     }
 }
 
@@ -1153,8 +1339,11 @@ mod tests {
         let original_ws = runtime.app_state.active_workspace_id.clone();
         assert_eq!(runtime.view_model().sessions.total, 1);
 
-        // New session creates a workspace and switches to it.
-        runtime.update_shell(ShellMessage::NewSessionRequested);
+        // Launching a quick-launch profile creates a workspace and switches to it.
+        runtime.update_shell(ShellMessage::LaunchProfile {
+            shell: "pwsh".to_string(),
+            title: "PowerShell 7".to_string(),
+        });
         assert_ne!(runtime.app_state.active_workspace_id, original_ws);
         assert_eq!(runtime.view_model().sessions.total, 2);
 
@@ -1188,6 +1377,69 @@ mod tests {
         assert!(runtime.view_model().chrome.session_panel_open);
         runtime.update_shell(ShellMessage::RailSelected(RailItem::Sessions));
         assert!(!runtime.view_model().chrome.session_panel_open);
+    }
+
+    #[test]
+    fn command_palette_opens_filters_and_activates() {
+        let mut runtime = NativeShellRuntime::default();
+        assert_eq!(runtime.view_model().chrome.active_overlay, Overlay::None);
+
+        // Ctrl+K opens the palette with the full command list.
+        runtime.update_shell(ShellMessage::OverlayRequested(RailItem::CommandPalette));
+        assert_eq!(
+            runtime.view_model().chrome.active_overlay,
+            Overlay::CommandPalette
+        );
+        assert!(runtime.view_model().palette.items.len() > 3);
+
+        // Filtering narrows to matching commands.
+        runtime.update_shell(ShellMessage::PaletteQueryChanged("theme".to_string()));
+        let items = &runtime.view_model().palette.items;
+        assert!(
+            items
+                .iter()
+                .all(|item| item.label.to_lowercase().contains("theme"))
+        );
+
+        // Activating the selected item runs its action and closes the palette.
+        assert_eq!(runtime.view_model().chrome.ui_theme, UiTheme::Dark);
+        runtime.update_shell(ShellMessage::PaletteActivate);
+        assert_eq!(runtime.view_model().chrome.active_overlay, Overlay::None);
+        assert_eq!(runtime.view_model().chrome.ui_theme, UiTheme::Light);
+    }
+
+    #[test]
+    fn quick_launch_and_settings_overlays_flow() {
+        let mut runtime = NativeShellRuntime::default();
+
+        // New-session opens quick-launch; picking a profile creates a session.
+        runtime.update_shell(ShellMessage::NewSessionRequested);
+        assert_eq!(
+            runtime.view_model().chrome.active_overlay,
+            Overlay::QuickLaunch
+        );
+        runtime.update_shell(ShellMessage::LaunchProfile {
+            shell: "wsl.exe".to_string(),
+            title: "WSL".to_string(),
+        });
+        assert_eq!(runtime.view_model().chrome.active_overlay, Overlay::None);
+        assert_eq!(runtime.view_model().sessions.total, 2);
+
+        // Settings overlay: accent selection and Escape dismiss.
+        runtime.update_shell(ShellMessage::OverlayRequested(RailItem::Settings));
+        assert_eq!(
+            runtime.view_model().chrome.active_overlay,
+            Overlay::Settings
+        );
+        runtime.update_shell(ShellMessage::AccentSelected(
+            pandamux_ui::theme::Accent::Blue,
+        ));
+        assert_eq!(
+            runtime.view_model().settings.accent,
+            pandamux_ui::theme::Accent::Blue
+        );
+        runtime.update_shell(ShellMessage::OverlayDismissed);
+        assert_eq!(runtime.view_model().chrome.active_overlay, Overlay::None);
     }
 
     #[test]

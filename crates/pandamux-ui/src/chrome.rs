@@ -37,6 +37,18 @@ pub enum RailItem {
     Settings,
 }
 
+/// Which centered/anchored overlay is showing. One at a time; a backdrop click
+/// dismisses it. The notifications slide-over is tracked separately (it is a
+/// side panel, not a modal).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Overlay {
+    #[default]
+    None,
+    CommandPalette,
+    QuickLaunch,
+    Settings,
+}
+
 /// Activity state of the focused session, driving the status-bar dot color
 /// (running = accent, busy-agent = gold, idle = dim), mirroring the Electron
 /// `shellState` + Claude-activity signal.
@@ -61,6 +73,8 @@ pub struct ChromeState {
     pub session_panel_open: bool,
     /// Current session-panel grouping (Project / Type / Host).
     pub session_grouping: SessionGrouping,
+    /// The currently open centered overlay (palette / quick-launch / settings).
+    pub active_overlay: Overlay,
     pub unread_notifications: bool,
     pub activity: SessionActivity,
     pub shell_kind: ShellKind,
@@ -84,6 +98,7 @@ impl Default for ChromeState {
             active_session_name: "Workspace".to_string(),
             session_panel_open: true,
             session_grouping: SessionGrouping::default(),
+            active_overlay: Overlay::None,
             unread_notifications: false,
             activity: SessionActivity::Idle,
             shell_kind: ShellKind::PowerShell,

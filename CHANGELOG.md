@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0]
+
+### Added
+
+- Added the command palette (Ctrl+K): a 560px centered overlay with a live substring filter over commands, pane actions, and "switch to session" entries; each row carries its action and shows a shortcut chip. Enter runs the selection.
+- Added the quick-launch popover: a 300px picker of local shell profiles (PowerShell 7, Windows PowerShell, Command Prompt, WSL) that create a new session; opened by the rail "+", the session-panel footer, and Ctrl+T (SSH host import lands with the SSH manager).
+- Added the settings modal (640x440 on a scrim) with a left nav (General / Terminal / Keyboard / Notifications / Quick launch); the General tab toggles UI theme, selects the accent, and toggles the status bar live, and the Keyboard tab lists the bound shortcuts.
+- Added overlay management: one centered overlay at a time over a dismiss-on-backdrop scrim, Escape to close, and Ctrl+, to open settings.
+
+### Changed
+
+- The native runtime now owns command-palette and settings-section state, rebuilds the palette item list (with session switches) each refresh, and routes overlay open/dismiss, palette query/activate, quick-launch, settings-section, and accent-select messages.
+- Bumped the app version to `0.20.0`.
+
 ## [0.19.0]
 
 ### Added

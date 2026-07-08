@@ -8,11 +8,13 @@
 //! to a [`ShellMessage`] that the runtime routes into core intents or window
 //! actions. It never owns canonical state.
 
-use crate::chrome::{self, ChromeState, RailItem};
+use crate::chrome::{self, ChromeState, Overlay, RailItem};
+use crate::command_palette::{self, PaletteViewState, QuickLaunchViewState};
 use crate::overlays;
 use crate::session_panel::{self, SessionGrouping, SessionsViewState};
+use crate::settings::{self, SettingsSection, SettingsViewState};
 use crate::shell_projection::{ColumnProjection, PaneProjection, SurfaceProjection};
-use crate::theme::{self, Palette, ShellKind};
+use crate::theme::{self, Accent, Palette, ShellKind};
 use iced::widget::{Space, button, canvas, column, container, mouse_area, row, stack, text};
 use iced::{
     Alignment, Color, Element, Length, Padding, Pixels, Point, Rectangle, Renderer, Size, Theme,
@@ -52,6 +54,21 @@ pub enum ShellMessage {
     },
     SessionGroupingChanged(SessionGrouping),
     NewSessionRequested,
+    // Overlays (command palette / quick-launch / settings)
+    /// Dismiss whatever centered overlay is open (backdrop click / Esc).
+    OverlayDismissed,
+    PaletteQueryChanged(String),
+    /// Move the palette selection by a delta (arrow keys).
+    PaletteMoveSelection(i32),
+    /// Activate the highlighted palette item (Enter).
+    PaletteActivate,
+    /// Launch a new session from a quick-launch profile.
+    LaunchProfile {
+        shell: String,
+        title: String,
+    },
+    SettingsSectionSelected(SettingsSection),
+    AccentSelected(Accent),
     ToggleStatusBar,
     ToggleTheme,
     CycleAccent,
@@ -126,6 +143,12 @@ pub struct ShellViewModel {
     pub copy_mode: bool,
     /// Session-panel projection (sessions across all workspaces).
     pub sessions: SessionsViewState,
+    /// Command-palette state (filtered items live here).
+    pub palette: PaletteViewState,
+    /// Quick-launch profile list.
+    pub quick_launch: QuickLaunchViewState,
+    /// Settings modal projection.
+    pub settings: SettingsViewState,
 }
 
 // ---------------------------------------------------------------------------
@@ -303,9 +326,13 @@ pub fn app_view(model: &ShellViewModel) -> Element<'_, ShellMessage> {
             ..Default::default()
         });
 
-    // The notifications slide-over floats on the right, below the titlebar.
+    // Layer overlays on top of the base: the notifications slide-over (a right
+    // side panel) and then the active centered overlay (palette / quick-launch /
+    // settings), so a modal sits above the notifications panel if both are open.
+    let mut layers = stack![base];
+
     if model.notifications.open {
-        let overlay = container(overlays::notifications_panel(&model.notifications, palette))
+        let notifications = container(overlays::notifications_panel(&model.notifications, palette))
             .width(Length::Fill)
             .height(Length::Fill)
             .align_x(Alignment::End)
@@ -316,10 +343,23 @@ pub fn app_view(model: &ShellViewModel) -> Element<'_, ShellMessage> {
                 bottom: 8.0,
                 left: 8.0,
             });
-        stack![base, overlay].into()
-    } else {
-        base.into()
+        layers = layers.push(notifications);
     }
+
+    match model.chrome.active_overlay {
+        Overlay::None => {}
+        Overlay::CommandPalette => {
+            layers = layers.push(command_palette::command_palette(&model.palette, palette));
+        }
+        Overlay::QuickLaunch => {
+            layers = layers.push(command_palette::quick_launch(&model.quick_launch, palette));
+        }
+        Overlay::Settings => {
+            layers = layers.push(settings::settings_modal(&model.settings, palette));
+        }
+    }
+
+    layers.into()
 }
 
 /// The pane workspace only (used by tests and the headless smoke path).
@@ -671,6 +711,9 @@ mod tests {
             notifications: crate::overlays::NotificationsViewState::default(),
             copy_mode: false,
             sessions: SessionsViewState::default(),
+            palette: PaletteViewState::default(),
+            quick_launch: QuickLaunchViewState::default(),
+            settings: SettingsViewState::default(),
         }
     }
 
