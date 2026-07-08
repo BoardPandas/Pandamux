@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.1]
+
+### Changed
+
+- Updated `tasks/plan-repo.md` Phase 5 status to mark the agent manager and sidebar status/progress/log surface as delivered, and refined the remaining to-do list (orchestrator-script verification, drag-split, Claude-context startup injection, markdown/diff surfaces, themes/i18n, visual polish).
+- Bumped the app version to `0.23.1`.
+
 ## [0.23.0]
 
 ### Added
