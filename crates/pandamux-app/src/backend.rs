@@ -112,6 +112,16 @@ pub fn handle_line(line: &str, ctx: DispatchCtx<'_>) -> String {
         return "pong".to_string();
     }
 
+    // V1 shell-integration cwd report: `report_pwd <surfaceId> <path>` (bash/pwsh
+    // report over the pipe; cmd reports inline via OSC, parsed in the term layer).
+    if let Some(rest) = message.strip_prefix("report_pwd ") {
+        let mut parts = rest.splitn(2, ' ');
+        if let (Some(surface_id), Some(path)) = (parts.next(), parts.next()) {
+            ctx.ptys.set_cwd(surface_id, path.trim());
+        }
+        return String::new();
+    }
+
     if !message.starts_with('{') {
         return String::new();
     }
@@ -1581,6 +1591,14 @@ mod tests {
     fn non_json_line_returns_empty() {
         let mut backend = Backend::new(false);
         assert_eq!(backend.handle_line("not-json"), "");
+    }
+
+    #[test]
+    fn report_pwd_v1_line_is_accepted() {
+        let mut backend = Backend::new(false);
+        // The V1 shell-integration cwd report writes no reply and does not error
+        // (there is no live PTY session in this hermetic test, so it is a no-op).
+        assert_eq!(backend.handle_line("report_pwd surf-1 C:\\Users\\chaz"), "");
     }
 
     #[test]

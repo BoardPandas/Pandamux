@@ -1,3 +1,4 @@
+use crate::cwd::CwdScanner;
 use crate::grid::{GridSize, TerminalGrid};
 use crate::links::DetectedLink;
 use crate::pty::{PtyCommand, PtyResult};
@@ -22,6 +23,7 @@ struct PtySession {
     rx: Receiver<Result<Vec<u8>, String>>,
     output: Vec<u8>,
     cpr_answered: bool,
+    cwd_scanner: CwdScanner,
 }
 
 impl PtySessionManager {
@@ -84,6 +86,7 @@ impl PtySessionManager {
                 rx,
                 output: Vec::new(),
                 cpr_answered: false,
+                cwd_scanner: CwdScanner::new(),
             },
         );
         Ok(())
@@ -237,6 +240,23 @@ impl PtySessionManager {
         self.sessions.keys().cloned().collect()
     }
 
+    /// The session's last-reported working directory (from an OSC 7 / OSC 9;9 in
+    /// the PTY stream, or a pipe `report_pwd`). Requires the session to have been
+    /// polled since the report arrived.
+    pub fn cwd(&self, session_id: &str) -> Option<String> {
+        self.sessions
+            .get(session_id)
+            .and_then(|session| session.cwd_scanner.cwd().map(str::to_string))
+    }
+
+    /// Set a session's cwd directly (the pipe `report_pwd` path, where bash/pwsh
+    /// report over the named pipe rather than inline in the stream).
+    pub fn set_cwd(&mut self, session_id: &str, cwd: &str) {
+        if let Some(session) = self.sessions.get_mut(session_id) {
+            session.cwd_scanner.set(cwd);
+        }
+    }
+
     /// Whether a session's child process is still running. Returns `false` for an
     /// unknown session or one whose child has exited. Used for agent status.
     pub fn is_running(&mut self, session_id: &str) -> bool {
@@ -259,6 +279,7 @@ impl PtySession {
             match chunk {
                 Ok(chunk) => {
                     self.grid.advance(&chunk);
+                    self.cwd_scanner.feed(&chunk);
                     self.output.extend_from_slice(&chunk);
                     // Answer DA1 (Primary Device Attributes) probes in-process so
                     // oh-my-posh / PSReadLine never stall or leak the reply onto

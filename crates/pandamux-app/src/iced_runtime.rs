@@ -316,13 +316,16 @@ impl NativeShellRuntime {
                 window::latest().and_then(window::toggle_maximize)
             }
             ShellMessage::WindowClosePressed => window::latest().and_then(window::close),
-            ShellMessage::PollRequested => Task::perform(crate::pollers::poll_all(), |result| {
-                ShellMessage::PollUpdate {
-                    git_branch: result.git_branch,
-                    git_ahead: result.git_ahead,
-                    ports: result.ports,
-                }
-            }),
+            ShellMessage::PollRequested => {
+                let cwd = self.focused_cwd();
+                Task::perform(crate::pollers::poll_all(cwd), |result| {
+                    ShellMessage::PollUpdate {
+                        git_branch: result.git_branch,
+                        git_ahead: result.git_ahead,
+                        ports: result.ports,
+                    }
+                })
+            }
             other => {
                 self.update_shell(other);
                 Task::none()
@@ -826,6 +829,15 @@ impl NativeShellRuntime {
         self.app_state
             .active_workspace()
             .and_then(|workspace| workspace.focused_pane_id.clone())
+    }
+
+    /// The focused session's reported working directory, if the shell integration
+    /// has reported one (scopes the git poller to that session).
+    fn focused_cwd(&self) -> Option<std::path::PathBuf> {
+        let surface_id = self.active_surface_id()?;
+        self.ptys
+            .cwd(surface_id.as_str())
+            .map(std::path::PathBuf::from)
     }
 
     /// Refresh the chrome view state derived from canonical state (session/pane

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.29.0]
+
+### Added
+
+- Per-session working-directory tracking. The terminal layer now parses OSC 9;9 (cmd / Windows Terminal) and OSC 7 (`file://` URIs) from each session's PTY byte stream (`pandamux-term::cwd::CwdScanner`, incremental so a split sequence is handled), and the dispatcher accepts the V1 `report_pwd <surfaceId> <path>` line that bash/pwsh send over the pipe. The git status-bar poller is now scoped to the focused session's reported cwd (falling back to the process cwd), so the branch/ahead reflects the session you are actually in.
+
+### Changed
+
+- Bumped the app version to `0.29.0`.
+
 ## [0.28.0]
 
 ### Added

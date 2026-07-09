@@ -3,10 +3,10 @@
 //! async `tokio` I/O only (no blocking `std::fs`/process calls on the runtime,
 //! per the LL-G Tokio gotcha).
 //!
-//! Scope: git is polled in the process working directory (the repo pandamux was
-//! launched from) and ports are scanned on localhost. Per-session cwd tracking
-//! (via shell-integration OSC reporting) refines this later; for now this gives
-//! the status bar real, if app-scoped, data.
+//! Scope: git is polled in the focused session's working directory when it is
+//! known (from shell-integration OSC / `report_pwd` reporting, see
+//! `pandamux-term::cwd`), falling back to the process working directory; ports
+//! are scanned on localhost.
 
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
@@ -25,9 +25,10 @@ const CANDIDATE_PORTS: &[u16] = &[
     3000, 3001, 4000, 4200, 5000, 5173, 5199, 8000, 8080, 8081, 9000,
 ];
 
-/// Run git + port polls concurrently and combine them.
-pub async fn poll_all() -> PollResult {
-    let cwd = std::env::current_dir().unwrap_or_default();
+/// Run git + port polls concurrently and combine them. `cwd` is the focused
+/// session's directory when known; otherwise the process working directory.
+pub async fn poll_all(cwd: Option<PathBuf>) -> PollResult {
+    let cwd = cwd.unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
     let (git, ports) = tokio::join!(poll_git(cwd), poll_ports());
     let (git_branch, git_ahead) = git.unwrap_or((None, 0));
     PollResult {
