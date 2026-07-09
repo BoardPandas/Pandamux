@@ -1,4 +1,6 @@
 pub mod agent;
+pub mod config;
+pub mod i18n;
 pub mod ids;
 pub mod notification;
 pub mod protocol;
@@ -8,6 +10,10 @@ pub mod state;
 pub mod surface_content;
 
 pub use agent::{AgentInfo, AgentRegistry, AgentStatus, SpawnStrategy};
+pub use config::{
+    Appearance, Theme, ThemeStore, import_windows_terminal, parse_ghostty_theme, parse_hex,
+};
+pub use i18n::{Locale, Localizer};
 pub use ids::{PaneId, SurfaceId, WindowId, WorkspaceId};
 pub use notification::{NewNotification, NotificationInfo, NotificationSource, Notifications};
 pub use protocol::{RpcError, RpcRequest, RpcResponse};

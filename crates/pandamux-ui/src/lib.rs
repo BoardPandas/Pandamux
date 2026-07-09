@@ -40,7 +40,7 @@ pub use shell_projection::{
     project_workspace_shell,
 };
 #[cfg(feature = "iced-runtime")]
-pub use theme::{Accent, Palette, ShellKind, UiTheme};
+pub use theme::{Accent, Palette, ShellKind, TermScheme, UiTheme};
 
 pub fn crate_name() -> &'static str {
     "pandamux-ui"

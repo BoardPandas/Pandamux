@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.0]
+
+### Added
+
+- Terminal themes: the native shell now loads the bundled `.theme` files (Ghostty color format) at startup and applies the selected theme's colors (background, foreground, cursor, ANSI palette) to the terminal viewport, independent of the light/dark chrome theme. New `theme.list` / `theme.select` / `theme.get` pipe methods and `pandamux list-themes` / `themes` / `select-theme <name>` CLI commands.
+- Config import: `config.import_windows_terminal` (parses a Windows Terminal settings.json `schemes[]` into themes) and `config.import_ghostty` pipe methods, plus `pandamux config import-windows-terminal <file>` / `config import-ghostty <name> <file>` (files read client-side), and `config show` / `config path` / `config reload` (and `reload-config`).
+- Internationalization scaffolding: a `pandamux-core::i18n` locale catalog (English + French, partial Arabic/Japanese) with `i18n.set_locale` / `i18n.translate` pipe methods and `pandamux set-locale <en|fr|ar|ja>`.
+- `pandamux-core::config` (Theme model, Ghostty/Windows-Terminal parsers, `ThemeStore`) and `pandamux-ui::theme::TermScheme`, both unit-tested.
+
+### Changed
+
+- Threaded a `ThemeStore` and `Localizer` through the shared single-writer dispatcher (via `DispatchCtx`), so CLI/orchestrator theme and locale changes reach the running UI.
+- Bumped the app version to `0.27.0`.
+
 ## [0.26.0]
 
 ### Added

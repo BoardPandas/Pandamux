@@ -14,7 +14,7 @@ use crate::overlays;
 use crate::session_panel::{self, SessionGrouping, SessionsViewState};
 use crate::settings::{self, SettingsSection, SettingsViewState};
 use crate::shell_projection::{ColumnProjection, PaneProjection, SurfaceProjection};
-use crate::theme::{self, Accent, Palette, ShellKind};
+use crate::theme::{self, Accent, Palette, ShellKind, TermScheme};
 use iced::widget::{Space, button, canvas, column, container, mouse_area, row, stack, text};
 use iced::{
     Alignment, Color, Element, Length, Padding, Pixels, Point, Rectangle, Renderer, Size, Theme,
@@ -195,6 +195,8 @@ pub struct ShellViewModel {
     pub surface_contents: HashMap<SurfaceId, String>,
     /// Active drag-and-drop, if a tab is being dragged.
     pub drag: Option<DragView>,
+    /// Terminal color scheme derived from the selected theme (or default dark).
+    pub term_scheme: TermScheme,
 }
 
 // ---------------------------------------------------------------------------
@@ -209,6 +211,7 @@ pub struct TerminalViewport {
     show_cursor: bool,
     links: Vec<LinkSpan>,
     highlight: Option<LinkSpan>,
+    scheme: TermScheme,
 }
 
 impl TerminalViewport {
@@ -220,11 +223,17 @@ impl TerminalViewport {
             show_cursor: false,
             links: Vec::new(),
             highlight: None,
+            scheme: TermScheme::default(),
         }
     }
 
     pub fn with_cursor(mut self, show_cursor: bool) -> Self {
         self.show_cursor = show_cursor;
+        self
+    }
+
+    pub fn with_scheme(mut self, scheme: TermScheme) -> Self {
+        self.scheme = scheme;
         self
     }
 
@@ -268,7 +277,7 @@ impl<Message> canvas::Program<Message> for TerminalViewport {
     ) -> Vec<canvas::Geometry> {
         let mut frame = canvas::Frame::new(renderer, bounds.size());
         let background = canvas::Path::rectangle(Point::ORIGIN, bounds.size());
-        frame.fill(&background, theme::term::SURFACE_OPAQUE);
+        frame.fill(&background, self.scheme.background);
 
         let pad = theme::TERMINAL_PADDING;
         let cell_h = theme::term::CELL_HEIGHT;
@@ -291,7 +300,7 @@ impl<Message> canvas::Program<Message> for TerminalViewport {
                 content: line.clone(),
                 position: Point::new(pad, pad + row_index as f32 * cell_h),
                 max_width: (bounds.width - pad * 2.0).max(0.0),
-                color: theme::term::TEXT,
+                color: self.scheme.text,
                 size: Pixels(theme::SIZE_TERMINAL),
                 line_height: iced::widget::text::LineHeight::Absolute(Pixels(cell_h)),
                 font: theme::MONO_FONT,
@@ -321,8 +330,8 @@ impl<Message> canvas::Program<Message> for TerminalViewport {
                 Point::new(cursor_x, cursor_y),
                 Size::new(theme::term::CURSOR_WIDTH, theme::term::CURSOR_HEIGHT),
             );
-            // Prompt color is the accent; blink handled by the caller's flag.
-            frame.fill(&cursor, theme::Accent::Teal.color());
+            // Cursor uses the active scheme's prompt/cursor color.
+            frame.fill(&cursor, self.scheme.cursor);
         }
 
         vec![frame.into_geometry()]
@@ -437,6 +446,7 @@ fn workspace_view<'a>(model: &'a ShellViewModel, palette: Palette) -> Element<'a
             &model.terminals,
             &model.surface_contents,
             model.drag.as_ref(),
+            model.term_scheme,
             palette,
             focused,
             model.cursor_on,
@@ -466,6 +476,7 @@ fn column_view<'a>(
     terminals: &'a [TerminalSnapshot],
     surface_contents: &'a HashMap<SurfaceId, String>,
     drag: Option<&'a DragView>,
+    term_scheme: TermScheme,
     palette: Palette,
     focused: Option<&PaneId>,
     cursor_on: bool,
@@ -478,6 +489,7 @@ fn column_view<'a>(
             terminals,
             surface_contents,
             drag,
+            term_scheme,
             palette,
             focused,
             cursor_on,
@@ -493,6 +505,7 @@ fn pane_view<'a>(
     terminals: &'a [TerminalSnapshot],
     surface_contents: &'a HashMap<SurfaceId, String>,
     drag: Option<&'a DragView>,
+    term_scheme: TermScheme,
     palette: Palette,
     focused: Option<&PaneId>,
     cursor_on: bool,
@@ -537,14 +550,16 @@ fn pane_view<'a>(
                     TerminalViewport::new(snapshot.lines.clone(), snapshot.columns, snapshot.rows)
                         .with_cursor(is_focused && cursor_on)
                         .with_links(snapshot.links.clone())
-                        .with_highlight(highlight),
+                        .with_highlight(highlight)
+                        .with_scheme(term_scheme),
                 )
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into(),
                 None => canvas::Canvas::new(
                     TerminalViewport::new(vec![placeholder_line(pane)], 80, 24)
-                        .with_cursor(is_focused && cursor_on),
+                        .with_cursor(is_focused && cursor_on)
+                        .with_scheme(term_scheme),
                 )
                 .width(Length::Fill)
                 .height(Length::Fill)
@@ -944,6 +959,7 @@ mod tests {
             settings: SettingsViewState::default(),
             surface_contents: HashMap::new(),
             drag: None,
+            term_scheme: TermScheme::default(),
         }
     }
 

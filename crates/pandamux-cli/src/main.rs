@@ -131,6 +131,48 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 );
             }
         },
+        "list-themes" | "themes" => print_json(send_v2("theme.list", json!({})).await?),
+        "select-theme" => print_json(send_v2("theme.select", name_param(&args[1..])?).await?),
+        "reload-config" => print_json(send_v2("config.reload", json!({})).await?),
+        "set-locale" => print_json(send_v2("i18n.set_locale", locale_param(&args[1..])?).await?),
+        "config" => match args.get(1).map(String::as_str) {
+            Some("show") => print_json(send_v2("config.show", json!({})).await?),
+            Some("path") => print_json(send_v2("config.path", json!({})).await?),
+            Some("reload") => print_json(send_v2("config.reload", json!({})).await?),
+            Some("import-windows-terminal") => {
+                let content = read_file_arg(&args[2..])?;
+                print_json(
+                    send_v2(
+                        "config.import_windows_terminal",
+                        json!({ "content": content }),
+                    )
+                    .await?,
+                )
+            }
+            Some("import-ghostty") => {
+                let name = args
+                    .get(2)
+                    .ok_or("config import-ghostty requires <name> <file>")?;
+                let file = args
+                    .get(3)
+                    .ok_or("config import-ghostty requires <name> <file>")?;
+                let content = std::fs::read_to_string(file)?;
+                print_json(
+                    send_v2(
+                        "config.import_ghostty",
+                        json!({ "name": name, "content": content }),
+                    )
+                    .await?,
+                )
+            }
+            _ => {
+                print_usage();
+                return Err(
+                    "usage: pandamux config <show|path|reload|import-windows-terminal <file>|import-ghostty <name> <file>>"
+                        .into(),
+                );
+            }
+        },
         "browser" => {
             return Err(
                 "browser automation is not supported in the native build; use Claude Code's browser tooling"
@@ -743,6 +785,21 @@ fn content_set_params(args: &[String]) -> Result<Value, Box<dyn Error>> {
     Ok(json!({ "id": id, "content": content }))
 }
 
+fn name_param(args: &[String]) -> Result<Value, Box<dyn Error>> {
+    let name = args.first().ok_or("missing name")?;
+    Ok(json!({ "name": name }))
+}
+
+fn locale_param(args: &[String]) -> Result<Value, Box<dyn Error>> {
+    let locale = args.first().ok_or("set-locale requires <en|fr|ar|ja>")?;
+    Ok(json!({ "locale": locale }))
+}
+
+fn read_file_arg(args: &[String]) -> Result<String, Box<dyn Error>> {
+    let path = args.first().ok_or("missing <file>")?;
+    Ok(std::fs::read_to_string(path)?)
+}
+
 fn clear_notifications_params(args: &[String]) -> Result<Value, Box<dyn Error>> {
     let mut params = serde_json::Map::new();
     if let Some(id) = args.first() {
@@ -810,7 +867,7 @@ fn print_json(value: Value) {
 
 fn print_usage() {
     println!(
-        "Usage: pandamux <command>\n\nCommands:\n  ping\n  identify\n  capabilities\n  tree\n  new-workspace [--title <title>] [--shell <shell>]\n  list-workspaces\n  select-workspace <id>\n  rename-workspace <id> <title>\n  close-workspace <id>\n  split [--down] [--type terminal|markdown|diff] [--pane <id>] [--surface <id>] [--workspace <id>]\n  close-pane <id> [--workspace <id>]\n  focus-pane <id> [--workspace <id>]\n  zoom-pane [id] [--workspace <id>]\n  new-surface [--type terminal|markdown|diff] [--pane <id>] [--workspace <id>]\n  focus-surface <id> [--workspace <id>]\n  close-surface <id> [--workspace <id>]\n  list-panes [--workspace <id>]\n  list-surfaces [--workspace <id>] [--pane <id>]\n  send <text> [--surface <id>] [--workspace <id>]\n  send-key <key> [--ctrl] [--shift] [--alt] [--surface <id>] [--workspace <id>]\n  read-screen [--lines <N>] [--surface <id>] [--workspace <id>]\n  trigger-flash [surfaceId]\n  notify <message> [--body <text>] [--source build|agent|deploy|port|generic]\n  list-notifications\n  clear-notifications [id]\n  agent spawn --cmd <command> [--label <name>] [--cwd <dir>] [--pane <id>]\n  agent spawn-batch --json '[...]' [--strategy distribute|stack|split]\n  agent status <id> | agent list | agent kill <id>\n  set-status <key> <value>\n  set-progress <value> [--label <text>]\n  log <level> <message>\n  sidebar-state\n  markdown set <surfaceId> [--file <path>] [--content <text>]\n  diff set <surfaceId> [--file <path>] [--content <text>]\n  layout grid --count <N> [--type terminal|markdown|diff] [--anchor-pane <id>] [--anchor-surface <id>] [--workspace <id>]"
+        "Usage: pandamux <command>\n\nCommands:\n  ping\n  identify\n  capabilities\n  tree\n  new-workspace [--title <title>] [--shell <shell>]\n  list-workspaces\n  select-workspace <id>\n  rename-workspace <id> <title>\n  close-workspace <id>\n  split [--down] [--type terminal|markdown|diff] [--pane <id>] [--surface <id>] [--workspace <id>]\n  close-pane <id> [--workspace <id>]\n  focus-pane <id> [--workspace <id>]\n  zoom-pane [id] [--workspace <id>]\n  new-surface [--type terminal|markdown|diff] [--pane <id>] [--workspace <id>]\n  focus-surface <id> [--workspace <id>]\n  close-surface <id> [--workspace <id>]\n  list-panes [--workspace <id>]\n  list-surfaces [--workspace <id>] [--pane <id>]\n  send <text> [--surface <id>] [--workspace <id>]\n  send-key <key> [--ctrl] [--shift] [--alt] [--surface <id>] [--workspace <id>]\n  read-screen [--lines <N>] [--surface <id>] [--workspace <id>]\n  trigger-flash [surfaceId]\n  notify <message> [--body <text>] [--source build|agent|deploy|port|generic]\n  list-notifications\n  clear-notifications [id]\n  agent spawn --cmd <command> [--label <name>] [--cwd <dir>] [--pane <id>]\n  agent spawn-batch --json '[...]' [--strategy distribute|stack|split]\n  agent status <id> | agent list | agent kill <id>\n  set-status <key> <value>\n  set-progress <value> [--label <text>]\n  log <level> <message>\n  sidebar-state\n  markdown set <surfaceId> [--file <path>] [--content <text>]\n  diff set <surfaceId> [--file <path>] [--content <text>]\n  layout grid --count <N> [--type terminal|markdown|diff] [--anchor-pane <id>] [--anchor-surface <id>] [--workspace <id>]\n  list-themes | themes | select-theme <name>\n  config <show|path|reload|import-windows-terminal <file>|import-ghostty <name> <file>>\n  reload-config\n  set-locale <en|fr|ar|ja>"
     );
 }
 

@@ -2,9 +2,10 @@ use crate::persistence::SessionStore;
 use iced::futures::SinkExt;
 use iced::{Element, Size, Subscription, Task, Theme, application, keyboard, stream, time, window};
 use pandamux_core::{
-    AgentRegistry, AppIntent, AppState, NewNotification, NotificationSource, Notifications,
-    PaneIntent, SidebarState, SplitDirection, SplitNode, SplitPaneParams, SurfaceContents,
-    SurfaceId, SurfaceIntent, SurfaceType, WorkspaceIntent, get_all_pane_ids,
+    AgentRegistry, AppIntent, AppState, Localizer, NewNotification, NotificationSource,
+    Notifications, PaneIntent, SidebarState, SplitDirection, SplitNode, SplitPaneParams,
+    SurfaceContents, SurfaceId, SurfaceIntent, SurfaceType, ThemeStore, WorkspaceIntent,
+    get_all_pane_ids, parse_ghostty_theme,
 };
 use pandamux_term::{
     GridSize, PtyCommand, PtySessionManager, SearchOptions, detect_links, search_lines,
@@ -13,8 +14,8 @@ use pandamux_ui::{
     ChromeState, DragView, FindViewState, LinkSpan, NotificationCard, NotificationsViewState,
     Overlay, PaletteItem, PaletteViewState, QuickLaunchViewState, RailItem, SessionActivity,
     SessionsViewState, SettingsSection, SettingsViewState, ShellKind, ShellMessage, ShellViewModel,
-    TerminalSnapshot, UiTheme, app_view, filter_items, project_sessions, project_workspace_shell,
-    shell_view,
+    TermScheme, TerminalSnapshot, UiTheme, app_view, filter_items, project_sessions,
+    project_workspace_shell, shell_view,
 };
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -52,6 +53,10 @@ pub struct NativeShellRuntime {
     sidebar: SidebarState,
     /// Markdown/diff surface content set via the pipe (CLI / orchestrator).
     contents: SurfaceContents,
+    /// Loaded terminal themes (bundled `.theme` files + imports) and the active one.
+    themes: ThemeStore,
+    /// Localization state (set via the pipe / CLI `set-locale`).
+    localizer: Localizer,
     /// Active drag-and-drop of a tab, if any (plan Section 12.3).
     drag: Option<DragView>,
     copy_mode: bool,
@@ -110,6 +115,8 @@ impl NativeShellRuntime {
             agents: AgentRegistry::new(),
             sidebar: SidebarState::new(),
             contents: SurfaceContents::new(),
+            themes: ThemeStore::new(),
+            localizer: Localizer::default(),
             drag: None,
             copy_mode: false,
             palette: PaletteViewState::default(),
@@ -123,6 +130,7 @@ impl NativeShellRuntime {
             pipe_seq: Arc::new(AtomicU64::new(1)),
         };
         if live_ptys {
+            runtime.load_bundled_themes();
             runtime.raise_notification(NewNotification {
                 workspace_id: None,
                 surface_id: None,
@@ -149,6 +157,30 @@ impl NativeShellRuntime {
         self.notif_seq += 1;
         let id = format!("notif-{}", self.notif_seq);
         self.notifications.push(note, id, now_ms());
+    }
+
+    /// Load bundled `.theme` files (Ghostty color format) into the theme store.
+    /// One-time, at startup on the UI thread, so it never runs on an async worker.
+    fn load_bundled_themes(&mut self) {
+        let Some(dir) = themes_dir() else {
+            return;
+        };
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) == Some("theme")
+                && let Ok(content) = std::fs::read_to_string(&path)
+            {
+                let name = path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or("theme")
+                    .to_string();
+                self.themes.insert(parse_ghostty_theme(name, &content));
+            }
+        }
     }
 
     fn toggle_notifications(&mut self) {
@@ -502,6 +534,8 @@ impl NativeShellRuntime {
                     agents: &mut self.agents,
                     sidebar: &mut self.sidebar,
                     contents: &mut self.contents,
+                    themes: &mut self.themes,
+                    localizer: &mut self.localizer,
                     now_ms: now_ms(),
                     spawn_ptys: self.live_ptys,
                 };
@@ -623,6 +657,11 @@ impl NativeShellRuntime {
             settings,
             surface_contents: self.contents.snapshot(),
             drag: self.drag.clone(),
+            term_scheme: self
+                .themes
+                .active()
+                .map(TermScheme::from_theme)
+                .unwrap_or_default(),
         };
     }
 
@@ -1116,6 +1155,7 @@ fn initial_view_model(app_state: &AppState, chrome: &ChromeState) -> ShellViewMo
         settings: SettingsViewState::default(),
         surface_contents: HashMap::new(),
         drag: None,
+        term_scheme: TermScheme::default(),
     }
 }
 
@@ -1124,6 +1164,33 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// Resolve the bundled themes directory: `PANDAMUX_THEMES_DIR` if set, else
+/// `<exe dir>/resources/themes`, else walk up from the cwd to a `resources/themes`
+/// (dev checkout). Returns `None` if none is found.
+fn themes_dir() -> Option<std::path::PathBuf> {
+    if let Ok(dir) = std::env::var("PANDAMUX_THEMES_DIR") {
+        return Some(std::path::PathBuf::from(dir));
+    }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(parent) = exe.parent()
+    {
+        let candidate = parent.join("resources").join("themes");
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+    }
+    let mut dir = std::env::current_dir().ok()?;
+    loop {
+        let candidate = dir.join("resources").join("themes");
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
 }
 
 /// Human relative age like "just now", "3m ago", "2h ago".
@@ -1652,6 +1719,34 @@ mod tests {
         assert_eq!(runtime.view_model().projection.visible_panes.len(), 2);
         assert!(runtime.view_model().drag.is_none());
         assert_eq!(runtime.last_error(), None);
+    }
+
+    #[test]
+    fn selecting_a_theme_updates_the_terminal_scheme() {
+        let mut runtime = NativeShellRuntime::default();
+        assert_eq!(runtime.view_model().term_scheme, TermScheme::default());
+
+        // Import a theme over the pipe, then select it; the derived terminal
+        // scheme should pick up its colors.
+        let (tx, rx) = oneshot::channel();
+        runtime.pipe_registry.lock().unwrap().insert(1, tx);
+        runtime.update_shell(ShellMessage::PipeRequest {
+            id: 1,
+            payload: r#"{"method":"config.import_ghostty","params":{"name":"Neon","content":"background = #010203\nforeground = #fafbfc\n"},"id":1}"#.to_string(),
+        });
+        let _ = rx.blocking_recv();
+
+        let (tx2, rx2) = oneshot::channel();
+        runtime.pipe_registry.lock().unwrap().insert(2, tx2);
+        runtime.update_shell(ShellMessage::PipeRequest {
+            id: 2,
+            payload: r#"{"method":"theme.select","params":{"name":"Neon"},"id":2}"#.to_string(),
+        });
+        let _ = rx2.blocking_recv();
+
+        let scheme = runtime.view_model().term_scheme;
+        assert_eq!(scheme.background, iced::Color::from_rgb8(0x01, 0x02, 0x03));
+        assert_eq!(scheme.text, iced::Color::from_rgb8(0xfa, 0xfb, 0xfc));
     }
 
     #[test]

@@ -191,6 +191,64 @@ pub mod term {
     pub const CELL_HEIGHT: f32 = 21.0;
 }
 
+/// The terminal color scheme applied to the canvas viewport. Defaults to the
+/// fixed-dark scheme above; a selected theme (loaded from a `.theme` file or an
+/// imported config) overrides it. Independent of the chrome [`UiTheme`], as in
+/// the Electron app.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TermScheme {
+    pub background: Color,
+    pub text: Color,
+    pub dim: Color,
+    pub success: Color,
+    pub gold: Color,
+    pub cursor: Color,
+}
+
+impl Default for TermScheme {
+    fn default() -> Self {
+        Self {
+            background: term::SURFACE_OPAQUE,
+            text: term::TEXT,
+            dim: term::DIM,
+            success: term::SUCCESS,
+            gold: term::GOLD,
+            cursor: Accent::Teal.color(),
+        }
+    }
+}
+
+impl TermScheme {
+    /// Derive a scheme from a loaded core theme, falling back to the default for
+    /// any missing or invalid color. Palette indices follow ANSI: 2 = green
+    /// (success), 3 = yellow (gold), 8 = bright black (dim).
+    pub fn from_theme(theme: &pandamux_core::Theme) -> Self {
+        let base = Self::default();
+        let hex = |value: &Option<String>, fallback: Color| {
+            value.as_deref().and_then(hex_to_color).unwrap_or(fallback)
+        };
+        let palette = |index: usize, fallback: Color| {
+            theme
+                .palette
+                .get(index)
+                .and_then(|value| hex_to_color(value))
+                .unwrap_or(fallback)
+        };
+        Self {
+            background: hex(&theme.background, base.background),
+            text: hex(&theme.foreground, base.text),
+            dim: palette(8, base.dim),
+            success: palette(2, base.success),
+            gold: palette(3, base.gold),
+            cursor: hex(&theme.cursor, hex(&theme.foreground, base.text)),
+        }
+    }
+}
+
+fn hex_to_color(hex: &str) -> Option<Color> {
+    pandamux_core::parse_hex(hex).map(|(r, g, b)| Color::from_rgb8(r, g, b))
+}
+
 // ---------------------------------------------------------------------------
 // Chrome palette
 // ---------------------------------------------------------------------------
@@ -363,5 +421,19 @@ mod tests {
         assert_eq!(Accent::Gold.next(), Accent::Blue);
         assert_eq!(Accent::Blue.next(), Accent::Mauve);
         assert_eq!(Accent::Mauve.next(), Accent::Teal);
+    }
+
+    #[test]
+    fn term_scheme_maps_theme_colors_with_fallback() {
+        let theme = pandamux_core::parse_ghostty_theme(
+            "t",
+            "background = #101010\nforeground = #eeeeee\npalette = 2=#00ff00\n",
+        );
+        let scheme = TermScheme::from_theme(&theme);
+        assert_eq!(scheme.background, Color::from_rgb8(0x10, 0x10, 0x10));
+        assert_eq!(scheme.text, Color::from_rgb8(0xee, 0xee, 0xee));
+        assert_eq!(scheme.success, Color::from_rgb8(0x00, 0xff, 0x00));
+        // palette[3] (gold) absent -> falls back to the default scheme's gold.
+        assert_eq!(scheme.gold, TermScheme::default().gold);
     }
 }

@@ -13,10 +13,11 @@
 
 use pandamux_core::{
     AgentInfo, AgentRegistry, AgentStatus, AppDelta, AppIntent, AppState, DropZone,
-    LayoutGridParams, NewNotification, NotificationSource, Notifications, PaneId, PaneIntent,
-    RpcRequest, RpcResponse, SidebarState, SpawnStrategy, SplitDirection, SplitNode,
-    SplitPaneParams, SurfaceContents, SurfaceId, SurfaceIntent, SurfaceType, SystemIntent,
-    WorkspaceId, WorkspaceIntent, find_leaf, get_all_pane_ids,
+    LayoutGridParams, Locale, Localizer, NewNotification, NotificationSource, Notifications,
+    PaneId, PaneIntent, RpcRequest, RpcResponse, SidebarState, SpawnStrategy, SplitDirection,
+    SplitNode, SplitPaneParams, SurfaceContents, SurfaceId, SurfaceIntent, SurfaceType,
+    SystemIntent, ThemeStore, WorkspaceId, WorkspaceIntent, find_leaf, get_all_pane_ids,
+    import_windows_terminal, parse_ghostty_theme,
 };
 use pandamux_term::{GridSize, PtyCommand, PtySessionManager};
 use serde_json::{Value, json};
@@ -36,6 +37,8 @@ pub struct DispatchCtx<'a> {
     pub agents: &'a mut AgentRegistry,
     pub sidebar: &'a mut SidebarState,
     pub contents: &'a mut SurfaceContents,
+    pub themes: &'a mut ThemeStore,
+    pub localizer: &'a mut Localizer,
     pub now_ms: u64,
     pub spawn_ptys: bool,
 }
@@ -51,6 +54,8 @@ pub struct Backend {
     pub agents: AgentRegistry,
     pub sidebar: SidebarState,
     pub contents: SurfaceContents,
+    pub themes: ThemeStore,
+    pub localizer: Localizer,
     pub spawn_ptys: bool,
 }
 
@@ -64,6 +69,8 @@ impl Backend {
             agents: AgentRegistry::new(),
             sidebar: SidebarState::new(),
             contents: SurfaceContents::new(),
+            themes: ThemeStore::new(),
+            localizer: Localizer::default(),
             spawn_ptys,
         }
     }
@@ -78,6 +85,8 @@ impl Backend {
             agents: &mut self.agents,
             sidebar: &mut self.sidebar,
             contents: &mut self.contents,
+            themes: &mut self.themes,
+            localizer: &mut self.localizer,
             now_ms: now_ms(),
             spawn_ptys: self.spawn_ptys,
         };
@@ -134,6 +143,8 @@ fn dispatch(request: &RpcRequest, ctx: DispatchCtx<'_>) -> Result<Value, (i32, S
         agents,
         sidebar,
         contents,
+        themes,
+        localizer,
         now_ms,
         spawn_ptys,
     } = ctx;
@@ -143,6 +154,10 @@ fn dispatch(request: &RpcRequest, ctx: DispatchCtx<'_>) -> Result<Value, (i32, S
     }
 
     if let Some(result) = dispatch_sidebar(request, sidebar)? {
+        return Ok(result);
+    }
+
+    if let Some(result) = dispatch_config(request, themes, localizer)? {
         return Ok(result);
     }
 
@@ -270,6 +285,83 @@ fn dispatch_sidebar(
             Ok(Some(json!({ "ok": true })))
         }
         "sidebar.get_state" => Ok(Some(serde_json::to_value(&*sidebar).unwrap_or(json!({})))),
+        _ => Ok(None),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Themes / config / i18n
+// ---------------------------------------------------------------------------
+
+fn dispatch_config(
+    request: &RpcRequest,
+    themes: &mut ThemeStore,
+    localizer: &mut Localizer,
+) -> Result<Option<Value>, (i32, String)> {
+    match request.method.as_str() {
+        "theme.list" => Ok(Some(json!({
+            "themes": themes.names(),
+            "active": themes.active_name(),
+        }))),
+        "theme.select" => {
+            let name = opt_string(&request.params, "name")
+                .or_else(|| opt_string(&request.params, "id"))
+                .ok_or_else(|| (-32602, "theme.select requires name".to_string()))?;
+            if themes.set_active(&name) {
+                Ok(Some(json!({ "ok": true, "active": name })))
+            } else {
+                Err((-32000, format!("theme not found: {name}")))
+            }
+        }
+        "theme.get" => {
+            let name = opt_string(&request.params, "name")
+                .ok_or_else(|| (-32602, "theme.get requires name".to_string()))?;
+            let theme = themes
+                .get(&name)
+                .ok_or_else(|| (-32000, format!("theme not found: {name}")))?;
+            Ok(Some(serde_json::to_value(theme).unwrap_or(json!({}))))
+        }
+        "config.import_windows_terminal" => {
+            let content = opt_string(&request.params, "content")
+                .ok_or_else(|| (-32602, "import requires content".to_string()))?;
+            let imported = import_windows_terminal(&content).map_err(|error| (-32000, error))?;
+            let names: Vec<String> = imported.iter().map(|theme| theme.name.clone()).collect();
+            for theme in imported {
+                themes.insert(theme);
+            }
+            Ok(Some(json!({ "imported": names })))
+        }
+        "config.import_ghostty" => {
+            let content = opt_string(&request.params, "content")
+                .ok_or_else(|| (-32602, "import requires content".to_string()))?;
+            let name =
+                opt_string(&request.params, "name").unwrap_or_else(|| "imported".to_string());
+            themes.insert(parse_ghostty_theme(name.clone(), &content));
+            Ok(Some(json!({ "name": name })))
+        }
+        "config.show" => Ok(Some(json!({
+            "activeTheme": themes.active_name(),
+            "themeCount": themes.len(),
+            "locale": localizer.locale().code(),
+        }))),
+        "config.path" => Ok(Some(json!({
+            "path": std::env::var("PANDAMUX_THEMES_DIR")
+                .unwrap_or_else(|_| "resources/themes".to_string()),
+        }))),
+        "config.reload" => Ok(Some(json!({ "ok": true, "themeCount": themes.len() }))),
+        "i18n.set_locale" => {
+            let code = opt_string(&request.params, "locale")
+                .ok_or_else(|| (-32602, "i18n.set_locale requires locale".to_string()))?;
+            let locale = Locale::parse(&code)
+                .ok_or_else(|| (-32602, format!("unsupported locale: {code}")))?;
+            localizer.set_locale(locale);
+            Ok(Some(json!({ "ok": true, "locale": locale.code() })))
+        }
+        "i18n.translate" => {
+            let key = opt_string(&request.params, "key")
+                .ok_or_else(|| (-32602, "i18n.translate requires key".to_string()))?;
+            Ok(Some(json!({ "text": localizer.t(&key) })))
+        }
         _ => Ok(None),
     }
 }
@@ -1541,6 +1633,66 @@ mod tests {
                 .get(&SurfaceId::from(surface_id.as_str()))
                 .is_none()
         );
+    }
+
+    #[test]
+    fn themes_config_and_i18n_roundtrip() {
+        let mut backend = Backend::new(false);
+
+        // Import a Ghostty theme, list, and select it.
+        let imported = handle(
+            &mut backend,
+            r#"{"method":"config.import_ghostty","params":{"name":"Dracula","content":"background = #282a36\npalette = 1=#ff5555\n"},"id":1}"#,
+        );
+        assert_eq!(imported["result"]["name"], "Dracula");
+        let list = handle(
+            &mut backend,
+            r#"{"method":"theme.list","params":{},"id":2}"#,
+        );
+        assert!(
+            list["result"]["themes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|name| name == "Dracula")
+        );
+        let selected = handle(
+            &mut backend,
+            r#"{"method":"theme.select","params":{"name":"Dracula"},"id":3}"#,
+        );
+        assert_eq!(selected["result"]["active"], "Dracula");
+        let unknown = handle(
+            &mut backend,
+            r#"{"method":"theme.select","params":{"name":"nope"},"id":4}"#,
+        );
+        assert_eq!(unknown["error"]["code"], -32000);
+
+        // Windows Terminal import (the content is JSON-in-JSON containing "#).
+        let wt = handle(
+            &mut backend,
+            r##"{"method":"config.import_windows_terminal","params":{"content":"{\"schemes\":[{\"name\":\"WT\",\"background\":\"#000000\",\"red\":\"#ff0000\"}]}"},"id":5}"##,
+        );
+        assert_eq!(wt["result"]["imported"][0], "WT");
+
+        // config.show reflects the active theme + locale.
+        let show = handle(
+            &mut backend,
+            r#"{"method":"config.show","params":{},"id":6}"#,
+        );
+        assert_eq!(show["result"]["activeTheme"], "Dracula");
+        assert_eq!(show["result"]["locale"], "en");
+
+        // i18n: set locale then translate.
+        let locale = handle(
+            &mut backend,
+            r#"{"method":"i18n.set_locale","params":{"locale":"fr"},"id":7}"#,
+        );
+        assert_eq!(locale["result"]["locale"], "fr");
+        let translated = handle(
+            &mut backend,
+            r#"{"method":"i18n.translate","params":{"key":"settings"},"id":8}"#,
+        );
+        assert_eq!(translated["result"]["text"], "Paramètres");
     }
 
     /// Wire-compat regression guard for the pandamux-orchestrator plugin. Replays
