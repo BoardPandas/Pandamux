@@ -3,6 +3,8 @@ pub mod chrome;
 #[cfg(feature = "iced-runtime")]
 pub mod command_palette;
 #[cfg(feature = "iced-runtime")]
+pub mod content_views;
+#[cfg(feature = "iced-runtime")]
 pub mod iced_shell;
 #[cfg(feature = "iced-runtime")]
 pub mod overlays;

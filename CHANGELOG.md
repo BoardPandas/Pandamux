@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.0]
+
+### Added
+
+- Markdown and diff surfaces now render their content in the pane instead of a placeholder: a line-based markdown renderer (headings, bullets, blockquotes, fenced code, rules, paragraphs) and a per-line-colored unified-diff view, both on the fixed-dark pane scheme.
+- New pipe methods `markdown.set_content`, `markdown.load_file`, `diff.set_content`, and `diff.refresh`, backed by a `pandamux-core::SurfaceContents` store threaded through the single-writer dispatcher (so CLI/orchestrator content updates reach the live UI). Content for a closed surface is pruned automatically.
+- New CLI commands `pandamux markdown set <surfaceId> [--file <path>] [--content <text>]` and `pandamux diff set <surfaceId> ...`. `--file` is read client-side, so the pipe server never touches the filesystem. This completes the pandamux-orchestrator dashboard path (`pandamux markdown set <sid> --file dashboard.md`).
+
+### Changed
+
+- Folded the shared backend dispatcher's growing `&mut` parameter list into a single `DispatchCtx` struct (app/ptys/notifications/agents/sidebar/contents/clock/spawn flag), so `handle_line` and the sub-dispatchers stay readable as more surfaces gain state.
+- Bumped the app version to `0.25.0`.
+
 ## [0.24.0]
 
 ### Added

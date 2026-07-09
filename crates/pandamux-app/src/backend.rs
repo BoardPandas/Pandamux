@@ -15,13 +15,30 @@ use pandamux_core::{
     AgentInfo, AgentRegistry, AgentStatus, AppDelta, AppIntent, AppState, LayoutGridParams,
     NewNotification, NotificationSource, Notifications, PaneId, PaneIntent, RpcRequest,
     RpcResponse, SidebarState, SpawnStrategy, SplitDirection, SplitNode, SplitPaneParams,
-    SurfaceId, SurfaceIntent, SurfaceType, SystemIntent, WorkspaceId, WorkspaceIntent, find_leaf,
-    get_all_pane_ids,
+    SurfaceContents, SurfaceId, SurfaceIntent, SurfaceType, SystemIntent, WorkspaceId,
+    WorkspaceIntent, find_leaf, get_all_pane_ids,
 };
 use pandamux_term::{GridSize, PtyCommand, PtySessionManager};
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// The mutable backend state a single dispatch borrows. Grouping these into one
+/// struct (rather than a long `&mut` parameter list) keeps `handle_line` and the
+/// sub-dispatchers readable as more surfaces gain state; both clients of the
+/// single writer (the pipe server and the live Iced runtime) build one of these
+/// per request and pass it in.
+pub struct DispatchCtx<'a> {
+    pub app: &'a mut AppState,
+    pub ptys: &'a mut PtySessionManager,
+    pub notifications: &'a mut Notifications,
+    pub notif_seq: &'a mut u64,
+    pub agents: &'a mut AgentRegistry,
+    pub sidebar: &'a mut SidebarState,
+    pub contents: &'a mut SurfaceContents,
+    pub now_ms: u64,
+    pub spawn_ptys: bool,
+}
 
 /// Owns the canonical backend state for the headless (no-UI) pipe-server path.
 /// The live Iced runtime keeps its own copies of these fields and calls the free
@@ -33,6 +50,7 @@ pub struct Backend {
     pub notif_seq: u64,
     pub agents: AgentRegistry,
     pub sidebar: SidebarState,
+    pub contents: SurfaceContents,
     pub spawn_ptys: bool,
 }
 
@@ -45,23 +63,25 @@ impl Backend {
             notif_seq: 0,
             agents: AgentRegistry::new(),
             sidebar: SidebarState::new(),
+            contents: SurfaceContents::new(),
             spawn_ptys,
         }
     }
 
     /// Handle one protocol line and return the reply to write back to the client.
     pub fn handle_line(&mut self, line: &str) -> String {
-        handle_line(
-            line,
-            &mut self.app,
-            &mut self.ptys,
-            &mut self.notifications,
-            &mut self.notif_seq,
-            &mut self.agents,
-            &mut self.sidebar,
-            now_ms(),
-            self.spawn_ptys,
-        )
+        let ctx = DispatchCtx {
+            app: &mut self.app,
+            ptys: &mut self.ptys,
+            notifications: &mut self.notifications,
+            notif_seq: &mut self.notif_seq,
+            agents: &mut self.agents,
+            sidebar: &mut self.sidebar,
+            contents: &mut self.contents,
+            now_ms: now_ms(),
+            spawn_ptys: self.spawn_ptys,
+        };
+        handle_line(line, ctx)
     }
 }
 
@@ -74,20 +94,10 @@ pub fn now_ms() -> u64 {
 }
 
 /// The single dispatch entry point. Handles the V1 `ping` text protocol and the
-/// V2 JSON-RPC methods. `now_ms` is injected so callers (and tests) control the
-/// clock. Returns the serialized reply; an empty string means "write nothing".
-#[allow(clippy::too_many_arguments)]
-pub fn handle_line(
-    line: &str,
-    app: &mut AppState,
-    ptys: &mut PtySessionManager,
-    notifications: &mut Notifications,
-    notif_seq: &mut u64,
-    agents: &mut AgentRegistry,
-    sidebar: &mut SidebarState,
-    now_ms: u64,
-    spawn_ptys: bool,
-) -> String {
+/// V2 JSON-RPC methods. The clock (`ctx.now_ms`) is injected so callers (and
+/// tests) control it. Returns the serialized reply; an empty string means "write
+/// nothing".
+pub fn handle_line(line: &str, ctx: DispatchCtx<'_>) -> String {
     let message = line.trim();
     if message == "ping" {
         return "pong".to_string();
@@ -109,34 +119,25 @@ pub fn handle_line(
     };
 
     let id = request.id.clone();
-    match dispatch(
-        &request,
+    match dispatch(&request, ctx) {
+        Ok(result) => serialize_response(RpcResponse::result(id, result)),
+        Err((code, message)) => serialize_response(RpcResponse::error(id, code, message)),
+    }
+}
+
+fn dispatch(request: &RpcRequest, ctx: DispatchCtx<'_>) -> Result<Value, (i32, String)> {
+    let DispatchCtx {
         app,
         ptys,
         notifications,
         notif_seq,
         agents,
         sidebar,
+        contents,
         now_ms,
         spawn_ptys,
-    ) {
-        Ok(result) => serialize_response(RpcResponse::result(id, result)),
-        Err((code, message)) => serialize_response(RpcResponse::error(id, code, message)),
-    }
-}
+    } = ctx;
 
-#[allow(clippy::too_many_arguments)]
-fn dispatch(
-    request: &RpcRequest,
-    app: &mut AppState,
-    ptys: &mut PtySessionManager,
-    notifications: &mut Notifications,
-    notif_seq: &mut u64,
-    agents: &mut AgentRegistry,
-    sidebar: &mut SidebarState,
-    now_ms: u64,
-    spawn_ptys: bool,
-) -> Result<Value, (i32, String)> {
     if let Some(result) = dispatch_notifications(request, notifications, notif_seq, now_ms)? {
         return Ok(result);
     }
@@ -153,6 +154,10 @@ fn dispatch(
         return Ok(result);
     }
 
+    if let Some(result) = dispatch_surface_content(request, app, contents)? {
+        return Ok(result);
+    }
+
     // Browser automation is intentionally dropped in the native build (plan
     // Section 4.1). Reject it with a clear message instead of a generic
     // "method not found" so agents/CLI callers get actionable feedback.
@@ -166,6 +171,8 @@ fn dispatch(
     let intent = intent_for_request(request)?;
     let delta = app.apply(intent).map_err(|message| (-32000, message))?;
     sync_terminal_sessions(app, ptys, spawn_ptys).map_err(|message| (-32000, message))?;
+    // Drop markdown/diff content for surfaces the mutation may have closed.
+    contents.retain_live(&all_surface_ids(app));
     Ok(delta_to_result(delta))
 }
 
@@ -464,8 +471,7 @@ fn spawn_agent(
 /// build set on spawned shells (`PANDAMUX`, `PANDAMUX_SURFACE_ID`,
 /// `PANDAMUX_PIPE`), plus `PANDAMUX_AGENT_ID` for agent surfaces.
 pub(crate) fn pandamux_env(surface_id: &str, agent_id: Option<&str>) -> Vec<(String, String)> {
-    let pipe =
-        std::env::var("PANDAMUX_PIPE").unwrap_or_else(|_| r"\\.\pipe\pandamux".to_string());
+    let pipe = std::env::var("PANDAMUX_PIPE").unwrap_or_else(|_| r"\\.\pipe\pandamux".to_string());
     let mut env = vec![
         ("PANDAMUX".to_string(), "1".to_string()),
         ("PANDAMUX_SURFACE_ID".to_string(), surface_id.to_string()),
@@ -606,6 +612,84 @@ fn dispatch_terminal_io(
         }
         "surface.trigger_flash" => Ok(Some(json!({ "ok": true }))),
         _ => Ok(None),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Surface content (markdown / diff)
+// ---------------------------------------------------------------------------
+
+fn dispatch_surface_content(
+    request: &RpcRequest,
+    app: &AppState,
+    contents: &mut SurfaceContents,
+) -> Result<Option<Value>, (i32, String)> {
+    match request.method.as_str() {
+        "markdown.set_content" | "diff.set_content" => {
+            let surface_id = content_surface_id(app, &request.params)?;
+            let content = opt_string(&request.params, "content").unwrap_or_default();
+            contents.set(surface_id, content);
+            Ok(Some(json!({ "ok": true })))
+        }
+        // `load_file`/`refresh` accept an inline `content` (preferred: the CLI
+        // reads the file client-side) or a server-readable `path`. Reading the
+        // file here is a small, one-shot blocking read on the sync dispatch path
+        // (consistent with the PTY spawns it already performs), not a hot loop.
+        "markdown.load_file" | "diff.refresh" => {
+            let surface_id = content_surface_id(app, &request.params)?;
+            let content = match opt_string(&request.params, "content") {
+                Some(content) => content,
+                None => {
+                    let path = opt_string(&request.params, "path").ok_or_else(|| {
+                        (
+                            -32602,
+                            format!("{} requires content or path", request.method),
+                        )
+                    })?;
+                    std::fs::read_to_string(&path)
+                        .map_err(|error| (-32000, format!("read {path}: {error}")))?
+                }
+            };
+            contents.set(surface_id, content);
+            Ok(Some(json!({ "ok": true })))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Resolve the required surface id for a content method. Content surfaces are
+/// always addressed explicitly (there is no "focused content surface" fallback).
+fn content_surface_id(app: &AppState, params: &Value) -> Result<SurfaceId, (i32, String)> {
+    let surface_id: SurfaceId = opt_id(params, "surfaceId")
+        .or_else(|| opt_id(params, "id"))
+        .ok_or_else(|| (-32602, "content method requires surfaceId".to_string()))?;
+    if all_surface_ids(app).contains(&surface_id) {
+        Ok(surface_id)
+    } else {
+        Err((-32000, format!("surface not found: {surface_id}")))
+    }
+}
+
+/// Every surface id across all workspaces (terminal and non-terminal).
+fn all_surface_ids(app: &AppState) -> HashSet<SurfaceId> {
+    let mut ids = HashSet::new();
+    for workspace in &app.workspaces {
+        collect_surface_ids(&workspace.split_tree, &mut ids);
+    }
+    ids
+}
+
+fn collect_surface_ids(tree: &SplitNode, ids: &mut HashSet<SurfaceId>) {
+    match tree {
+        SplitNode::Leaf(leaf) => {
+            for surface in &leaf.surfaces {
+                ids.insert(surface.id.clone());
+            }
+        }
+        SplitNode::Branch(branch) => {
+            collect_surface_ids(&branch.children[0], ids);
+            collect_surface_ids(&branch.children[1], ids);
+        }
     }
 }
 
@@ -931,8 +1015,8 @@ pub fn sync_terminal_sessions(
             if ptys.has(&session_id) {
                 continue;
             }
-            let command = PtyCommand::new(workspace.shell.clone())
-                .with_env(pandamux_env(&session_id, None));
+            let command =
+                PtyCommand::new(workspace.shell.clone()).with_env(pandamux_env(&session_id, None));
             ptys.spawn(session_id, &command, GridSize::new(120, 30))
                 .map_err(|error| error.to_string())?;
         }
@@ -1389,6 +1473,58 @@ mod tests {
     fn non_json_line_returns_empty() {
         let mut backend = Backend::new(false);
         assert_eq!(backend.handle_line("not-json"), "");
+    }
+
+    #[test]
+    fn sets_reads_and_prunes_surface_content() {
+        let mut backend = Backend::new(false);
+        // Create a markdown surface in the default pane.
+        let create = handle(
+            &mut backend,
+            r#"{"method":"surface.create","params":{"paneId":"pane-default","type":"markdown"},"id":1}"#,
+        );
+        let surface_id = create["result"]["surfaceId"]
+            .as_str()
+            .expect("surface id")
+            .to_string();
+
+        // Set + read back the content.
+        let set = handle(
+            &mut backend,
+            &format!(
+                r##"{{"method":"markdown.set_content","params":{{"id":"{surface_id}","content":"# Hi"}},"id":2}}"##
+            ),
+        );
+        assert_eq!(set["result"]["ok"], true);
+        assert_eq!(
+            backend.contents.get(&SurfaceId::from(surface_id.as_str())),
+            Some("# Hi")
+        );
+
+        // An unknown surface is rejected.
+        let missing = handle(
+            &mut backend,
+            r#"{"method":"markdown.set_content","params":{"id":"surf-nope","content":"x"},"id":3}"#,
+        );
+        assert_eq!(missing["error"]["code"], -32000);
+
+        // Closing the surface (after adding a sibling so it is not the last one)
+        // prunes its stored content.
+        handle(
+            &mut backend,
+            r#"{"method":"surface.create","params":{"paneId":"pane-default","type":"terminal"},"id":4}"#,
+        );
+        let close = handle(
+            &mut backend,
+            &format!(r#"{{"method":"surface.close","params":{{"id":"{surface_id}"}},"id":5}}"#),
+        );
+        assert_eq!(close["result"]["ok"], true);
+        assert!(
+            backend
+                .contents
+                .get(&SurfaceId::from(surface_id.as_str()))
+                .is_none()
+        );
     }
 
     /// Wire-compat regression guard for the pandamux-orchestrator plugin. Replays

@@ -5,6 +5,7 @@ pub mod protocol;
 pub mod sidebar;
 pub mod split_tree;
 pub mod state;
+pub mod surface_content;
 
 pub use agent::{AgentInfo, AgentRegistry, AgentStatus, SpawnStrategy};
 pub use ids::{PaneId, SurfaceId, WindowId, WorkspaceId};
@@ -21,3 +22,4 @@ pub use state::{
     AppDelta, AppIntent, AppState, Capabilities, LayoutGridParams, PaneIntent, SplitPaneParams,
     SurfaceIntent, SystemIntent, WorkspaceIntent, WorkspaceState, WorkspaceSummary,
 };
+pub use surface_content::SurfaceContents;

@@ -107,6 +107,30 @@ async fn run() -> Result<(), Box<dyn Error>> {
         }
         "log" => print_json(send_v2("sidebar.log", log_params(&args[1..])?).await?),
         "sidebar-state" => print_json(send_v2("sidebar.get_state", json!({})).await?),
+        "markdown" => match args.get(1).map(String::as_str) {
+            Some("set") => {
+                print_json(send_v2("markdown.set_content", content_set_params(&args[2..])?).await?)
+            }
+            _ => {
+                print_usage();
+                return Err(
+                    "usage: pandamux markdown set <surfaceId> [--file <path>] [--content <text>]"
+                        .into(),
+                );
+            }
+        },
+        "diff" => match args.get(1).map(String::as_str) {
+            Some("set") | Some("refresh") => {
+                print_json(send_v2("diff.refresh", content_set_params(&args[2..])?).await?)
+            }
+            _ => {
+                print_usage();
+                return Err(
+                    "usage: pandamux diff set <surfaceId> [--file <path>] [--content <text>]"
+                        .into(),
+                );
+            }
+        },
         "browser" => {
             return Err(
                 "browser automation is not supported in the native build; use Claude Code's browser tooling"
@@ -690,6 +714,35 @@ fn log_params(args: &[String]) -> Result<Value, Box<dyn Error>> {
     Ok(json!({ "level": level, "message": message }))
 }
 
+/// Params for `markdown set` / `diff set`: a required surface id plus content
+/// from `--content <text>` or `--file <path>` (read here client-side so the pipe
+/// server never touches the filesystem).
+fn content_set_params(args: &[String]) -> Result<Value, Box<dyn Error>> {
+    let id = args.first().ok_or("set requires <surfaceId>")?.clone();
+    let mut content: Option<String> = None;
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--content" => {
+                content = Some(
+                    args.get(index + 1)
+                        .ok_or("--content requires a value")?
+                        .clone(),
+                );
+                index += 2;
+            }
+            "--file" => {
+                let path = args.get(index + 1).ok_or("--file requires a value")?;
+                content = Some(std::fs::read_to_string(path)?);
+                index += 2;
+            }
+            unknown => return Err(format!("unknown set option: {unknown}").into()),
+        }
+    }
+    let content = content.ok_or("set requires --file <path> or --content <text>")?;
+    Ok(json!({ "id": id, "content": content }))
+}
+
 fn clear_notifications_params(args: &[String]) -> Result<Value, Box<dyn Error>> {
     let mut params = serde_json::Map::new();
     if let Some(id) = args.first() {
@@ -757,7 +810,7 @@ fn print_json(value: Value) {
 
 fn print_usage() {
     println!(
-        "Usage: pandamux <command>\n\nCommands:\n  ping\n  identify\n  capabilities\n  tree\n  new-workspace [--title <title>] [--shell <shell>]\n  list-workspaces\n  select-workspace <id>\n  rename-workspace <id> <title>\n  close-workspace <id>\n  split [--down] [--type terminal|markdown|diff] [--pane <id>] [--surface <id>] [--workspace <id>]\n  close-pane <id> [--workspace <id>]\n  focus-pane <id> [--workspace <id>]\n  zoom-pane [id] [--workspace <id>]\n  new-surface [--type terminal|markdown|diff] [--pane <id>] [--workspace <id>]\n  focus-surface <id> [--workspace <id>]\n  close-surface <id> [--workspace <id>]\n  list-panes [--workspace <id>]\n  list-surfaces [--workspace <id>] [--pane <id>]\n  send <text> [--surface <id>] [--workspace <id>]\n  send-key <key> [--ctrl] [--shift] [--alt] [--surface <id>] [--workspace <id>]\n  read-screen [--lines <N>] [--surface <id>] [--workspace <id>]\n  trigger-flash [surfaceId]\n  notify <message> [--body <text>] [--source build|agent|deploy|port|generic]\n  list-notifications\n  clear-notifications [id]\n  agent spawn --cmd <command> [--label <name>] [--cwd <dir>] [--pane <id>]\n  agent spawn-batch --json '[...]' [--strategy distribute|stack|split]\n  agent status <id> | agent list | agent kill <id>\n  set-status <key> <value>\n  set-progress <value> [--label <text>]\n  log <level> <message>\n  sidebar-state\n  layout grid --count <N> [--type terminal|markdown|diff] [--anchor-pane <id>] [--anchor-surface <id>] [--workspace <id>]"
+        "Usage: pandamux <command>\n\nCommands:\n  ping\n  identify\n  capabilities\n  tree\n  new-workspace [--title <title>] [--shell <shell>]\n  list-workspaces\n  select-workspace <id>\n  rename-workspace <id> <title>\n  close-workspace <id>\n  split [--down] [--type terminal|markdown|diff] [--pane <id>] [--surface <id>] [--workspace <id>]\n  close-pane <id> [--workspace <id>]\n  focus-pane <id> [--workspace <id>]\n  zoom-pane [id] [--workspace <id>]\n  new-surface [--type terminal|markdown|diff] [--pane <id>] [--workspace <id>]\n  focus-surface <id> [--workspace <id>]\n  close-surface <id> [--workspace <id>]\n  list-panes [--workspace <id>]\n  list-surfaces [--workspace <id>] [--pane <id>]\n  send <text> [--surface <id>] [--workspace <id>]\n  send-key <key> [--ctrl] [--shift] [--alt] [--surface <id>] [--workspace <id>]\n  read-screen [--lines <N>] [--surface <id>] [--workspace <id>]\n  trigger-flash [surfaceId]\n  notify <message> [--body <text>] [--source build|agent|deploy|port|generic]\n  list-notifications\n  clear-notifications [id]\n  agent spawn --cmd <command> [--label <name>] [--cwd <dir>] [--pane <id>]\n  agent spawn-batch --json '[...]' [--strategy distribute|stack|split]\n  agent status <id> | agent list | agent kill <id>\n  set-status <key> <value>\n  set-progress <value> [--label <text>]\n  log <level> <message>\n  sidebar-state\n  markdown set <surfaceId> [--file <path>] [--content <text>]\n  diff set <surfaceId> [--file <path>] [--content <text>]\n  layout grid --count <N> [--type terminal|markdown|diff] [--anchor-pane <id>] [--anchor-surface <id>] [--workspace <id>]"
     );
 }
 
@@ -891,6 +944,21 @@ mod tests {
         .expect("agent spawn");
         assert_eq!(params["cmd"], "claude --foo");
         assert_eq!(params["label"], "worker");
+    }
+
+    #[test]
+    fn parses_content_set_params() {
+        let params = content_set_params(&[
+            "surf-1".to_string(),
+            "--content".to_string(),
+            "# Dashboard".to_string(),
+        ])
+        .expect("content params should parse");
+        assert_eq!(params["id"], "surf-1");
+        assert_eq!(params["content"], "# Dashboard");
+
+        assert!(content_set_params(&["surf-1".to_string()]).is_err());
+        assert!(content_set_params(&[]).is_err());
     }
 
     #[test]

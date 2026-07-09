@@ -21,6 +21,7 @@ use iced::{
     mouse,
 };
 use pandamux_core::{PaneId, SplitDirection, SurfaceId, SurfaceType, WorkspaceId};
+use std::collections::HashMap;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ShellMessage {
@@ -158,6 +159,8 @@ pub struct ShellViewModel {
     pub quick_launch: QuickLaunchViewState,
     /// Settings modal projection.
     pub settings: SettingsViewState,
+    /// Markdown/diff content keyed by surface id, rendered by non-terminal panes.
+    pub surface_contents: HashMap<SurfaceId, String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -388,6 +391,7 @@ fn workspace_view<'a>(model: &'a ShellViewModel, palette: Palette) -> Element<'a
         columns = columns.push(column_view(
             col,
             &model.terminals,
+            &model.surface_contents,
             palette,
             focused,
             model.cursor_on,
@@ -411,9 +415,11 @@ fn workspace_view<'a>(model: &'a ShellViewModel, palette: Palette) -> Element<'a
         .into()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn column_view<'a>(
     col: &'a ColumnProjection,
     terminals: &'a [TerminalSnapshot],
+    surface_contents: &'a HashMap<SurfaceId, String>,
     palette: Palette,
     focused: Option<&PaneId>,
     cursor_on: bool,
@@ -424,6 +430,7 @@ fn column_view<'a>(
         stacked = stacked.push(pane_view(
             pane,
             terminals,
+            surface_contents,
             palette,
             focused,
             cursor_on,
@@ -433,9 +440,11 @@ fn column_view<'a>(
     stacked.width(Length::Fill).height(Length::Fill).into()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn pane_view<'a>(
     pane: &'a PaneProjection,
     terminals: &'a [TerminalSnapshot],
+    surface_contents: &'a HashMap<SurfaceId, String>,
     palette: Palette,
     focused: Option<&PaneId>,
     cursor_on: bool,
@@ -450,28 +459,52 @@ fn pane_view<'a>(
 
     let tab_bar = tab_bar_view(pane, palette);
 
-    let active_terminal = pane
-        .active_surface_id
-        .as_ref()
-        .and_then(|surface_id| terminal_snapshot(terminals, surface_id));
-    let viewport = match active_terminal {
-        Some(snapshot) => canvas::Canvas::new(
-            TerminalViewport::new(snapshot.lines.clone(), snapshot.columns, snapshot.rows)
-                .with_cursor(is_focused && cursor_on)
-                .with_links(snapshot.links.clone())
-                .with_highlight(highlight),
-        )
-        .width(Length::Fill)
-        .height(Length::Fill),
-        None => canvas::Canvas::new(
-            TerminalViewport::new(vec![placeholder_line(pane)], 80, 24)
-                .with_cursor(is_focused && cursor_on),
-        )
-        .width(Length::Fill)
-        .height(Length::Fill),
+    // Non-terminal surfaces (markdown / diff) render their stored content; a
+    // terminal surface (or an unknown/empty pane) renders the canvas viewport.
+    let active_surface = pane.surfaces.iter().find(|surface| surface.is_active);
+    let body: Element<'a, ShellMessage> = match active_surface.map(|surface| &surface.surface_type)
+    {
+        Some(SurfaceType::Markdown) => {
+            let content = active_surface
+                .and_then(|surface| surface_contents.get(&surface.id))
+                .map(String::as_str)
+                .unwrap_or("");
+            crate::content_views::markdown_view(content, palette)
+        }
+        Some(SurfaceType::Diff) => {
+            let content = active_surface
+                .and_then(|surface| surface_contents.get(&surface.id))
+                .map(String::as_str)
+                .unwrap_or("");
+            crate::content_views::diff_view(content, palette)
+        }
+        _ => {
+            let active_terminal = pane
+                .active_surface_id
+                .as_ref()
+                .and_then(|surface_id| terminal_snapshot(terminals, surface_id));
+            match active_terminal {
+                Some(snapshot) => canvas::Canvas::new(
+                    TerminalViewport::new(snapshot.lines.clone(), snapshot.columns, snapshot.rows)
+                        .with_cursor(is_focused && cursor_on)
+                        .with_links(snapshot.links.clone())
+                        .with_highlight(highlight),
+                )
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
+                None => canvas::Canvas::new(
+                    TerminalViewport::new(vec![placeholder_line(pane)], 80, 24)
+                        .with_cursor(is_focused && cursor_on),
+                )
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
+            }
+        }
     };
 
-    let contents = column![tab_bar, viewport]
+    let contents = column![tab_bar, body]
         .width(Length::Fill)
         .height(Length::Fill);
 
@@ -723,6 +756,7 @@ mod tests {
             palette: PaletteViewState::default(),
             quick_launch: QuickLaunchViewState::default(),
             settings: SettingsViewState::default(),
+            surface_contents: HashMap::new(),
         }
     }
 
@@ -769,6 +803,44 @@ mod tests {
         let state = AppState::default();
         let mut model = model_from(&state, Vec::new());
         model.chrome.show_status_bar = false;
+        let _app = app_view(&model);
+    }
+
+    #[test]
+    fn renders_markdown_and_diff_surfaces_from_content_store() {
+        // A pane whose active surface is markdown (then diff) renders its stored
+        // content rather than the terminal viewport, without panicking.
+        let mut state = AppState::default();
+        let created = state
+            .apply(AppIntent::Surface(pandamux_core::SurfaceIntent::Create {
+                workspace_id: None,
+                pane_id: Some(PaneId::from("pane-default")),
+                surface_type: SurfaceType::Markdown,
+            }))
+            .expect("markdown surface should create");
+        let pandamux_core::AppDelta::SurfaceCreated { surface, .. } = created else {
+            panic!("expected surface created");
+        };
+
+        let mut model = model_from(&state, Vec::new());
+        model.surface_contents.insert(
+            surface.id.clone(),
+            "# Dashboard\n\n- wave 1\n\n```\ncode\n```\n".to_string(),
+        );
+        let _app = app_view(&model);
+
+        // Same pane, diff content.
+        state
+            .apply(AppIntent::Surface(pandamux_core::SurfaceIntent::Create {
+                workspace_id: None,
+                pane_id: Some(PaneId::from("pane-default")),
+                surface_type: SurfaceType::Diff,
+            }))
+            .expect("diff surface should create");
+        let mut model = model_from(&state, Vec::new());
+        model
+            .surface_contents
+            .insert(surface.id, "@@ -1 +1 @@\n-old\n+new\n".to_string());
         let _app = app_view(&model);
     }
 }

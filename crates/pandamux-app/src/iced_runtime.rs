@@ -3,8 +3,8 @@ use iced::futures::SinkExt;
 use iced::{Element, Size, Subscription, Task, Theme, application, keyboard, stream, time, window};
 use pandamux_core::{
     AgentRegistry, AppIntent, AppState, NewNotification, NotificationSource, Notifications,
-    PaneIntent, SidebarState, SplitDirection, SplitNode, SplitPaneParams, SurfaceId, SurfaceIntent,
-    SurfaceType, WorkspaceIntent, get_all_pane_ids,
+    PaneIntent, SidebarState, SplitDirection, SplitNode, SplitPaneParams, SurfaceContents,
+    SurfaceId, SurfaceIntent, SurfaceType, WorkspaceIntent, get_all_pane_ids,
 };
 use pandamux_term::{
     GridSize, PtyCommand, PtySessionManager, SearchOptions, detect_links, search_lines,
@@ -50,6 +50,8 @@ pub struct NativeShellRuntime {
     agents: AgentRegistry,
     /// Sidebar status/progress/log written via the pipe (CLI / orchestrator).
     sidebar: SidebarState,
+    /// Markdown/diff surface content set via the pipe (CLI / orchestrator).
+    contents: SurfaceContents,
     copy_mode: bool,
     /// Command-palette state (query + selection persist across refreshes; items
     /// are rebuilt each refresh).
@@ -105,6 +107,7 @@ impl NativeShellRuntime {
             notif_seq: 0,
             agents: AgentRegistry::new(),
             sidebar: SidebarState::new(),
+            contents: SurfaceContents::new(),
             copy_mode: false,
             palette: PaletteViewState::default(),
             settings_section: SettingsSection::default(),
@@ -442,17 +445,18 @@ impl NativeShellRuntime {
                 // dispatcher the standalone server uses. Then the UI repaints
                 // (falls through to refresh below), so a CLI-driven split or
                 // `notify` shows up live.
-                let reply = crate::backend::handle_line(
-                    &payload,
-                    &mut self.app_state,
-                    &mut self.ptys,
-                    &mut self.notifications,
-                    &mut self.notif_seq,
-                    &mut self.agents,
-                    &mut self.sidebar,
-                    now_ms(),
-                    self.live_ptys,
-                );
+                let ctx = crate::backend::DispatchCtx {
+                    app: &mut self.app_state,
+                    ptys: &mut self.ptys,
+                    notifications: &mut self.notifications,
+                    notif_seq: &mut self.notif_seq,
+                    agents: &mut self.agents,
+                    sidebar: &mut self.sidebar,
+                    contents: &mut self.contents,
+                    now_ms: now_ms(),
+                    spawn_ptys: self.live_ptys,
+                };
+                let reply = crate::backend::handle_line(&payload, ctx);
                 if let Ok(mut registry) = self.pipe_registry.lock()
                     && let Some(tx) = registry.remove(&id)
                 {
@@ -568,6 +572,7 @@ impl NativeShellRuntime {
             palette: self.palette.clone(),
             quick_launch: QuickLaunchViewState::default(),
             settings,
+            surface_contents: self.contents.snapshot(),
         };
     }
 
@@ -1059,6 +1064,7 @@ fn initial_view_model(app_state: &AppState, chrome: &ChromeState) -> ShellViewMo
         palette: PaletteViewState::default(),
         quick_launch: QuickLaunchViewState::default(),
         settings: SettingsViewState::default(),
+        surface_contents: HashMap::new(),
     }
 }
 
