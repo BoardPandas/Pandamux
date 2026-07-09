@@ -10,8 +10,8 @@ use pandamux_term::{
     GridSize, PtyCommand, PtySessionManager, SearchOptions, detect_links, search_lines,
 };
 use pandamux_ui::{
-    ChromeState, FindViewState, LinkSpan, NotificationCard, NotificationsViewState, Overlay,
-    PaletteItem, PaletteViewState, QuickLaunchViewState, RailItem, SessionActivity,
+    ChromeState, DragView, FindViewState, LinkSpan, NotificationCard, NotificationsViewState,
+    Overlay, PaletteItem, PaletteViewState, QuickLaunchViewState, RailItem, SessionActivity,
     SessionsViewState, SettingsSection, SettingsViewState, ShellKind, ShellMessage, ShellViewModel,
     TerminalSnapshot, UiTheme, app_view, filter_items, project_sessions, project_workspace_shell,
     shell_view,
@@ -52,6 +52,8 @@ pub struct NativeShellRuntime {
     sidebar: SidebarState,
     /// Markdown/diff surface content set via the pipe (CLI / orchestrator).
     contents: SurfaceContents,
+    /// Active drag-and-drop of a tab, if any (plan Section 12.3).
+    drag: Option<DragView>,
     copy_mode: bool,
     /// Command-palette state (query + selection persist across refreshes; items
     /// are rebuilt each refresh).
@@ -108,6 +110,7 @@ impl NativeShellRuntime {
             agents: AgentRegistry::new(),
             sidebar: SidebarState::new(),
             contents: SurfaceContents::new(),
+            drag: None,
             copy_mode: false,
             palette: PaletteViewState::default(),
             settings_section: SettingsSection::default(),
@@ -347,6 +350,52 @@ impl NativeShellRuntime {
             ShellMessage::NewSessionRequested => self.open_overlay(Overlay::QuickLaunch),
             ShellMessage::OverlayDismissed => {
                 self.chrome.active_overlay = Overlay::None;
+                // Esc also cancels an in-flight drag.
+                self.drag = None;
+            }
+            ShellMessage::TabDragArmed {
+                surface_id,
+                pane_id,
+            } => {
+                self.drag = Some(DragView {
+                    surface_id,
+                    source_pane_id: pane_id,
+                    over: None,
+                    active: false,
+                });
+            }
+            ShellMessage::DragMoved => {
+                if let Some(drag) = self.drag.as_mut() {
+                    drag.active = true;
+                }
+            }
+            ShellMessage::DragOverZone { pane_id, zone } => {
+                // Only track a zone once the drag is active (moved).
+                if let Some(drag) = self.drag.as_mut()
+                    && drag.active
+                {
+                    drag.over = Some((pane_id, zone));
+                }
+            }
+            ShellMessage::DragReleased => {
+                if let Some(drag) = self.drag.take() {
+                    // Over a zone -> move/split; otherwise the press-release was a
+                    // plain tab click -> focus the surface.
+                    let intent = match drag.over {
+                        Some((target_pane_id, zone)) => AppIntent::Surface(SurfaceIntent::Move {
+                            workspace_id: None,
+                            surface_id: drag.surface_id,
+                            target_pane_id,
+                            zone,
+                        }),
+                        None => AppIntent::Surface(SurfaceIntent::Focus {
+                            workspace_id: None,
+                            surface_id: drag.surface_id,
+                        }),
+                    };
+                    let result = self.app_state.apply(intent);
+                    self.last_error = result.err();
+                }
             }
             ShellMessage::PaletteQueryChanged(query) => {
                 self.palette.query = query;
@@ -573,6 +622,7 @@ impl NativeShellRuntime {
             quick_launch: QuickLaunchViewState::default(),
             settings,
             surface_contents: self.contents.snapshot(),
+            drag: self.drag.clone(),
         };
     }
 
@@ -1065,6 +1115,7 @@ fn initial_view_model(app_state: &AppState, chrome: &ChromeState) -> ShellViewMo
         quick_launch: QuickLaunchViewState::default(),
         settings: SettingsViewState::default(),
         surface_contents: HashMap::new(),
+        drag: None,
     }
 }
 
@@ -1571,6 +1622,63 @@ mod tests {
     #[test]
     fn iced_shell_smoke_builds_view_once() {
         run_iced_shell_smoke().expect("smoke should build the shell view");
+    }
+
+    #[test]
+    fn drag_move_splits_pane_via_core_intent() {
+        let mut runtime = NativeShellRuntime::default();
+        let pane_id = runtime.view_model().projection.visible_panes[0].id.clone();
+        // Add a second tab so a directional drop can split the pane.
+        runtime.update_shell(ShellMessage::TerminalSurfaceCreated(pane_id.clone()));
+        let surface_id = runtime.view_model().projection.visible_panes[0]
+            .surfaces
+            .last()
+            .expect("second surface")
+            .id
+            .clone();
+
+        // Arm, move (activate), hover the bottom zone, release.
+        runtime.update_shell(ShellMessage::TabDragArmed {
+            surface_id,
+            pane_id: pane_id.clone(),
+        });
+        runtime.update_shell(ShellMessage::DragMoved);
+        runtime.update_shell(ShellMessage::DragOverZone {
+            pane_id,
+            zone: pandamux_core::DropZone::Bottom,
+        });
+        runtime.update_shell(ShellMessage::DragReleased);
+
+        assert_eq!(runtime.view_model().projection.visible_panes.len(), 2);
+        assert!(runtime.view_model().drag.is_none());
+        assert_eq!(runtime.last_error(), None);
+    }
+
+    #[test]
+    fn tab_click_without_drag_focuses_not_moves() {
+        let mut runtime = NativeShellRuntime::default();
+        let pane_id = runtime.view_model().projection.visible_panes[0].id.clone();
+        // Two tabs; the first is inactive after creating the second.
+        runtime.update_shell(ShellMessage::TerminalSurfaceCreated(pane_id.clone()));
+        let first_surface = runtime.view_model().projection.visible_panes[0].surfaces[0]
+            .id
+            .clone();
+
+        // Arm on the first tab and release without moving: a plain click focuses,
+        // does not split.
+        runtime.update_shell(ShellMessage::TabDragArmed {
+            surface_id: first_surface.clone(),
+            pane_id,
+        });
+        runtime.update_shell(ShellMessage::DragReleased);
+
+        assert!(runtime.view_model().drag.is_none());
+        assert_eq!(runtime.view_model().projection.visible_panes.len(), 1);
+        assert_eq!(
+            runtime.view_model().projection.visible_panes[0].active_surface_id,
+            Some(first_surface)
+        );
+        assert_eq!(runtime.last_error(), None);
     }
 
     #[test]

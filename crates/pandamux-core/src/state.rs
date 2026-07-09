@@ -1,8 +1,8 @@
 use crate::ids::{PaneId, SurfaceId, WorkspaceId};
 use crate::split_tree::{
-    GridLayoutResult, SplitDirection, SplitNode, SurfaceRef, SurfaceType, build_grid_layout,
-    create_leaf, find_leaf, find_pane_id_for_surface, get_all_pane_ids, remove_leaf, replace_leaf,
-    split_node,
+    DropZone, GridLayoutResult, MoveResult, SplitDirection, SplitNode, SurfaceRef, SurfaceType,
+    build_grid_layout, create_leaf, find_leaf, find_pane_id_for_surface, get_all_pane_ids,
+    move_surface, remove_leaf, replace_leaf, split_node,
 };
 use serde::{Deserialize, Serialize};
 
@@ -115,6 +115,13 @@ pub enum SurfaceIntent {
         workspace_id: Option<WorkspaceId>,
         surface_id: SurfaceId,
     },
+    /// Drag-drop move of an existing surface to a drop target (plan Section 12.3).
+    Move {
+        workspace_id: Option<WorkspaceId>,
+        surface_id: SurfaceId,
+        target_pane_id: PaneId,
+        zone: DropZone,
+    },
     List {
         workspace_id: Option<WorkspaceId>,
         pane_id: Option<PaneId>,
@@ -213,6 +220,10 @@ pub enum AppDelta {
     SurfaceClosed {
         workspace_id: WorkspaceId,
         surface_id: SurfaceId,
+    },
+    SurfaceMoved {
+        workspace_id: WorkspaceId,
+        tree: SplitNode,
     },
     SurfaceListReported {
         workspace_id: WorkspaceId,
@@ -607,6 +618,34 @@ impl AppState {
                     workspace_id,
                     surface_id,
                 })
+            }
+            SurfaceIntent::Move {
+                workspace_id,
+                surface_id,
+                target_pane_id,
+                zone,
+            } => {
+                let workspace_id = self.resolve_workspace_id(workspace_id);
+                let workspace = self
+                    .workspace_mut(&workspace_id)
+                    .ok_or_else(|| format!("workspace not found: {workspace_id}"))?;
+                match move_surface(&workspace.split_tree, &surface_id, &target_pane_id, zone) {
+                    Some(MoveResult {
+                        tree,
+                        focus_pane_id,
+                    }) => {
+                        workspace.split_tree = tree.clone();
+                        workspace.focused_pane_id = Some(focus_pane_id);
+                        workspace.zoomed_pane_id = None;
+                        Ok(AppDelta::SurfaceMoved { workspace_id, tree })
+                    }
+                    // No-op drop (e.g. a pane's only tab onto itself): report the
+                    // unchanged tree so the UI simply repaints.
+                    None => Ok(AppDelta::SurfaceMoved {
+                        workspace_id,
+                        tree: workspace.split_tree.clone(),
+                    }),
+                }
             }
             SurfaceIntent::List {
                 workspace_id,

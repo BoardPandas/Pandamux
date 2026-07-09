@@ -396,6 +396,202 @@ pub fn build_grid_layout(
     }
 }
 
+/// Where a dragged surface is dropped relative to a target pane (plan Section
+/// 12.3). `Center` appends the surface as a tab; the directional zones create a
+/// new pane beside/above/below the target holding the moved surface.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DropZone {
+    Center,
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+impl DropZone {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "center" => Some(DropZone::Center),
+            "left" => Some(DropZone::Left),
+            "right" => Some(DropZone::Right),
+            "top" => Some(DropZone::Top),
+            "bottom" => Some(DropZone::Bottom),
+            _ => None,
+        }
+    }
+
+    /// Directional zones map to a split (direction + whether the new leaf goes
+    /// first). `Center` has no split.
+    fn split(self) -> Option<(SplitDirection, bool)> {
+        match self {
+            DropZone::Center => None,
+            DropZone::Left => Some((SplitDirection::Horizontal, true)),
+            DropZone::Right => Some((SplitDirection::Horizontal, false)),
+            DropZone::Top => Some((SplitDirection::Vertical, true)),
+            DropZone::Bottom => Some((SplitDirection::Vertical, false)),
+        }
+    }
+}
+
+/// The result of moving a surface: the new tree and the pane that should take
+/// focus (the destination).
+#[derive(Clone, Debug, PartialEq)]
+pub struct MoveResult {
+    pub tree: SplitNode,
+    pub focus_pane_id: PaneId,
+}
+
+/// Move an existing surface to a drop target (plan Section 12.3 drop semantics).
+///
+/// - `Center`: append the surface as a tab in the target pane.
+/// - directional: create a new single-surface pane beside/above/below the
+///   target, holding the moved surface.
+///
+/// In all cases the surface is removed from its source pane, and an emptied
+/// source pane is pruned. Returns `None` for a no-op (surface/target missing, or
+/// dropping a pane's only tab back onto itself), so the caller leaves the tree
+/// unchanged.
+pub fn move_surface(
+    tree: &SplitNode,
+    surface_id: &SurfaceId,
+    target_pane_id: &PaneId,
+    zone: DropZone,
+) -> Option<MoveResult> {
+    let source_pane_id = find_pane_id_for_surface(tree, surface_id)?;
+    let source_leaf = find_leaf(tree, &source_pane_id)?;
+    let moved = source_leaf
+        .surfaces
+        .iter()
+        .find(|surface| &surface.id == surface_id)?
+        .clone();
+    let source_is_single = source_leaf.surfaces.len() == 1;
+
+    // Target must exist.
+    find_leaf(tree, target_pane_id)?;
+
+    // No-op: dropping a pane's only tab back onto itself, or a center drop onto
+    // its own pane (no structural change).
+    if &source_pane_id == target_pane_id && (zone == DropZone::Center || source_is_single) {
+        return None;
+    }
+
+    match zone.split() {
+        None => {
+            // Center: append to the target, then remove + prune the source.
+            let tree = append_surface_to_leaf(tree, target_pane_id, moved);
+            let tree = remove_surface_and_prune(&tree, &source_pane_id, surface_id);
+            Some(MoveResult {
+                tree,
+                focus_pane_id: target_pane_id.clone(),
+            })
+        }
+        Some((direction, new_first)) => {
+            // Remove + prune the source first (a same-pane directional drop keeps
+            // the source alive because it still has other surfaces), then split
+            // the target, placing the moved surface in the new leaf.
+            let tree = remove_surface_and_prune(tree, &source_pane_id, surface_id);
+            let new_pane_id = PaneId::generate();
+            let new_leaf = LeafNode {
+                pane_id: new_pane_id.clone(),
+                surfaces: vec![moved],
+                active_surface_index: 0,
+            };
+            let tree = split_with_leaf(&tree, target_pane_id, new_leaf, direction, new_first);
+            Some(MoveResult {
+                tree,
+                focus_pane_id: new_pane_id,
+            })
+        }
+    }
+}
+
+fn append_surface_to_leaf(tree: &SplitNode, pane_id: &PaneId, surface: SurfaceRef) -> SplitNode {
+    let Some(leaf) = find_leaf(tree, pane_id) else {
+        return tree.clone();
+    };
+    let mut leaf = leaf.clone();
+    leaf.surfaces.push(surface);
+    leaf.active_surface_index = leaf.surfaces.len() - 1;
+    replace_leaf(tree, pane_id, leaf)
+}
+
+fn remove_surface_and_prune(
+    tree: &SplitNode,
+    pane_id: &PaneId,
+    surface_id: &SurfaceId,
+) -> SplitNode {
+    let Some(leaf) = find_leaf(tree, pane_id) else {
+        return tree.clone();
+    };
+    let mut leaf = leaf.clone();
+    let Some(position) = leaf.surfaces.iter().position(|s| &s.id == surface_id) else {
+        return tree.clone();
+    };
+    leaf.surfaces.remove(position);
+    if leaf.surfaces.is_empty() {
+        remove_leaf(tree, pane_id).unwrap_or_else(|| tree.clone())
+    } else {
+        if leaf.active_surface_index >= leaf.surfaces.len() {
+            leaf.active_surface_index = leaf.surfaces.len() - 1;
+        }
+        replace_leaf(tree, pane_id, leaf)
+    }
+}
+
+/// Like [`split_node`], but inserts a provided (already-populated) leaf instead
+/// of creating a fresh single-surface one, and honors `new_first` ordering.
+fn split_with_leaf(
+    tree: &SplitNode,
+    target_pane_id: &PaneId,
+    new_leaf: LeafNode,
+    direction: SplitDirection,
+    new_first: bool,
+) -> SplitNode {
+    match tree {
+        SplitNode::Leaf(leaf) => {
+            if &leaf.pane_id != target_pane_id {
+                return tree.clone();
+            }
+            let inserted = SplitNode::Leaf(new_leaf);
+            let children = if new_first {
+                [inserted, tree.clone()]
+            } else {
+                [tree.clone(), inserted]
+            };
+            SplitNode::Branch(BranchNode {
+                direction,
+                ratio: 0.5,
+                children: Box::new(children),
+            })
+        }
+        SplitNode::Branch(branch) => {
+            let left = split_with_leaf(
+                &branch.children[0],
+                target_pane_id,
+                new_leaf.clone(),
+                direction,
+                new_first,
+            );
+            let right = split_with_leaf(
+                &branch.children[1],
+                target_pane_id,
+                new_leaf,
+                direction,
+                new_first,
+            );
+            if left == branch.children[0] && right == branch.children[1] {
+                tree.clone()
+            } else {
+                SplitNode::Branch(BranchNode {
+                    children: Box::new([left, right]),
+                    ..branch.clone()
+                })
+            }
+        }
+    }
+}
+
 fn clamp_ratio(ratio: f32) -> f32 {
     ratio.clamp(0.1, 0.9)
 }
@@ -407,5 +603,159 @@ fn branch_contains_pane_id(node: &SplitNode, pane_id: &PaneId) -> bool {
             branch_contains_pane_id(&branch.children[0], pane_id)
                 || branch_contains_pane_id(&branch.children[1], pane_id)
         }
+    }
+}
+
+#[cfg(test)]
+mod move_tests {
+    use super::*;
+
+    fn leaf(pane: &str, surfaces: &[&str]) -> SplitNode {
+        SplitNode::Leaf(LeafNode {
+            pane_id: PaneId::from(pane),
+            surfaces: surfaces
+                .iter()
+                .map(|id| SurfaceRef {
+                    id: SurfaceId::from(*id),
+                    surface_type: SurfaceType::Terminal,
+                })
+                .collect(),
+            active_surface_index: 0,
+        })
+    }
+
+    fn branch(direction: SplitDirection, first: SplitNode, second: SplitNode) -> SplitNode {
+        SplitNode::Branch(BranchNode {
+            direction,
+            ratio: 0.5,
+            children: Box::new([first, second]),
+        })
+    }
+
+    #[test]
+    fn center_appends_and_prunes_source() {
+        let tree = branch(
+            SplitDirection::Horizontal,
+            leaf("pane-a", &["s-a"]),
+            leaf("pane-b", &["s-b"]),
+        );
+        let result = move_surface(
+            &tree,
+            &SurfaceId::from("s-a"),
+            &PaneId::from("pane-b"),
+            DropZone::Center,
+        )
+        .expect("move should apply");
+
+        // pane-a emptied and pruned; pane-b now holds both surfaces.
+        assert_eq!(get_all_pane_ids(&result.tree), vec![PaneId::from("pane-b")]);
+        let target = find_leaf(&result.tree, &PaneId::from("pane-b")).unwrap();
+        assert_eq!(target.surfaces.len(), 2);
+        assert_eq!(target.active_surface_index, 1);
+        assert_eq!(result.focus_pane_id, PaneId::from("pane-b"));
+    }
+
+    #[test]
+    fn directional_creates_new_pane_beside_target() {
+        let tree = branch(
+            SplitDirection::Horizontal,
+            leaf("pane-a", &["s-a"]),
+            leaf("pane-b", &["s-b"]),
+        );
+        let result = move_surface(
+            &tree,
+            &SurfaceId::from("s-a"),
+            &PaneId::from("pane-b"),
+            DropZone::Right,
+        )
+        .expect("move should apply");
+
+        let panes = get_all_pane_ids(&result.tree);
+        assert_eq!(panes.len(), 2);
+        assert!(panes.contains(&PaneId::from("pane-b")));
+        // Focus is the freshly created pane holding the moved surface.
+        assert_ne!(result.focus_pane_id, PaneId::from("pane-b"));
+        let moved = find_leaf(&result.tree, &result.focus_pane_id).unwrap();
+        assert_eq!(moved.surfaces[0].id, SurfaceId::from("s-a"));
+        // Right => target first, new leaf second, horizontal split.
+        let SplitNode::Branch(root) = &result.tree else {
+            panic!("expected a branch");
+        };
+        assert_eq!(root.direction, SplitDirection::Horizontal);
+        assert!(find_leaf(&root.children[0], &PaneId::from("pane-b")).is_some());
+        assert!(find_leaf(&root.children[1], &result.focus_pane_id).is_some());
+    }
+
+    #[test]
+    fn dropping_only_tab_onto_itself_is_a_no_op() {
+        let tree = leaf("pane-a", &["s-a"]);
+        assert!(
+            move_surface(
+                &tree,
+                &SurfaceId::from("s-a"),
+                &PaneId::from("pane-a"),
+                DropZone::Center,
+            )
+            .is_none()
+        );
+        assert!(
+            move_surface(
+                &tree,
+                &SurfaceId::from("s-a"),
+                &PaneId::from("pane-a"),
+                DropZone::Right,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn directional_split_of_own_multi_tab_pane_keeps_source() {
+        let tree = leaf("pane-a", &["s-1", "s-2"]);
+        let result = move_surface(
+            &tree,
+            &SurfaceId::from("s-2"),
+            &PaneId::from("pane-a"),
+            DropZone::Bottom,
+        )
+        .expect("move should apply");
+
+        assert_eq!(get_all_pane_ids(&result.tree).len(), 2);
+        let source = find_leaf(&result.tree, &PaneId::from("pane-a")).unwrap();
+        assert_eq!(source.surfaces.len(), 1);
+        assert_eq!(source.surfaces[0].id, SurfaceId::from("s-1"));
+        let moved = find_leaf(&result.tree, &result.focus_pane_id).unwrap();
+        assert_eq!(moved.surfaces[0].id, SurfaceId::from("s-2"));
+        let SplitNode::Branch(root) = &result.tree else {
+            panic!("expected a branch");
+        };
+        assert_eq!(root.direction, SplitDirection::Vertical);
+    }
+
+    #[test]
+    fn missing_surface_or_target_is_a_no_op() {
+        let tree = branch(
+            SplitDirection::Horizontal,
+            leaf("pane-a", &["s-a"]),
+            leaf("pane-b", &["s-b"]),
+        );
+        assert!(
+            move_surface(
+                &tree,
+                &SurfaceId::from("s-missing"),
+                &PaneId::from("pane-b"),
+                DropZone::Center,
+            )
+            .is_none()
+        );
+        assert!(
+            move_surface(
+                &tree,
+                &SurfaceId::from("s-a"),
+                &PaneId::from("pane-missing"),
+                DropZone::Center,
+            )
+            .is_none()
+        );
     }
 }

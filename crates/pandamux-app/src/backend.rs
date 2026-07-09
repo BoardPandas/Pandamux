@@ -12,11 +12,11 @@
 //! two divergent dispatchers.
 
 use pandamux_core::{
-    AgentInfo, AgentRegistry, AgentStatus, AppDelta, AppIntent, AppState, LayoutGridParams,
-    NewNotification, NotificationSource, Notifications, PaneId, PaneIntent, RpcRequest,
-    RpcResponse, SidebarState, SpawnStrategy, SplitDirection, SplitNode, SplitPaneParams,
-    SurfaceContents, SurfaceId, SurfaceIntent, SurfaceType, SystemIntent, WorkspaceId,
-    WorkspaceIntent, find_leaf, get_all_pane_ids,
+    AgentInfo, AgentRegistry, AgentStatus, AppDelta, AppIntent, AppState, DropZone,
+    LayoutGridParams, NewNotification, NotificationSource, Notifications, PaneId, PaneIntent,
+    RpcRequest, RpcResponse, SidebarState, SpawnStrategy, SplitDirection, SplitNode,
+    SplitPaneParams, SurfaceContents, SurfaceId, SurfaceIntent, SurfaceType, SystemIntent,
+    WorkspaceId, WorkspaceIntent, find_leaf, get_all_pane_ids,
 };
 use pandamux_term::{GridSize, PtyCommand, PtySessionManager};
 use serde_json::{Value, json};
@@ -754,6 +754,12 @@ fn intent_for_request(request: &RpcRequest) -> Result<AppIntent, (i32, String)> 
             workspace_id: opt_id(&request.params, "workspaceId"),
             surface_id: required_id(&request.params, &["id", "surfaceId"])?,
         })),
+        "surface.move" => Ok(AppIntent::Surface(SurfaceIntent::Move {
+            workspace_id: opt_id(&request.params, "workspaceId"),
+            surface_id: required_id(&request.params, &["surfaceId", "id"])?,
+            target_pane_id: required_id(&request.params, &["targetPaneId", "paneId"])?,
+            zone: parse_zone(&request.params)?,
+        })),
         "surface.list" => Ok(AppIntent::Surface(SurfaceIntent::List {
             workspace_id: opt_id(&request.params, "workspaceId"),
             pane_id: opt_id(&request.params, "paneId"),
@@ -808,6 +814,11 @@ fn parse_surface_type(value: &str) -> Result<SurfaceType, (i32, String)> {
         "browser" => Err((-32602, "browser surfaces are not supported".to_string())),
         other => Err((-32602, format!("unsupported surface type: {other}"))),
     }
+}
+
+fn parse_zone(params: &Value) -> Result<DropZone, (i32, String)> {
+    let zone = opt_string(params, "zone").unwrap_or_else(|| "center".to_string());
+    DropZone::parse(&zone).ok_or_else(|| (-32602, format!("unsupported drop zone: {zone}")))
 }
 
 fn split_direction_param(params: &Value) -> Result<SplitDirection, (i32, String)> {
@@ -977,6 +988,11 @@ fn delta_to_result(delta: AppDelta) -> Value {
         | AppDelta::PaneZoomed { .. }
         | AppDelta::SurfaceFocused { .. }
         | AppDelta::SurfaceClosed { .. } => json!({ "ok": true }),
+        AppDelta::SurfaceMoved { workspace_id, tree } => json!({
+            "workspaceId": workspace_id,
+            "tree": tree,
+            "ok": true,
+        }),
         AppDelta::PaneListReported { panes, .. } => json!({ "panes": panes }),
         AppDelta::SurfaceCreated {
             workspace_id,

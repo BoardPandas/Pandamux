@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.0]
+
+### Added
+
+- Drag-and-drop pane splitting (plan Section 12.3). Press a tab and drag it: the pane shows five drop zones (left/right as full-height 25% strips, and a central column of top/center/bottom), the source tab dims, and releasing over a zone moves the tab. Center appends it as a tab in the target pane; a directional zone creates a new pane beside/above/below the target holding the moved surface. A movement gate distinguishes a real drag from a plain click (which just focuses the tab), and Esc cancels an in-flight drag. Empty source panes are pruned, and UI-initiated splits stay 2-level so the column projection round-trips.
+- New `pandamux-core::move_surface` split-tree operation and `DropZone` type, a `SurfaceIntent::Move` intent, and a `surface.move` pipe method (`{surfaceId, targetPaneId, zone}`), all unit-tested (center append + prune, directional split, no-op on a pane's only tab, missing surface/target).
+
+### Changed
+
+- Bumped the app version to `0.26.0`.
+
 ## [0.25.0]
 
 ### Added

@@ -20,7 +20,7 @@ use iced::{
     Alignment, Color, Element, Length, Padding, Pixels, Point, Rectangle, Renderer, Size, Theme,
     mouse,
 };
-use pandamux_core::{PaneId, SplitDirection, SurfaceId, SurfaceType, WorkspaceId};
+use pandamux_core::{DropZone, PaneId, SplitDirection, SurfaceId, SurfaceType, WorkspaceId};
 use std::collections::HashMap;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -37,6 +37,23 @@ pub enum ShellMessage {
     TerminalSurfaceCreated(PaneId),
     SurfaceFocused(SurfaceId),
     SurfaceClosed(SurfaceId),
+    // Drag-and-drop pane splitting (Section 12.3)
+    /// A tab press armed a potential drag of `surface_id` from `pane_id`. A
+    /// release without ever entering a drop zone is treated as a plain click
+    /// (focus); a release over a zone moves/splits.
+    TabDragArmed {
+        surface_id: SurfaceId,
+        pane_id: PaneId,
+    },
+    /// The pointer moved while a drag was armed (confirms a real drag vs a click).
+    DragMoved,
+    /// The drag pointer entered a pane's drop zone.
+    DragOverZone {
+        pane_id: PaneId,
+        zone: DropZone,
+    },
+    /// The drag pointer was released anywhere (drop if over a zone, else focus).
+    DragReleased,
     // Chrome / window
     WindowDragStarted,
     WindowMinimizePressed,
@@ -107,6 +124,21 @@ pub enum ShellMessage {
     Noop,
 }
 
+/// Live drag-and-drop state (plan Section 12.3). Present only while a tab is
+/// being dragged; drives the dimmed source tab and the drop-zone overlay.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DragView {
+    pub surface_id: SurfaceId,
+    pub source_pane_id: PaneId,
+    /// The pane + zone the pointer is currently over, if any.
+    pub over: Option<(PaneId, DropZone)>,
+    /// `true` once the pointer has moved after the press (the drag is a real drag,
+    /// not a click). Drop zones only render and register while active, so a
+    /// stationary press-release stays a plain click (focus), standing in for the
+    /// design's 6px drag threshold.
+    pub active: bool,
+}
+
 /// A detected-link span on a visible row (character offsets), for underlining.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LinkSpan {
@@ -161,6 +193,8 @@ pub struct ShellViewModel {
     pub settings: SettingsViewState,
     /// Markdown/diff content keyed by surface id, rendered by non-terminal panes.
     pub surface_contents: HashMap<SurfaceId, String>,
+    /// Active drag-and-drop, if a tab is being dragged.
+    pub drag: Option<DragView>,
 }
 
 // ---------------------------------------------------------------------------
@@ -371,7 +405,17 @@ pub fn app_view(model: &ShellViewModel) -> Element<'_, ShellMessage> {
         }
     }
 
-    layers.into()
+    // A root release handler completes any in-flight drag (drop or focus). It is
+    // a no-op when nothing is being dragged. While a drag is armed, a root
+    // `on_move` confirms it (the movement gate) so a stationary click stays a
+    // click; the handler is omitted otherwise to avoid a message per mouse move.
+    let root = mouse_area(layers).on_release(ShellMessage::DragReleased);
+    let root = if model.drag.is_some() {
+        root.on_move(|_point| ShellMessage::DragMoved)
+    } else {
+        root
+    };
+    root.into()
 }
 
 /// The pane workspace only (used by tests and the headless smoke path).
@@ -392,6 +436,7 @@ fn workspace_view<'a>(model: &'a ShellViewModel, palette: Palette) -> Element<'a
             col,
             &model.terminals,
             &model.surface_contents,
+            model.drag.as_ref(),
             palette,
             focused,
             model.cursor_on,
@@ -420,6 +465,7 @@ fn column_view<'a>(
     col: &'a ColumnProjection,
     terminals: &'a [TerminalSnapshot],
     surface_contents: &'a HashMap<SurfaceId, String>,
+    drag: Option<&'a DragView>,
     palette: Palette,
     focused: Option<&PaneId>,
     cursor_on: bool,
@@ -431,6 +477,7 @@ fn column_view<'a>(
             pane,
             terminals,
             surface_contents,
+            drag,
             palette,
             focused,
             cursor_on,
@@ -445,6 +492,7 @@ fn pane_view<'a>(
     pane: &'a PaneProjection,
     terminals: &'a [TerminalSnapshot],
     surface_contents: &'a HashMap<SurfaceId, String>,
+    drag: Option<&'a DragView>,
     palette: Palette,
     focused: Option<&PaneId>,
     cursor_on: bool,
@@ -457,7 +505,8 @@ fn pane_view<'a>(
         None
     };
 
-    let tab_bar = tab_bar_view(pane, palette);
+    let dragged_surface = drag.map(|drag| &drag.surface_id);
+    let tab_bar = tab_bar_view(pane, palette, dragged_surface);
 
     // Non-terminal surfaces (markdown / diff) render their stored content; a
     // terminal surface (or an unknown/empty pane) renders the canvas viewport.
@@ -514,15 +563,34 @@ fn pane_view<'a>(
         .clip(true)
         .style(move |_theme| pane_style(palette, is_focused));
 
-    mouse_area(pane_box)
-        .on_press(ShellMessage::PaneFocused(pane.id.clone()))
-        .into()
+    // While a drag is in flight, overlay the drop zones on top of the pane so the
+    // pointer's enter events select a zone; otherwise the pane is a click-to-focus
+    // target.
+    match drag {
+        // Overlay drop zones only once the drag is active (moved), so a plain tab
+        // click never registers a zone.
+        Some(drag) if drag.active => {
+            let active_zone = match &drag.over {
+                Some((pane_id, zone)) if pane_id == &pane.id => Some(*zone),
+                _ => None,
+            };
+            stack![pane_box, drop_zone_overlay(&pane.id, active_zone, palette)].into()
+        }
+        _ => mouse_area(pane_box)
+            .on_press(ShellMessage::PaneFocused(pane.id.clone()))
+            .into(),
+    }
 }
 
-fn tab_bar_view<'a>(pane: &'a PaneProjection, palette: Palette) -> Element<'a, ShellMessage> {
+fn tab_bar_view<'a>(
+    pane: &'a PaneProjection,
+    palette: Palette,
+    dragged_surface: Option<&SurfaceId>,
+) -> Element<'a, ShellMessage> {
     let mut tabs = row![].spacing(4).align_y(Alignment::Center);
     for surface in &pane.surfaces {
-        tabs = tabs.push(tab_view(surface, palette));
+        let is_dragging = dragged_surface == Some(&surface.id);
+        tabs = tabs.push(tab_view(surface, &pane.id, palette, is_dragging));
     }
 
     let add_tab = icon_button(
@@ -581,10 +649,28 @@ fn tab_bar_view<'a>(pane: &'a PaneProjection, palette: Palette) -> Element<'a, S
         .into()
 }
 
-fn tab_view<'a>(surface: &'a SurfaceProjection, palette: Palette) -> Element<'a, ShellMessage> {
+fn tab_view<'a>(
+    surface: &'a SurfaceProjection,
+    pane_id: &PaneId,
+    palette: Palette,
+    is_dragging: bool,
+) -> Element<'a, ShellMessage> {
     let kind = surface_shell_kind(&surface.surface_type);
-    let shell_color = palette.shell_color(kind);
+    // The dragged tab dims to ~35% (plan Section 12.3): a plain click focuses;
+    // a press-drag-release over a pane moves. Both start from this same press.
+    let shell_color = if is_dragging {
+        theme::with_alpha(palette.shell_color(kind), 0.35)
+    } else {
+        palette.shell_color(kind)
+    };
     let is_active = surface.is_active;
+    let label_color = if is_dragging {
+        palette.t4
+    } else if is_active {
+        palette.t1
+    } else {
+        palette.t3
+    };
 
     let label = row![
         text(kind.glyph())
@@ -593,14 +679,17 @@ fn tab_view<'a>(surface: &'a SurfaceProjection, palette: Palette) -> Element<'a,
             .color(shell_color),
         text(surface_type_label(&surface.surface_type))
             .size(theme::SIZE_BODY)
-            .color(if is_active { palette.t1 } else { palette.t3 }),
+            .color(label_color),
     ]
     .spacing(6)
     .align_y(Alignment::Center);
 
     let focus_button = button(label)
         .padding(Padding::from([5.0, 8.0]))
-        .on_press(ShellMessage::SurfaceFocused(surface.id.clone()))
+        .on_press(ShellMessage::TabDragArmed {
+            surface_id: surface.id.clone(),
+            pane_id: pane_id.clone(),
+        })
         .style(move |_theme, status| tab_style(palette, is_active, status));
 
     let close = button(text("\u{00d7}").size(theme::SIZE_BODY).color(palette.t3))
@@ -646,6 +735,103 @@ fn icon_button<'a>(
     .on_press(message)
     .style(move |_theme, status| ghost_button_style(palette, status))
     .into()
+}
+
+// ---------------------------------------------------------------------------
+// Drag-and-drop drop zones (Section 12.3)
+// ---------------------------------------------------------------------------
+
+/// The five drop zones overlaid on a pane during a drag. Left/right are
+/// full-height 25% strips (so they win over top/bottom near the corners, per the
+/// spec's `x<0.25` / `x>0.75` precedence); the central 50% column carries
+/// top (30%) / center (40%) / bottom (30%). Each region reports `on_enter` so the
+/// runtime tracks the hovered zone; the active one is highlighted.
+fn drop_zone_overlay<'a>(
+    pane_id: &PaneId,
+    active: Option<DropZone>,
+    palette: Palette,
+) -> Element<'a, ShellMessage> {
+    let middle = column![
+        zone_region(
+            pane_id,
+            DropZone::Top,
+            active,
+            palette,
+            Length::FillPortion(30)
+        ),
+        zone_region(
+            pane_id,
+            DropZone::Center,
+            active,
+            palette,
+            Length::FillPortion(40)
+        ),
+        zone_region(
+            pane_id,
+            DropZone::Bottom,
+            active,
+            palette,
+            Length::FillPortion(30)
+        ),
+    ]
+    .width(Length::FillPortion(50))
+    .height(Length::Fill);
+
+    row![
+        wrap_width(
+            zone_region(pane_id, DropZone::Left, active, palette, Length::Fill),
+            Length::FillPortion(25)
+        ),
+        middle,
+        wrap_width(
+            zone_region(pane_id, DropZone::Right, active, palette, Length::Fill),
+            Length::FillPortion(25)
+        ),
+    ]
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .into()
+}
+
+fn wrap_width<'a>(element: Element<'a, ShellMessage>, width: Length) -> Element<'a, ShellMessage> {
+    container(element).width(width).height(Length::Fill).into()
+}
+
+fn zone_region<'a>(
+    pane_id: &PaneId,
+    zone: DropZone,
+    active: Option<DropZone>,
+    palette: Palette,
+    height: Length,
+) -> Element<'a, ShellMessage> {
+    let is_active = active == Some(zone);
+    // A 3px inset so the highlight reads as a card within the pane.
+    let inner = container(Space::new().width(Length::Fill).height(Length::Fill))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(move |_theme| drop_zone_style(palette, is_active));
+    let padded = container(inner)
+        .padding(3.0)
+        .width(Length::Fill)
+        .height(height);
+    mouse_area(padded)
+        .on_enter(ShellMessage::DragOverZone {
+            pane_id: pane_id.clone(),
+            zone,
+        })
+        .into()
+}
+
+fn drop_zone_style(palette: Palette, is_active: bool) -> container::Style {
+    if is_active {
+        container::Style {
+            background: Some(theme::with_alpha(palette.accent, 0.13).into()),
+            border: theme::border(theme::with_alpha(palette.accent, 0.55), 1.5, 10.0),
+            ..Default::default()
+        }
+    } else {
+        container::Style::default()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -757,6 +943,7 @@ mod tests {
             quick_launch: QuickLaunchViewState::default(),
             settings: SettingsViewState::default(),
             surface_contents: HashMap::new(),
+            drag: None,
         }
     }
 
@@ -842,5 +1029,24 @@ mod tests {
             .surface_contents
             .insert(surface.id, "@@ -1 +1 @@\n-old\n+new\n".to_string());
         let _app = app_view(&model);
+    }
+
+    #[test]
+    fn renders_drop_zones_during_drag() {
+        // With an active drag, panes render the drop-zone overlay (and the source
+        // tab dims) without panicking.
+        let state = AppState::default();
+        let mut model = model_from(&state, Vec::new());
+        let pane = &model.projection.visible_panes[0];
+        let pane_id = pane.id.clone();
+        let surface_id = pane.active_surface_id.clone().expect("active surface");
+        model.drag = Some(DragView {
+            surface_id,
+            source_pane_id: pane_id.clone(),
+            over: Some((pane_id, DropZone::Right)),
+            active: true,
+        });
+        let _app = app_view(&model);
+        let _workspace = shell_view(&model);
     }
 }

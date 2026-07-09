@@ -24,7 +24,7 @@ pub use command_palette::{
 };
 #[cfg(feature = "iced-runtime")]
 pub use iced_shell::{
-    LinkSpan, ShellMessage, ShellViewModel, TerminalSnapshot, app_view, shell_view,
+    DragView, LinkSpan, ShellMessage, ShellViewModel, TerminalSnapshot, app_view, shell_view,
     terminal_viewport,
 };
 #[cfg(feature = "iced-runtime")]
