@@ -1,5 +1,9 @@
 mod backend;
 mod clipboard_os;
+// In-app update check (Phase 7). The decision logic is always compiled/tested;
+// the network fetch is gated behind `iced-runtime`.
+#[allow(dead_code)]
+mod updater;
 // Claude Code startup integration (context injection + orchestrator plugin).
 // Only invoked for the real GUI launch, but always compiled so its tests run.
 #[allow(dead_code)]

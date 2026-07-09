@@ -102,6 +102,18 @@ pub enum ShellMessage {
         git_ahead: u32,
         ports: Vec<u16>,
     },
+    // In-app update check (Phase 7)
+    /// Timer tick / launch asking the runtime to check GitHub for a newer release.
+    UpdateCheckRequested,
+    /// A newer release was found (past the quarantine window); the runtime raises
+    /// an update toast. The download-and-run-installer step is wired with
+    /// packaging.
+    UpdateAvailable {
+        version: String,
+        tag: String,
+        url: Option<String>,
+        notes: String,
+    },
     ToggleStatusBar,
     ToggleTheme,
     CycleAccent,

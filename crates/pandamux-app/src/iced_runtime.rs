@@ -35,6 +35,8 @@ type PipeRegistry = Arc<StdMutex<HashMap<u64, oneshot::Sender<String>>>>;
 const CURSOR_BLINK_TICKS: u64 = 11;
 /// Ticks between session autosaves (~30s at a 100ms tick).
 const AUTOSAVE_TICKS: u64 = 300;
+/// Interval between GitHub release update checks (6 hours).
+const UPDATE_CHECK_INTERVAL_SECS: u64 = 6 * 60 * 60;
 
 pub struct NativeShellRuntime {
     app_state: AppState,
@@ -85,6 +87,11 @@ pub struct NativeShellRuntime {
     pipe_registry: PipeRegistry,
     /// Correlation-id source for embedded pipe requests.
     pipe_seq: Arc<AtomicU64>,
+    /// The last release version we raised an update toast for (dedupes the
+    /// periodic check so the same version is not toasted repeatedly).
+    last_update_offer: Option<String>,
+    /// Whether the launch-time update check has been kicked yet.
+    update_checked_once: bool,
 }
 
 impl Default for NativeShellRuntime {
@@ -144,6 +151,8 @@ impl NativeShellRuntime {
                 .unwrap_or_else(|_| r"\\.\pipe\pandamux".to_string()),
             pipe_registry: Arc::new(StdMutex::new(HashMap::new())),
             pipe_seq: Arc::new(AtomicU64::new(1)),
+            last_update_offer: None,
+            update_checked_once: false,
         };
         if live_ptys {
             runtime.load_bundled_themes();
@@ -334,19 +343,55 @@ impl NativeShellRuntime {
             ShellMessage::WindowClosePressed => window::latest().and_then(window::close),
             ShellMessage::PollRequested => {
                 let cwd = self.focused_cwd();
-                Task::perform(crate::pollers::poll_all(cwd), |result| {
+                let poll = Task::perform(crate::pollers::poll_all(cwd), |result| {
                     ShellMessage::PollUpdate {
                         git_branch: result.git_branch,
                         git_ahead: result.git_ahead,
                         ports: result.ports,
                     }
-                })
+                });
+                // Kick a one-off update check shortly after launch (the first
+                // status poll), then let the long-interval subscription drive it.
+                if !self.update_checked_once && self.live_ptys {
+                    self.update_checked_once = true;
+                    Task::batch([poll, self.update_check_task()])
+                } else {
+                    poll
+                }
             }
+            ShellMessage::UpdateCheckRequested => self.update_check_task(),
             other => {
                 self.update_shell(other);
                 Task::none()
             }
         }
+    }
+
+    /// Build the async task that checks GitHub for a newer release and maps the
+    /// result to an `UpdateAvailable` toast message (or `Noop` when there is
+    /// nothing to offer). No-op off the live GUI build.
+    fn update_check_task(&self) -> Task<ShellMessage> {
+        if !self.live_ptys {
+            return Task::none();
+        }
+        let current = env!("CARGO_PKG_VERSION").to_string();
+        let now_unix = now_ms() / 1000;
+        Task::perform(
+            crate::updater::check_for_update(
+                current,
+                now_unix,
+                crate::updater::DEFAULT_QUARANTINE_SECS,
+            ),
+            |found| match found {
+                Some(release) => ShellMessage::UpdateAvailable {
+                    version: release.version,
+                    tag: release.tag,
+                    url: release.installer_url,
+                    notes: release.notes,
+                },
+                None => ShellMessage::Noop,
+            },
+        )
     }
 
     pub fn update_shell(&mut self, message: ShellMessage) {
@@ -497,6 +542,32 @@ impl NativeShellRuntime {
                 self.chrome.git_branch = git_branch;
                 self.chrome.git_ahead = git_ahead;
                 self.chrome.ports = ports;
+            }
+            ShellMessage::UpdateAvailable {
+                version,
+                tag,
+                url,
+                notes,
+            } => {
+                // Toast once per version; the periodic check re-emits otherwise.
+                if self.last_update_offer.as_deref() != Some(version.as_str()) {
+                    self.last_update_offer = Some(version.clone());
+                    let first_line = notes.lines().find(|line| !line.trim().is_empty());
+                    let body = match first_line {
+                        Some(line) => format!("{} - {}", version, line.trim()),
+                        None => format!("Version {version} is available."),
+                    };
+                    self.raise_notification(NewNotification {
+                        workspace_id: None,
+                        surface_id: None,
+                        title: "Update available".to_string(),
+                        body,
+                        source: NotificationSource::Deploy,
+                    });
+                    // tag + url are consumed by the download-and-run step, which is
+                    // wired when packaging lands; the checker already found them.
+                    let _ = (tag, url);
+                }
             }
             ShellMessage::OverlayRequested(item) => {
                 self.chrome.active_rail = item;
@@ -1018,6 +1089,12 @@ fn subscription_iced_shell(state: &NativeShellRuntime) -> Subscription<ShellMess
         // Poll git/ports for the status bar every few seconds.
         subscriptions
             .push(time::every(Duration::from_secs(5)).map(|_| ShellMessage::PollRequested));
+        // Check GitHub for a newer release periodically (a launch-time check is
+        // kicked from the first status poll; see `update`).
+        subscriptions.push(
+            time::every(Duration::from_secs(UPDATE_CHECK_INTERVAL_SECS))
+                .map(|_| ShellMessage::UpdateCheckRequested),
+        );
     }
     Subscription::batch(subscriptions)
 }
@@ -1595,6 +1672,36 @@ mod tests {
         assert!(!runtime.view_model().copy_mode);
         runtime.update_shell(ShellMessage::CopyModeToggled);
         assert!(runtime.view_model().copy_mode);
+    }
+
+    #[test]
+    fn update_available_toast_dedupes_per_version() {
+        let mut runtime = NativeShellRuntime::default();
+        let offer = |version: &str| ShellMessage::UpdateAvailable {
+            version: version.to_string(),
+            tag: format!("v{version}"),
+            url: Some("https://example/Setup.exe".to_string()),
+            notes: "Highlights of the release".to_string(),
+        };
+
+        runtime.update_shell(offer("0.34.0"));
+        runtime.update_shell(ShellMessage::Tick);
+        assert_eq!(runtime.view_model().notifications.cards.len(), 1);
+        assert_eq!(
+            runtime.view_model().notifications.cards[0].title,
+            "Update available"
+        );
+
+        // The same version re-offered by the periodic check does not re-toast.
+        runtime.update_shell(offer("0.34.0"));
+        runtime.update_shell(ShellMessage::Tick);
+        assert_eq!(runtime.view_model().notifications.cards.len(), 1);
+
+        // A newer version does toast again.
+        runtime.update_shell(offer("0.35.0"));
+        runtime.update_shell(ShellMessage::Tick);
+        assert_eq!(runtime.view_model().notifications.cards.len(), 2);
+        assert_eq!(runtime.last_error(), None);
     }
 
     #[test]

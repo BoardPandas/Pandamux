@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.34.0]
+
+### Added
+
+- **In-app update checker (`pandamux-app::updater`, Phase 7 groundwork).** On launch (kicked from the first status poll) and every 6 hours, the GUI calls the GitHub Releases API (`/repos/BoardPandas/Pandamux/releases/latest`), strips the leading `v`, semver-compares the tag to the running version, and (once the release is past a 6-hour quarantine window) raises an "Update available" toast through the existing notification model. Drafts and prereleases are never offered, and the same version is toasted only once. This means a published GitHub Release only needs the single signed `Setup.exe` asset for the app to discover and (once packaging lands) install updates: no Velopack update feed or `.nupkg` is required. The decision logic (API parse, `.exe` asset selection, semver compare, RFC 3339 timestamp parse, quarantine gate) is pure and hermetically unit-tested; the network fetch (`reqwest`, OS-TLS/schannel) is gated behind the `iced-runtime` feature so the headless build and unit tests never touch the network. The download-and-run-installer step is wired when packaging exists and there is a real release to point at.
+
+### Changed
+
+- Bumped the app version to `0.34.0`.
+- Refined the Phase 7 ship plan in `tasks/plan-repo.md`: the release is one GitHub Actions workflow (build -> Azure-sign `pandamux.exe` -> wrap into `Setup.exe` -> sign the installer -> publish) whose GitHub Release carries exactly one asset, the signed `.exe`; updates flow through the in-app checker above (so no Velopack feed). Dropped the Electron session-import migration (the repo's Electron build was a never-shipped fork pull, so there is no user base to migrate); its removal is a plain file deletion.
+
 ## [0.33.0]
 
 ### Added
