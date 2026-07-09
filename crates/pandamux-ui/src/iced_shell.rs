@@ -202,6 +202,8 @@ pub struct ShellViewModel {
     pub drag: Option<DragView>,
     /// Terminal color scheme derived from the selected theme (or default dark).
     pub term_scheme: TermScheme,
+    /// Per-surface terminal color-scheme overrides (resolved from `set-color-scheme`).
+    pub surface_term_schemes: HashMap<SurfaceId, TermScheme>,
 }
 
 // ---------------------------------------------------------------------------
@@ -450,6 +452,7 @@ fn workspace_view<'a>(model: &'a ShellViewModel, palette: Palette) -> Element<'a
             col,
             &model.terminals,
             &model.surface_contents,
+            &model.surface_term_schemes,
             model.drag.as_ref(),
             model.term_scheme,
             palette,
@@ -480,6 +483,7 @@ fn column_view<'a>(
     col: &'a ColumnProjection,
     terminals: &'a [TerminalSnapshot],
     surface_contents: &'a HashMap<SurfaceId, String>,
+    surface_schemes: &'a HashMap<SurfaceId, TermScheme>,
     drag: Option<&'a DragView>,
     term_scheme: TermScheme,
     palette: Palette,
@@ -493,6 +497,7 @@ fn column_view<'a>(
             pane,
             terminals,
             surface_contents,
+            surface_schemes,
             drag,
             term_scheme,
             palette,
@@ -509,6 +514,7 @@ fn pane_view<'a>(
     pane: &'a PaneProjection,
     terminals: &'a [TerminalSnapshot],
     surface_contents: &'a HashMap<SurfaceId, String>,
+    surface_schemes: &'a HashMap<SurfaceId, TermScheme>,
     drag: Option<&'a DragView>,
     term_scheme: TermScheme,
     palette: Palette,
@@ -529,6 +535,11 @@ fn pane_view<'a>(
     // Non-terminal surfaces (markdown / diff) render their stored content; a
     // terminal surface (or an unknown/empty pane) renders the canvas viewport.
     let active_surface = pane.surfaces.iter().find(|surface| surface.is_active);
+    // Per-surface color-scheme override (set-color-scheme), else the global scheme.
+    let scheme = active_surface
+        .and_then(|surface| surface_schemes.get(&surface.id))
+        .copied()
+        .unwrap_or(term_scheme);
     let body: Element<'a, ShellMessage> = match active_surface.map(|surface| &surface.surface_type)
     {
         Some(SurfaceType::Markdown) => {
@@ -556,7 +567,7 @@ fn pane_view<'a>(
                         .with_cursor(is_focused && cursor_on)
                         .with_links(snapshot.links.clone())
                         .with_highlight(highlight)
-                        .with_scheme(term_scheme),
+                        .with_scheme(scheme),
                 )
                 .width(Length::Fill)
                 .height(Length::Fill)
@@ -564,7 +575,7 @@ fn pane_view<'a>(
                 None => canvas::Canvas::new(
                     TerminalViewport::new(vec![placeholder_line(pane)], 80, 24)
                         .with_cursor(is_focused && cursor_on)
-                        .with_scheme(term_scheme),
+                        .with_scheme(scheme),
                 )
                 .width(Length::Fill)
                 .height(Length::Fill)
@@ -965,6 +976,7 @@ mod tests {
             surface_contents: HashMap::new(),
             drag: None,
             term_scheme: TermScheme::default(),
+            surface_term_schemes: HashMap::new(),
         }
     }
 

@@ -21,7 +21,7 @@ use pandamux_core::{
 };
 use pandamux_term::{GridSize, PtyCommand, PtySessionManager};
 use serde_json::{Value, json};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The mutable backend state a single dispatch borrows. Grouping these into one
@@ -39,6 +39,8 @@ pub struct DispatchCtx<'a> {
     pub contents: &'a mut SurfaceContents,
     pub themes: &'a mut ThemeStore,
     pub localizer: &'a mut Localizer,
+    /// Per-surface terminal color-scheme overrides (surface id -> theme name).
+    pub surface_schemes: &'a mut HashMap<SurfaceId, String>,
     pub now_ms: u64,
     pub spawn_ptys: bool,
 }
@@ -56,6 +58,7 @@ pub struct Backend {
     pub contents: SurfaceContents,
     pub themes: ThemeStore,
     pub localizer: Localizer,
+    pub surface_schemes: HashMap<SurfaceId, String>,
     pub spawn_ptys: bool,
 }
 
@@ -71,6 +74,7 @@ impl Backend {
             contents: SurfaceContents::new(),
             themes: ThemeStore::new(),
             localizer: Localizer::default(),
+            surface_schemes: HashMap::new(),
             spawn_ptys,
         }
     }
@@ -87,6 +91,7 @@ impl Backend {
             contents: &mut self.contents,
             themes: &mut self.themes,
             localizer: &mut self.localizer,
+            surface_schemes: &mut self.surface_schemes,
             now_ms: now_ms(),
             spawn_ptys: self.spawn_ptys,
         };
@@ -155,6 +160,7 @@ fn dispatch(request: &RpcRequest, ctx: DispatchCtx<'_>) -> Result<Value, (i32, S
         contents,
         themes,
         localizer,
+        surface_schemes,
         now_ms,
         spawn_ptys,
     } = ctx;
@@ -168,6 +174,14 @@ fn dispatch(request: &RpcRequest, ctx: DispatchCtx<'_>) -> Result<Value, (i32, S
     }
 
     if let Some(result) = dispatch_config(request, themes, localizer)? {
+        return Ok(result);
+    }
+
+    if let Some(result) = dispatch_window(request)? {
+        return Ok(result);
+    }
+
+    if let Some(result) = dispatch_surface_scheme(request, app, themes, surface_schemes)? {
         return Ok(result);
     }
 
@@ -196,8 +210,10 @@ fn dispatch(request: &RpcRequest, ctx: DispatchCtx<'_>) -> Result<Value, (i32, S
     let intent = intent_for_request(request)?;
     let delta = app.apply(intent).map_err(|message| (-32000, message))?;
     sync_terminal_sessions(app, ptys, spawn_ptys).map_err(|message| (-32000, message))?;
-    // Drop markdown/diff content for surfaces the mutation may have closed.
-    contents.retain_live(&all_surface_ids(app));
+    // Drop content + color-scheme overrides for surfaces the mutation may have closed.
+    let live = all_surface_ids(app);
+    contents.retain_live(&live);
+    surface_schemes.retain(|surface_id, _| live.contains(surface_id));
     Ok(delta_to_result(delta))
 }
 
@@ -371,6 +387,73 @@ fn dispatch_config(
             let key = opt_string(&request.params, "key")
                 .ok_or_else(|| (-32602, "i18n.translate requires key".to_string()))?;
             Ok(Some(json!({ "text": localizer.t(&key) })))
+        }
+        _ => Ok(None),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Windows (multi-window parity)
+// ---------------------------------------------------------------------------
+
+/// The native build is single-window; `window.list` / `window.focus` report and
+/// act on the one window so the CLI contract (`list-windows` / `focus-window`)
+/// stays satisfied. Spawning additional OS windows needs the Iced multi-window
+/// (daemon) runtime and is out of scope here.
+fn dispatch_window(request: &RpcRequest) -> Result<Option<Value>, (i32, String)> {
+    match request.method.as_str() {
+        "window.list" => Ok(Some(json!({
+            "windows": [{
+                "id": "win-main",
+                "title": "PandaMUX Everywhere",
+                "focused": true,
+            }],
+        }))),
+        "window.focus" => {
+            let id = opt_string(&request.params, "id")
+                .or_else(|| opt_string(&request.params, "windowId"))
+                .unwrap_or_else(|| "win-main".to_string());
+            if id == "win-main" {
+                Ok(Some(json!({ "ok": true, "id": id })))
+            } else {
+                Err((-32000, format!("window not found: {id}")))
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Surface color scheme (per-surface terminal theme override)
+// ---------------------------------------------------------------------------
+
+fn dispatch_surface_scheme(
+    request: &RpcRequest,
+    app: &AppState,
+    themes: &ThemeStore,
+    surface_schemes: &mut HashMap<SurfaceId, String>,
+) -> Result<Option<Value>, (i32, String)> {
+    match request.method.as_str() {
+        "surface.set_color_scheme" => {
+            let surface_id = content_surface_id(app, &request.params)?;
+            let scheme = opt_string(&request.params, "scheme")
+                .or_else(|| opt_string(&request.params, "name"))
+                .ok_or_else(|| {
+                    (
+                        -32602,
+                        "surface.set_color_scheme requires scheme".to_string(),
+                    )
+                })?;
+            if themes.get(&scheme).is_none() {
+                return Err((-32000, format!("theme not found: {scheme}")));
+            }
+            surface_schemes.insert(surface_id, scheme.clone());
+            Ok(Some(json!({ "ok": true, "scheme": scheme })))
+        }
+        "surface.clear_color_scheme" => {
+            let surface_id = content_surface_id(app, &request.params)?;
+            surface_schemes.remove(&surface_id);
+            Ok(Some(json!({ "ok": true })))
         }
         _ => Ok(None),
     }
@@ -1711,6 +1794,77 @@ mod tests {
             r#"{"method":"i18n.translate","params":{"key":"settings"},"id":8}"#,
         );
         assert_eq!(translated["result"]["text"], "Paramètres");
+    }
+
+    #[test]
+    fn windows_list_focus_and_surface_color_scheme() {
+        let mut backend = Backend::new(false);
+
+        // Single-window build: list + focus.
+        let list = handle(
+            &mut backend,
+            r#"{"method":"window.list","params":{},"id":1}"#,
+        );
+        assert_eq!(list["result"]["windows"][0]["id"], "win-main");
+        let focus = handle(
+            &mut backend,
+            r#"{"method":"window.focus","params":{"id":"win-main"},"id":2}"#,
+        );
+        assert_eq!(focus["result"]["ok"], true);
+        let missing = handle(
+            &mut backend,
+            r#"{"method":"window.focus","params":{"id":"win-x"},"id":3}"#,
+        );
+        assert_eq!(missing["error"]["code"], -32000);
+
+        // Per-surface color scheme: import a theme, then set/clear it on the
+        // default terminal surface.
+        handle(
+            &mut backend,
+            r#"{"method":"config.import_ghostty","params":{"name":"Neon","content":"background = #010203\n"},"id":4}"#,
+        );
+        let surfaces = handle(
+            &mut backend,
+            r#"{"method":"surface.list","params":{},"id":5}"#,
+        );
+        let surface_id = surfaces["result"]["surfaces"][0]["id"]
+            .as_str()
+            .expect("surface id")
+            .to_string();
+
+        let set = handle(
+            &mut backend,
+            &format!(
+                r#"{{"method":"surface.set_color_scheme","params":{{"surfaceId":"{surface_id}","scheme":"Neon"}},"id":6}}"#
+            ),
+        );
+        assert_eq!(set["result"]["scheme"], "Neon");
+        assert_eq!(
+            backend
+                .surface_schemes
+                .get(&SurfaceId::from(surface_id.as_str()))
+                .map(String::as_str),
+            Some("Neon")
+        );
+
+        // Unknown theme is rejected.
+        let bad = handle(
+            &mut backend,
+            &format!(
+                r#"{{"method":"surface.set_color_scheme","params":{{"surfaceId":"{surface_id}","scheme":"Nope"}},"id":7}}"#
+            ),
+        );
+        assert_eq!(bad["error"]["code"], -32000);
+
+        // Clear removes the override.
+        let clear = handle(
+            &mut backend,
+            &format!(
+                r#"{{"method":"surface.clear_color_scheme","params":{{"surfaceId":"{surface_id}"}},"id":8}}"#
+            ),
+        );
+        assert_eq!(clear["result"]["ok"], true);
+        assert!(backend.surface_schemes.is_empty());
     }
 
     /// Wire-compat regression guard for the pandamux-orchestrator plugin. Replays

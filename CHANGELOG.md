@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.30.0]
+
+### Added
+
+- Per-surface terminal color scheme: `surface.set_color_scheme` / `surface.clear_color_scheme` pipe methods and `pandamux set-color-scheme <surfaceId> <scheme>` / `clear-color-scheme <surfaceId>` CLI commands. A surface can override the global theme with any loaded theme, applied to just that pane's viewport; overrides are pruned when the surface closes.
+- Multi-window parity: `window.list` / `window.focus` pipe methods and `pandamux list-windows` / `windows` / `focus-window <id>` CLI commands (single-window native build; spawning additional OS windows needs the Iced multi-window runtime and stays out of scope).
+- The app sets the Windows AppUserModelID (`com.pandamux.app`) at startup so the taskbar groups it under a stable identity, matching the Electron build.
+
+### Changed
+
+- Bumped the app version to `0.30.0`.
+
 ## [0.29.0]
 
 ### Added

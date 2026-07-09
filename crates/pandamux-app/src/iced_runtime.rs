@@ -57,6 +57,8 @@ pub struct NativeShellRuntime {
     themes: ThemeStore,
     /// Localization state (set via the pipe / CLI `set-locale`).
     localizer: Localizer,
+    /// Per-surface terminal color-scheme overrides (surface id -> theme name).
+    surface_schemes: HashMap<SurfaceId, String>,
     /// Active drag-and-drop of a tab, if any (plan Section 12.3).
     drag: Option<DragView>,
     copy_mode: bool,
@@ -117,6 +119,7 @@ impl NativeShellRuntime {
             contents: SurfaceContents::new(),
             themes: ThemeStore::new(),
             localizer: Localizer::default(),
+            surface_schemes: HashMap::new(),
             drag: None,
             copy_mode: false,
             palette: PaletteViewState::default(),
@@ -565,6 +568,7 @@ impl NativeShellRuntime {
                     contents: &mut self.contents,
                     themes: &mut self.themes,
                     localizer: &mut self.localizer,
+                    surface_schemes: &mut self.surface_schemes,
                     now_ms: now_ms(),
                     spawn_ptys: self.live_ptys,
                 };
@@ -691,6 +695,15 @@ impl NativeShellRuntime {
                 .active()
                 .map(TermScheme::from_theme)
                 .unwrap_or_default(),
+            surface_term_schemes: self
+                .surface_schemes
+                .iter()
+                .filter_map(|(surface_id, name)| {
+                    self.themes
+                        .get(name)
+                        .map(|theme| (surface_id.clone(), TermScheme::from_theme(theme)))
+                })
+                .collect(),
         };
     }
 
@@ -1218,6 +1231,7 @@ fn initial_view_model(app_state: &AppState, chrome: &ChromeState) -> ShellViewMo
         surface_contents: HashMap::new(),
         drag: None,
         term_scheme: TermScheme::default(),
+        surface_term_schemes: HashMap::new(),
     }
 }
 
