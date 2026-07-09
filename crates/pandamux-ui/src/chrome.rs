@@ -2,12 +2,11 @@
 //! status bar. Every color, size, and radius comes from [`crate::theme`]; this
 //! module never hardcodes a color.
 //!
-//! Icons are rendered as compact glyph text for now (the design calls for
-//! 1.2-1.4px-stroke line glyphs recreated as canvas/SVG; that refinement is
-//! tracked for a later pass). The layout, sizing, and interaction wiring match
-//! the design spec.
+//! Icons are drawn as canvas line glyphs (see [`crate::icons`]), matching the
+//! design's 1.2-1.4px-stroke line-icon set rather than unicode placeholders.
 
 use crate::iced_shell::ShellMessage;
+use crate::icons::{Icon, icon};
 use crate::session_panel::SessionGrouping;
 use crate::theme::{self, Accent, Palette, ShellKind, UiTheme};
 use iced::widget::{Space, button, column, container, mouse_area, row, text};
@@ -147,7 +146,7 @@ pub fn titlebar<'a>(chrome: &ChromeState, palette: Palette) -> Element<'a, Shell
     // Center: session-switcher pill that opens the command palette.
     let pill = button(
         row![
-            glyph(icons::SEARCH, theme::SIZE_SECONDARY, palette.t3),
+            icon(Icon::Search, 13.0, palette.t3),
             text(chrome.active_session_name.clone())
                 .size(theme::SIZE_BODY)
                 .color(palette.t2),
@@ -162,13 +161,13 @@ pub fn titlebar<'a>(chrome: &ChromeState, palette: Palette) -> Element<'a, Shell
 
     // Right: bell (with unread dot), settings, window controls.
     let bell = titlebar_icon_button(
-        icons::BELL,
+        Icon::Bell,
         palette,
         ShellMessage::OverlayRequested(RailItem::Notifications),
         chrome.unread_notifications,
     );
     let settings = titlebar_icon_button(
-        icons::SETTINGS,
+        Icon::Settings,
         palette,
         ShellMessage::OverlayRequested(RailItem::Settings),
         false,
@@ -179,23 +178,18 @@ pub fn titlebar<'a>(chrome: &ChromeState, palette: Palette) -> Element<'a, Shell
         settings,
         fixed_space(6.0),
         window_button(
-            icons::MINIMIZE,
+            Icon::Minimize,
             palette,
             ShellMessage::WindowMinimizePressed,
             false
         ),
         window_button(
-            icons::MAXIMIZE,
+            Icon::Maximize,
             palette,
             ShellMessage::WindowMaximizeToggled,
             false
         ),
-        window_button(
-            icons::CLOSE,
-            palette,
-            ShellMessage::WindowClosePressed,
-            true
-        ),
+        window_button(Icon::Close, palette, ShellMessage::WindowClosePressed, true),
     ]
     .spacing(2)
     .align_y(Alignment::Center);
@@ -245,25 +239,25 @@ fn logo_mark<'a>(palette: Palette) -> Element<'a, ShellMessage> {
 pub fn icon_rail<'a>(chrome: &ChromeState, palette: Palette) -> Element<'a, ShellMessage> {
     let top = column![
         rail_button(
-            icons::SESSIONS,
+            Icon::Sessions,
             RailItem::Sessions,
             chrome.active_rail,
             palette
         ),
         rail_button(
-            icons::PALETTE,
+            Icon::Palette,
             RailItem::CommandPalette,
             chrome.active_rail,
             palette
         ),
         rail_button(
-            icons::PLUS,
+            Icon::Plus,
             RailItem::NewSession,
             chrome.active_rail,
             palette
         ),
         rail_button(
-            icons::BELL,
+            Icon::Bell,
             RailItem::Notifications,
             chrome.active_rail,
             palette
@@ -276,7 +270,7 @@ pub fn icon_rail<'a>(chrome: &ChromeState, palette: Palette) -> Element<'a, Shel
         top,
         Space::new().height(Length::Fill),
         rail_button(
-            icons::SETTINGS,
+            Icon::Settings,
             RailItem::Settings,
             chrome.active_rail,
             palette
@@ -300,7 +294,7 @@ pub fn icon_rail<'a>(chrome: &ChromeState, palette: Palette) -> Element<'a, Shel
 }
 
 fn rail_button<'a>(
-    glyph_str: &'static str,
+    kind: Icon,
     item: RailItem,
     active: RailItem,
     palette: Palette,
@@ -311,8 +305,8 @@ fn rail_button<'a>(
         other => ShellMessage::OverlayRequested(other),
     };
     button(
-        container(glyph(
-            glyph_str,
+        container(icon(
+            kind,
             16.0,
             if is_active {
                 palette.accent
@@ -345,7 +339,7 @@ pub fn status_bar<'a>(chrome: &ChromeState, palette: Palette) -> Element<'a, She
 
     if let Some(branch) = &chrome.git_branch {
         left = left.push(fixed_space(8.0));
-        left = left.push(glyph(icons::GIT, theme::SIZE_STATUS_BAR, palette.t3));
+        left = left.push(icon(Icon::Git, theme::SIZE_STATUS_BAR, palette.t3));
         left = left.push(mono_label(branch, palette.t3));
         if chrome.git_ahead > 0 {
             left = left.push(mono_label(
@@ -420,10 +414,6 @@ pub fn status_bar<'a>(chrome: &ChromeState, palette: Palette) -> Element<'a, She
 // Small shared widgets
 // ---------------------------------------------------------------------------
 
-fn glyph<'a>(value: &'static str, size: f32, color: Color) -> Element<'a, ShellMessage> {
-    text(value).size(size).color(color).into()
-}
-
 fn mono_label<'a>(value: &str, color: Color) -> Element<'a, ShellMessage> {
     text(value.to_string())
         .size(theme::SIZE_STATUS_BAR)
@@ -472,13 +462,13 @@ fn activity_color(activity: SessionActivity, palette: Palette) -> Color {
 }
 
 fn titlebar_icon_button<'a>(
-    glyph_str: &'static str,
+    kind: Icon,
     palette: Palette,
     message: ShellMessage,
     unread: bool,
 ) -> Element<'a, ShellMessage> {
     // Icon plus, when unread, a small accent dot with a knockout border.
-    let mut content = row![glyph(glyph_str, 15.0, palette.t3)]
+    let mut content = row![icon(kind, 15.0, palette.t3)]
         .spacing(1)
         .align_y(Alignment::Center);
     if unread {
@@ -504,13 +494,13 @@ fn titlebar_icon_button<'a>(
 }
 
 fn window_button<'a>(
-    glyph_str: &'static str,
+    kind: Icon,
     palette: Palette,
     message: ShellMessage,
     is_close: bool,
 ) -> Element<'a, ShellMessage> {
     button(
-        container(glyph(glyph_str, 13.0, palette.t3))
+        container(icon(kind, 13.0, palette.t3))
             .width(Length::Fixed(40.0))
             .height(Length::Fixed(28.0))
             .align_x(Alignment::Center)
@@ -602,20 +592,6 @@ fn window_button_style(palette: Palette, is_close: bool, status: button::Status)
 
 fn plural(count: usize) -> &'static str {
     if count == 1 { "" } else { "s" }
-}
-
-/// Glyph placeholders (unicode) standing in for the design's line-icon set.
-mod icons {
-    pub const SEARCH: &str = "\u{1f50d}"; // 🔍
-    pub const BELL: &str = "\u{1f514}"; // 🔔
-    pub const SETTINGS: &str = "\u{2699}"; // ⚙
-    pub const MINIMIZE: &str = "\u{2013}"; // –
-    pub const MAXIMIZE: &str = "\u{25a1}"; // □
-    pub const CLOSE: &str = "\u{00d7}"; // ×
-    pub const SESSIONS: &str = "\u{2637}"; // ☷ (stacked rows)
-    pub const PALETTE: &str = "\u{2318}"; // ⌘
-    pub const PLUS: &str = "\u{002b}"; // +
-    pub const GIT: &str = "\u{2325}"; // ⌥ (branch stand-in)
 }
 
 #[cfg(test)]

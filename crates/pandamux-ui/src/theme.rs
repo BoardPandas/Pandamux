@@ -263,6 +263,9 @@ pub struct Palette {
     /// black (light theme). Drives [`Palette::ov`].
     overlay_white: bool,
     pub bg_base: Color,
+    /// The window background vertical-gradient endpoints (top -> bottom).
+    pub bg_top: Color,
+    pub bg_bottom: Color,
     pub t1: Color,
     pub t2: Color,
     pub t3: Color,
@@ -292,6 +295,8 @@ impl Palette {
             accent: accent.color(),
             overlay_white: true,
             bg_base: Color::from_rgb8(0x0b, 0x0f, 0x12),
+            bg_top: Color::from_rgb8(0x0c, 0x11, 0x14),
+            bg_bottom: Color::from_rgb8(0x0a, 0x0e, 0x11),
             t1: Color::from_rgb8(0xdb, 0xe6, 0xe6),
             t2: Color::from_rgb8(0x8f, 0xa0, 0xa3),
             t3: Color::from_rgb8(0x7d, 0x8d, 0x90),
@@ -314,6 +319,8 @@ impl Palette {
             accent: accent.color(),
             overlay_white: false,
             bg_base: Color::from_rgb8(0xed, 0xf1, 0xf1),
+            bg_top: Color::from_rgb8(0xf2, 0xf5, 0xf5),
+            bg_bottom: Color::from_rgb8(0xe7, 0xec, 0xec),
             t1: Color::from_rgb8(0x1c, 0x25, 0x27),
             t2: Color::from_rgb8(0x3f, 0x50, 0x54),
             t3: Color::from_rgb8(0x5c, 0x6c, 0x70),
@@ -343,6 +350,17 @@ impl Palette {
     /// Accent at a reduced alpha (for tinted fills / rings).
     pub fn accent_alpha(&self, alpha: f32) -> Color {
         with_alpha(self.accent, alpha)
+    }
+
+    /// The window background as the design's vertical gradient (top -> bottom).
+    /// The radial teal/gold ambience glows have no Iced primitive and remain a
+    /// tracked approximation; this covers the base gradient.
+    pub fn bg_gradient(&self) -> iced::Background {
+        iced::Background::Gradient(iced::Gradient::Linear(
+            iced::gradient::Linear::new(iced::Radians(std::f32::consts::PI))
+                .add_stop(0.0, self.bg_top)
+                .add_stop(1.0, self.bg_bottom),
+        ))
     }
 
     pub fn shell_color(&self, kind: ShellKind) -> Color {

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.31.0]
+
+### Added
+
+- Line icons: a canvas-drawn icon set (`pandamux-ui::icons`, 15 stroked line glyphs at ~1.3px) now replaces the unicode-glyph placeholders across the titlebar (search, bell, settings, window controls), the icon rail (sessions, palette, new, notifications, settings), the pane tab bars (add, split-right, split-down, zoom), and the status-bar git segment, matching the design's line-icon style.
+- The window background now uses the design's vertical gradient (`bg-top -> bg-bottom` per chrome theme) instead of a flat fill.
+
+### Changed
+
+- Bumped the app version to `0.31.0`.
+
+### Notes
+
+- The JetBrains Mono TTF is not bundled in the repo, so the mono face still resolves via the named-font fallback (`theme::MONO_FONT`) until the font file is dropped into `resources/fonts` and registered; the radial teal/gold ambience glows and true backdrop blur have no Iced primitive and remain the documented layered-translucency approximation.
+
 ## [0.30.0]
 
 ### Added

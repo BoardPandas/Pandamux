@@ -10,6 +10,7 @@
 
 use crate::chrome::{self, ChromeState, Overlay, RailItem};
 use crate::command_palette::{self, PaletteViewState, QuickLaunchViewState};
+use crate::icons::{Icon, icon};
 use crate::overlays;
 use crate::session_panel::{self, SessionGrouping, SessionsViewState};
 use crate::settings::{self, SettingsSection, SettingsViewState};
@@ -384,7 +385,7 @@ pub fn app_view(model: &ShellViewModel) -> Element<'_, ShellMessage> {
         .width(Length::Fill)
         .height(Length::Fill)
         .style(move |_theme| container::Style {
-            background: Some(palette.bg_base.into()),
+            background: Some(palette.bg_gradient()),
             ..Default::default()
         });
 
@@ -625,12 +626,12 @@ fn tab_bar_view<'a>(
     }
 
     let add_tab = icon_button(
-        "+",
+        Icon::Plus,
         palette,
         ShellMessage::TerminalSurfaceCreated(pane.id.clone()),
     );
     let split_right = icon_button(
-        "\u{25eb}", // ◫
+        Icon::SplitRight,
         palette,
         ShellMessage::PaneSplit {
             pane_id: pane.id.clone(),
@@ -638,7 +639,7 @@ fn tab_bar_view<'a>(
         },
     );
     let split_down = icon_button(
-        "\u{2b12}", // ⬒
+        Icon::SplitDown,
         palette,
         ShellMessage::PaneSplit {
             pane_id: pane.id.clone(),
@@ -647,9 +648,9 @@ fn tab_bar_view<'a>(
     );
     let zoom = icon_button(
         if pane.is_zoomed {
-            "\u{2921}"
+            Icon::ZoomOut
         } else {
-            "\u{2922}"
+            Icon::ZoomIn
         },
         palette,
         ShellMessage::PaneZoomToggled(pane.id.clone()),
@@ -751,12 +752,12 @@ fn tab_view<'a>(
 }
 
 fn icon_button<'a>(
-    glyph: &'static str,
+    kind: Icon,
     palette: Palette,
     message: ShellMessage,
 ) -> Element<'a, ShellMessage> {
     button(
-        container(text(glyph).size(theme::SIZE_BODY).color(palette.t3))
+        container(icon(kind, 14.0, palette.t3))
             .width(Length::Fixed(22.0))
             .height(Length::Fixed(22.0))
             .align_x(Alignment::Center)

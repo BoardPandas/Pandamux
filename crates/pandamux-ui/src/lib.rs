@@ -7,6 +7,8 @@ pub mod content_views;
 #[cfg(feature = "iced-runtime")]
 pub mod iced_shell;
 #[cfg(feature = "iced-runtime")]
+pub mod icons;
+#[cfg(feature = "iced-runtime")]
 pub mod overlays;
 #[cfg(feature = "iced-runtime")]
 pub mod session_panel;
@@ -27,6 +29,8 @@ pub use iced_shell::{
     DragView, LinkSpan, ShellMessage, ShellViewModel, TerminalSnapshot, app_view, shell_view,
     terminal_viewport,
 };
+#[cfg(feature = "iced-runtime")]
+pub use icons::{Icon, icon};
 #[cfg(feature = "iced-runtime")]
 pub use overlays::{FindViewState, NotificationCard, NotificationsViewState};
 #[cfg(feature = "iced-runtime")]
