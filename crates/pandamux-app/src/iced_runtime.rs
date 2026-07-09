@@ -3,7 +3,7 @@ use iced::futures::SinkExt;
 use iced::{Element, Size, Subscription, Task, Theme, application, keyboard, stream, time, window};
 use pandamux_core::{
     AgentRegistry, AppIntent, AppState, Localizer, NewNotification, NotificationSource,
-    Notifications, PaneIntent, SidebarState, SplitDirection, SplitNode, SplitPaneParams,
+    Notifications, PaneId, PaneIntent, SidebarState, SplitDirection, SplitNode, SplitPaneParams,
     SurfaceContents, SurfaceId, SurfaceIntent, SurfaceType, ThemeStore, WorkspaceIntent,
     get_all_pane_ids, parse_ghostty_theme,
 };
@@ -434,6 +434,10 @@ impl NativeShellRuntime {
                 self.palette.selected = 0;
             }
             ShellMessage::PaletteMoveSelection(delta) => {
+                // Arrow keys only navigate while the palette is open.
+                if self.chrome.active_overlay != Overlay::CommandPalette {
+                    return;
+                }
                 let count = self.palette.items.len();
                 if count > 0 {
                     let index = (self.palette.selected as i64 + delta as i64)
@@ -442,6 +446,10 @@ impl NativeShellRuntime {
                 }
             }
             ShellMessage::PaletteActivate => {
+                // Enter only activates a palette item while the palette is open.
+                if self.chrome.active_overlay != Overlay::CommandPalette {
+                    return;
+                }
                 if let Some(item) = self.palette.items.get(self.palette.selected).cloned() {
                     self.chrome.active_overlay = Overlay::None;
                     self.update_shell(item.action);
@@ -490,6 +498,24 @@ impl NativeShellRuntime {
             }
             ShellMessage::CycleAccent => {
                 self.chrome.accent = self.chrome.accent.next();
+            }
+            ShellMessage::SplitFocused(direction) => {
+                if let Some(pane_id) = self.focused_pane_id() {
+                    self.update_shell(ShellMessage::PaneSplit { pane_id, direction });
+                    return;
+                }
+            }
+            ShellMessage::CloseFocusedPane => {
+                if let Some(pane_id) = self.focused_pane_id() {
+                    self.update_shell(ShellMessage::PaneClosed(pane_id));
+                    return;
+                }
+            }
+            ShellMessage::ZoomFocusedPane => {
+                if let Some(pane_id) = self.focused_pane_id() {
+                    self.update_shell(ShellMessage::PaneZoomToggled(pane_id));
+                    return;
+                }
             }
             ShellMessage::FindOpened => {
                 self.find.open = true;
@@ -794,6 +820,14 @@ impl NativeShellRuntime {
             .and_then(|pane| pane.active_surface_id)
     }
 
+    /// The focused pane of the active workspace, if any (keyboard shortcuts that
+    /// act on "the focused pane" resolve it here).
+    fn focused_pane_id(&self) -> Option<PaneId> {
+        self.app_state
+            .active_workspace()
+            .and_then(|workspace| workspace.focused_pane_id.clone())
+    }
+
     /// Refresh the chrome view state derived from canonical state (session/pane
     /// counts, active shell/session, activity, unread badge). Pollers (git/ports)
     /// fill the rest later.
@@ -1055,6 +1089,18 @@ fn map_key_event(event: keyboard::Event) -> ShellMessage {
             }
             // Escape dismisses any open centered overlay (no-op otherwise).
             Key::Named(Named::Escape) => return ShellMessage::OverlayDismissed,
+            // Arrow keys drive command-palette selection (no-op when it is closed).
+            Key::Named(Named::ArrowUp) => return ShellMessage::PaletteMoveSelection(-1),
+            Key::Named(Named::ArrowDown) => return ShellMessage::PaletteMoveSelection(1),
+            // Ctrl+Enter zooms the focused pane; plain Enter activates the
+            // highlighted palette item (both no-op when not applicable).
+            Key::Named(Named::Enter) => {
+                return if modifiers.control() {
+                    ShellMessage::ZoomFocusedPane
+                } else {
+                    ShellMessage::PaletteActivate
+                };
+            }
             _ => {}
         }
     }
@@ -1072,10 +1118,14 @@ fn shortcut_for(ctrl: bool, shift: bool, character: &str) -> ShellMessage {
         (true, "t") => ShellMessage::ToggleTheme,
         (true, "a") => ShellMessage::CycleAccent,
         (false, "k") => ShellMessage::OverlayRequested(RailItem::CommandPalette),
+        (true, "p") => ShellMessage::OverlayRequested(RailItem::CommandPalette),
         (false, "t") => ShellMessage::NewSessionRequested,
         (false, ",") => ShellMessage::OverlayRequested(RailItem::Settings),
         (false, "f") => ShellMessage::FindOpened,
         (false, "n") => ShellMessage::NotificationsToggled,
+        (false, "d") => ShellMessage::SplitFocused(SplitDirection::Horizontal),
+        (true, "d") => ShellMessage::SplitFocused(SplitDirection::Vertical),
+        (false, "w") => ShellMessage::CloseFocusedPane,
         _ => ShellMessage::Noop,
     }
 }
@@ -1658,8 +1708,68 @@ mod tests {
             shortcut_for(true, false, "k"),
             ShellMessage::OverlayRequested(RailItem::CommandPalette)
         );
+        assert_eq!(
+            shortcut_for(true, false, "d"),
+            ShellMessage::SplitFocused(SplitDirection::Horizontal)
+        );
+        assert_eq!(
+            shortcut_for(true, true, "d"),
+            ShellMessage::SplitFocused(SplitDirection::Vertical)
+        );
+        assert_eq!(
+            shortcut_for(true, false, "w"),
+            ShellMessage::CloseFocusedPane
+        );
+        assert_eq!(
+            shortcut_for(true, true, "p"),
+            ShellMessage::OverlayRequested(RailItem::CommandPalette)
+        );
         assert_eq!(shortcut_for(false, false, "b"), ShellMessage::Noop);
         assert_eq!(shortcut_for(true, false, "z"), ShellMessage::Noop);
+    }
+
+    #[test]
+    fn focused_pane_shortcuts_split_close_and_zoom() {
+        let mut runtime = NativeShellRuntime::default();
+        // Ctrl+D splits the focused pane.
+        runtime.update_shell(ShellMessage::SplitFocused(SplitDirection::Horizontal));
+        assert_eq!(runtime.view_model().projection.visible_panes.len(), 2);
+        // Ctrl+Enter zooms the focused pane.
+        runtime.update_shell(ShellMessage::ZoomFocusedPane);
+        assert!(
+            runtime
+                .app_state
+                .active_workspace()
+                .unwrap()
+                .zoomed_pane_id
+                .is_some()
+        );
+        // Unzoom, then Ctrl+W closes the focused pane back to one.
+        runtime.update_shell(ShellMessage::ZoomFocusedPane);
+        runtime.update_shell(ShellMessage::CloseFocusedPane);
+        assert_eq!(runtime.view_model().projection.visible_panes.len(), 1);
+        assert_eq!(runtime.last_error(), None);
+    }
+
+    #[test]
+    fn palette_arrow_navigation_gated_to_open_palette() {
+        let mut runtime = NativeShellRuntime::default();
+        // Closed palette: arrow/activate are no-ops.
+        runtime.update_shell(ShellMessage::PaletteMoveSelection(1));
+        assert_eq!(runtime.view_model().palette.selected, 0);
+        runtime.update_shell(ShellMessage::PaletteActivate);
+        assert_eq!(runtime.view_model().chrome.active_overlay, Overlay::None);
+
+        // Open it, move down, and activating runs the highlighted item.
+        runtime.update_shell(ShellMessage::OverlayRequested(RailItem::CommandPalette));
+        assert_eq!(
+            runtime.view_model().chrome.active_overlay,
+            Overlay::CommandPalette
+        );
+        runtime.update_shell(ShellMessage::PaletteMoveSelection(1));
+        assert_eq!(runtime.view_model().palette.selected, 1);
+        runtime.update_shell(ShellMessage::PaletteActivate);
+        assert_eq!(runtime.view_model().chrome.active_overlay, Overlay::None);
     }
 
     #[test]

@@ -34,6 +34,11 @@ pub enum ShellMessage {
     },
     PaneClosed(PaneId),
     PaneZoomToggled(PaneId),
+    /// Keyboard-driven variants that act on the focused pane (the runtime
+    /// resolves it, since a keystroke carries no pane id).
+    SplitFocused(SplitDirection),
+    CloseFocusedPane,
+    ZoomFocusedPane,
     TerminalSurfaceCreated(PaneId),
     SurfaceFocused(SurfaceId),
     SurfaceClosed(SurfaceId),

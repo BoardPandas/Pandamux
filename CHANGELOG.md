@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.28.0]
+
+### Added
+
+- Wired the rest of the designed keyboard shortcuts: Ctrl+D / Ctrl+Shift+D split the focused pane right / down, Ctrl+W closes the focused pane, Ctrl+Enter zooms it, and Ctrl+Shift+P opens the command palette (alongside the existing Ctrl+K). The keystroke variants resolve the focused pane in the runtime.
+- Command-palette keyboard navigation: Up/Down move the highlighted item and Enter activates it, both gated to when the palette is open (so Enter/arrows are inert elsewhere).
+
+### Changed
+
+- Bumped the app version to `0.28.0`.
+
 ## [0.27.0]
 
 ### Added
