@@ -12,14 +12,17 @@
 //! two divergent dispatchers.
 
 use pandamux_core::{
-    AgentInfo, AgentRegistry, AgentStatus, AppDelta, AppIntent, AppState, DropZone,
-    LayoutGridParams, Locale, Localizer, NewNotification, NotificationSource, Notifications,
-    PaneId, PaneIntent, RpcRequest, RpcResponse, SidebarState, SpawnStrategy, SplitDirection,
-    SplitNode, SplitPaneParams, SurfaceContents, SurfaceId, SurfaceIntent, SurfaceType,
-    SystemIntent, ThemeStore, WorkspaceId, WorkspaceIntent, find_leaf, get_all_pane_ids,
-    import_windows_terminal, parse_ghostty_theme,
+    AgentInfo, AgentRegistry, AgentStatus, AppDelta, AppIntent, AppState, ClipboardConfig,
+    DropZone, LayoutGridParams, Locale, Localizer, NewNotification, NotificationSource,
+    Notifications, PaneId, PaneIntent, RpcRequest, RpcResponse, SidebarState, SpawnStrategy,
+    SplitDirection, SplitNode, SplitPaneParams, SshAuthConfig, SshHostProfile, SshProfiles,
+    SurfaceContents, SurfaceId, SurfaceIntent, SurfaceType, SystemIntent, ThemeStore, WorkspaceId,
+    WorkspaceIntent, find_leaf, get_all_pane_ids, import_windows_terminal, parse_ghostty_theme,
 };
-use pandamux_term::{GridSize, PtyCommand, PtySessionManager};
+use pandamux_term::{
+    ClipboardStore, GridSize, PtyCommand, PtySessionManager, RemoteSessionManager, SshAuth,
+    SshConfig, wrap_paste,
+};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -41,6 +44,16 @@ pub struct DispatchCtx<'a> {
     pub localizer: &'a mut Localizer,
     /// Per-surface terminal color-scheme overrides (surface id -> theme name).
     pub surface_schemes: &'a mut HashMap<SurfaceId, String>,
+    /// SSH remote terminal sessions (plan F2). A remote surface's byte source is
+    /// an SSH channel instead of a local PTY; terminal I/O routes here for it.
+    pub remotes: &'a mut RemoteSessionManager,
+    /// Which surfaces are remote and how to reach them (kept so reconciliation
+    /// skips them for local-PTY spawning and I/O routes correctly).
+    pub remote_configs: &'a mut HashMap<SurfaceId, SshConfig>,
+    /// Saved SSH host profiles (imported from `~/.ssh/config` or entered).
+    pub ssh_profiles: &'a mut SshProfiles,
+    /// Persistent clipboard policy (OSC 52 size cap + per-host load opt-in).
+    pub clipboard_config: &'a mut ClipboardConfig,
     pub now_ms: u64,
     pub spawn_ptys: bool,
 }
@@ -59,6 +72,10 @@ pub struct Backend {
     pub themes: ThemeStore,
     pub localizer: Localizer,
     pub surface_schemes: HashMap<SurfaceId, String>,
+    pub remotes: RemoteSessionManager,
+    pub remote_configs: HashMap<SurfaceId, SshConfig>,
+    pub ssh_profiles: SshProfiles,
+    pub clipboard_config: ClipboardConfig,
     pub spawn_ptys: bool,
 }
 
@@ -75,6 +92,10 @@ impl Backend {
             themes: ThemeStore::new(),
             localizer: Localizer::default(),
             surface_schemes: HashMap::new(),
+            remotes: RemoteSessionManager::default(),
+            remote_configs: HashMap::new(),
+            ssh_profiles: SshProfiles::new(),
+            clipboard_config: ClipboardConfig::default(),
             spawn_ptys,
         }
     }
@@ -92,10 +113,58 @@ impl Backend {
             themes: &mut self.themes,
             localizer: &mut self.localizer,
             surface_schemes: &mut self.surface_schemes,
+            remotes: &mut self.remotes,
+            remote_configs: &mut self.remote_configs,
+            ssh_profiles: &mut self.ssh_profiles,
+            clipboard_config: &mut self.clipboard_config,
             now_ms: now_ms(),
             spawn_ptys: self.spawn_ptys,
         };
         handle_line(line, ctx)
+    }
+
+    /// Forward any OSC 52 clipboard-store events captured from local or remote
+    /// terminal grids to the OS clipboard (plan F1). Best-effort. Called on each
+    /// UI refresh and after headless dispatch.
+    pub fn drain_clipboards(&mut self) {
+        drain_clipboard_stores(
+            &mut self.ptys,
+            &mut self.remotes,
+            self.clipboard_config.max_store_bytes,
+        );
+    }
+}
+
+/// Drain OSC 52 stores from every local PTY and remote session, writing the most
+/// recent within the size cap to the OS clipboard. Best-effort (a headless box
+/// without a clipboard fails softly).
+pub fn drain_clipboard_stores(
+    ptys: &mut PtySessionManager,
+    remotes: &mut RemoteSessionManager,
+    max_store_bytes: usize,
+) {
+    let mut latest: Option<String> = None;
+    for session_id in ptys.session_ids() {
+        // Polling advances the grid so captured OSC 52 events surface.
+        let _ = ptys.poll(&session_id);
+        for store in ptys.take_clipboard_stores(&session_id) {
+            consider_store(store, max_store_bytes, &mut latest);
+        }
+    }
+    for session_id in remotes.session_ids() {
+        let _ = remotes.poll(&session_id);
+        for store in remotes.take_clipboard_stores(&session_id) {
+            consider_store(store, max_store_bytes, &mut latest);
+        }
+    }
+    if let Some(text) = latest {
+        let _ = crate::clipboard_os::set_text(&text);
+    }
+}
+
+fn consider_store(store: ClipboardStore, max_store_bytes: usize, latest: &mut Option<String>) {
+    if store.text.len() <= max_store_bytes {
+        *latest = Some(store.text);
     }
 }
 
@@ -161,6 +230,10 @@ fn dispatch(request: &RpcRequest, ctx: DispatchCtx<'_>) -> Result<Value, (i32, S
         themes,
         localizer,
         surface_schemes,
+        remotes,
+        remote_configs,
+        ssh_profiles,
+        clipboard_config,
         now_ms,
         spawn_ptys,
     } = ctx;
@@ -189,7 +262,24 @@ fn dispatch(request: &RpcRequest, ctx: DispatchCtx<'_>) -> Result<Value, (i32, S
         return Ok(result);
     }
 
-    if let Some(result) = dispatch_terminal_io(request, app, ptys, spawn_ptys)? {
+    if let Some(result) = dispatch_ssh(
+        request,
+        app,
+        remotes,
+        remote_configs,
+        ssh_profiles,
+        spawn_ptys,
+    )? {
+        return Ok(result);
+    }
+
+    if let Some(result) = dispatch_clipboard(request, clipboard_config)? {
+        return Ok(result);
+    }
+
+    if let Some(result) =
+        dispatch_terminal_io(request, app, ptys, remotes, remote_configs, spawn_ptys)?
+    {
         return Ok(result);
     }
 
@@ -209,11 +299,13 @@ fn dispatch(request: &RpcRequest, ctx: DispatchCtx<'_>) -> Result<Value, (i32, S
 
     let intent = intent_for_request(request)?;
     let delta = app.apply(intent).map_err(|message| (-32000, message))?;
-    sync_terminal_sessions(app, ptys, spawn_ptys).map_err(|message| (-32000, message))?;
+    sync_terminal_sessions(app, ptys, remotes, spawn_ptys).map_err(|message| (-32000, message))?;
     // Drop content + color-scheme overrides for surfaces the mutation may have closed.
     let live = all_surface_ids(app);
     contents.retain_live(&live);
     surface_schemes.retain(|surface_id, _| live.contains(surface_id));
+    // Kill remote sessions whose surface was closed and forget their config.
+    sync_remote_sessions(&live, remotes, remote_configs);
     Ok(delta_to_result(delta))
 }
 
@@ -742,61 +834,382 @@ fn agent_json(info: &AgentInfo) -> Value {
 }
 
 // ---------------------------------------------------------------------------
-// Terminal I/O
+// SSH remote surfaces (plan F2 / F3)
+// ---------------------------------------------------------------------------
+
+fn dispatch_ssh(
+    request: &RpcRequest,
+    app: &mut AppState,
+    remotes: &mut RemoteSessionManager,
+    remote_configs: &mut HashMap<SurfaceId, SshConfig>,
+    ssh_profiles: &mut SshProfiles,
+    spawn_ptys: bool,
+) -> Result<Option<Value>, (i32, String)> {
+    match request.method.as_str() {
+        "ssh.connect" => {
+            let config = ssh_config_from_params(&request.params)?;
+            // A remote surface is a terminal surface whose bytes come from SSH.
+            let delta = app
+                .apply(AppIntent::Surface(SurfaceIntent::Create {
+                    workspace_id: opt_id(&request.params, "workspaceId"),
+                    pane_id: opt_id(&request.params, "paneId"),
+                    surface_type: SurfaceType::Terminal,
+                }))
+                .map_err(|message| (-32000, message))?;
+            let (workspace_id, pane_id, surface_id) = match delta {
+                AppDelta::SurfaceCreated {
+                    workspace_id,
+                    pane_id,
+                    surface,
+                } => (workspace_id, pane_id, surface.id),
+                _ => return Err((-32000, "remote surface was not created".to_string())),
+            };
+            // Only the live runtime opens the socket; the headless/test backend
+            // records the config so the surface is known-remote without I/O.
+            if spawn_ptys {
+                remotes
+                    .connect(
+                        surface_id.to_string(),
+                        config.clone(),
+                        GridSize::new(120, 30),
+                    )
+                    .map_err(|error| (-32000, error))?;
+            }
+            remote_configs.insert(surface_id.clone(), config.clone());
+            Ok(Some(json!({
+                "ok": true,
+                "surfaceId": surface_id,
+                "paneId": pane_id,
+                "workspaceId": workspace_id,
+                "host": config.host,
+            })))
+        }
+        "ssh.disconnect" => {
+            let surface_id: SurfaceId = required_id(&request.params, &["surfaceId", "id"])?;
+            if spawn_ptys && remotes.has(surface_id.as_str()) {
+                let _ = remotes.kill(surface_id.as_str());
+            }
+            remote_configs.remove(&surface_id);
+            let _ = app.apply(AppIntent::Surface(SurfaceIntent::Close {
+                workspace_id: None,
+                surface_id: surface_id.clone(),
+            }));
+            Ok(Some(json!({ "ok": true })))
+        }
+        "ssh.list" => {
+            let sessions: Vec<Value> = remote_configs
+                .iter()
+                .map(|(surface_id, config)| {
+                    json!({
+                        "surfaceId": surface_id,
+                        "host": config.host,
+                        "port": config.port,
+                        "user": config.user,
+                        "running": remotes.has(surface_id.as_str()),
+                    })
+                })
+                .collect();
+            Ok(Some(json!({ "sessions": sessions })))
+        }
+        "ssh.profiles" => Ok(Some(json!({ "profiles": ssh_profiles.list() }))),
+        "ssh.save_profile" => {
+            let profile = ssh_profile_from_params(&request.params)?;
+            let name = profile.name.clone();
+            ssh_profiles.upsert(profile);
+            Ok(Some(json!({ "ok": true, "name": name })))
+        }
+        "ssh.remove_profile" => {
+            let name = opt_string(&request.params, "name")
+                .ok_or_else(|| (-32602, "ssh.remove_profile requires name".to_string()))?;
+            let removed = ssh_profiles.remove(&name);
+            Ok(Some(json!({ "ok": removed })))
+        }
+        "ssh.import_config" => {
+            let content = match opt_string(&request.params, "content") {
+                Some(content) => content,
+                None => {
+                    let path = opt_string(&request.params, "path").ok_or_else(|| {
+                        (
+                            -32602,
+                            "ssh.import_config requires content or path".to_string(),
+                        )
+                    })?;
+                    std::fs::read_to_string(&path)
+                        .map_err(|error| (-32000, format!("read {path}: {error}")))?
+                }
+            };
+            let names = ssh_profiles.import_config(&content);
+            Ok(Some(json!({ "imported": names })))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn ssh_config_from_params(params: &Value) -> Result<SshConfig, (i32, String)> {
+    let host = opt_string(params, "host")
+        .ok_or_else(|| (-32602, "ssh.connect requires host".to_string()))?;
+    let user = opt_string(params, "user")
+        .ok_or_else(|| (-32602, "ssh.connect requires user".to_string()))?;
+    let port = params
+        .get("port")
+        .and_then(Value::as_u64)
+        .map(|port| port as u16)
+        .unwrap_or(22);
+    let auth = ssh_auth_from_params(params)?;
+    Ok(SshConfig::new(host, user, auth).with_port(port))
+}
+
+/// Parse the runtime auth (`SshAuth`, which may carry a secret) from connect
+/// params. Defaults to the Windows OpenSSH-compatible agent pipe.
+fn ssh_auth_from_params(params: &Value) -> Result<SshAuth, (i32, String)> {
+    match opt_string(params, "auth").as_deref().unwrap_or("agent") {
+        "agent" => Ok(SshAuth::Agent {
+            pipe_path: opt_string(params, "pipePath")
+                .unwrap_or_else(|| r"\\.\pipe\openssh-ssh-agent".to_string()),
+        }),
+        "key" | "keyfile" => Ok(SshAuth::KeyFile {
+            path: opt_string(params, "keyPath")
+                .ok_or_else(|| (-32602, "key auth requires keyPath".to_string()))?
+                .into(),
+            passphrase: opt_string(params, "passphrase"),
+        }),
+        "password" => Ok(SshAuth::Password {
+            password: opt_string(params, "password")
+                .ok_or_else(|| (-32602, "password auth requires password".to_string()))?,
+        }),
+        other => Err((-32602, format!("unsupported ssh auth: {other}"))),
+    }
+}
+
+/// Parse a saved (secretless) host profile from params.
+fn ssh_profile_from_params(params: &Value) -> Result<SshHostProfile, (i32, String)> {
+    let host = opt_string(params, "host")
+        .ok_or_else(|| (-32602, "ssh.save_profile requires host".to_string()))?;
+    let user = opt_string(params, "user")
+        .ok_or_else(|| (-32602, "ssh.save_profile requires user".to_string()))?;
+    let name = opt_string(params, "name").unwrap_or_else(|| host.clone());
+    let mut profile = SshHostProfile::new(name, host, user);
+    if let Some(port) = params.get("port").and_then(Value::as_u64) {
+        profile.port = port as u16;
+    }
+    profile.auth = match opt_string(params, "auth").as_deref().unwrap_or("agent") {
+        "agent" => SshAuthConfig::Agent,
+        "key" | "keyfile" => SshAuthConfig::KeyFile {
+            path: opt_string(params, "keyPath")
+                .ok_or_else(|| (-32602, "key auth requires keyPath".to_string()))?,
+        },
+        "password" => SshAuthConfig::Password,
+        other => return Err((-32602, format!("unsupported ssh auth: {other}"))),
+    };
+    profile.jump = opt_string(params, "jump");
+    Ok(profile)
+}
+
+// ---------------------------------------------------------------------------
+// Clipboard (plan F1)
+// ---------------------------------------------------------------------------
+
+fn dispatch_clipboard(
+    request: &RpcRequest,
+    clipboard_config: &mut ClipboardConfig,
+) -> Result<Option<Value>, (i32, String)> {
+    match request.method.as_str() {
+        "clipboard.copy" => {
+            let text = opt_string(&request.params, "text").unwrap_or_default();
+            if text.len() > clipboard_config.max_store_bytes {
+                return Err((-32000, "clipboard payload exceeds size cap".to_string()));
+            }
+            crate::clipboard_os::set_text(&text).map_err(|error| (-32000, error))?;
+            Ok(Some(json!({ "ok": true })))
+        }
+        "clipboard.get" => {
+            let text = crate::clipboard_os::get_text().map_err(|error| (-32000, error))?;
+            Ok(Some(json!({ "text": text })))
+        }
+        "clipboard.policy" => {
+            // Read (no fields) or update (maxStoreBytes / host+allowLoad).
+            if let Some(max) = request.params.get("maxStoreBytes").and_then(Value::as_u64) {
+                clipboard_config.max_store_bytes = max as usize;
+            }
+            if let Some(host) = opt_string(&request.params, "host") {
+                let allow = request
+                    .params
+                    .get("allowLoad")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                if allow {
+                    clipboard_config.allow_load(host);
+                } else {
+                    clipboard_config.deny_load(&host);
+                }
+            }
+            Ok(Some(json!({
+                "maxStoreBytes": clipboard_config.max_store_bytes,
+                "loadAllowedHosts": clipboard_config.load_allowed_hosts,
+            })))
+        }
+        _ => Ok(None),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Terminal I/O (routes local-PTY and SSH-remote surfaces uniformly)
 // ---------------------------------------------------------------------------
 
 fn dispatch_terminal_io(
     request: &RpcRequest,
     app: &AppState,
     ptys: &mut PtySessionManager,
+    remotes: &mut RemoteSessionManager,
+    remote_configs: &HashMap<SurfaceId, SshConfig>,
     spawn_ptys: bool,
 ) -> Result<Option<Value>, (i32, String)> {
     match request.method.as_str() {
         "surface.send_text" => {
-            sync_terminal_sessions(app, ptys, spawn_ptys).map_err(|message| (-32000, message))?;
-            let surface_id = resolve_terminal_surface_id(app, ptys, &request.params)?;
+            sync_terminal_sessions(app, ptys, remotes, spawn_ptys)
+                .map_err(|message| (-32000, message))?;
+            let target = resolve_io_target(app, ptys, remote_configs, &request.params)?;
             let text = opt_string(&request.params, "text").unwrap_or_default();
-            ptys.write_all(surface_id.as_str(), text.as_bytes())
-                .map_err(|error| (-32000, error.to_string()))?;
+            write_target(ptys, remotes, &target, text.as_bytes())?;
             Ok(Some(json!({ "ok": true })))
         }
         "surface.send_key" => {
-            sync_terminal_sessions(app, ptys, spawn_ptys).map_err(|message| (-32000, message))?;
-            let surface_id = resolve_terminal_surface_id(app, ptys, &request.params)?;
+            sync_terminal_sessions(app, ptys, remotes, spawn_ptys)
+                .map_err(|message| (-32000, message))?;
+            let target = resolve_io_target(app, ptys, remote_configs, &request.params)?;
             let bytes = key_bytes(&request.params)?;
-            ptys.write_all(surface_id.as_str(), &bytes)
-                .map_err(|error| (-32000, error.to_string()))?;
+            write_target(ptys, remotes, &target, &bytes)?;
             Ok(Some(json!({ "ok": true })))
         }
+        // Bracketed-paste-aware paste (plan F1): wrap the text in
+        // ESC[200~..ESC[201~ when the target has requested bracketed paste.
+        "surface.paste" => {
+            sync_terminal_sessions(app, ptys, remotes, spawn_ptys)
+                .map_err(|message| (-32000, message))?;
+            let target = resolve_io_target(app, ptys, remote_configs, &request.params)?;
+            let text = opt_string(&request.params, "text").unwrap_or_default();
+            let bracketed = match &target {
+                IoTarget::Remote(id) => remotes.bracketed_paste_active(id.as_str()),
+                IoTarget::Local(id) => ptys.bracketed_paste_active(id.as_str()),
+            };
+            let bytes = wrap_paste(text.as_bytes(), bracketed);
+            write_target(ptys, remotes, &target, &bytes)?;
+            Ok(Some(json!({ "ok": true, "bracketed": bracketed })))
+        }
+        // Transfer a local image to the remote host over SFTP (plan F3) and
+        // inject its path, or inject a local path for a local surface.
+        "surface.paste_image" => {
+            sync_terminal_sessions(app, ptys, remotes, spawn_ptys)
+                .map_err(|message| (-32000, message))?;
+            let path = opt_string(&request.params, "path")
+                .ok_or_else(|| (-32602, "surface.paste_image requires path".to_string()))?;
+            let target = resolve_io_target(app, ptys, remote_configs, &request.params)?;
+            let injected = match &target {
+                IoTarget::Remote(id) => remotes
+                    .upload_image(id.as_str(), &path)
+                    .map_err(|error| (-32000, error))?,
+                IoTarget::Local(_) => path.clone(),
+            };
+            // Inject the path plus a trailing space (Claude Code accepts image
+            // file paths in prompts).
+            let payload = format!("{injected} ");
+            write_target(ptys, remotes, &target, payload.as_bytes())?;
+            Ok(Some(json!({ "ok": true, "path": injected })))
+        }
         "surface.read_text" => {
-            sync_terminal_sessions(app, ptys, spawn_ptys).map_err(|message| (-32000, message))?;
-            let surface_id = resolve_terminal_surface_id(app, ptys, &request.params)?;
+            sync_terminal_sessions(app, ptys, remotes, spawn_ptys)
+                .map_err(|message| (-32000, message))?;
+            let target = resolve_io_target(app, ptys, remote_configs, &request.params)?;
             let lines = request
                 .params
                 .get("lines")
                 .and_then(Value::as_u64)
                 .unwrap_or(50) as usize;
-            let text = ptys
-                .screen_text_lines(surface_id.as_str(), lines)
-                .map_err(|error| (-32000, error.to_string()))?;
+            let text = match &target {
+                IoTarget::Remote(id) => remotes
+                    .screen_text_lines(id.as_str(), lines)
+                    .map_err(|error| (-32000, error))?,
+                IoTarget::Local(id) => ptys
+                    .screen_text_lines(id.as_str(), lines)
+                    .map_err(|error| (-32000, error.to_string()))?,
+            };
             Ok(Some(json!({ "text": text })))
         }
         "surface.resize" | "pty.resize" => {
-            sync_terminal_sessions(app, ptys, spawn_ptys).map_err(|message| (-32000, message))?;
-            let surface_id = resolve_terminal_surface_id(app, ptys, &request.params)?;
+            sync_terminal_sessions(app, ptys, remotes, spawn_ptys)
+                .map_err(|message| (-32000, message))?;
+            let target = resolve_io_target(app, ptys, remote_configs, &request.params)?;
             let size = grid_size_param(&request.params)?;
-            ptys.resize(surface_id.as_str(), size)
-                .map_err(|error| (-32000, error.to_string()))?;
+            match &target {
+                IoTarget::Remote(id) => remotes
+                    .resize(id.as_str(), size)
+                    .map_err(|error| (-32000, error))?,
+                IoTarget::Local(id) => ptys
+                    .resize(id.as_str(), size)
+                    .map_err(|error| (-32000, error.to_string()))?,
+            }
             Ok(Some(json!({ "ok": true })))
         }
         "surface.kill" | "pty.kill" => {
-            let surface_id = resolve_terminal_surface_id(app, ptys, &request.params)?;
-            ptys.kill(surface_id.as_str())
-                .map_err(|error| (-32000, error.to_string()))?;
+            let target = resolve_io_target(app, ptys, remote_configs, &request.params)?;
+            match &target {
+                IoTarget::Remote(id) => {
+                    remotes.kill(id.as_str()).map_err(|error| (-32000, error))?
+                }
+                IoTarget::Local(id) => ptys
+                    .kill(id.as_str())
+                    .map_err(|error| (-32000, error.to_string()))?,
+            }
             Ok(Some(json!({ "ok": true })))
         }
         "surface.trigger_flash" => Ok(Some(json!({ "ok": true }))),
         _ => Ok(None),
+    }
+}
+
+/// A resolved terminal-I/O target: either a local PTY or an SSH remote surface.
+enum IoTarget {
+    Local(SurfaceId),
+    Remote(SurfaceId),
+}
+
+/// Resolve which surface a terminal-I/O method targets and whether it is remote.
+/// An explicit id that names a remote surface routes to SSH; otherwise fall back
+/// to the focused/any local terminal.
+fn resolve_io_target(
+    app: &AppState,
+    ptys: &PtySessionManager,
+    remote_configs: &HashMap<SurfaceId, SshConfig>,
+    params: &Value,
+) -> Result<IoTarget, (i32, String)> {
+    if let Some(surface_id) =
+        opt_id::<SurfaceId>(params, "surfaceId").or_else(|| opt_id(params, "id"))
+    {
+        if remote_configs.contains_key(&surface_id) {
+            return Ok(IoTarget::Remote(surface_id));
+        }
+        if ptys.has(surface_id.as_str()) {
+            return Ok(IoTarget::Local(surface_id));
+        }
+        return Err((-32000, format!("terminal surface not found: {surface_id}")));
+    }
+    let surface_id = resolve_terminal_surface_id(app, ptys, params)?;
+    Ok(IoTarget::Local(surface_id))
+}
+
+fn write_target(
+    ptys: &mut PtySessionManager,
+    remotes: &mut RemoteSessionManager,
+    target: &IoTarget,
+    bytes: &[u8],
+) -> Result<(), (i32, String)> {
+    match target {
+        IoTarget::Remote(id) => remotes
+            .write_all(id.as_str(), bytes)
+            .map_err(|error| (-32000, error)),
+        IoTarget::Local(id) => ptys
+            .write_all(id.as_str(), bytes)
+            .map_err(|error| (-32000, error.to_string())),
     }
 }
 
@@ -1197,11 +1610,14 @@ fn delta_to_result(delta: AppDelta) -> Value {
 // Terminal session reconciliation
 // ---------------------------------------------------------------------------
 
-/// Ensure a live PTY exists for every terminal surface and kill orphaned ones.
-/// No-op unless `spawn_ptys` is set (tests/smoke stay hermetic).
+/// Ensure a live PTY exists for every local terminal surface and kill orphaned
+/// ones. Remote (SSH-backed) surfaces are skipped: their byte source is a
+/// [`RemoteSessionManager`] session, not a local PTY. No-op unless `spawn_ptys`
+/// is set (tests/smoke stay hermetic).
 pub fn sync_terminal_sessions(
     app: &AppState,
     ptys: &mut PtySessionManager,
+    remotes: &RemoteSessionManager,
     spawn_ptys: bool,
 ) -> Result<(), String> {
     if !spawn_ptys {
@@ -1212,6 +1628,10 @@ pub fn sync_terminal_sessions(
     for workspace in &app.workspaces {
         for surface_id in terminal_surface_ids(&workspace.split_tree) {
             let session_id = surface_id.to_string();
+            // A remote surface has an SSH session, not a local PTY: leave it be.
+            if remotes.has(&session_id) {
+                continue;
+            }
             expected_session_ids.insert(session_id.clone());
             if ptys.has(&session_id) {
                 continue;
@@ -1230,6 +1650,26 @@ pub fn sync_terminal_sessions(
     }
 
     Ok(())
+}
+
+/// Kill SSH remote sessions whose surface was closed, and forget their config.
+/// `live` is the set of all surface ids still present in the tree.
+pub fn sync_remote_sessions(
+    live: &HashSet<SurfaceId>,
+    remotes: &mut RemoteSessionManager,
+    remote_configs: &mut HashMap<SurfaceId, SshConfig>,
+) {
+    let orphaned: Vec<SurfaceId> = remote_configs
+        .keys()
+        .filter(|surface_id| !live.contains(*surface_id))
+        .cloned()
+        .collect();
+    for surface_id in orphaned {
+        if remotes.has(surface_id.as_str()) {
+            let _ = remotes.kill(surface_id.as_str());
+        }
+        remote_configs.remove(&surface_id);
+    }
 }
 
 pub fn terminal_surface_ids(tree: &SplitNode) -> Vec<SurfaceId> {
@@ -1942,5 +2382,115 @@ mod tests {
             &format!(r#"{{"method":"agent.kill","params":{{"id":"{agent_id}"}},"id":8}}"#),
         );
         assert_eq!(kill["result"]["ok"], true);
+    }
+
+    #[test]
+    fn ssh_connect_creates_remote_surface_lists_and_disconnects() {
+        // spawn_ptys=false: records the remote surface without opening a socket.
+        let mut backend = Backend::new(false);
+        let connect = handle(
+            &mut backend,
+            r#"{"method":"ssh.connect","params":{"host":"10.55.88.48","user":"chaz","auth":"agent"},"id":1}"#,
+        );
+        assert_eq!(connect["result"]["ok"], true);
+        assert_eq!(connect["result"]["host"], "10.55.88.48");
+        let surface_id = connect["result"]["surfaceId"]
+            .as_str()
+            .expect("remote surface id")
+            .to_string();
+
+        let list = handle(&mut backend, r#"{"method":"ssh.list","params":{},"id":2}"#);
+        let sessions = list["result"]["sessions"].as_array().unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0]["surfaceId"], surface_id);
+        assert_eq!(sessions[0]["host"], "10.55.88.48");
+        // Not "running" because no socket was opened in the hermetic backend.
+        assert_eq!(sessions[0]["running"], false);
+
+        let disconnect = handle(
+            &mut backend,
+            &format!(
+                r#"{{"method":"ssh.disconnect","params":{{"surfaceId":"{surface_id}"}},"id":3}}"#
+            ),
+        );
+        assert_eq!(disconnect["result"]["ok"], true);
+        let list = handle(&mut backend, r#"{"method":"ssh.list","params":{},"id":4}"#);
+        assert!(list["result"]["sessions"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn ssh_connect_requires_host_and_user() {
+        let mut backend = Backend::new(false);
+        let missing = handle(
+            &mut backend,
+            r#"{"method":"ssh.connect","params":{"user":"chaz"},"id":1}"#,
+        );
+        assert_eq!(missing["error"]["code"], -32602);
+    }
+
+    #[test]
+    fn ssh_profiles_save_import_and_list() {
+        let mut backend = Backend::new(false);
+        let saved = handle(
+            &mut backend,
+            r#"{"method":"ssh.save_profile","params":{"name":"galahad","host":"10.55.88.48","user":"chaz","port":22,"auth":"agent"},"id":1}"#,
+        );
+        assert_eq!(saved["result"]["name"], "galahad");
+
+        let imported = handle(
+            &mut backend,
+            r#"{"method":"ssh.import_config","params":{"content":"Host box\n  HostName box.local\n  User root\n"},"id":2}"#,
+        );
+        assert_eq!(imported["result"]["imported"][0], "box");
+
+        let profiles = handle(
+            &mut backend,
+            r#"{"method":"ssh.profiles","params":{},"id":3}"#,
+        );
+        assert_eq!(profiles["result"]["profiles"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn clipboard_policy_get_and_update() {
+        let mut backend = Backend::new(false);
+        // Read defaults.
+        let policy = handle(
+            &mut backend,
+            r#"{"method":"clipboard.policy","params":{},"id":1}"#,
+        );
+        assert!(policy["result"]["maxStoreBytes"].as_u64().unwrap() > 0);
+        assert!(
+            policy["result"]["loadAllowedHosts"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+
+        // Opt a host into clipboard-read, then update the size cap.
+        let allowed = handle(
+            &mut backend,
+            r#"{"method":"clipboard.policy","params":{"host":"galahad","allowLoad":true},"id":2}"#,
+        );
+        assert_eq!(allowed["result"]["loadAllowedHosts"][0], "galahad");
+        let capped = handle(
+            &mut backend,
+            r#"{"method":"clipboard.policy","params":{"maxStoreBytes":2048},"id":3}"#,
+        );
+        assert_eq!(capped["result"]["maxStoreBytes"], 2048);
+    }
+
+    #[test]
+    fn remote_surface_is_not_given_a_local_pty_on_reconcile() {
+        // Even in a "live" backend, a remote surface must be skipped by the local
+        // PTY reconciler (its bytes come from SSH). We assert the config is
+        // tracked and the surface exists without asserting socket behavior.
+        let mut backend = Backend::new(false);
+        let connect = handle(
+            &mut backend,
+            r#"{"method":"ssh.connect","params":{"host":"h","user":"u"},"id":1}"#,
+        );
+        let surface_id = SurfaceId::from(connect["result"]["surfaceId"].as_str().unwrap());
+        assert!(backend.remote_configs.contains_key(&surface_id));
+        assert!(!backend.ptys.has(surface_id.as_str()));
     }
 }

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.33.0]
+
+### Added
+
+- **Phase 6 (F1): Copy/paste over SSH with OSC 52 + bracketed paste.** The terminal engine now captures a program's OSC 52 clipboard-store escape (`pandamux-term::clipboard`, via a capturing `EventListener` on the grid, secure `Osc52::OnlyCopy` policy) and the app forwards it to the OS clipboard through `arboard` (`pandamux-app::clipboard_os`), on every UI refresh and after each headless pipe command. This works identically for local shells and SSH-backed surfaces because both feed the same grid. Clipboard reads by a remote (OSC 52 load) are denied by default with a per-host opt-in (`ClipboardConfig`). Outgoing pastes are wrapped in bracketed-paste markers when the target has requested DECSET 2004. New pipe methods `clipboard.copy` / `clipboard.get` / `clipboard.policy` and `surface.paste`, plus CLI `pandamux clipboard copy|get|policy` and `pandamux paste`.
+- **Phase 6 (F2): SSH remote surfaces with tmux durability and reconnect.** A new `pandamux-term::ssh` (`RemoteSessionManager`, promoted from the proven Phase 2 russh spike) gives a terminal surface an SSH channel as its byte source instead of a local PTY, with a synchronous API mirroring `PtySessionManager` so the backend treats remote and local surfaces uniformly. The remote command wraps the login shell in `tmux new-session -A -s pandamux-<surface>` (falling back to a plain login shell when tmux is absent, degraded/no durability), and the driver reconnects with exponential backoff and resets the grid on re-attach so the server repaint reconciles cleanly (plan Section 5). Resize forwards as an SSH `window-change`. Auth covers the Windows OpenSSH-compatible agent pipe (default; covers 1Password), a key file, or a password. New pipe methods `ssh.connect` / `ssh.disconnect` / `ssh.list` / `ssh.profiles` / `ssh.save_profile` / `ssh.remove_profile` / `ssh.import_config`, plus CLI `pandamux ssh connect|disconnect|list|profiles|save-profile|import`. Terminal I/O (`send_text` / `send_key` / `read_text` / `resize` / `kill` / `paste`) routes to the SSH session for remote surfaces. A slim SSH context chip names the host on a remote pane.
+- **Phase 6 (F3): Paste/drop images into a remote session over SFTP.** `RemoteSessionManager::upload_image` transfers a local file to `/tmp/pandamux-paste-<uuid>` on the remote via `russh-sftp` and injects the remote path into the terminal; a local surface injects the local path. New pipe method `surface.paste_image` and CLI `pandamux paste-image <path> [--surface <id>]`.
+- **SSH host profiles + `~/.ssh/config` import** (`pandamux-core::ssh`): `SshHostProfile` / `SshProfiles` and a `parse_ssh_config` parser (Host/HostName/User/Port/IdentityFile/ProxyJump, wildcard hosts skipped). Passwords are never stored; a password profile only records that a prompt is needed.
+- **Copy-mode yank primitive + region extraction** (`TerminalGrid::region_text`) over scrollback coordinates, and the `clipboard.copy` path, deliver the load-bearing half of the Phase 4 copy-mode-yank deferral.
+- Opt-in live SSH validation: `pandamux-app --ssh-smoke` connects to a real host (configured via `PANDAMUX_SSH_SMOKE_*` env vars), runs a durable marker command, reads it back, and prints `PANDAMUX_SSH_SMOKE_OK`. Flag-gated; never runs in CI.
+
+### Changed
+
+- Bumped the app version to `0.33.0`.
+
+### Notes
+
+- The full interactive vi-navigation copy mode and canvas link-click hit-testing (the remaining halves of the paired Phase 4 deferrals) still need GUI interaction work and are tracked. Known-hosts pinning for SSH is a tracked follow-up (the connection currently accepts the server key, matching the Phase 2 spike); ProxyJump is parsed and stored but not yet dialed. The remote-session and SFTP paths are unit-tested hermetically and exercised end-to-end via `--ssh-smoke` against a live host, since they cannot be verified in headless CI.
+
 ## [0.32.1]
 
 ### Changed

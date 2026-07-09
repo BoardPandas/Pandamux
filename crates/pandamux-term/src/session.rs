@@ -211,6 +211,24 @@ impl PtySessionManager {
         Ok(session.grid.links())
     }
 
+    /// Drain OSC 52 clipboard-store events captured from a local surface (a
+    /// program copying via OSC 52). The caller should [`poll`] first so recent
+    /// output has been advanced into the grid.
+    pub fn take_clipboard_stores(&self, session_id: &str) -> Vec<crate::clipboard::ClipboardStore> {
+        self.sessions
+            .get(session_id)
+            .map(|session| session.grid.take_clipboard_stores())
+            .unwrap_or_default()
+    }
+
+    /// Whether bracketed-paste mode is active for a local surface.
+    pub fn bracketed_paste_active(&self, session_id: &str) -> bool {
+        self.sessions
+            .get(session_id)
+            .map(|session| session.grid.bracketed_paste_active())
+            .unwrap_or(false)
+    }
+
     /// The session's write-cursor position as (row, column).
     pub fn cursor(&mut self, session_id: &str) -> PtyResult<(usize, usize)> {
         self.poll(session_id)?;

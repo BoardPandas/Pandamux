@@ -185,6 +185,50 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 );
             }
         },
+        "ssh" => match args.get(1).map(String::as_str) {
+            Some("connect") => {
+                print_json(send_v2("ssh.connect", ssh_connect_params(&args[2..])?).await?)
+            }
+            Some("disconnect") => {
+                print_json(send_v2("ssh.disconnect", ssh_surface_param(&args[2..])?).await?)
+            }
+            Some("list") => print_json(send_v2("ssh.list", json!({})).await?),
+            Some("profiles") => print_json(send_v2("ssh.profiles", json!({})).await?),
+            Some("save-profile") => {
+                print_json(send_v2("ssh.save_profile", ssh_connect_params(&args[2..])?).await?)
+            }
+            Some("import") => {
+                let path = args.get(2).cloned().unwrap_or_else(default_ssh_config_path);
+                let content = std::fs::read_to_string(&path)
+                    .map_err(|error| format!("read {path}: {error}"))?;
+                print_json(send_v2("ssh.import_config", json!({ "content": content })).await?)
+            }
+            _ => {
+                print_usage();
+                return Err(
+                    "usage: pandamux ssh <connect|disconnect|list|profiles|save-profile|import>"
+                        .into(),
+                );
+            }
+        },
+        "clipboard" => match args.get(1).map(String::as_str) {
+            Some("copy") => {
+                let text = args[2..].join(" ");
+                print_json(send_v2("clipboard.copy", json!({ "text": text })).await?)
+            }
+            Some("get") => print_json(send_v2("clipboard.get", json!({})).await?),
+            Some("policy") => {
+                print_json(send_v2("clipboard.policy", clipboard_policy_params(&args[2..])?).await?)
+            }
+            _ => {
+                print_usage();
+                return Err("usage: pandamux clipboard <copy <text>|get|policy [...]>".into());
+            }
+        },
+        "paste" => print_json(send_v2("surface.paste", paste_params(&args[1..])?).await?),
+        "paste-image" => {
+            print_json(send_v2("surface.paste_image", paste_image_params(&args[1..])?).await?)
+        }
         "browser" => {
             return Err(
                 "browser automation is not supported in the native build; use Claude Code's browser tooling"
@@ -825,6 +869,140 @@ fn read_file_arg(args: &[String]) -> Result<String, Box<dyn Error>> {
     Ok(std::fs::read_to_string(path)?)
 }
 
+fn ssh_connect_params(args: &[String]) -> Result<Value, Box<dyn Error>> {
+    let mut params = serde_json::Map::new();
+    let mut index = 0;
+    while index < args.len() {
+        let flag = args[index].as_str();
+        let key = match flag {
+            "--host" => "host",
+            "--user" => "user",
+            "--port" => "port",
+            "--auth" => "auth",
+            "--key-path" => "keyPath",
+            "--password" => "password",
+            "--passphrase" => "passphrase",
+            "--name" => "name",
+            "--jump" => "jump",
+            "--pane" => "paneId",
+            "--pipe-path" => "pipePath",
+            unknown => return Err(format!("unknown ssh option: {unknown}").into()),
+        };
+        let value = args
+            .get(index + 1)
+            .ok_or_else(|| format!("{flag} requires a value"))?;
+        if key == "port" {
+            params.insert(key.to_string(), json!(value.parse::<u16>()?));
+        } else {
+            params.insert(key.to_string(), json!(value));
+        }
+        index += 2;
+    }
+    if !params.contains_key("host") {
+        return Err("ssh connect requires --host <host>".into());
+    }
+    if !params.contains_key("user") {
+        return Err("ssh connect requires --user <user>".into());
+    }
+    Ok(Value::Object(params))
+}
+
+fn ssh_surface_param(args: &[String]) -> Result<Value, Box<dyn Error>> {
+    let surface = args.first().ok_or("ssh disconnect requires <surfaceId>")?;
+    Ok(json!({ "surfaceId": surface }))
+}
+
+fn default_ssh_config_path() -> String {
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .unwrap_or_default();
+    format!("{home}/.ssh/config")
+}
+
+fn clipboard_policy_params(args: &[String]) -> Result<Value, Box<dyn Error>> {
+    let mut params = serde_json::Map::new();
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--max-store-bytes" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or("--max-store-bytes requires a value")?
+                    .parse::<u64>()?;
+                params.insert("maxStoreBytes".to_string(), json!(value));
+                index += 2;
+            }
+            "--host" => {
+                params.insert(
+                    "host".to_string(),
+                    json!(args.get(index + 1).ok_or("--host requires a value")?),
+                );
+                index += 2;
+            }
+            "--allow-load" => {
+                params.insert("allowLoad".to_string(), json!(true));
+                index += 1;
+            }
+            "--deny-load" => {
+                params.insert("allowLoad".to_string(), json!(false));
+                index += 1;
+            }
+            unknown => return Err(format!("unknown clipboard policy option: {unknown}").into()),
+        }
+    }
+    Ok(Value::Object(params))
+}
+
+fn paste_params(args: &[String]) -> Result<Value, Box<dyn Error>> {
+    let mut params = serde_json::Map::new();
+    let mut text_parts = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--surface" => {
+                params.insert(
+                    "surfaceId".to_string(),
+                    json!(args.get(index + 1).ok_or("--surface requires a value")?),
+                );
+                index += 2;
+            }
+            value => {
+                text_parts.push(value.to_string());
+                index += 1;
+            }
+        }
+    }
+    params.insert("text".to_string(), json!(text_parts.join(" ")));
+    Ok(Value::Object(params))
+}
+
+fn paste_image_params(args: &[String]) -> Result<Value, Box<dyn Error>> {
+    let mut params = serde_json::Map::new();
+    let mut path = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--surface" => {
+                params.insert(
+                    "surfaceId".to_string(),
+                    json!(args.get(index + 1).ok_or("--surface requires a value")?),
+                );
+                index += 2;
+            }
+            value if !value.starts_with("--") && path.is_none() => {
+                path = Some(value.to_string());
+                index += 1;
+            }
+            unknown => return Err(format!("unknown paste-image option: {unknown}").into()),
+        }
+    }
+    params.insert(
+        "path".to_string(),
+        json!(path.ok_or("paste-image requires <path>")?),
+    );
+    Ok(Value::Object(params))
+}
+
 fn clear_notifications_params(args: &[String]) -> Result<Value, Box<dyn Error>> {
     let mut params = serde_json::Map::new();
     if let Some(id) = args.first() {
@@ -892,7 +1070,7 @@ fn print_json(value: Value) {
 
 fn print_usage() {
     println!(
-        "Usage: pandamux <command>\n\nCommands:\n  ping\n  identify\n  capabilities\n  tree\n  new-workspace [--title <title>] [--shell <shell>]\n  list-workspaces\n  select-workspace <id>\n  rename-workspace <id> <title>\n  close-workspace <id>\n  split [--down] [--type terminal|markdown|diff] [--pane <id>] [--surface <id>] [--workspace <id>]\n  close-pane <id> [--workspace <id>]\n  focus-pane <id> [--workspace <id>]\n  zoom-pane [id] [--workspace <id>]\n  new-surface [--type terminal|markdown|diff] [--pane <id>] [--workspace <id>]\n  focus-surface <id> [--workspace <id>]\n  close-surface <id> [--workspace <id>]\n  list-panes [--workspace <id>]\n  list-surfaces [--workspace <id>] [--pane <id>]\n  send <text> [--surface <id>] [--workspace <id>]\n  send-key <key> [--ctrl] [--shift] [--alt] [--surface <id>] [--workspace <id>]\n  read-screen [--lines <N>] [--surface <id>] [--workspace <id>]\n  trigger-flash [surfaceId]\n  notify <message> [--body <text>] [--source build|agent|deploy|port|generic]\n  list-notifications\n  clear-notifications [id]\n  agent spawn --cmd <command> [--label <name>] [--cwd <dir>] [--pane <id>]\n  agent spawn-batch --json '[...]' [--strategy distribute|stack|split]\n  agent status <id> | agent list | agent kill <id>\n  set-status <key> <value>\n  set-progress <value> [--label <text>]\n  log <level> <message>\n  sidebar-state\n  markdown set <surfaceId> [--file <path>] [--content <text>]\n  diff set <surfaceId> [--file <path>] [--content <text>]\n  layout grid --count <N> [--type terminal|markdown|diff] [--anchor-pane <id>] [--anchor-surface <id>] [--workspace <id>]\n  list-themes | themes | select-theme <name>\n  config <show|path|reload|import-windows-terminal <file>|import-ghostty <name> <file>>\n  reload-config\n  set-locale <en|fr|ar|ja>\n  list-windows | windows | focus-window <id>\n  set-color-scheme <surfaceId> <scheme> | clear-color-scheme <surfaceId>"
+        "Usage: pandamux <command>\n\nCommands:\n  ping\n  identify\n  capabilities\n  tree\n  new-workspace [--title <title>] [--shell <shell>]\n  list-workspaces\n  select-workspace <id>\n  rename-workspace <id> <title>\n  close-workspace <id>\n  split [--down] [--type terminal|markdown|diff] [--pane <id>] [--surface <id>] [--workspace <id>]\n  close-pane <id> [--workspace <id>]\n  focus-pane <id> [--workspace <id>]\n  zoom-pane [id] [--workspace <id>]\n  new-surface [--type terminal|markdown|diff] [--pane <id>] [--workspace <id>]\n  focus-surface <id> [--workspace <id>]\n  close-surface <id> [--workspace <id>]\n  list-panes [--workspace <id>]\n  list-surfaces [--workspace <id>] [--pane <id>]\n  send <text> [--surface <id>] [--workspace <id>]\n  send-key <key> [--ctrl] [--shift] [--alt] [--surface <id>] [--workspace <id>]\n  read-screen [--lines <N>] [--surface <id>] [--workspace <id>]\n  trigger-flash [surfaceId]\n  notify <message> [--body <text>] [--source build|agent|deploy|port|generic]\n  list-notifications\n  clear-notifications [id]\n  agent spawn --cmd <command> [--label <name>] [--cwd <dir>] [--pane <id>]\n  agent spawn-batch --json '[...]' [--strategy distribute|stack|split]\n  agent status <id> | agent list | agent kill <id>\n  set-status <key> <value>\n  set-progress <value> [--label <text>]\n  log <level> <message>\n  sidebar-state\n  markdown set <surfaceId> [--file <path>] [--content <text>]\n  diff set <surfaceId> [--file <path>] [--content <text>]\n  layout grid --count <N> [--type terminal|markdown|diff] [--anchor-pane <id>] [--anchor-surface <id>] [--workspace <id>]\n  list-themes | themes | select-theme <name>\n  config <show|path|reload|import-windows-terminal <file>|import-ghostty <name> <file>>\n  reload-config\n  set-locale <en|fr|ar|ja>\n  list-windows | windows | focus-window <id>\n  set-color-scheme <surfaceId> <scheme> | clear-color-scheme <surfaceId>\n  ssh connect --host <h> --user <u> [--port <p>] [--auth agent|key|password] [--key-path <p>] [--password <p>] [--pane <id>]\n  ssh list | ssh disconnect <surfaceId> | ssh profiles | ssh save-profile --name <n> --host <h> --user <u> | ssh import [file]\n  clipboard copy <text> | clipboard get | clipboard policy [--max-store-bytes <n>] [--host <h> --allow-load|--deny-load]\n  paste <text> [--surface <id>]\n  paste-image <path> [--surface <id>]"
     );
 }
 
@@ -1050,6 +1228,54 @@ mod tests {
 
         assert!(content_set_params(&["surf-1".to_string()]).is_err());
         assert!(content_set_params(&[]).is_err());
+    }
+
+    #[test]
+    fn parses_ssh_connect_params() {
+        let params = ssh_connect_params(&[
+            "--host".to_string(),
+            "10.55.88.48".to_string(),
+            "--user".to_string(),
+            "chaz".to_string(),
+            "--port".to_string(),
+            "2222".to_string(),
+            "--auth".to_string(),
+            "agent".to_string(),
+        ])
+        .expect("ssh connect params should parse");
+        assert_eq!(params["host"], "10.55.88.48");
+        assert_eq!(params["user"], "chaz");
+        assert_eq!(params["port"], 2222);
+        assert_eq!(params["auth"], "agent");
+
+        assert!(ssh_connect_params(&["--user".to_string(), "x".to_string()]).is_err());
+    }
+
+    #[test]
+    fn parses_clipboard_and_paste_params() {
+        let policy = clipboard_policy_params(&[
+            "--host".to_string(),
+            "galahad".to_string(),
+            "--allow-load".to_string(),
+        ])
+        .expect("clipboard policy params should parse");
+        assert_eq!(policy["host"], "galahad");
+        assert_eq!(policy["allowLoad"], true);
+
+        let paste = paste_params(&[
+            "hello".to_string(),
+            "world".to_string(),
+            "--surface".to_string(),
+            "surf-1".to_string(),
+        ])
+        .expect("paste params should parse");
+        assert_eq!(paste["text"], "hello world");
+        assert_eq!(paste["surfaceId"], "surf-1");
+
+        let image = paste_image_params(&["C:/tmp/a.png".to_string()])
+            .expect("paste-image params should parse");
+        assert_eq!(image["path"], "C:/tmp/a.png");
+        assert!(paste_image_params(&[]).is_err());
     }
 
     #[test]

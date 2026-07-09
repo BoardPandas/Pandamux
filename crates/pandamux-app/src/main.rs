@@ -1,4 +1,5 @@
 mod backend;
+mod clipboard_os;
 // Claude Code startup integration (context injection + orchestrator plugin).
 // Only invoked for the real GUI launch, but always compiled so its tests run.
 #[allow(dead_code)]
@@ -33,6 +34,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    // Opt-in live SSH smoke (plan F2): connect to a real host through the same
+    // RemoteSessionManager the runtime uses, run a durable tmux command, and read
+    // it back. Reuses the Phase 2 auth matrix. Never runs in CI (flag-gated).
+    if std::env::args().any(|arg| arg == "--ssh-smoke") {
+        return run_ssh_smoke();
+    }
+
     let pipe_name =
         std::env::var("PANDAMUX_PIPE").unwrap_or_else(|_| r"\\.\pipe\pandamux".to_string());
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -40,6 +48,69 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
     runtime.block_on(pipe_server::run(&pipe_name))?;
     Ok(())
+}
+
+/// Manual end-to-end SSH validation (plan F2). Configure with:
+///   PANDAMUX_SSH_SMOKE_HOST, PANDAMUX_SSH_SMOKE_USER (required),
+///   PANDAMUX_SSH_SMOKE_AUTH = agent (default) | password | key,
+///   PANDAMUX_SSH_SMOKE_PASSWORD or PANDAMUX_SSH_SMOKE_KEY as applicable.
+/// Prints `PANDAMUX_SSH_SMOKE_OK` on success.
+fn run_ssh_smoke() -> Result<(), Box<dyn std::error::Error>> {
+    use pandamux_term::{GridSize, RemoteSessionManager, SshAuth, SshConfig};
+    use std::time::{Duration, Instant};
+
+    let host =
+        std::env::var("PANDAMUX_SSH_SMOKE_HOST").map_err(|_| "set PANDAMUX_SSH_SMOKE_HOST")?;
+    let user =
+        std::env::var("PANDAMUX_SSH_SMOKE_USER").map_err(|_| "set PANDAMUX_SSH_SMOKE_USER")?;
+    let auth = match std::env::var("PANDAMUX_SSH_SMOKE_AUTH")
+        .unwrap_or_else(|_| "agent".to_string())
+        .as_str()
+    {
+        "password" => SshAuth::Password {
+            password: std::env::var("PANDAMUX_SSH_SMOKE_PASSWORD")
+                .map_err(|_| "set PANDAMUX_SSH_SMOKE_PASSWORD")?,
+        },
+        "key" => SshAuth::KeyFile {
+            path: std::env::var("PANDAMUX_SSH_SMOKE_KEY")
+                .map_err(|_| "set PANDAMUX_SSH_SMOKE_KEY")?
+                .into(),
+            passphrase: std::env::var("PANDAMUX_SSH_SMOKE_PASSPHRASE").ok(),
+        },
+        _ => SshAuth::Agent {
+            pipe_path: r"\\.\pipe\openssh-ssh-agent".to_string(),
+        },
+    };
+
+    let config = SshConfig::new(host.clone(), user, auth);
+    let mut manager = RemoteSessionManager::new()?;
+    manager.connect("surf-ssh-smoke", config, GridSize::new(120, 30))?;
+    println!("connecting to {host} ...");
+
+    // Wait for the shell/tmux to come up, then run a marker command and read it.
+    std::thread::sleep(Duration::from_secs(3));
+    manager.write_all("surf-ssh-smoke", b"echo PANDAMUX_SSH_SMOKE_MARKER\n")?;
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut screen = String::new();
+    while Instant::now() < deadline {
+        screen = manager.screen_text("surf-ssh-smoke")?;
+        if screen.contains("PANDAMUX_SSH_SMOKE_MARKER")
+            && screen.matches("PANDAMUX_SSH_SMOKE_MARKER").count() >= 2
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    let _ = manager.kill("surf-ssh-smoke");
+
+    if screen.contains("PANDAMUX_SSH_SMOKE_MARKER") {
+        println!("--- remote screen tail ---\n{screen}\n---");
+        println!("PANDAMUX_SSH_SMOKE_OK");
+        Ok(())
+    } else {
+        Err(format!("ssh smoke never saw the marker; screen was:\n{screen}").into())
+    }
 }
 
 /// Set the Windows AppUserModelID so the taskbar groups the app under a stable

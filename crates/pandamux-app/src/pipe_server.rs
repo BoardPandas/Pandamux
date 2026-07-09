@@ -46,7 +46,11 @@ where
     reader.read_line(&mut line).await?;
     let reply = {
         let mut backend = backend.lock().await;
-        backend.handle_line(line.trim())
+        let reply = backend.handle_line(line.trim());
+        // Forward any OSC 52 copies captured while advancing grids to the OS
+        // clipboard (best-effort; plan F1).
+        backend.drain_clipboards();
+        reply
     };
     let mut stream = reader.into_inner();
     stream.write_all(reply.as_bytes()).await?;

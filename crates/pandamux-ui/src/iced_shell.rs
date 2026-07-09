@@ -161,6 +161,9 @@ pub struct TerminalSnapshot {
     pub rows: usize,
     /// Detected link spans on the visible screen (underlined by the viewport).
     pub links: Vec<LinkSpan>,
+    /// The SSH host this surface is connected to, if it is a remote surface
+    /// (plan F2). Drives the SSH context chip on the pane.
+    pub remote_host: Option<String>,
 }
 
 impl TerminalSnapshot {
@@ -172,7 +175,14 @@ impl TerminalSnapshot {
             columns,
             rows,
             links: Vec::new(),
+            remote_host: None,
         }
+    }
+
+    /// Mark this snapshot as an SSH remote surface connected to `host`.
+    pub fn with_remote_host(mut self, host: impl Into<String>) -> Self {
+        self.remote_host = Some(host.into());
+        self
     }
 }
 
@@ -585,9 +595,19 @@ fn pane_view<'a>(
         }
     };
 
-    let contents = column![tab_bar, body]
-        .width(Length::Fill)
-        .height(Length::Fill);
+    // SSH context chip for a remote surface (plan F2): a slim accent bar naming
+    // the host, between the tab bar and the terminal body.
+    let remote_host = pane
+        .active_surface_id
+        .as_ref()
+        .and_then(|surface_id| terminal_snapshot(terminals, surface_id))
+        .and_then(|snapshot| snapshot.remote_host.clone());
+    let contents = match remote_host {
+        Some(host) => column![tab_bar, ssh_context_chip(&host, palette), body],
+        None => column![tab_bar, body],
+    }
+    .width(Length::Fill)
+    .height(Length::Fill);
 
     let pane_box = container(contents)
         .width(Length::Fill)
@@ -612,6 +632,23 @@ fn pane_view<'a>(
             .on_press(ShellMessage::PaneFocused(pane.id.clone()))
             .into(),
     }
+}
+
+/// A slim SSH context chip naming the remote host for a remote surface (plan
+/// F2), shown under the tab bar.
+fn ssh_context_chip<'a>(host: &str, palette: Palette) -> Element<'a, ShellMessage> {
+    let label = text(format!("SSH  {host}"))
+        .size(theme::SIZE_METADATA)
+        .color(palette.accent);
+    container(label)
+        .padding(Padding::from([2.0, 8.0]))
+        .width(Length::Fill)
+        .style(move |_theme| container::Style {
+            background: Some(palette.accent_alpha(0.12).into()),
+            border: theme::border(palette.accent_alpha(0.25), 0.0, 0.0),
+            ..Default::default()
+        })
+        .into()
 }
 
 fn tab_bar_view<'a>(

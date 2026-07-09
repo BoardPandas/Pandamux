@@ -2,13 +2,14 @@ use crate::persistence::SessionStore;
 use iced::futures::SinkExt;
 use iced::{Element, Size, Subscription, Task, Theme, application, keyboard, stream, time, window};
 use pandamux_core::{
-    AgentRegistry, AppIntent, AppState, Localizer, NewNotification, NotificationSource,
-    Notifications, PaneId, PaneIntent, SidebarState, SplitDirection, SplitNode, SplitPaneParams,
-    SurfaceContents, SurfaceId, SurfaceIntent, SurfaceType, ThemeStore, WorkspaceIntent,
-    get_all_pane_ids, parse_ghostty_theme,
+    AgentRegistry, AppIntent, AppState, ClipboardConfig, Localizer, NewNotification,
+    NotificationSource, Notifications, PaneId, PaneIntent, SidebarState, SplitDirection, SplitNode,
+    SplitPaneParams, SshProfiles, SurfaceContents, SurfaceId, SurfaceIntent, SurfaceType,
+    ThemeStore, WorkspaceIntent, get_all_pane_ids, parse_ghostty_theme,
 };
 use pandamux_term::{
-    GridSize, PtyCommand, PtySessionManager, SearchOptions, detect_links, search_lines,
+    GridSize, PtyCommand, PtySessionManager, RemoteSessionManager, SearchOptions, SshConfig,
+    detect_links, search_lines,
 };
 use pandamux_ui::{
     ChromeState, DragView, FindViewState, LinkSpan, NotificationCard, NotificationsViewState,
@@ -59,6 +60,14 @@ pub struct NativeShellRuntime {
     localizer: Localizer,
     /// Per-surface terminal color-scheme overrides (surface id -> theme name).
     surface_schemes: HashMap<SurfaceId, String>,
+    /// SSH remote terminal sessions (plan F2).
+    remotes: RemoteSessionManager,
+    /// Which surfaces are SSH-remote and how to reach them.
+    remote_configs: HashMap<SurfaceId, SshConfig>,
+    /// Saved SSH host profiles.
+    ssh_profiles: SshProfiles,
+    /// Persistent clipboard policy (plan F1).
+    clipboard_config: ClipboardConfig,
     /// Active drag-and-drop of a tab, if any (plan Section 12.3).
     drag: Option<DragView>,
     copy_mode: bool,
@@ -120,6 +129,10 @@ impl NativeShellRuntime {
             themes: ThemeStore::new(),
             localizer: Localizer::default(),
             surface_schemes: HashMap::new(),
+            remotes: RemoteSessionManager::default(),
+            remote_configs: HashMap::new(),
+            ssh_profiles: SshProfiles::new(),
+            clipboard_config: ClipboardConfig::default(),
             drag: None,
             copy_mode: false,
             palette: PaletteViewState::default(),
@@ -569,6 +582,10 @@ impl NativeShellRuntime {
                     themes: &mut self.themes,
                     localizer: &mut self.localizer,
                     surface_schemes: &mut self.surface_schemes,
+                    remotes: &mut self.remotes,
+                    remote_configs: &mut self.remote_configs,
+                    ssh_profiles: &mut self.ssh_profiles,
+                    clipboard_config: &mut self.clipboard_config,
                     now_ms: now_ms(),
                     spawn_ptys: self.live_ptys,
                 };
@@ -642,11 +659,25 @@ impl NativeShellRuntime {
         if let Err(error) = self.sync_terminal_sessions() {
             self.last_error = Some(error);
         }
-        self.terminals = terminal_snapshots(&self.app_state, &mut self.ptys, self.live_ptys)
-            .unwrap_or_else(|error| {
-                self.last_error = Some(error);
-                fallback_terminal_snapshots(&self.app_state)
-            });
+        // Forward any OSC 52 copies (local or over SSH) to the OS clipboard.
+        if self.live_ptys {
+            crate::backend::drain_clipboard_stores(
+                &mut self.ptys,
+                &mut self.remotes,
+                self.clipboard_config.max_store_bytes,
+            );
+        }
+        self.terminals = terminal_snapshots(
+            &self.app_state,
+            &mut self.ptys,
+            &mut self.remotes,
+            &self.remote_configs,
+            self.live_ptys,
+        )
+        .unwrap_or_else(|error| {
+            self.last_error = Some(error);
+            fallback_terminal_snapshots(&self.app_state)
+        });
         self.recompute_find_matches();
         self.rebuild_chrome();
         let active_surface_id = self.active_surface_id();
@@ -891,6 +922,10 @@ impl NativeShellRuntime {
         for workspace in &self.app_state.workspaces {
             for surface_id in terminal_surface_ids(&workspace.split_tree) {
                 let session_id = surface_id.to_string();
+                // Remote (SSH-backed) surfaces have no local PTY; skip them.
+                if self.remotes.has(&session_id) {
+                    continue;
+                }
                 expected_session_ids.insert(session_id.clone());
                 if self.ptys.has(&session_id) {
                     continue;
@@ -1165,6 +1200,8 @@ fn theme_iced_shell(state: &NativeShellRuntime) -> Theme {
 fn terminal_snapshots(
     app_state: &AppState,
     ptys: &mut PtySessionManager,
+    remotes: &mut RemoteSessionManager,
+    remote_configs: &HashMap<SurfaceId, SshConfig>,
     live_ptys: bool,
 ) -> Result<Vec<TerminalSnapshot>, String> {
     let Some(workspace) = app_state.active_workspace() else {
@@ -1181,7 +1218,14 @@ fn terminal_snapshots(
             if !is_terminal {
                 return None;
             }
-            let lines = if live_ptys {
+            let is_remote = remote_configs.contains_key(&surface_id);
+            let lines = if is_remote {
+                // Remote surfaces render from the SSH-fed grid.
+                let text = remotes
+                    .screen_text_lines(surface_id.as_str(), 30)
+                    .unwrap_or_default();
+                non_empty_lines(text)
+            } else if live_ptys {
                 let text = ptys
                     .screen_text_lines(surface_id.as_str(), 30)
                     .map_err(|error| error.to_string())
@@ -1198,12 +1242,16 @@ fn terminal_snapshots(
                     end: link.end,
                 })
                 .collect();
+            let remote_host = remote_configs
+                .get(&surface_id)
+                .map(|config| config.host.clone());
             Some(TerminalSnapshot {
                 surface_id,
                 lines,
                 columns: 120,
                 rows: 30,
                 links,
+                remote_host,
             })
         })
         .collect();
@@ -1286,7 +1334,14 @@ fn relative_age(now_ms: u64, then_ms: u64) -> String {
 }
 
 fn fallback_terminal_snapshots(app_state: &AppState) -> Vec<TerminalSnapshot> {
-    terminal_snapshots(app_state, &mut PtySessionManager::new(), false).unwrap_or_default()
+    terminal_snapshots(
+        app_state,
+        &mut PtySessionManager::new(),
+        &mut RemoteSessionManager::default(),
+        &HashMap::new(),
+        false,
+    )
+    .unwrap_or_default()
 }
 
 fn fallback_lines() -> Vec<String> {
