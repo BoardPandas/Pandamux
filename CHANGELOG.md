@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.32.0]
+
+### Added
+
+- Claude Code startup integration (`pandamux-app::claude_context`), ported from the Electron `claude-context.ts`. On the real GUI launch the native app now, best-effort: (1) injects a marker-delimited PandaMUX block into the user's `~/.claude/CLAUDE.md` (idempotent, never touching content outside the `<!-- pandamux:start ... -->` / `<!-- pandamux:end -->` markers), and (2) installs the pandamux-orchestrator plugin into `~/.claude/plugins/cache/pandamux-orchestrator/{version}/`, registering it in `installed_plugins.json` and enabling it in `settings.json`. Every step is idempotent and unit-tested against temp directories; a failure logs and never aborts launch.
+
+### Changed
+
+- Bumped the app version to `0.32.0`.
+
+### Notes
+
+- The Claude Code hook wiring in `settings.json` and the live activity observer (the observability half of the Electron integration) remain deferred to the Phase 7 ship boundary; the busy-agent status dot is already fed by the agent registry as the interim signal.
+
 ## [0.31.0]
 
 ### Added

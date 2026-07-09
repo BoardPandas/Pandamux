@@ -1,4 +1,8 @@
 mod backend;
+// Claude Code startup integration (context injection + orchestrator plugin).
+// Only invoked for the real GUI launch, but always compiled so its tests run.
+#[allow(dead_code)]
+mod claude_context;
 #[cfg(feature = "iced-runtime")]
 mod iced_runtime;
 #[cfg(feature = "iced-runtime")]
@@ -15,6 +19,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(feature = "iced-runtime")]
     if std::env::args().any(|arg| arg == "--iced-shell") {
+        // Make Claude Code aware of PandaMUX Everywhere and install the
+        // orchestrator plugin (best-effort; never aborts launch). Not run for
+        // the headless pipe server or the `--iced-shell-smoke` CI path.
+        claude_context::run_startup_integration();
         iced_runtime::run_iced_shell()?;
         return Ok(());
     }
