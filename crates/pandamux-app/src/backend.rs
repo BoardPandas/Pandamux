@@ -358,7 +358,10 @@ fn dispatch_agents(
         }
         "agent.list" => {
             refresh_agent_status(ptys, agents, spawn_ptys);
-            Ok(Some(json!({ "agents": agents.list() })))
+            // Map through `agent_json` so list items carry `agentId` (the
+            // orchestrator's monitoring loop reads it) and match `agent.spawn`.
+            let agents_json: Vec<Value> = agents.list().iter().map(agent_json).collect();
+            Ok(Some(json!({ "agents": agents_json })))
         }
         "agent.kill" => {
             let id = opt_string(&request.params, "id")
@@ -431,14 +434,18 @@ fn spawn_agent(
         }
     };
 
+    // Mint the id before spawning so the child carries PANDAMUX_AGENT_ID (the
+    // orchestrator's on-agent-stop / on-tool-use hooks key per-agent state on it).
+    let agent_id = agents.next_id();
     if spawn_ptys {
-        let pty_command = parse_command(&command, cwd.clone());
+        let pty_command = parse_command(&command, cwd.clone())
+            .with_env(pandamux_env(&surface_id.to_string(), Some(&agent_id)));
         ptys.spawn(surface_id.to_string(), &pty_command, GridSize::new(120, 30))
             .map_err(|error| (-32000, error.to_string()))?;
     }
 
     let info = AgentInfo {
-        id: agents.next_id(),
+        id: agent_id,
         label,
         command,
         cwd,
@@ -449,6 +456,25 @@ fn spawn_agent(
     };
     agents.add(info.clone());
     Ok(info)
+}
+
+/// The `PANDAMUX_*` environment injected into every spawned shell/agent so
+/// shell-integration scripts, the CLI, and the orchestrator hooks can find the
+/// pipe and identify their surface/agent. Ported from the env vars the Electron
+/// build set on spawned shells (`PANDAMUX`, `PANDAMUX_SURFACE_ID`,
+/// `PANDAMUX_PIPE`), plus `PANDAMUX_AGENT_ID` for agent surfaces.
+pub(crate) fn pandamux_env(surface_id: &str, agent_id: Option<&str>) -> Vec<(String, String)> {
+    let pipe =
+        std::env::var("PANDAMUX_PIPE").unwrap_or_else(|_| r"\\.\pipe\pandamux".to_string());
+    let mut env = vec![
+        ("PANDAMUX".to_string(), "1".to_string()),
+        ("PANDAMUX_SURFACE_ID".to_string(), surface_id.to_string()),
+        ("PANDAMUX_PIPE".to_string(), pipe),
+    ];
+    if let Some(agent_id) = agent_id {
+        env.push(("PANDAMUX_AGENT_ID".to_string(), agent_id.to_string()));
+    }
+    env
 }
 
 /// Parse a command line into a `PtyCommand` (naive whitespace split; quoting is
@@ -513,6 +539,8 @@ fn batch_specs(params: &Value) -> Result<Vec<Value>, (i32, String)> {
 fn agent_json(info: &AgentInfo) -> Value {
     json!({
         "id": info.id,
+        // Alias: the orchestrator's spawn-agents.sh reads `.agentId`.
+        "agentId": info.id,
         "label": info.label,
         "workspaceId": info.workspace_id,
         "paneId": info.pane_id,
@@ -903,12 +931,10 @@ pub fn sync_terminal_sessions(
             if ptys.has(&session_id) {
                 continue;
             }
-            ptys.spawn(
-                session_id,
-                &PtyCommand::new(workspace.shell.clone()),
-                GridSize::new(120, 30),
-            )
-            .map_err(|error| error.to_string())?;
+            let command = PtyCommand::new(workspace.shell.clone())
+                .with_env(pandamux_env(&session_id, None));
+            ptys.spawn(session_id, &command, GridSize::new(120, 30))
+                .map_err(|error| error.to_string())?;
         }
     }
 
@@ -1363,5 +1389,82 @@ mod tests {
     fn non_json_line_returns_empty() {
         let mut backend = Backend::new(false);
         assert_eq!(backend.handle_line("not-json"), "");
+    }
+
+    /// Wire-compat regression guard for the pandamux-orchestrator plugin. Replays
+    /// the exact pipe methods its scripts invoke (via the `pandamux` CLI) and
+    /// asserts every response field its `json-tool.js` parser reads. If any of
+    /// these shapes drift, scripted orchestration silently breaks.
+    #[test]
+    fn orchestrator_command_sequence_shapes_match() {
+        let mut backend = Backend::new(false);
+
+        // detect-pandamux.sh / spawn-agents.sh: `pandamux ping` -> exact "pong".
+        assert_eq!(backend.handle_line("ping"), "pong");
+
+        // spawn-agents.sh: `pandamux layout grid --count 3` -> result.newPaneIds[].
+        let grid = handle(
+            &mut backend,
+            r#"{"method":"layout.grid","params":{"count":3,"type":"terminal"},"id":1}"#,
+        );
+        let pane_ids = grid["result"]["newPaneIds"]
+            .as_array()
+            .expect("layout.grid must return newPaneIds");
+        assert_eq!(pane_ids.len(), 2);
+        let anchor_pane = pane_ids[0].as_str().expect("pane id string").to_string();
+
+        // spawn-agents.sh: `pandamux agent spawn` -> result.agentId + result.surfaceId.
+        let spawn = handle(
+            &mut backend,
+            &format!(
+                r#"{{"method":"agent.spawn","params":{{"cmd":"claude work","label":"w1","pane":"{anchor_pane}"}},"id":2}}"#
+            ),
+        );
+        let agent_id = spawn["result"]["agentId"]
+            .as_str()
+            .expect("agent.spawn must return agentId")
+            .to_string();
+        assert!(
+            spawn["result"]["surfaceId"].as_str().is_some(),
+            "agent.spawn must return surfaceId"
+        );
+
+        // orchestrate SKILL monitoring loop: `pandamux agent list` -> agents[].status (+ agentId).
+        let list = handle(
+            &mut backend,
+            r#"{"method":"agent.list","params":{},"id":3}"#,
+        );
+        let agents = list["result"]["agents"]
+            .as_array()
+            .expect("agent.list must return agents");
+        assert_eq!(agents.len(), 1);
+        assert!(
+            agents[0]["status"].as_str().is_some(),
+            "agent.list items must carry status"
+        );
+        assert_eq!(agents[0]["agentId"].as_str(), Some(agent_id.as_str()));
+
+        // on-agent-stop.sh: `pandamux notify` -> ok.
+        let notify = handle(
+            &mut backend,
+            r#"{"method":"notification.raise","params":{"title":"All agents complete"},"id":4}"#,
+        );
+        assert_eq!(notify["result"]["ok"], true);
+
+        // orchestrator coordination surface: sidebar set-status / set-progress / log.
+        for line in [
+            r#"{"method":"sidebar.set_status","params":{"key":"wave","value":"1"},"id":5}"#,
+            r#"{"method":"sidebar.set_progress","params":{"value":50,"label":"wave 1"},"id":6}"#,
+            r#"{"method":"sidebar.log","params":{"level":"info","message":"spawned"},"id":7}"#,
+        ] {
+            assert_eq!(handle(&mut backend, line)["result"]["ok"], true);
+        }
+
+        // cleanup: `pandamux agent kill <id>`.
+        let kill = handle(
+            &mut backend,
+            &format!(r#"{{"method":"agent.kill","params":{{"id":"{agent_id}"}},"id":8}}"#),
+        );
+        assert_eq!(kill["result"]["ok"], true);
     }
 }

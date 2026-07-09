@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0]
+
+### Added
+
+- Spawned terminal shells and agents now carry the `PANDAMUX_*` environment (`PANDAMUX=1`, `PANDAMUX_SURFACE_ID`, `PANDAMUX_PIPE`, and `PANDAMUX_AGENT_ID` for agent surfaces), so shell-integration scripts, the CLI, and the pandamux-orchestrator hooks can find the pipe and identify their surface/agent. The orchestrator's `on-agent-stop`/`on-tool-use` hooks key their per-agent state on `PANDAMUX_AGENT_ID`. Closes the Phase 4-deferred `PANDAMUX_*` env plumbing on session spawn.
+- Added a `with_env` builder to `PtyCommand` (extra child environment variables).
+
+### Fixed
+
+- `agent spawn` and `agent list` now include an `agentId` field (aliasing the agent `id`), which the orchestrator's `spawn-agents.sh` reads from `agent spawn` output and the monitoring loop reads from `agent list`. Previously only `id` was returned, so scripted orchestration read a null `agentId`.
+
+### Changed
+
+- Added an orchestrator wire-compatibility regression test that replays the exact pipe-method sequence the pandamux-orchestrator scripts invoke (`ping`, `layout.grid`, `agent.spawn`/`list`/`kill`, `notification.raise`, `sidebar.*`) and asserts every response field its `json-tool.js` parser depends on, so orchestration cannot silently break on a shape drift.
+- Bumped the app version to `0.24.0`.
+
 ## [0.23.1]
 
 ### Changed

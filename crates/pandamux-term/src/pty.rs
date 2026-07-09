@@ -13,6 +13,10 @@ pub struct PtyCommand {
     pub program: String,
     pub args: Vec<String>,
     pub cwd: Option<String>,
+    /// Extra environment variables injected into the spawned child (e.g. the
+    /// `PANDAMUX_*` set that shell integration, the CLI, and the orchestrator
+    /// hooks read to find the pipe and identify their surface/agent).
+    pub env: Vec<(String, String)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -27,6 +31,7 @@ impl PtyCommand {
             program: program.into(),
             args: Vec::new(),
             cwd: None,
+            env: Vec::new(),
         }
     }
 
@@ -40,11 +45,20 @@ impl PtyCommand {
         self
     }
 
+    /// Replace the injected environment variables.
+    pub fn with_env(mut self, env: impl IntoIterator<Item = (String, String)>) -> Self {
+        self.env = env.into_iter().collect();
+        self
+    }
+
     pub(crate) fn to_builder(&self) -> CommandBuilder {
         let mut command = CommandBuilder::new(&self.program);
         command.args(self.args.iter().map(String::as_str));
         if let Some(cwd) = &self.cwd {
             command.cwd(cwd);
+        }
+        for (key, value) in &self.env {
+            command.env(key, value);
         }
         command
     }

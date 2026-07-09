@@ -742,12 +742,10 @@ impl NativeShellRuntime {
                 if self.ptys.has(&session_id) {
                     continue;
                 }
+                let command = PtyCommand::new(workspace.shell.clone())
+                    .with_env(crate::backend::pandamux_env(&session_id, None));
                 self.ptys
-                    .spawn(
-                        session_id,
-                        &PtyCommand::new(workspace.shell.clone()),
-                        GridSize::new(120, 30),
-                    )
+                    .spawn(session_id, &command, GridSize::new(120, 30))
                     .map_err(|error| error.to_string())?;
             }
         }
