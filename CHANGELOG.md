@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.32.1]
+
+### Changed
+
+- Marked Phase 5 COMPLETE in `tasks/plan-repo.md`: checked off the nine remaining Phase 5 to-dos (delivered across 0.24.0-0.32.0), recorded the tracked deferrals (JetBrains Mono TTF asset, radial glows + glass blur, the settings.json hook wiring + live activity observer, copy-mode yank/link-open, animation polish), and added a Phase 5 completion status line. Next is Phase 6 (SSH / OSC 52 / SFTP).
+- Bumped the app version to `0.32.1`.
+
 ## [0.32.0]
 
 ### Added
