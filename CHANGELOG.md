@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.34.1]
+
+### Removed
+
+- Deleted the legacy `.agents/` and `.codex/` tooling-mirror directories (duplicate agent/skill/hook definitions for other tool frontends), superseded by `.claude/` in the bootstrap template sync. `.claude/` is now the single source of truth. No application code or runtime behavior is affected.
+
+### Changed
+
+- Bumped the app version to `0.34.1`.
+
 ## [0.34.0]
 
 ### Added
