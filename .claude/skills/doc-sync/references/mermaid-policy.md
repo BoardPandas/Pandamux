@@ -184,10 +184,16 @@ sequenceDiagram
 After writing pages, attempt validation:
 
 ```bash
-which mmdc || npm list -g @mermaid-js/mermaid-cli
+command -v mmdc || npm list -g @mermaid-js/mermaid-cli
 ```
 
-If `mmdc` is on PATH, extract each ` ```mermaid` fenced block and pipe it through `mmdc --input - --output /tmp/check.svg --quiet`. Treat exit code 0 as valid.
+If `mmdc` is on PATH, extract each ` ```mermaid` fenced block to a uniquely named file in the session scratchpad directory (e.g. `{scratchpad}/mermaid-{page_id}-{n}.mmd`; never `/tmp`, which does not exist outside Git Bash on Windows) and run:
+
+```bash
+mmdc -i {scratchpad}/mermaid-{page_id}-{n}.mmd -o {scratchpad}/mermaid-{page_id}-{n}.svg --quiet
+```
+
+Treat exit code 0 as valid. Unique filenames per block keep parallel validations from clobbering each other; do not pipe blocks through stdin, which is unreliable across mermaid-cli versions.
 
 If `mmdc` is unavailable, skip syntactic validation and instead do a static check:
 - Opening line is one of the allowed types

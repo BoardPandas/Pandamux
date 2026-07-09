@@ -106,7 +106,7 @@ This file is a catalog. When you design `_toc.yaml`, pick categories from here b
 - File: `Docs/GLOSSARY.md`
 - Template: `templates/glossary.md`
 - Source: domain terms encountered across pages
-- Sections: a single Terms section with one entry per term
+- Sections: Terms (one entry per term) and Acronyms, matching `templates/_toc.yaml.template`
 
 ## When NOT to add a page
 

@@ -2,43 +2,71 @@
 name: spec-developer
 model: opus
 effort: high
-description: Interview-driven spec generation. Asks 20+ clarifying questions, then produces a detailed implementation plan saved to /tasks. Use for any feature larger than a single file change.
+description: Interview-driven spec generation. Explores the codebase, checks LL-G and BP, asks scoped clarifying questions, then produces a detailed implementation plan saved to /tasks. Use for any feature larger than a single file change.
 user-invocable: true
 argument-hint: <feature name or description>
 disable-model-invocation: true
 allowed-tools:
   - Read
   - Write
+  - Edit
   - Glob
   - Grep
-  - Agent
+  - Agent(explorer)
   - WebSearch
   - WebFetch
+  - Bash(pandamux markdown *)
 ---
 
 # Spec Developer
 
-You have been asked to develop a detailed specification for a feature. Follow these steps exactly.
+You have been asked to develop a detailed specification for this feature: **$ARGUMENTS**
+
+If no feature was provided, ask the user what feature to spec before doing anything else.
 
 ## Important: Plan in This Session, Execute in Another
 
 This skill produces a plan ONLY. It does not implement anything. The user will start a fresh session to execute the plan, keeping context clean.
 
-## Step 1: Explore the Codebase (Spec Developer Explorer variant)
+## Sizing the Effort
 
-Before asking questions, spin up 3-5 parallel `explorer` agents to understand the codebase. Use the custom `explorer` agent (defined in `.claude/agents/`), never the built-in `Explore` type -- the built-in loads every MCP tool schema and blows the context window before it can do any work.
+First, judge the feature's size from its description and adjust the whole process:
 
-1. **Architecture subagent:** "Understand the project's architecture and module boundaries. WHY: We need to know where this feature fits and what it can depend on."
-2. **Patterns subagent:** "Find existing patterns for similar features (routing, state, data fetching, error handling). WHY: The new feature must follow established patterns to maintain consistency."
-3. **Dependencies subagent:** "List external dependencies and their capabilities. WHY: We need to know what's already available before adding new dependencies."
-4. **Tests subagent:** "Understand the test setup, patterns, and coverage gaps. WHY: The spec must include a test plan that matches the existing test infrastructure."
-5. **Data flow subagent (if applicable):** "Trace how data flows from input to storage to display for a similar existing feature. WHY: The new feature's data flow must integrate with existing patterns."
+| Size | Explorer agents | Clarifying questions | Spec length target |
+|------|-----------------|----------------------|--------------------|
+| Small (a few files, one module) | 2-3 | 8-12 | ~200 lines |
+| Medium (crosses modules, new data) | 3-4 | 12-20 | 300-500 lines |
+| Large (new subsystem, migrations, public API) | 4-5 | 20+ | 500-700 lines |
+
+Do not pad a small feature to hit a bigger tier's numbers. Depth should come from the feature, not the template.
+
+## Step 1: Explore the Codebase and Knowledge Bases (in parallel)
+
+### 1a. Codebase exploration (Spec Developer Explorer variant)
+
+Spin up parallel `explorer` agents scaled to feature size (see table above). Use the custom `explorer` agent (defined in `.claude/agents/`), never the built-in `Explore` type; the built-in loads every MCP tool schema and blows the context window before it can do any work. The allowed-tools list enforces this: only `Agent(explorer)` is permitted.
+
+Every prompt must name the feature so the explorer can focus its search:
+
+1. **Architecture subagent:** "Understand the project's architecture and module boundaries. WHY: We are speccing '$ARGUMENTS' and need to know where it fits and what it can depend on."
+2. **Patterns subagent:** "Find existing patterns for features similar to '$ARGUMENTS' (routing, state, data fetching, error handling). WHY: The new feature must follow established patterns to maintain consistency."
+3. **Dependencies subagent:** "List external dependencies and their capabilities relevant to '$ARGUMENTS'. WHY: We need to know what is already available before the spec proposes new dependencies."
+4. **Tests subagent (medium/large):** "Understand the test setup, patterns, and coverage gaps around the areas '$ARGUMENTS' will touch. WHY: The spec must include a test plan that matches the existing test infrastructure."
+5. **Data flow subagent (if applicable):** "Trace how data flows from input to storage to display for an existing feature similar to '$ARGUMENTS'. WHY: The new feature's data flow must integrate with existing patterns."
+
+### 1b. LL-G and BP check (RULE 1 and RULE 3, mandatory)
+
+While the explorers run, consult both knowledge bases:
+
+1. Fetch `https://raw.githubusercontent.com/BoardPandas/LL-G/main/llms.txt`, then the sub-index for each technology the feature will touch (e.g., `kb/<tech>/llms.txt`). Read ALL HIGH-severity entries for those technologies and any MEDIUM entry whose title matches this feature.
+2. Fetch `https://raw.githubusercontent.com/BoardPandas/BP/main/llms.txt`, then each relevant concern index. Load all FOUNDATIONAL entries and RECOMMENDED entries whose tech tags match this project's stack.
+3. Carry what you find forward: LL-G gotchas become "Potential gotchas" bullets in the Implementation Steps; BP patterns shape the Architecture and Implementation Steps sections.
 
 Wait for all subagents to complete before proceeding.
 
 ## Step 2: Ask Clarifying Questions
 
-Based on the codebase exploration, ask the user 20+ non-obvious clarifying questions. Group them by category:
+Based on the exploration, ask the user non-obvious clarifying questions, scaled per the sizing table. Group them by category, and give every question a stated default so the user can skip it ("If you don't care, I'll assume X"). Record any skipped or deferred questions as entries in the spec's Assumptions / Open Questions section instead of blocking on them. If the user says "use your judgment," pick the default and log it as an assumption.
 
 ### Behavior
 - What is the exact input/output contract?
@@ -70,13 +98,13 @@ Based on the codebase exploration, ask the user 20+ non-obvious clarifying quest
 - Is there sensitive data that needs encryption or redaction?
 - Are there audit logging requirements?
 
-Adapt questions to the specific feature. Skip irrelevant categories. Add domain-specific questions based on what the subagents found.
+Adapt questions to the specific feature. Skip irrelevant categories. Add domain-specific questions based on what the subagents and LL-G entries surfaced.
 
-Wait for user answers before proceeding.
+Wait for user answers (or explicit deferrals) before proceeding.
 
 ## Step 3: Generate the Spec
 
-Produce a detailed implementation plan (target: 500-700 lines) covering:
+Produce an implementation plan sized per the table above, covering:
 
 ### 1. Overview
 - Feature name and one-sentence description
@@ -90,11 +118,11 @@ Produce a detailed implementation plan (target: 500-700 lines) covering:
 - State management approach (if applicable)
 
 ### 3. Implementation Steps
-Numbered steps in implementation order. For each step:
+Numbered steps in implementation order, grouped into **checkpoints**: commit-sized chunks that each complete well under 50% of a session's context, so the implementing session can commit, `/compact`, or hand off between them. For each step:
 - File to create or modify
 - What to add or change (specific, not vague)
 - Patterns to follow from existing code (reference specific files)
-- Potential gotchas
+- Potential gotchas (include the relevant LL-G entries found in Step 1b, cited by slug)
 
 ### 4. Data Model (if applicable)
 - Schema changes
@@ -106,44 +134,69 @@ Numbered steps in implementation order. For each step:
 - Error response format
 - Authentication/authorization requirements
 
-### 6. Test Plan
+### 6. Acceptance Criteria
+- A verifiable definition of done: concrete, testable statements the tester agent can check
+- Each criterion maps to at least one test in the Test Plan
+
+### 7. Out of Scope
+- Explicitly list what this feature does NOT include, to prevent scope creep in the implementation session
+- Note any follow-up features these exclusions imply
+
+### 8. Assumptions / Open Questions
+- Defaults chosen for questions the user skipped or deferred (from Step 2)
+- Anything the implementer should confirm before relying on it
+
+### 9. Test Plan
 - Unit tests needed (list specific test cases)
 - Integration tests needed
 - Edge case tests
 - Test data requirements
 
-### 7. Error Handling
+### 10. Error Handling
 - Exhaustive list of failure modes
 - Recovery strategy for each
 - User-facing error messages
 
-### 8. Rollback Plan
+### 11. Rollback Plan
 - How to undo this feature without affecting other work
 - Database rollback steps (if applicable)
 
-### 9. Learning Lessons / Gotchas
+### 12. Lessons Learned / Gotchas
 
 After implementation, capture here:
-- [ ] New patterns discovered -- add to `.claude/agent-memory/patterns.md`
-- [ ] Gotchas encountered -- add to `.claude/agent-memory/debugging.md`
-- [ ] Workflow improvements -- update CLAUDE.md or agent memory
-- [ ] Failed approaches -- document what was tried and why it failed
+- [ ] Gotchas encountered: route to LL-G via `/add-lesson` (preferred; lessons stored locally stay local)
+- [ ] Proven reusable patterns: route to BP via `/add-practice`
+- [ ] Repo-specific notes that do not generalize: `.claude/agent-memory/debugging.md` or `patterns.md`
+- [ ] Workflow improvements: update CLAUDE.md or agent memory
+- [ ] Failed approaches: document what was tried and why it failed
 
-*Fill in during/after implementation. Route generalizable lessons to the appropriate agent-memory file.*
+*Fill in during/after implementation. Default to LL-G/BP; only keep a lesson local when it truly applies to this repo alone.*
 
 ## Step 4: Save the Spec
 
-Save to `tasks/<feature-slug>.md` with the complete spec.
+Check the current date first (do not assume it). Save to `tasks/<YYYY-MM-DD>-<feature-slug>.md` using today's date.
 
 If a `tasks/` folder does not exist, create it.
 
+Before writing, glob `tasks/*<feature-slug>*.md`. If a spec for this feature already exists, ask the user whether this is a retry of a failed implementation:
+- If yes, follow the "Document Failed Attempts" section below and write a new dated file rather than overwriting the old one.
+- If no (they just want the spec revised), update the existing file with Edit instead of creating a duplicate.
+
 ## Step 5: Report
 
-Print a summary of the spec, then tell the user:
+Print a summary of the spec. If running inside PandaMUX (the `pandamux` CLI is available), also open the spec for comfortable review:
 
-> Spec saved to `tasks/<feature-slug>.md`. Start a fresh session to implement -- this keeps context clean. In the new session, say: "Implement the spec in tasks/<feature-slug>.md"
+```bash
+pandamux markdown tasks/<YYYY-MM-DD>-<feature-slug>.md
+```
 
-> **Reminder:** After implementing this spec, review the "Learning Lessons / Gotchas" section and route discoveries to `.claude/agent-memory/debugging.md`.
+If `pandamux` is not available, skip this; the printed summary is enough.
+
+Then tell the user:
+
+> Spec saved to `tasks/<YYYY-MM-DD>-<feature-slug>.md`. Start a fresh session to implement; this keeps context clean. In the new session, say: "Implement the spec in tasks/<YYYY-MM-DD>-<feature-slug>.md"
+
+> **Reminder:** After implementing this spec, review the "Lessons Learned / Gotchas" section and route discoveries to LL-G via `/add-lesson` (and reusable patterns to BP via `/add-practice`).
 
 ## Document Failed Attempts
 
@@ -151,5 +204,7 @@ If this spec is a retry after a failed implementation, ask the user to describe 
 - What was tried
 - Why it failed
 - What to avoid this time
+
+Also consider routing the failure itself to LL-G via `/add-lesson` if it would trip up other repos or technicians.
 
 This prevents the implementation session from repeating dead ends.

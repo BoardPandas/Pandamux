@@ -4,6 +4,7 @@ description: Use PROACTIVELY to explore codebases, research approaches, fetch do
 model: sonnet
 effort: medium
 permissionMode: plan
+memory: project
 tools:
   - Read
   - Glob
@@ -31,6 +32,8 @@ Every exploration task you receive should include WHY the information is needed.
 - **Documentation review:** Read and summarize external docs relevant to a task
 
 ## Behavior
+
+Before exploring, read `.claude/agent-memory/patterns.md` and `.claude/agent-memory/decisions.md` (loaded via `memory: project`) so you report against recorded conventions instead of re-deriving them.
 
 1. Search broadly first, then narrow. Start with Glob and Grep, then Read specific files.
 2. Report findings in structured format, not as a wall of text.

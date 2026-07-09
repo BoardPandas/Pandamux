@@ -50,9 +50,10 @@ This section is populated by plan-repo or init-repo based on the project's stack
 ### Linters & Formatters
 | Tool | Check | Install | Use When |
 |------|-------|---------|----------|
-| eslint | `npx eslint --version` | `npm i -D eslint` | JS/TS linting |
-| prettier | `npx prettier --version` | `npm i -D prettier` | JS/TS/CSS/MD formatting |
-| biome | `npx biome --version` | `npm i -D @biomejs/biome` | Fast JS/TS lint + format |
+| biome | `npx biome --version` | `npm i -D @biomejs/biome` | Recommended default for new JS/TS projects (BP): single Rust-based lint + format tool replacing ESLint+Prettier |
+| eslint | `npx eslint --version` | `npm i -D eslint` | Mature codebases needing its plugin ecosystem (React Hooks, a11y, security); consider biome or oxlint for greenfield/speed-sensitive projects |
+| oxlint | `npx oxlint --version` | `npm i -D oxlint` | Fast drop-in ESLint rule coverage; pair with eslint for plugin-only rules |
+| prettier | `npx prettier --version` | `npm i -D prettier` | JS/TS/CSS/MD formatting (increasingly folded into biome) |
 | ruff | `ruff --version` | `pip install ruff` | Fast Python lint + format |
 | rustfmt | `rustfmt --version` | Included with rustup | Rust formatting |
 
@@ -67,15 +68,16 @@ This section is populated by plan-repo or init-repo based on the project's stack
 ### Build Tools
 | Tool | Check | Install | Use When |
 |------|-------|---------|----------|
-| vite | `npx vite --version` | `npm i -D vite` | Frontend builds |
+| vite | `npx vite --version` | `npm i -D vite` | Frontend builds (Vite 8+ bundles via Rolldown internally) |
 | turbo | `npx turbo --version` | `npm i -D turbo` | Monorepo builds |
-| esbuild | `npx esbuild --version` | `npm i -D esbuild` | Fast JS bundling |
+| rolldown | `npx rolldown --version` | `npm i -D rolldown` | Rust bundler; default inside Vite 8+ (no separate install for Vite users), standalone for library bundling |
+| esbuild | `npx esbuild --version` | `npm i -D esbuild` | Fast JS bundling (standalone or via tsup; superseded inside Vite by Rolldown) |
 | tsc | `npx tsc --version` | `npm i -D typescript` | TypeScript compilation |
 
 ### Database Tools (Remote Only)
 | Tool | Check | Install | Use When |
 |------|-------|---------|----------|
-| prisma | `npx prisma --version` | `npm i -D prisma` | Prisma ORM (connects to Northflank Postgres) |
+| prisma | `npx prisma --version` | `npm i -D prisma` | Prisma ORM v7+ (pure TS/WASM client, native edge-runtime support; connects to Northflank Postgres) |
 | drizzle-kit | `npx drizzle-kit --version` | `npm i -D drizzle-kit` | Drizzle ORM (connects to Northflank Postgres) |
 
 ### Deployment Tools

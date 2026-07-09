@@ -17,9 +17,9 @@ The README is the front door to `Docs/`. It must be skimmable in 30 seconds and 
 # {Project Name} Documentation
 
 > **Latest Updates ({Month YYYY}):**
-> - **v{X.Y.Z.B}:** {one-line summary of most recent release notes}
-> - **v{X.Y.Z.B}:** {next}
-> - **v{X.Y.Z.B}:** {next}
+> - **v{X.Y.Z}:** {one-line summary of most recent release notes}
+> - **v{X.Y.Z}:** {next}
+> - **v{X.Y.Z}:** {next}
 
 ## Quick Start
 

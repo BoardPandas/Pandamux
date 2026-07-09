@@ -1,88 +1,68 @@
 ---
 name: performance-review
-effort: medium
+effort: high
 description: Analyze the codebase for performance bottlenecks, inefficiencies, and optimization opportunities. Use when investigating slowness or preparing for scale.
 user-invocable: true
 argument-hint: [optional: file or directory path to scope the review]
+context: fork
 agent: performance
 allowed-tools:
   - Read
   - Glob
   - Grep
+  - Bash(npm ls*)
+  - Bash(du*)
 ---
 
 # Performance Review
 
-You have been asked to analyze the codebase for performance issues. Follow these steps.
+You have been asked to analyze the codebase for performance issues. The analysis categories (database, memory, network, frontend, algorithms, build) are defined in your agent instructions; this skill defines the process and the report format.
 
 ## Step 1: Determine Scope and Tech Stack
 
 1. If the user specified a file or directory, scope the review to that path.
-2. If no scope was specified, review the entire codebase.
-3. Identify the tech stack from dependency manifests and file types.
+2. If no scope was specified, do not attempt to read everything. Prioritize hot paths first: entry points, request handlers and API routes, database access layers, render paths, and data pipelines. Cover other areas only as context allows, and record what was skipped for the report.
+3. Identify the tech stack and framework versions from dependency manifests and lockfiles. Framework advice must match the detected version. For example, do not recommend React.memo, useMemo, or useCallback on React 19 projects using the React Compiler, which handles memoization automatically.
 
-## Step 2: Database and Query Analysis
+## Step 2: Analyze
 
-1. Search for ORM queries, raw SQL, and database calls.
-2. Look for N+1 patterns: loops that execute a query per iteration.
-3. Check for missing pagination on queries that return lists.
-4. Identify queries that fetch all columns when only a few are needed.
-5. Look for missing indexes on columns used in WHERE, JOIN, or ORDER BY clauses.
-6. Check for missing connection pooling configuration.
+Work through every analysis category from your agent instructions against the scoped files. Collect candidate findings with file:line references.
 
-## Step 3: Memory and Resource Analysis
+Cheap measurements beat guesses. Where available, run `npm ls --prod --depth=0` to gauge dependency weight and `du` on asset or build output directories to find oversized payloads.
 
-1. Search for event listeners, subscriptions, or timers that are added but never removed.
-2. Look for large data structures that grow without bounds (caches without eviction, logs without rotation).
-3. Check for file handles, database connections, or streams that are opened but not closed.
-4. Identify objects held in module-level or global scope unnecessarily.
+## Step 3: Verify Candidates
 
-## Step 4: Network and I/O Analysis
+Pattern matches are hypotheses, not findings. Before reporting each candidate:
 
-1. Find sequential API calls or I/O operations that could be parallelized (Promise.all, asyncio.gather, goroutines).
-2. Look for synchronous file reads in request handlers.
-3. Check for missing request timeouts on HTTP calls.
-4. Identify large payloads sent without compression.
-5. Look for repeated identical fetches that should be cached or deduplicated.
+1. Read the surrounding code and confirm the pattern actually sits on a hot path (per-request, per-render, per-row) or handles unbounded data.
+2. Discard candidates on cold paths with small, bounded data. A nested loop over a 10-element config array is not a finding.
+3. Assign a confidence level: high (verified hot path, clear cost), medium (plausible but frequency unconfirmed), low (speculative; include only if the fix is trivial).
 
-## Step 5: Frontend Analysis (if applicable)
+## Step 4: Produce Report
 
-1. Check for unnecessary re-renders: components without React.memo on stable props, inline object/array/function creation in render.
-2. Analyze bundle configuration for missing tree-shaking or code splitting.
-3. Look for large images served without optimization or responsive sizing.
-4. Check for render-blocking resources in the critical path.
-5. Identify components that import large libraries for minor functionality.
-
-## Step 6: Algorithm and Data Structure Analysis
-
-1. Look for O(n^2) or worse patterns: nested loops over the same collection, repeated linear searches.
-2. Identify repeated computations that should be memoized.
-3. Check for string concatenation in tight loops (use StringBuilder/join patterns instead).
-4. Look for unnecessary sorting or filtering on already-processed data.
-
-## Step 7: Build and Deploy Analysis
-
-1. Check build configuration for missing production optimizations (minification, dead code elimination).
-2. Identify oversized dependencies that have lighter alternatives.
-3. Look for missing caching configuration (CDN, browser cache headers, server-side cache).
-
-## Step 8: Produce Report
+Static analysis can only hypothesize about runtime behavior; the report must be honest about that. Every HIGH finding must state why the code is hot (called per-request, per-render, per-row, or over unbounded data) and how to confirm the cost with a real measurement (a specific benchmark, EXPLAIN ANALYZE, a profiler run, a bundle analyzer).
 
 Format the report as follows:
 
 ```
 # Performance Review Report
 
+## Scope
+- Reviewed: <paths and areas covered>
+- Not reviewed: <paths and areas skipped, and why>
+
 ## Summary
-- Files analyzed: <count>
 - High impact: <count>
 - Medium impact: <count>
 - Low impact: <count>
 
 ## High Impact
-[HIGH] <category> -- file:line
+[HIGH] <category>: file:line
   Finding: <description>
+  Why it is hot: <call frequency or data volume evidence>
   Estimated effect: <what happens at scale>
+  Confidence: <high | medium | low>
+  How to confirm: <specific measurement to run>
   Fix: <specific code change or pattern>
 
 ## Medium Impact
