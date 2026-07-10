@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.34.2]
+
+### Added
+
+- Restored the repository-local `.agents/` skill catalog and `.codex/` agent, hook, and configuration definitions so Codex tooling remains available alongside the existing `.claude/` configuration.
+
+### Changed
+
+- Bumped the app version to `0.34.2`.
+
 ## [0.34.1]
 
 ### Removed
