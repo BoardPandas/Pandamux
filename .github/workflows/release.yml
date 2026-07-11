@@ -1,16 +1,25 @@
 name: Release
 
+# Phase 7 ship pipeline. On a `v*` tag the whole release runs here: build the
+# native Rust app, Azure-sign the exe, package a single NSIS Setup.exe, sign the
+# installer, and publish a GitHub Release whose ONLY asset is that installer.
+# The in-app updater (pandamux-app::updater) discovers it via the Releases API,
+# so there is no Velopack feed / latest.yml to generate.
+
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to release (e.g. v0.5.6). Leave empty to use current package.json version.'
+        description: 'Tag to release (e.g. v0.35.0). Leave empty to derive from the workspace version.'
         required: false
 
 permissions:
   contents: write
+
+env:
+  CARGO_PACKAGER_VERSION: '0.11.8'
 
 jobs:
   build-sign-release:
@@ -19,91 +28,53 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # pnpm BEFORE setup-node so setup-node's pnpm cache works. Version comes
-      # from the packageManager field in package.json (single source of truth).
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24.18.0
-          cache: pnpm
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
 
-      - name: Fix Python distutils for node-gyp
-        run: pip install setuptools
+      - name: Install cargo-packager
+        run: cargo install cargo-packager --version ${{ env.CARGO_PACKAGER_VERSION }} --locked
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      # ── Build ──────────────────────────────────────────────
-      - name: Build main + preload + CLI
-        run: pnpm run build:main
-
-      - name: Build renderer
-        run: pnpm exec vite build
-
-      # ── Package (unpacked directory, no installer) ─────────
-      - name: Package with electron-builder
-        run: pnpm exec electron-builder --win --dir --publish never
-
-      - name: Extract version
+      # ── Resolve version + tag ──────────────────────────────
+      # The tag is the source of truth for the release; the workspace Cargo.toml
+      # version (which cargo-packager stamps into the installer) must match it.
+      - name: Resolve version
         id: version
         shell: bash
         run: |
-          VER=$(node -p "require('./package.json').version")
-          echo "version=$VER" >> "$GITHUB_OUTPUT"
           if [ "${{ github.event_name }}" = "push" ]; then
-            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            TAG="${{ github.ref_name }}"
           elif [ -n "${{ github.event.inputs.tag }}" ]; then
-            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+            TAG="${{ github.event.inputs.tag }}"
           else
-            echo "tag=v$VER" >> "$GITHUB_OUTPUT"
+            VER=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+            TAG="v$VER"
           fi
+          VER="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "Releasing $TAG (version $VER)"
 
-      # ── Code signing note ──────────────────────────────────
-      # Signing runs AFTER the rcedit step below, not here. rcedit rewrites the
-      # exe (icon + version metadata), and any modification to a binary after
-      # it is signed invalidates the Authenticode signature. So signing must be
-      # the last mutation of pandamux.exe before it is zipped. See the Azure
-      # Trusted Signing steps after "Embed icon and version metadata".
+      # ── Build (the GUI needs the iced-runtime feature) ─────
+      - name: Build CLI
+        run: cargo build --release -p pandamux-cli
 
-      # ── Embed icon + metadata into exe (rcedit) ───────────
-      - name: Embed icon and version metadata
-        shell: bash
-        run: |
-          VER=$(node -p "require('./package.json').version")
-          node -e "
-            const { rcedit } = require('rcedit');
-            rcedit('release/win-unpacked/pandamux.exe', {
-              icon: 'resources/icons/icon.ico',
-              'version-string': {
-                ProductName: 'PandaMUX Everywhere',
-                FileDescription: 'PandaMUX Everywhere',
-                CompanyName: 'BoardPandas',
-                InternalName: 'pandamux',
-                OriginalFilename: 'pandamux.exe',
-                LegalCopyright: 'Copyright (c) 2025 BoardPandas'
-              },
-              'file-version': process.env.VER,
-              'product-version': process.env.VER
-            }).then(() => console.log('rcedit done')).catch(e => { console.error(e); process.exit(1); });
-          "
-        env:
-          VER: ${{ steps.version.outputs.version }}
+      - name: Build GUI app
+        run: cargo build --release -p pandamux-app --features iced-runtime
 
-      # ── Sign pandamux.exe with Azure Trusted Signing ───────
-      # Credentials come from Doppler (project pandamux, config prd) via the
-      # single DOPPLER_TOKEN repo secret. The pandamux-ci-signing service
-      # principal (Wellforce tenant) holds the Artifact Signing Certificate
-      # Profile Signer role on the SupportForge profile of the HDBtrustedsigning
-      # account. Runs after rcedit so the signature stays valid.
+      # ── Sign the binaries BEFORE packaging ─────────────────
+      # cargo-packager has no before-packaging-command, so it bundles these
+      # already-signed exes unchanged (the signature stays valid). Signing must
+      # be the last mutation of each exe before it is packaged.
       - name: Fetch signing secrets from Doppler
         uses: dopplerhq/secrets-fetch-action@v2.0.0
         with:
           doppler-token: ${{ secrets.DOPPLER_TOKEN }}
           inject-env-vars: true
 
-      - name: Sign pandamux.exe (Azure Trusted Signing)
+      - name: Sign pandamux.exe + pandamux-cli.exe (Azure Trusted Signing)
         uses: azure/trusted-signing-action@v2.0.0
         with:
           azure-tenant-id: ${{ env.AZURE_TENANT_ID }}
@@ -112,64 +83,58 @@ jobs:
           endpoint: ${{ env.AZURE_TRUSTED_SIGNING_ENDPOINT }}
           trusted-signing-account-name: ${{ env.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
           certificate-profile-name: ${{ env.AZURE_TRUSTED_SIGNING_CERT_PROFILE_NAME }}
-          files-folder: ${{ github.workspace }}\release\win-unpacked
+          files-folder: ${{ github.workspace }}\target\release
           files-folder-filter: exe
           files-folder-recurse: false
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
 
-      # ── Create release zip ─────────────────────────────────
-      - name: Create release zip
+      # ── Package a single NSIS Setup.exe ────────────────────
+      # cargo-packager downloads its own NSIS; no choco install needed. It reads
+      # [package.metadata.packager] in crates/pandamux-app/Cargo.toml and bundles
+      # the signed target/release/pandamux.exe.
+      - name: Package NSIS installer
+        run: cargo packager --release --formats nsis --out-dir dist
+
+      - name: Normalize installer name
+        id: installer
         shell: pwsh
         run: |
-          Compress-Archive -Path "release/win-unpacked/*" `
-            -DestinationPath "pandamux-${{ steps.version.outputs.version }}-win-x64.zip"
+          $setup = Get-ChildItem -Path dist -Recurse -Filter *setup*.exe | Select-Object -First 1
+          if (-not $setup) { Write-Error 'No NSIS setup .exe produced'; exit 1 }
+          $dest = "dist/PandaMUX-Everywhere-Setup-${{ steps.version.outputs.version }}.exe"
+          Move-Item -Force $setup.FullName $dest
+          echo "path=$dest" >> $env:GITHUB_OUTPUT
+          Write-Host "Installer: $dest"
 
-      # ── Generate latest.yml for electron-updater ──────────
-      - name: Generate latest.yml
-        shell: bash
-        run: |
-          node -e "
-            const crypto = require('crypto');
-            const fs = require('fs');
-            const version = '${{ steps.version.outputs.version }}';
-            const zip = 'pandamux-' + version + '-win-x64.zip';
-            const data = fs.readFileSync(zip);
-            const sha512 = crypto.createHash('sha512').update(data).digest('base64');
-            const size = data.length;
-            const date = new Date().toISOString();
-            const yaml = [
-              'version: ' + version,
-              'files:',
-              '  - url: ' + zip,
-              '    sha512: ' + sha512,
-              '    size: ' + size,
-              'path: ' + zip,
-              'sha512: ' + sha512,
-              \"releaseDate: '\" + date + \"'\",
-              ''
-            ].join('\n');
-            fs.writeFileSync('latest.yml', yaml);
-            console.log('latest.yml generated for', zip, 'size=' + size, 'sha512=' + sha512.substring(0, 20) + '...');
-          "
+      # ── Sign the installer ─────────────────────────────────
+      - name: Sign installer (Azure Trusted Signing)
+        uses: azure/trusted-signing-action@v2.0.0
+        with:
+          azure-tenant-id: ${{ env.AZURE_TENANT_ID }}
+          azure-client-id: ${{ env.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ env.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ env.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ env.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ env.AZURE_TRUSTED_SIGNING_CERT_PROFILE_NAME }}
+          files: ${{ steps.installer.outputs.path }}
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
 
-      - name: Upload release artifacts as workflow artifacts
+      - name: Upload installer as workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: pandamux-release
-          path: |
-            pandamux-${{ steps.version.outputs.version }}-win-x64.zip
-            latest.yml
+          name: pandamux-installer
+          path: ${{ steps.installer.outputs.path }}
 
-      # ── GitHub Release ─────────────────────────────────────
-      - name: Create or update GitHub Release
+      # ── GitHub Release (installer is the ONLY asset) ───────
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: PandaMUX Everywhere ${{ steps.version.outputs.tag }}
-          files: |
-            pandamux-${{ steps.version.outputs.version }}-win-x64.zip
-            latest.yml
+          files: ${{ steps.installer.outputs.path }}
           draft: false
           generate_release_notes: true

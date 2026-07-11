@@ -28,7 +28,7 @@ if [ "${SKIP_CHANGELOG:-}" = "1" ]; then
 fi
 
 # This hook fires BEFORE the command runs. A compound command like
-# "git add CHANGELOG.md package.json && git commit ..." stages the changelog
+# "git add CHANGELOG.md Cargo.toml && git commit ..." stages the changelog
 # as part of the same call, so the staged check below cannot see it yet.
 # Allow any command that stages CHANGELOG.md itself.
 if printf '%s' "$input" | grep -qE 'git add [^&|;]*CHANGELOG\.md'; then

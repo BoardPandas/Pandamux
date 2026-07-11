@@ -1,5 +1,11 @@
 # Auto-publish each PandaMUX Everywhere release to the Windows Package Manager (winget).
-# Issue #32: lowest-friction distribution win — no code-signing required.
+# Issue #32: low-friction distribution channel.
+#
+# NOTE (Phase 7): the native app ships a signed NSIS installer (.exe), not the old
+# portable zip. The regex below targets that installer. The winget-pkgs package was
+# originally bootstrapped as InstallerType: zip; because the installer type changed,
+# the package needs a fresh manual bootstrap PR (see winget/*.yaml, now nsis) before
+# winget-releaser can auto-update it.
 #
 # ONE-TIME SETUP (owner):
 #   1. Manually submit winget/*.yaml to https://github.com/microsoft/winget-pkgs
@@ -27,7 +33,7 @@ jobs:
         uses: vedantmgoyal9/winget-releaser@v2
         with:
           identifier: BoardPandas.PandaMUX
-          installers-regex: 'pandamux-.*-win-x64\.zip$'
+          installers-regex: 'PandaMUX-Everywhere-Setup-.*\.exe$'
           token: ${{ secrets.WINGET_TOKEN }}
         env:
           WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}

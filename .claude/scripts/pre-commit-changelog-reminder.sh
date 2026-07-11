@@ -33,11 +33,11 @@ You are about to commit but CHANGELOG.md is not staged. Before committing, you M
 1. Review staged changes: git diff --cached --stat
 2. Update CHANGELOG.md under [Unreleased] with user-facing entries:
    - Added / Changed / Fixed / Removed / Security
-3. Bump version in package.json (Major.Minor.Patch, every commit bumps at least Patch):
+3. Bump the workspace version in Cargo.toml [workspace.package] (Major.Minor.Patch, every commit bumps at least Patch):
    - Patch: bug fixes, security patches, perf improvements, docs, refactors, config, chores
    - Minor: new features or enhancements
    - Major: NEVER bump autonomously -- ask user first
-4. Stage both: git add CHANGELOG.md package.json
+4. Stage both: git add CHANGELOG.md Cargo.toml
 5. Then retry the commit.
 
 ===

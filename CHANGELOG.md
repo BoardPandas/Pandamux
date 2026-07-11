@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.0]
+
+### Added
+
+- **Phase 7 ship pipeline: signed installer + release automation.** Tagging `v*` now runs one GitHub Actions workflow (`.github/workflows/release.yml`, windows-latest) that builds the native app, Azure-signs `pandamux.exe` and `pandamux-cli.exe`, packages a single NSIS `Setup.exe` with `cargo-packager`, signs the installer, and publishes a GitHub Release whose only asset is that signed installer. The in-app updater (added in 0.34.0) discovers it via the Releases API, so there is no Velopack feed / `latest.yml`. Signing uses Azure Trusted Signing with credentials sourced from Doppler; an unsigned build is the fallback only if a signing run fails.
+- **Windows icon + version metadata embedded in `pandamux.exe`** via a `winresource` `build.rs` (replaces the Electron rcedit step). Explorer, the taskbar, and the properties dialog show "PandaMUX Everywhere" and the app version, which is sourced from `CARGO_PKG_VERSION`. A dev box without the Windows SDK still builds (the embed is skipped with a warning); CI embeds for real.
+- **cargo-packager NSIS configuration** (`[package.metadata.packager]` in `crates/pandamux-app/Cargo.toml`) that bundles the app resources (`themes`, `sounds`, `icons`, `shell-integration`, `pandamux-orchestrator`, `claude-instructions.md`) and the CLI alongside `pandamux.exe`, laid out where the runtime looks for them. Validated end-to-end locally (`cargo packager` produces `pandamux_0.35.0_x64-setup.exe`).
+
+### Changed
+
+- **Single version source is now the root `Cargo.toml`** (`[workspace.package] version = "0.35.0"`); every crate inherits it via `version.workspace = true`. The commit/changelog rule and its pre-commit hooks now bump `Cargo.toml` instead of the removed `package.json`.
+- The GUI binary installs as `pandamux.exe` (declared via `[[bin]] name = "pandamux"`), while the cargo package stays `pandamux-app`.
+- Rewrote `CLAUDE.md`, `AGENTS.md` (now a pointer to `CLAUDE.md`), the README, and the auto-injected Claude Code instructions to describe the native Rust app and to drop the retired `pandamux browser` guidance (agents use Claude Code's own browser tooling; `system.capabilities` reports `browser: false`).
+- winget publishing (`winget.yml` + `winget/*.yaml`) now targets the signed NSIS installer instead of the old portable zip. Because the installer type changed, the winget-pkgs package needs a one-time manual re-bootstrap PR before auto-updates resume.
+
+### Removed
+
+- **Deleted the never-shipped Electron/TypeScript prototype**: `src/`, `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `electron-builder.json`, the TypeScript/Vite/ESLint config, the Node version pins, the Vitest suite, the Electron CLI (`resources/cli/`), the stale release-zip mirror (`zip/`), and the ASAR release doc. The repo is now a pure Rust workspace plus shared `resources/` and `site/`. This was a fork pull with no user base, so it is a plain deletion (no migration).
+
 ## [0.34.2]
 
 ### Added

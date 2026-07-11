@@ -46,7 +46,7 @@ jobs:
         run: cargo test -p pandamux-ui --features iced-runtime --lib
 
       - name: Test Iced app runtime feature
-        run: cargo test -p pandamux-app --features iced-runtime --bin pandamux-app
+        run: cargo test -p pandamux-app --features iced-runtime --bin pandamux
 
       - name: Smoke Iced app shell view
         run: cargo run -p pandamux-app --features iced-runtime -- --iced-shell-smoke

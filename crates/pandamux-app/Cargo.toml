@@ -1,10 +1,17 @@
 [package]
 name = "pandamux-app"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+
+# The GUI binary installs as `pandamux.exe` (matches the winresource metadata in
+# build.rs and the historical Electron exe name). The package stays
+# `pandamux-app` so `cargo ... -p pandamux-app` and the CI smokes are unchanged.
+[[bin]]
+name = "pandamux"
+path = "src/main.rs"
 
 [dependencies]
 arboard = "=3.6.1"
@@ -26,3 +33,41 @@ tokio = { workspace = true, features = ["process", "time"] }
 [features]
 default = []
 iced-runtime = ["dep:iced", "dep:reqwest", "pandamux-ui/iced-runtime"]
+
+# Embeds the app icon + version metadata into pandamux.exe at build time
+# (Windows only). build.rs treats a missing resource compiler as non-fatal so a
+# dev box without the Windows SDK still builds; CI (windows-latest) has rc.exe
+# and embeds for real.
+[target.'cfg(windows)'.build-dependencies]
+winresource = "=0.1.31"
+
+# cargo-packager (Phase 7 release): produces the single signed NSIS Setup.exe the
+# GitHub Release ships and the in-app updater downloads. The workflow builds and
+# Azure-signs pandamux.exe BEFORE this runs; omitting before-packaging-command
+# means cargo-packager bundles the already-signed exe rather than rebuilding it.
+# resources land next to the exe as `<install>/resources/...`, which is exactly
+# where the runtime's resources_dir() looks (<exe dir>/resources).
+[package.metadata.packager]
+product-name = "PandaMUX Everywhere"
+identifier = "com.pandamux.app"
+description = "Native Windows terminal multiplexer for AI agents."
+authors = ["BoardPandas"]
+publisher = "BoardPandas"
+homepage = "https://pandamux.boardpandas.ai"
+license-file = "../../LICENSE"
+icons = ["../../resources/icons/icon.ico", "../../resources/icons/icon.png"]
+formats = ["nsis"]
+binaries = [{ path = "pandamux", main = true }]
+resources = [
+  { src = "../../resources/claude-instructions.md", target = "resources/claude-instructions.md" },
+  { src = "../../resources/themes", target = "resources/themes" },
+  { src = "../../resources/sounds", target = "resources/sounds" },
+  { src = "../../resources/icons", target = "resources/icons" },
+  { src = "../../resources/shell-integration", target = "resources/shell-integration" },
+  { src = "../../resources/pandamux-orchestrator", target = "resources/pandamux-orchestrator" },
+  { src = "../../target/release/pandamux-cli.exe", target = "pandamux-cli.exe" },
+]
+
+[package.metadata.packager.nsis]
+installer-mode = "currentUser"
+appdata-paths = ["$LOCALAPPDATA/pandamux"]

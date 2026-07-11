@@ -18,7 +18,9 @@ Before every `git commit`, you MUST:
 - Review staged changes (`git diff --cached`) to determine what changed.
 - Write entries from the user's perspective, not implementation details.
 
-## 2. Bump Version in package.json
+## 2. Bump Version in Cargo.toml
+
+The single version source is `[workspace.package] version` in the root `Cargo.toml`; every crate inherits it via `version.workspace = true`, and it drives `CARGO_PKG_VERSION` (which the in-app updater compares against GitHub releases). The old Electron `package.json` no longer exists.
 
 Version format: **Major.Minor.Patch** (SemVer, e.g., `0.0.1`)
 
@@ -39,13 +41,13 @@ Rules:
 
 After updating, stage both files before committing:
 ```bash
-git add CHANGELOG.md package.json
+git add CHANGELOG.md Cargo.toml
 ```
 
 ## Workflow
 
 1. Run `git diff --cached --stat` to see what's staged
 2. Update CHANGELOG.md with appropriate entries
-3. Bump version in package.json
-4. `git add CHANGELOG.md package.json`
+3. Bump the workspace version in Cargo.toml
+4. `git add CHANGELOG.md Cargo.toml`
 5. Proceed with the commit
