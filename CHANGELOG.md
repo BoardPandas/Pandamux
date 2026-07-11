@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.1]
+
+### Changed
+
+- Updated pinned dependencies: `serde_json` `1.0.145` -> `1.0.150` and `uuid` `1.19.0` -> `1.23.4`. As part of the `serde_json` update, its float-formatting dependency switched from `ryu` to `zmij` in the lockfile.
+
 ## [0.35.0]
 
 ### Added
