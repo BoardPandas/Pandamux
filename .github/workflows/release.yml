@@ -81,7 +81,7 @@ jobs:
           azure-client-id: ${{ env.AZURE_CLIENT_ID }}
           azure-client-secret: ${{ env.AZURE_CLIENT_SECRET }}
           endpoint: ${{ env.AZURE_TRUSTED_SIGNING_ENDPOINT }}
-          trusted-signing-account-name: ${{ env.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          signing-account-name: ${{ env.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
           certificate-profile-name: ${{ env.AZURE_TRUSTED_SIGNING_CERT_PROFILE_NAME }}
           files-folder: ${{ github.workspace }}\target\release
           files-folder-filter: exe
@@ -93,19 +93,30 @@ jobs:
       # ── Package a single NSIS Setup.exe ────────────────────
       # cargo-packager downloads its own NSIS; no choco install needed. It reads
       # [package.metadata.packager] in crates/pandamux-app/Cargo.toml and bundles
-      # the signed target/release/pandamux.exe.
+      # the signed target/release/pandamux.exe. NOTE: cargo-packager resolves a
+      # relative --out-dir against the package manifest dir (crates/pandamux-app)
+      # on the runner, so pass an absolute path for a deterministic location.
       - name: Package NSIS installer
-        run: cargo packager --release --formats nsis --out-dir dist
+        run: cargo packager --release --formats nsis --out-dir "${{ github.workspace }}\dist"
 
       - name: Normalize installer name
         id: installer
         shell: pwsh
         run: |
-          $setup = Get-ChildItem -Path dist -Recurse -Filter *setup*.exe | Select-Object -First 1
+          # Look in both the absolute out-dir and the manifest-relative dist that
+          # cargo-packager may use, so we find the installer regardless.
+          $candidates = @(
+            "${{ github.workspace }}\dist",
+            "${{ github.workspace }}\crates\pandamux-app\dist"
+          )
+          $setup = $candidates | Where-Object { Test-Path $_ } | ForEach-Object {
+            Get-ChildItem -Path $_ -Recurse -Filter *setup*.exe -ErrorAction SilentlyContinue
+          } | Select-Object -First 1
           if (-not $setup) { Write-Error 'No NSIS setup .exe produced'; exit 1 }
-          $dest = "dist/PandaMUX-Everywhere-Setup-${{ steps.version.outputs.version }}.exe"
+          $dest = Join-Path "${{ github.workspace }}\dist" ("PandaMUX-Everywhere-Setup-{0}.exe" -f "${{ steps.version.outputs.version }}")
+          New-Item -ItemType Directory -Force -Path (Split-Path $dest) | Out-Null
           Move-Item -Force $setup.FullName $dest
-          echo "path=$dest" >> $env:GITHUB_OUTPUT
+          "path=$dest" >> $env:GITHUB_OUTPUT
           Write-Host "Installer: $dest"
 
       # ── Sign the installer ─────────────────────────────────
@@ -116,7 +127,7 @@ jobs:
           azure-client-id: ${{ env.AZURE_CLIENT_ID }}
           azure-client-secret: ${{ env.AZURE_CLIENT_SECRET }}
           endpoint: ${{ env.AZURE_TRUSTED_SIGNING_ENDPOINT }}
-          trusted-signing-account-name: ${{ env.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          signing-account-name: ${{ env.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
           certificate-profile-name: ${{ env.AZURE_TRUSTED_SIGNING_CERT_PROFILE_NAME }}
           files: ${{ steps.installer.outputs.path }}
           file-digest: SHA256
