@@ -18,7 +18,7 @@ The following files were used as evidence for this page:
 
 </details>
 
-# PandaMUX Everywhere -- Overview
+# PandaMUX -- Overview
 
 > **Related Pages**: [Getting Started](GETTING_STARTED.md), [Architecture](core/ARCHITECTURE.md)
 
@@ -27,7 +27,7 @@ The following files were used as evidence for this page:
 <!-- BEGIN:AUTOGEN pandamux_01_overview_introduction -->
 ## Introduction
 
-PandaMUX Everywhere is a Windows terminal multiplexer built as a visibility layer for AI coding agents, most notably Claude Code, running in ConPTY-backed panes with a browser panel alongside them ([README.md:1-8](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/README.md#L1-L8)). The `package.json` manifest names the distributable `pandamux` and describes it as "PandaMUX Everywhere: Windows terminal multiplexer for AI agents", currently at version `0.15.12` and licensed MIT ([package.json:1-23](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/package.json#L1-L23)).
+PandaMUX is a Windows terminal multiplexer built as a visibility layer for AI coding agents, most notably Claude Code, running in ConPTY-backed panes with a browser panel alongside them ([README.md:1-8](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/README.md#L1-L8)). The `package.json` manifest names the distributable `pandamux` and describes it as "PandaMUX: Windows terminal multiplexer for AI agents", currently at version `0.15.12` and licensed MIT ([package.json:1-23](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/package.json#L1-L23)).
 
 The current shipping build is Electron plus xterm.js, and its socket protocol lineage traces to [cmux](https://github.com/manaflow-ai/cmux), a macOS multitasking terminal, which keeps the two wire-compatible ([README.md:1-8](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/README.md#L1-L8)). This means anything the pandamux CLI or a Claude Code hook can do over the named pipe (`\\.\pipe\pandamux`), a cmux-aware tool can also speak.
 
@@ -39,7 +39,7 @@ Sources: [README.md:1-8](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a
 <!-- BEGIN:AUTOGEN pandamux_01_overview_purpose -->
 ## Purpose and Direction
 
-PandaMUX Everywhere's core purpose is to make parallel Claude Code sessions on Windows observable without changing how Claude Code itself behaves: sidebar activity dots, git branch/dirty state, open ports, and PR status update from shell-integration hooks over the named pipe, and notifications fire when a command finishes or an agent needs attention ([README.md:162-172](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/README.md#L162-L172)).
+PandaMUX's core purpose is to make parallel Claude Code sessions on Windows observable without changing how Claude Code itself behaves: sidebar activity dots, git branch/dirty state, open ports, and PR status update from shell-integration hooks over the named pipe, and notifications fire when a command finishes or an agent needs attention ([README.md:162-172](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/README.md#L162-L172)).
 
 The project is mid-transition. This Electron/TypeScript codebase is frozen to bug fixes while a fully native, GPU-rendered Rust rewrite (Iced + alacritty_terminal + portable-pty) is developed under `tasks/plan-repo.md`, and the CDP-driven browser panel documented in this repo is present in the current build but is being retired in that rewrite in favor of Claude Code's own browser tooling ([README.md:20-31](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/README.md#L20-L31)). `CLAUDE.md` restates the same direction for contributors working in the repo day to day: the Electron app has completed its npm-to-pnpm migration, remains bug-fix-only, and its named-pipe API will stay wire-compatible with the eventual Rust app ([CLAUDE.md:1-11](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/CLAUDE.md#L1-L11)).
 
@@ -55,7 +55,7 @@ Sources: [README.md:20-31](https://github.com/BoardPandas/Pandamux/blob/0ab9e646
 <!-- BEGIN:AUTOGEN pandamux_01_overview_stack -->
 ## Technology Stack
 
-PandaMUX Everywhere is a single TypeScript codebase split across an Electron main process and a React renderer, with a pinned pnpm/Node toolchain enforced through `engines` and `packageManager` ([package.json:1-23](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/package.json#L1-L23)).
+PandaMUX is a single TypeScript codebase split across an Electron main process and a React renderer, with a pinned pnpm/Node toolchain enforced through `engines` and `packageManager` ([package.json:1-23](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/package.json#L1-L23)).
 
 | Layer | Technology | Version | Source |
 |---|---|---|---|

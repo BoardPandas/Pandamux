@@ -1,4 +1,4 @@
-# PandaMUX Everywhere: Full Repo Review and Native Rust Rewrite Plan
+# PandaMUX: Full Repo Review and Native Rust Rewrite Plan
 
 Date: 2026-07-05
 Status: Approved direction (fully native Rust, Warp/Zed-style). This document is the master plan. **Phase 1 (pnpm migration) is COMPLETE; Phase 2 de-risk spike is COMPLETE; Phase 3 is COMPLETE (theme module, frameless titlebar, icon rail, toggleable status bar, styled pane frame, fixed-dark terminal scheme, column-view projection); Phase 4 backend + terminal-adjacent UI is COMPLETE (hand-built search/serialize/link engine, ported PTY lifecycle semantics, session persistence with 30s autosave, notifications model + panel, find bar, link underlines, copy-mode indicator, session-activity status dot). Remaining Phase 4 items (copy-mode selection/yank depth, animation polish) are tracked deferrals. Phase 5 (peripheral UI + integrations parity) is IN PROGRESS: the load-bearing pipe/UI single-writer unification (which closed the Phase 4 CLI/pipe->live-UI bridge deferral), the 264px session panel, the command palette + quick-launch + settings overlays, git/port status-bar pollers, the native browser-method rejection, the agent manager (spawn/batch/status/list/kill), and the sidebar status/progress/log surface are landed (versions 0.18.0-0.23.0); orchestrator-script verification, drag-split, Claude-context/hooks startup injection, markdown/diff surfaces, themes/i18n, and visual polish remain as tracked to-dos under the Phase 5 section.**
@@ -46,7 +46,7 @@ Updated: 2026-07-08 (Phase 6 COMPLETE, shipped 0.33.0): F1 (OSC 52 copy/paste + 
 
 ### Infrastructure note
 
-The plan-repo skill's locked web infrastructure (Northflank, Better Auth, Postgres, Redis, R2, Resend) does not apply: PandaMUX Everywhere is a desktop application with no server backend, no auth, no database. The only "infrastructure" is GitHub Releases (distribution), Azure Artifact Signing (signing), and Netlify (the static pandamux.boardpandas.ai site, unchanged).
+The plan-repo skill's locked web infrastructure (Northflank, Better Auth, Postgres, Redis, R2, Resend) does not apply: PandaMUX is a desktop application with no server backend, no auth, no database. The only "infrastructure" is GitHub Releases (distribution), Azure Artifact Signing (signing), and Netlify (the static pandamux.boardpandas.ai site, unchanged).
 
 ---
 
@@ -171,7 +171,7 @@ Migration note: `resources/claude-instructions/claude-instructions.md` currently
 - Resize events forward as SSH `window-change`.
 
 ### F3: Paste/drop images into a remote Claude Code session
-- This is file transfer, not terminal graphics: on paste (clipboard image) or drag-drop onto a remote surface, PandaMUX Everywhere uploads the image via SFTP (russh-sftp) to a remote temp path (e.g. `/tmp/pandamux-paste-<uuid>.png`), then injects the remote path into the terminal input (Claude Code accepts image file paths in prompts).
+- This is file transfer, not terminal graphics: on paste (clipboard image) or drag-drop onto a remote surface, PandaMUX uploads the image via SFTP (russh-sftp) to a remote temp path (e.g. `/tmp/pandamux-paste-<uuid>.png`), then injects the remote path into the terminal input (Claude Code accepts image file paths in prompts).
 - Local surfaces keep the existing behavior (write temp file locally, inject local path), matching today's `clipboard.pasteImage`.
 - Cleanup: best-effort deletion of transferred temp files on session close; document the residue caveat.
 
@@ -473,7 +473,7 @@ The version specifics in this plan (iced 0.14, alacritty_terminal API shape, rus
 
 ## 12. UI Design Replication (authoritative visual spec)
 
-Source of truth for look and feel: the high-fidelity design handoff `design_handoff_pandamux_ui/` (Claude-designed, delivered 2026-07-08). Bundle contents: `PandaMUX Everywhere.dc.html` (main workspace + command palette, quick-launch, notifications, settings overlays), `Drag Split Panes.dc.html` (drag-split interaction prototype), `README.md` (exact tokens), `assets/pandamux_logo.png`. The prototypes are HTML/React `dc-runtime` references, not code; the task is to recreate them in Iced idioms. **Fidelity is high: colors, spacing, typography, radii, and interaction timings are final and matched closely.** The design is replicated across Phases 3-5 (deliverables listed under each phase in Section 7).
+Source of truth for look and feel: the high-fidelity design handoff `design_handoff_pandamux_ui/` (Claude-designed, delivered 2026-07-08). Bundle contents: `PandaMUX.dc.html` (main workspace + command palette, quick-launch, notifications, settings overlays), `Drag Split Panes.dc.html` (drag-split interaction prototype), `README.md` (exact tokens), `assets/pandamux_logo.png`. The prototypes are HTML/React `dc-runtime` references, not code; the task is to recreate them in Iced idioms. **Fidelity is high: colors, spacing, typography, radii, and interaction timings are final and matched closely.** The design is replicated across Phases 3-5 (deliverables listed under each phase in Section 7).
 
 ### 12.1 Build decisions (owner-approved 2026-07-08)
 

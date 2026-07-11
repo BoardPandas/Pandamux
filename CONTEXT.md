@@ -1,6 +1,6 @@
-# PandaMUX Everywhere
+# PandaMUX
 
-PandaMUX Everywhere is a Windows terminal multiplexer organized around workspaces, split panes, and draggable surfaces. This glossary keeps product language precise when discussing layout and terminal interaction behavior.
+PandaMUX is a Windows terminal multiplexer organized around workspaces, split panes, and draggable surfaces. This glossary keeps product language precise when discussing layout and terminal interaction behavior.
 
 ## Language
 

@@ -48,7 +48,7 @@ winresource = "=0.1.31"
 # resources land next to the exe as `<install>/resources/...`, which is exactly
 # where the runtime's resources_dir() looks (<exe dir>/resources).
 [package.metadata.packager]
-product-name = "PandaMUX Everywhere"
+product-name = "PandaMUX"
 identifier = "com.pandamux.app"
 description = "Native Windows terminal multiplexer for AI agents."
 authors = ["BoardPandas"]

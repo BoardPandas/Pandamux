@@ -1,6 +1,6 @@
-# PandaMUX Everywhere config file
+# PandaMUX config file
 
-PandaMUX Everywhere reads `~/.pandamux/config.toml` on startup (Windows: `%USERPROFILE%\.pandamux\config.toml`).
+PandaMUX reads `~/.pandamux/config.toml` on startup (Windows: `%USERPROFILE%\.pandamux\config.toml`).
 The file is optional — if it isn't present, built-in defaults apply.
 
 Edit it, then run `pandamux reload-config` (or restart pandamux) to pick up changes.
@@ -57,7 +57,7 @@ palette = [
 4. Per-pane overrides (e.g. `pandamux split --color-scheme prod`) — always win for that pane
 
 "File wins at startup, app wins at runtime": if you tweak a value in the Settings
-UI after PandaMUX Everywhere booted, your tweak sticks until the next reload.
+UI after PandaMUX booted, your tweak sticks until the next reload.
 
 ## CLI helpers
 

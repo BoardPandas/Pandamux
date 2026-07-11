@@ -4,7 +4,7 @@ Standalone landing page for the PandaMUX Orchestrator Claude Code plugin.
 
 - **Production**: https://plugin.pandamux.boardpandas.ai
 - **Source**: this directory
-- **Parent project**: [PandaMUX Everywhere](https://pandamux.boardpandas.ai), the host multiplexer
+- **Parent project**: [PandaMUX](https://pandamux.boardpandas.ai), the host multiplexer
 - **Plugin repo**: https://github.com/BoardPandas/Pandamux (bundled under `resources/pandamux-orchestrator/`)
 
 ## Stack

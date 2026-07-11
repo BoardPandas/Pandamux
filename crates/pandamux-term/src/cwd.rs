@@ -1,6 +1,6 @@
 //! Per-session working-directory tracking from the PTY byte stream.
 //!
-//! Shells report their cwd two ways in PandaMUX Everywhere: cmd embeds an OSC
+//! Shells report their cwd two ways in PandaMUX: cmd embeds an OSC
 //! 9;9 sequence in its prompt (`ESC ] 9 ; 9 ; <path> ST`), and the standard
 //! OSC 7 (`ESC ] 7 ; file://<host><path> ST`) is emitted by many shells. Both
 //! arrive inline in the terminal output, so we scan for them here as bytes are

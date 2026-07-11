@@ -1,6 +1,6 @@
 # Winget distribution (issue #32)
 
-These manifests publish PandaMUX Everywhere to the [Windows Package Manager](https://learn.microsoft.com/windows/package-manager/),
+These manifests publish PandaMUX to the [Windows Package Manager](https://learn.microsoft.com/windows/package-manager/),
 so users can install/upgrade with:
 
 ```powershell
@@ -16,7 +16,7 @@ winget upgrade BoardPandas.PandaMUX
 > `InstallerSha256` pinned in the manifests are stale placeholders from the
 > upstream fork; regenerate them against the real release zip at bootstrap.
 
-PandaMUX Everywhere ships as a **portable zip** (no code-signing — an unsigned NSIS installer
+PandaMUX ships as a **portable zip** (no code-signing — an unsigned NSIS installer
 trips SmartScreen *harder* than a zip extraction), so the manifest models it as
 `InstallerType: zip` + `NestedInstallerType: portable`, exposing a `pandamux`
 command alias on PATH that launches the app.

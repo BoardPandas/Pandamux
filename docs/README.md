@@ -1,7 +1,7 @@
-# PandaMUX Everywhere Documentation
+# PandaMUX Documentation
 
 > **Latest Updates (July 2026):**
-> - **Rename:** the product is now "PandaMUX Everywhere"; the CLI, package, pipe, and env vars use the `pandamux` short-name (`\\.\pipe\pandamux`, `PANDAMUX_*`).
+> - **Rename:** the product is now "PandaMUX"; the CLI, package, pipe, and env vars use the `pandamux` short-name (`\\.\pipe\pandamux`, `PANDAMUX_*`).
 > - **Direction:** approved master plan to rebuild as a fully native Rust app (Iced + alacritty_terminal + portable-pty); the Electron app is frozen to bug fixes.
 > - **Toolchain:** migrated from npm to pnpm (pinned pnpm 11.10.0 + Node 24 LTS); upgraded Electron 33 to 43 and the TS6/Vite8/Vitest4/ESLint10 build toolchain.
 > - **Terminal:** upgraded xterm.js to 6.0 and dropped the abandoned Canvas addon; the renderer now falls back WebGL to DOM.
@@ -13,7 +13,7 @@
 |------|------------|
 | **Understand the system** | [ARCHITECTURE.md](core/ARCHITECTURE.md) |
 | **Run the project locally** | [GETTING_STARTED.md](GETTING_STARTED.md) |
-| **What is PandaMUX Everywhere** | [OVERVIEW.md](OVERVIEW.md) |
+| **What is PandaMUX** | [OVERVIEW.md](OVERVIEW.md) |
 | **Drive it from the CLI** | [CLI_REFERENCE.md](api/CLI_REFERENCE.md) |
 | **Cut a release** | [RELEASE.md](operations/RELEASE.md) |
 | **Look up a term** | [GLOSSARY.md](GLOSSARY.md) |
@@ -24,7 +24,7 @@
 
 | Document | Description |
 |----------|-------------|
-| [OVERVIEW.md](OVERVIEW.md) | What PandaMUX Everywhere is, its stack, repo layout, and where to start reading. |
+| [OVERVIEW.md](OVERVIEW.md) | What PandaMUX is, its stack, repo layout, and where to start reading. |
 | [GETTING_STARTED.md](GETTING_STARTED.md) | Prerequisites, pnpm install, dev workflow, build scripts, and tests. |
 
 ---
@@ -78,7 +78,7 @@ Deployment, packaging, and release procedures.
 
 | Document | Description |
 |----------|-------------|
-| [GLOSSARY.md](GLOSSARY.md) | Domain terms and branded ID types used across PandaMUX Everywhere. |
+| [GLOSSARY.md](GLOSSARY.md) | Domain terms and branded ID types used across PandaMUX. |
 
 ---
 

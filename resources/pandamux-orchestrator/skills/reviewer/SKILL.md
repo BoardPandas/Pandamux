@@ -1,11 +1,11 @@
 ---
 name: reviewer
-description: Automated reviewer for PandaMUX Everywhere orchestrations. Runs after all agent waves complete. Checks consistency, runs tests, fixes minor issues, produces a review report.
+description: Automated reviewer for PandaMUX orchestrations. Runs after all agent waves complete. Checks consistency, runs tests, fixes minor issues, produces a review report.
 ---
 
 # Orchestration Reviewer
 
-You are the reviewer for a completed PandaMUX Everywhere orchestration. Multiple agents have worked on a task in parallel waves. Your job is to verify consistency, fix minor issues, and produce a final report.
+You are the reviewer for a completed PandaMUX orchestration. Multiple agents have worked on a task in parallel waves. Your job is to verify consistency, fix minor issues, and produce a final report.
 
 ## Step 0: Resolve Plugin Root
 

@@ -28,7 +28,7 @@ The following files were used as evidence for this page:
 <!-- BEGIN:AUTOGEN pandamux_10_browser-cdp_overview -->
 ## Overview
 
-PandaMUX Everywhere embeds a Chromium `<webview>` inside a pane and drives it through the Chrome DevTools Protocol (CDP), so a human or an AI agent can navigate, inspect, click, type, and read a live web page as ordinary CLI commands, with no headless-browser process to manage.
+PandaMUX embeds a Chromium `<webview>` inside a pane and drives it through the Chrome DevTools Protocol (CDP), so a human or an AI agent can navigate, inspect, click, type, and read a live web page as ordinary CLI commands, with no headless-browser process to manage.
 
 There are two independent ways into the same underlying `webContents.debugger` session. The primary path is the named-pipe control plane: `pandamux browser <subcommand>` sends a V2 JSON-RPC request that `v2-browser.ts` routes to a per-caller `CDPBridge` target, which issues CDP domain commands directly against the attached webview ([v2-browser.ts:152-167](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-browser.ts#L152-L167)). The secondary path is `CDPProxy`, a loopback-only HTTP/WebSocket server on ports 9222-9230 that mimics Chrome's own remote-debugging endpoint (`/json/version`, `/json/list`) so external tools such as Puppeteer or chrome-devtools-mcp can attach directly ([cdp-proxy.ts:80-126](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/cdp-proxy.ts#L80-L126)).
 

@@ -1,9 +1,9 @@
 ---
 name: orchestrate
-description: Core orchestration skill. Analyzes codebase, decomposes tasks into waves of parallel agents, creates PandaMUX Everywhere layout, spawns agents, monitors progress, triggers reviewer.
+description: Core orchestration skill. Analyzes codebase, decomposes tasks into waves of parallel agents, creates PandaMUX layout, spawns agents, monitors progress, triggers reviewer.
 ---
 
-# PandaMUX Everywhere Orchestration Skill
+# PandaMUX Orchestration Skill
 
 You are the orchestrator. Your job is to decompose the user's task into parallel subtasks, create a wave-based execution plan, and launch Claude Code agents to execute it.
 
@@ -24,7 +24,7 @@ If the `find` returns empty, the plugin is not installed. Tell the user:
 
 **Store `PLUGIN_ROOT` and use it for ALL subsequent `bash` commands in this orchestration.** Every script reference below uses `$PLUGIN_ROOT` — you must prefix every bash command that references plugin scripts with the same export or pass the resolved path directly.
 
-## Phase 1: Detect PandaMUX Everywhere
+## Phase 1: Detect PandaMUX
 
 Run the detection script:
 
@@ -39,10 +39,10 @@ Store the result as `PANDAMUX_MODE`:
 **This decision is binding for the entire orchestration.** Do not switch modes mid-orchestration.
 
 If degraded, log to the user:
-> "PandaMUX Everywhere not detected. Running in degraded mode — agents will use Claude Code's native subagent system. Install PandaMUX Everywhere for the full multi-pane experience: https://pandamux.boardpandas.ai"
+> "PandaMUX not detected. Running in degraded mode — agents will use Claude Code's native subagent system. Install PandaMUX for the full multi-pane experience: https://pandamux.boardpandas.ai"
 
-If PandaMUX Everywhere mode, log to the user:
-> "PandaMUX Everywhere detected. Agents will spawn in visible terminal panes."
+If PandaMUX mode, log to the user:
+> "PandaMUX detected. Agents will spawn in visible terminal panes."
 
 ## Phase 2: Analyze the Codebase
 
@@ -85,7 +85,7 @@ Organize subtasks into sequential waves based on dependencies:
 
 Determine agent count per wave based on:
 - Number of truly independent subtasks in that wave
-- If PandaMUX Everywhere is available, check layout capacity: `pandamux list-panes`
+- If PandaMUX is available, check layout capacity: `pandamux list-panes`
 - Maximum practical limit: 5 agents per wave (more causes diminishing returns from context overhead)
 - If only 1 subtask exists, skip orchestration and do it directly
 
@@ -331,7 +331,7 @@ Use this format:
 [Points of attention for other agents or reviewer]
 ```
 
-### 6d. Create PandaMUX Everywhere layout (if available)
+### 6d. Create PandaMUX layout (if available)
 
 **IMPORTANT: Work in the CURRENT workspace. Do NOT create or close workspaces — that hides agent panes from the user.**
 
@@ -339,9 +339,9 @@ The spawn script (`spawn-agents.sh`) automatically creates panes via `pandamux s
 
 ### 6e. Spawn Wave 1 agents
 
-**CRITICAL RULE: When PandaMUX Everywhere is available, you MUST use `pandamux agent spawn` to create agents in visible terminal panes. Do NOT use Claude Code's `Agent` tool when PandaMUX Everywhere is available — the Agent tool creates invisible subagents that the user cannot see. The `Agent` tool is ONLY for degraded mode (no PandaMUX Everywhere).**
+**CRITICAL RULE: When PandaMUX is available, you MUST use `pandamux agent spawn` to create agents in visible terminal panes. Do NOT use Claude Code's `Agent` tool when PandaMUX is available — the Agent tool creates invisible subagents that the user cannot see. The `Agent` tool is ONLY for degraded mode (no PandaMUX).**
 
-**If PandaMUX Everywhere IS available:**
+**If PandaMUX IS available:**
 
 Spawn agents using the spawn script:
 ```bash
@@ -362,7 +362,7 @@ pandamux agent list
 
 You should see agents with `"status": "running"`.
 
-**If PandaMUX Everywhere is NOT available (degraded mode only):**
+**If PandaMUX is NOT available (degraded mode only):**
 
 Spawn each agent using Claude Code's native Agent tool:
 - For each agent in Wave 1, use the Agent tool with `subagent_type: "pandamux-orchestrator:pandamux-worker"`
@@ -378,15 +378,15 @@ Spawn each agent using Claude Code's native Agent tool:
 
 Before entering the loop, note how the user sees progress:
 
-- **In PandaMUX Everywhere mode**: PandaMUX Everywhere's sidebar automatically watches `{TMPDIR}/pandamux-orch-*/state.json` and renders a live cockpit (task, elapsed time, per-wave progress bars, per-agent state dots, tool counts). You don't need to do anything to keep it updated — the hooks already update state.json on tool-use and wave transitions, and the sidebar polls every second. Do NOT call the dashboard manually in PandaMUX Everywhere mode; it would be redundant and noisy.
+- **In PandaMUX mode**: PandaMUX's sidebar automatically watches `{TMPDIR}/pandamux-orch-*/state.json` and renders a live cockpit (task, elapsed time, per-wave progress bars, per-agent state dots, tool counts). You don't need to do anything to keep it updated — the hooks already update state.json on tool-use and wave transitions, and the sidebar polls every second. Do NOT call the dashboard manually in PandaMUX mode; it would be redundant and noisy.
 
-- **In degraded mode (no PandaMUX Everywhere)**: you must print the text dashboard into Claude Code's conversation at each wave transition so the user can see progress. Run:
+- **In degraded mode (no PandaMUX)**: you must print the text dashboard into Claude Code's conversation at each wave transition so the user can see progress. Run:
   ```bash
   node "$PLUGIN_ROOT/scripts/dashboard-text.js" "[orch-dir]"
   ```
   Call it ONCE after spawning each wave, and ONCE after each wave completes. Do not call it inside the monitoring loop (that would spam the session). If the user asks "how's it going", you can also call it then.
 
-### With PandaMUX Everywhere (poll-based monitoring):
+### With PandaMUX (poll-based monitoring):
 
 After spawning Wave N agents, enter a monitoring loop. Poll every 15-20 seconds:
 
@@ -416,7 +416,7 @@ For each agent, check the `"status"` field:
    d. Continue monitoring loop
 4. If all waves are done, proceed to Phase 8
 
-### Without PandaMUX Everywhere (degraded mode — Agent tool returns):
+### Without PandaMUX (degraded mode — Agent tool returns):
 1. Wait for all Wave N agents to complete (their Agent tool calls return)
 2. Read their result files
 3. Generate Wave N+1 agent prompts (inject previous wave results)

@@ -22,7 +22,7 @@ The following files were used as evidence for this page (6 files; this page's TO
 <!-- BEGIN:AUTOGEN pandamux_02_getting-started_prerequisites -->
 ## Prerequisites
 
-PandaMUX Everywhere pins its toolchain rather than accepting a version range, so the versions below are enforced, not merely recommended.
+PandaMUX pins its toolchain rather than accepting a version range, so the versions below are enforced, not merely recommended.
 
 | Tool | Version | Why |
 |---|---|---|

@@ -1,7 +1,7 @@
 //! Claude Code startup integration, ported from the Electron `claude-context.ts`.
 //!
 //! On launch of the real GUI the native app makes Claude Code aware of PandaMUX
-//! Everywhere and installs the orchestrator plugin, exactly as the Electron
+//! and installs the orchestrator plugin, exactly as the Electron
 //! build does:
 //!
 //! - [`ensure_claude_context`] injects a marker-delimited PandaMUX block into the

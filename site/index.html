@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>PandaMUX Everywhere — Le terminal concu pour Claude Code</title>
+  <title>PandaMUX — Le terminal concu pour Claude Code</title>
   <meta name="description" content="Application Windows basee sur Electron. Onglets verticaux, notifications quand les agents ont besoin d'attention, panneaux divises, navigateur integre et une API pipe pour l'automatisation." />
   <link rel="icon" type="image/png" href="assets/favicon.png" />
   <link rel="apple-touch-icon" href="assets/favicon.png" />
@@ -40,7 +40,7 @@
   {
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
-    "name": "PandaMUX Everywhere",
+    "name": "PandaMUX",
     "operatingSystem": "Windows",
     "applicationCategory": "DeveloperApplication",
     "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
@@ -501,7 +501,7 @@
     <div class="header-inner">
       <div class="header-left">
         <a href="/" class="logo-link">
-          <img src="assets/pandamux_logo.png" alt="PandaMUX Everywhere" class="logo-icon" />
+          <img src="assets/pandamux_logo.png" alt="PandaMUX" class="logo-icon" />
           <span>PandaMUX</span>
         </a>
         <nav>
@@ -530,8 +530,8 @@
     <!-- HERO -->
     <section class="hero">
       <div class="hero-logo fade-in">
-        <img src="assets/pandamux_logo.png" alt="PandaMUX Everywhere logo" />
-        <span>PandaMUX Everywhere</span>
+        <img src="assets/pandamux_logo.png" alt="PandaMUX logo" />
+        <span>PandaMUX</span>
       </div>
 
       <h1 class="fade-in fade-in-d1">
@@ -604,7 +604,7 @@
     <section class="features fade-in fade-in-d4">
       <h2 data-i18n="features.title">Fonctionnalit&eacute;s</h2>
       <ul>
-        <li><strong data-i18n="f1.name">Int&eacute;gration passive Claude Code</strong> : <span data-i18n-html="f1.desc">PandaMUX Everywhere observe Claude Code sans modifier son comportement. Un proxy CDP sur <code>localhost:9222</code> permet au navigateur int&eacute;gr&eacute; de montrer chaque action en temps r&eacute;el. Les hooks auto-configur&eacute;s rapportent l'activit&eacute; des agents et outils dans la barre lat&eacute;rale. Z&eacute;ro configuration.</span></li>
+        <li><strong data-i18n="f1.name">Int&eacute;gration passive Claude Code</strong> : <span data-i18n-html="f1.desc">PandaMUX observe Claude Code sans modifier son comportement. Un proxy CDP sur <code>localhost:9222</code> permet au navigateur int&eacute;gr&eacute; de montrer chaque action en temps r&eacute;el. Les hooks auto-configur&eacute;s rapportent l'activit&eacute; des agents et outils dans la barre lat&eacute;rale. Z&eacute;ro configuration.</span></li>
         <li><strong data-i18n="f2.name">Navigateur int&eacute;gr&eacute;</strong> : <span data-i18n-html="f2.desc">ouvrez un navigateur &agrave; c&ocirc;t&eacute; de votre terminal avec une API scriptable. Quand Claude Code navigue via <code>chrome-devtools-mcp</code>, chaque page, clic et formulaire est visible dans le panneau navigateur.</span></li>
         <li><strong data-i18n="f3.name">Anneaux de notification</strong> : <span data-i18n-html="f3.desc">les panneaux s'illuminent en bleu quand les agents ont besoin d'attention. Notification Windows toast, flash barre des t&acirc;ches, et centre de notifications int&eacute;gr&eacute;.</span></li>
         <li><strong data-i18n="f4.name">Onglets verticaux</strong> : <span data-i18n-html="f4.desc">la barre lat&eacute;rale affiche la branche git, le r&eacute;pertoire de travail, les ports, le nombre d'agents, le statut PR et le texte de notification. Double-clic pour renommer.</span></li>
@@ -621,7 +621,7 @@
 
     <!-- SCREENSHOT -->
     <section class="screenshot-section">
-      <img src="assets/pandamux-full.png" alt="PandaMUX Everywhere" loading="lazy" />
+      <img src="assets/pandamux-full.png" alt="PandaMUX" loading="lazy" />
     </section>
 
     <!-- FAQ -->
@@ -630,10 +630,10 @@
 
       <div class="faq-item">
         <button class="faq-question" onclick="this.parentElement.classList.toggle('open')">
-          <span data-i18n="faq1.q">Quelle est la relation entre PandaMUX Everywhere et cmux ?</span>
+          <span data-i18n="faq1.q">Quelle est la relation entre PandaMUX et cmux ?</span>
           <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
         </button>
-        <div class="faq-answer"><p data-i18n-html="faq1.a">PandaMUX Everywhere est un fork Windows de <a href="https://github.com/manaflow-ai/cmux" target="_blank" rel="noopener">cmux</a>. cmux est une application macOS native (Swift + AppKit + Ghostty). PandaMUX reproduit la m&ecirc;me exp&eacute;rience sur Windows en utilisant Electron + xterm.js + ConPTY. Le protocole CLI/pipe est compatible entre les deux.</p></div>
+        <div class="faq-answer"><p data-i18n-html="faq1.a">PandaMUX est un fork Windows de <a href="https://github.com/manaflow-ai/cmux" target="_blank" rel="noopener">cmux</a>. cmux est une application macOS native (Swift + AppKit + Ghostty). PandaMUX reproduit la m&ecirc;me exp&eacute;rience sur Windows en utilisant Electron + xterm.js + ConPTY. Le protocole CLI/pipe est compatible entre les deux.</p></div>
       </div>
       <div class="faq-item">
         <button class="faq-question" onclick="this.parentElement.classList.toggle('open')">
@@ -647,7 +647,7 @@
           <span data-i18n="faq3.q">Quels agents sont compatibles ?</span>
           <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
         </button>
-        <div class="faq-answer"><p data-i18n-html="faq3.a">PandaMUX Everywhere est optimis&eacute; pour Claude Code avec int&eacute;gration passive automatique (hooks, CDP proxy, CLAUDE.md). Tout agent ou programme en ligne de commande peut &ecirc;tre utilis&eacute; dans les terminaux PandaMUX.</p></div>
+        <div class="faq-answer"><p data-i18n-html="faq3.a">PandaMUX est optimis&eacute; pour Claude Code avec int&eacute;gration passive automatique (hooks, CDP proxy, CLAUDE.md). Tout agent ou programme en ligne de commande peut &ecirc;tre utilis&eacute; dans les terminaux PandaMUX.</p></div>
       </div>
       <div class="faq-item">
         <button class="faq-question" onclick="this.parentElement.classList.toggle('open')">
@@ -661,14 +661,14 @@
           <span data-i18n="faq5.q">En quoi c'est diff&eacute;rent de Windows Terminal ?</span>
           <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
         </button>
-        <div class="faq-answer"><p data-i18n-html="faq5.a">Windows Terminal est un excellent &eacute;mulateur de terminal, mais il n'a pas de syst&egrave;me de notification, pas de visibilit&eacute; sur l'activit&eacute; des agents, pas de navigateur int&eacute;gr&eacute;, et pas de m&eacute;tadonn&eacute;es live dans les onglets. PandaMUX Everywhere est con&ccedil;u sp&eacute;cifiquement pour superviser des agents IA.</p></div>
+        <div class="faq-answer"><p data-i18n-html="faq5.a">Windows Terminal est un excellent &eacute;mulateur de terminal, mais il n'a pas de syst&egrave;me de notification, pas de visibilit&eacute; sur l'activit&eacute; des agents, pas de navigateur int&eacute;gr&eacute;, et pas de m&eacute;tadonn&eacute;es live dans les onglets. PandaMUX est con&ccedil;u sp&eacute;cifiquement pour superviser des agents IA.</p></div>
       </div>
       <div class="faq-item">
         <button class="faq-question" onclick="this.parentElement.classList.toggle('open')">
           <span data-i18n="faq6.q">C'est gratuit ?</span>
           <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
         </button>
-        <div class="faq-answer"><p data-i18n-html="faq6.a">Oui. PandaMUX Everywhere est open-source sous licence MIT. T&eacute;l&eacute;chargement gratuit sur <a href="https://github.com/BoardPandas/Pandamux/releases" target="_blank" rel="noopener">GitHub Releases</a>.</p></div>
+        <div class="faq-answer"><p data-i18n-html="faq6.a">Oui. PandaMUX est open-source sous licence MIT. T&eacute;l&eacute;chargement gratuit sur <a href="https://github.com/BoardPandas/Pandamux/releases" target="_blank" rel="noopener">GitHub Releases</a>.</p></div>
       </div>
     </section>
 
@@ -720,7 +720,7 @@
       </div>
     </div>
     <div class="footer-bottom">
-      <span data-i18n="footer.copyright">&copy; 2026 PandaMUX Everywhere</span>
+      <span data-i18n="footer.copyright">&copy; 2026 PandaMUX</span>
       <div style="display:flex;align-items:center;gap:16px;">
         <span><span data-i18n="footer.fork">Fork Windows de</span> <a href="https://cmux.com" target="_blank" rel="noopener" style="color:var(--text-muted)">cmux</a></span>
         <!-- Language selector -->

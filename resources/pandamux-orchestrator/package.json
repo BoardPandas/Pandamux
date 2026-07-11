@@ -1,7 +1,7 @@
 {
   "name": "pandamux-orchestrator",
   "version": "0.1.0",
-  "description": "Multi-agent task orchestration for Claude Code with PandaMUX Everywhere visual panes",
+  "description": "Multi-agent task orchestration for Claude Code with PandaMUX visual panes",
   "author": "BoardPandas",
   "license": "MIT"
 }

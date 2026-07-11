@@ -1,4 +1,4 @@
-<h1 align="center">PandaMUX Everywhere</h1>
+<h1 align="center">PandaMUX</h1>
 <p align="center">A visibility layer for Claude Code on Windows: see what your AI agent does in real-time</p>
 
 <p align="center">
@@ -15,7 +15,7 @@
 
 ## What it is
 
-PandaMUX Everywhere is a Windows terminal multiplexer built for running many Claude Code (and other CLI) agents in parallel, each in its own visible pane. It passively observes Claude Code without changing how it works: auto-configured hooks report agent and tool activity to the sidebar, so you can see at a glance which sessions are working, done, or waiting for you.
+PandaMUX is a Windows terminal multiplexer built for running many Claude Code (and other CLI) agents in parallel, each in its own visible pane. It passively observes Claude Code without changing how it works: auto-configured hooks report agent and tool activity to the sidebar, so you can see at a glance which sessions are working, done, or waiting for you.
 
 It is a fully native Rust application (no web view). The terminal grid is GPU-rendered for smooth output at any speed, and the whole app is coordinated through a single named-pipe API that the CLI, shell integration, and the bundled orchestrator plugin all speak.
 
@@ -39,7 +39,7 @@ It is a fully native Rust application (no web view). The terminal grid is GPU-re
 
 ### Download (recommended)
 
-Download the latest `PandaMUX-Everywhere-Setup-<version>.exe` from [GitHub Releases](https://github.com/BoardPandas/Pandamux/releases/latest) and run it. The installer and app are Authenticode-signed (Azure Trusted Signing), and the app updates itself from within.
+Download the latest `PandaMUX-Setup-<version>.exe` from [GitHub Releases](https://github.com/BoardPandas/Pandamux/releases/latest) and run it. The installer and app are Authenticode-signed (Azure Trusted Signing), and the app updates itself from within.
 
 ### From source
 
@@ -53,9 +53,9 @@ cargo run -p pandamux-app --features iced-runtime -- --iced-shell
 
 See [`CLAUDE.md`](CLAUDE.md) for the full build, test, and release documentation.
 
-## Why PandaMUX Everywhere?
+## Why PandaMUX?
 
-Running many Claude Code sessions in parallel on Windows is painful. Windows Terminal has tabs but no notification system, so you check each tab manually to see if an agent finished or is waiting. tmux works in WSL but loses Windows integration. PandaMUX Everywhere is a visibility layer for AI coding agents: it does not replace Claude Code or change how it works; it observes and shows you what is happening. The sidebar shows each agent's git branch, open ports, and whether it needs attention, reported over the named pipe by shell-integration scripts in real time.
+Running many Claude Code sessions in parallel on Windows is painful. Windows Terminal has tabs but no notification system, so you check each tab manually to see if an agent finished or is waiting. tmux works in WSL but loses Windows integration. PandaMUX is a visibility layer for AI coding agents: it does not replace Claude Code or change how it works; it observes and shows you what is happening. The sidebar shows each agent's git branch, open ports, and whether it needs attention, reported over the named pipe by shell-integration scripts in real time.
 
 ## pandamux-orchestrator
 
@@ -63,13 +63,13 @@ A bundled Claude Code plugin for parallel multi-agent orchestration. Activate wi
 
 ## Shell Integration
 
-PandaMUX Everywhere injects integration scripts into your shells (PowerShell, CMD, Bash/Zsh in WSL) that report CWD, git branch/dirty state, and shell state (working/done/interrupted) over the named pipe. Per-session cwd tracking also uses OSC 9;9 / OSC 7.
+PandaMUX injects integration scripts into your shells (PowerShell, CMD, Bash/Zsh in WSL) that report CWD, git branch/dirty state, and shell state (working/done/interrupted) over the named pipe. Per-session cwd tracking also uses OSC 9;9 / OSC 7.
 
 Environment variables available in all shells:
 
 | Variable | Description |
 |----------|-------------|
-| `PANDAMUX` | Always `1` inside PandaMUX Everywhere |
+| `PANDAMUX` | Always `1` inside PandaMUX |
 | `PANDAMUX_CLI` | Path to the pandamux CLI |
 | `PANDAMUX_SURFACE_ID` | Current surface (tab) ID |
 | `PANDAMUX_PIPE` | Named pipe path (`\\.\pipe\pandamux`) |
@@ -156,7 +156,7 @@ Full developer docs, including the release/signing pipeline, are in [`CLAUDE.md`
 
 ## Lineage
 
-PandaMUX Everywhere is an independent Windows project whose named-pipe protocol and design philosophy trace to [cmux](https://github.com/manaflow-ai/cmux), the macOS terminal for multitasking. It is wire-compatible with cmux's socket protocol but does not reuse cmux's source code.
+PandaMUX is an independent Windows project whose named-pipe protocol and design philosophy trace to [cmux](https://github.com/manaflow-ai/cmux), the macOS terminal for multitasking. It is wire-compatible with cmux's socket protocol but does not reuse cmux's source code.
 
 ## Contributing
 
@@ -165,4 +165,4 @@ PandaMUX Everywhere is an independent Windows project whose named-pipe protocol 
 
 ## License
 
-PandaMUX Everywhere is open source under the [MIT License](LICENSE). Its socket protocol and design are inspired by cmux; it does not incorporate cmux's source code.
+PandaMUX is open source under the [MIT License](LICENSE). Its socket protocol and design are inspired by cmux; it does not incorporate cmux's source code.

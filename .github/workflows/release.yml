@@ -113,7 +113,7 @@ jobs:
             Get-ChildItem -Path $_ -Recurse -Filter *setup*.exe -ErrorAction SilentlyContinue
           } | Select-Object -First 1
           if (-not $setup) { Write-Error 'No NSIS setup .exe produced'; exit 1 }
-          $dest = Join-Path "${{ github.workspace }}\dist" ("PandaMUX-Everywhere-Setup-{0}.exe" -f "${{ steps.version.outputs.version }}")
+          $dest = Join-Path "${{ github.workspace }}\dist" ("PandaMUX-Setup-{0}.exe" -f "${{ steps.version.outputs.version }}")
           New-Item -ItemType Directory -Force -Path (Split-Path $dest) | Out-Null
           Move-Item -Force $setup.FullName $dest
           "path=$dest" >> $env:GITHUB_OUTPUT
@@ -145,7 +145,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
-          name: PandaMUX Everywhere ${{ steps.version.outputs.tag }}
+          name: PandaMUX ${{ steps.version.outputs.tag }}
           files: ${{ steps.installer.outputs.path }}
           draft: false
           generate_release_notes: true

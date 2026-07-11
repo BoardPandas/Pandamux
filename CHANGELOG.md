@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.2]
+
+### Changed
+
+- **Dropped "Everywhere" from the product name; the brand is now simply PandaMUX.** The titlebar no longer shows the "Everywhere" subtitle, and the embedded Windows `pandamux.exe` metadata, docs, marketing site, installer/winget metadata, orchestrator plugin, and release/tag naming now read "PandaMUX". No CLI command, package, executable, named-pipe, or environment-variable names change (those were already `pandamux`).
+
 ## [0.35.1]
 
 ### Changed

@@ -159,7 +159,7 @@ impl NativeShellRuntime {
             runtime.raise_notification(NewNotification {
                 workspace_id: None,
                 surface_id: None,
-                title: "PandaMUX Everywhere is running".to_string(),
+                title: "PandaMUX is running".to_string(),
                 body: "Native shell ready. Ctrl+F to find, Ctrl+B to toggle the status bar."
                     .to_string(),
                 source: NotificationSource::Build,
@@ -1027,7 +1027,7 @@ pub fn run_iced_shell() -> Result<(), Box<dyn std::error::Error>> {
         update_iced_shell,
         view_iced_shell,
     )
-    .title("PandaMUX Everywhere")
+    .title("PandaMUX")
     .window(window::Settings {
         size: Size::new(1280.0, 800.0),
         min_size: Some(Size::new(760.0, 480.0)),
@@ -1423,7 +1423,7 @@ fn fallback_terminal_snapshots(app_state: &AppState) -> Vec<TerminalSnapshot> {
 
 fn fallback_lines() -> Vec<String> {
     vec![
-        "PandaMUX Everywhere".to_string(),
+        "PandaMUX".to_string(),
         "Native shell runtime is active.".to_string(),
     ]
 }

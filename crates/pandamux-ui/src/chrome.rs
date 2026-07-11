@@ -135,10 +135,6 @@ pub fn titlebar<'a>(chrome: &ChromeState, palette: Palette) -> Element<'a, Shell
             .size(theme::SIZE_TITLE)
             .font(theme::ui(iced::font::Weight::Semibold))
             .color(palette.t1),
-        text("Everywhere")
-            .size(theme::SIZE_SECONDARY)
-            .font(theme::ui(iced::font::Weight::Normal))
-            .color(palette.t4),
     ]
     .spacing(7)
     .align_y(Alignment::Center);

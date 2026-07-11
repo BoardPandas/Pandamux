@@ -27,7 +27,7 @@ The following files were used as evidence for this page:
 <!-- BEGIN:AUTOGEN pandamux_06_configuration_layers -->
 ## Configuration Layers
 
-PandaMUX Everywhere has no single config file; instead it layers three independent stores plus one file that is entirely optional, and each layer's job is to survive a specific failure mode (a fresh install, a portable-zip update, or a per-pane override).
+PandaMUX has no single config file; instead it layers three independent stores plus one file that is entirely optional, and each layer's job is to survive a specific failure mode (a fresh install, a portable-zip update, or a per-pane override).
 
 | Layer | Source | Applied |
 |---|---|---|

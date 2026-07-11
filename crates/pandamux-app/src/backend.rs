@@ -497,7 +497,7 @@ fn dispatch_window(request: &RpcRequest) -> Result<Option<Value>, (i32, String)>
         "window.list" => Ok(Some(json!({
             "windows": [{
                 "id": "win-main",
-                "title": "PandaMUX Everywhere",
+                "title": "PandaMUX",
                 "focused": true,
             }],
         }))),

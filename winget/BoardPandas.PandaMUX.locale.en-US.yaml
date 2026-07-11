@@ -6,14 +6,14 @@ Publisher: BoardPandas
 PublisherUrl: https://github.com/BoardPandas
 PublisherSupportUrl: https://github.com/BoardPandas/Pandamux/issues
 Author: BoardPandas
-PackageName: PandaMUX Everywhere
+PackageName: PandaMUX
 PackageUrl: https://pandamux.boardpandas.ai
 License: MIT
 LicenseUrl: https://github.com/BoardPandas/Pandamux/blob/master/LICENSE
-Copyright: Copyright (c) 2025-2026 PandaMUX Everywhere contributors
+Copyright: Copyright (c) 2025-2026 PandaMUX contributors
 ShortDescription: Windows terminal multiplexer for AI coding agents.
 Description: >-
-  PandaMUX Everywhere is an Electron-based Windows terminal multiplexer built for AI coding
+  PandaMUX is an Electron-based Windows terminal multiplexer built for AI coding
   agents. It provides split panes, tabbed surfaces, a named-pipe CLI, and
   first-class Claude Code / OpenCode integration.
 Moniker: pandamux

@@ -1,4 +1,4 @@
-# Auto-publish each PandaMUX Everywhere release to the Windows Package Manager (winget).
+# Auto-publish each PandaMUX release to the Windows Package Manager (winget).
 # Issue #32: low-friction distribution channel.
 #
 # NOTE (Phase 7): the native app ships a signed NSIS installer (.exe), not the old
@@ -33,7 +33,7 @@ jobs:
         uses: vedantmgoyal9/winget-releaser@v2
         with:
           identifier: BoardPandas.PandaMUX
-          installers-regex: 'PandaMUX-Everywhere-Setup-.*\.exe$'
+          installers-regex: 'PandaMUX-Setup-.*\.exe$'
           token: ${{ secrets.WINGET_TOKEN }}
         env:
           WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}

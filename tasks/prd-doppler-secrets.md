@@ -18,7 +18,7 @@ rotation story, and no audit trail. Doppler centralizes them, injects them into
 CI and local shells on demand, and gives us versioning plus access control.
 
 This PRD covers the Doppler project design and rollout. It does not change
-application runtime behavior: Pandamux Everywhere is a desktop app and does not
+application runtime behavior: Pandamux is a desktop app and does not
 read Doppler at runtime.
 
 ## 2. Problem & Motivation

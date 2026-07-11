@@ -1,4 +1,4 @@
-# PandaMUX Everywhere — Development Guide
+# PandaMUX — Development Guide
 
 Native Windows terminal multiplexer for AI agents. Rust workspace: Iced (GPU UI) + alacritty_terminal (grid) + portable-pty (local PTY) + russh (remote PTY/SFTP).
 
@@ -89,7 +89,7 @@ Signing secrets come from Doppler (`pandamux`/`prd`, six `AZURE_*` vars) via the
 ### To cut a release
 
 1. Update `CHANGELOG.md` and bump `[workspace.package] version` in the root `Cargo.toml` (see `.claude/rules/commit-changelog.md`).
-2. Commit, then tag: `git tag -a v<VERSION> -m "PandaMUX Everywhere v<VERSION>"` and `git push origin v<VERSION>`.
+2. Commit, then tag: `git tag -a v<VERSION> -m "PandaMUX v<VERSION>"` and `git push origin v<VERSION>`.
 3. The workflow builds, signs, packages, signs the installer, and publishes the Release.
 
 ### Local packaging validation (optional, no signing)

@@ -24,7 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(feature = "iced-runtime")]
     if std::env::args().any(|arg| arg == "--iced-shell") {
-        // Make Claude Code aware of PandaMUX Everywhere and install the
+        // Make Claude Code aware of PandaMUX and install the
         // orchestrator plugin (best-effort; never aborts launch). Not run for
         // the headless pipe server or the `--iced-shell-smoke` CI path.
         claude_context::run_startup_integration();

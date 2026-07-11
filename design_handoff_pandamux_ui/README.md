@@ -1,7 +1,7 @@
-# Handoff: PandaMUX Everywhere — Native Rust UI (Iced)
+# Handoff: PandaMUX — Native Rust UI (Iced)
 
 ## Overview
-A new, modern interface for **PandaMUX Everywhere**, the tmux-inspired terminal multiplexer being rebuilt as a fully native Rust app (**Iced** + `alacritty_terminal` + `portable-pty`) for Windows. The design covers:
+A new, modern interface for **PandaMUX**, the tmux-inspired terminal multiplexer being rebuilt as a fully native Rust app (**Iced** + `alacritty_terminal` + `portable-pty`) for Windows. The design covers:
 
 1. **Main workspace** — frameless window with custom titlebar, slim icon rail, session panel (grouped by Project / Type / Host), split terminal panes with per-pane tabs, status bar, and four overlay surfaces (command palette, quick-launch, notifications, settings).
 2. **Drag-and-drop pane splitting** — the interaction model for dragging a tab out of a pane to re-split the layout (edge zones split, center zone moves the tab).
@@ -78,7 +78,7 @@ Workspace padding 10px, gap between panes/columns 8px. Session panel 264px wide 
 ## Screens / Views
 
 ### 1. Titlebar (40px, frameless window)
-- Left: 20px logo (`assets/pandamux_logo.png`, radius 5px), "PandaMUX" 13px/600, "Everywhere" 11px `t4`.
+- Left: 20px logo (`assets/pandamux_logo.png`, radius 5px), "PandaMUX" 13px/600.
 - Center: session-switcher pill (click → command palette): search icon, active session name 12px `t2`, `Ctrl K` kbd chip. Pill: `rgba(ov,0.035)` bg, `rgba(ov,0.06)` border, radius 7px.
 - Right: bell icon with accent unread dot (7px, 1.5px `bgc` border), settings icon, then min/max/close (40×28px hit areas; close hover `rgba(224,90,90,0.85)` + white glyph).
 - Whole bar is the drag region except interactive controls.
@@ -161,7 +161,7 @@ The core layout model is a **column list**: `Vec<Column>`, each `Column { flex, 
 - Fonts: JetBrains Mono (bundle it), Segoe UI (system).
 
 ## Files
-- `PandaMUX Everywhere.dc.html` — main workspace + all overlays; tweakable props: `uiTheme` (dark/light), `accent`, `vibrancy` (0–1 → blur 6–24px), `showStatusBar`.
+- `PandaMUX.dc.html` — main workspace + all overlays; tweakable props: `uiTheme` (dark/light), `accent`, `vibrancy` (0–1 → blur 6–24px), `showStatusBar`.
 - `Drag Split Panes.dc.html` — working drag-and-drop splitting prototype (column/pane/tab model, ghost, zones, re-splitting).
 - `assets/pandamux_logo.png`.
 

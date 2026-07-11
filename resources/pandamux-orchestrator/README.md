@@ -4,7 +4,7 @@ Multi-agent task orchestration for Claude Code -- decompose complex dev tasks in
 
 ## What it does
 
-When you hand Claude Code a large task, it works sequentially in a single terminal. pandamux-orchestrator breaks that task into independent subtasks, assigns each to a separate Claude Code instance, and runs them in parallel across PandaMUX Everywhere terminal panes. Agents are organized into waves: wave 1 handles foundations (types, shared interfaces), subsequent waves handle work that depends on earlier output, and a final automated reviewer checks cross-agent consistency and fixes minor issues. The result is faster execution with full visibility -- you watch every agent work in real-time and can intervene in any pane mid-flight.
+When you hand Claude Code a large task, it works sequentially in a single terminal. pandamux-orchestrator breaks that task into independent subtasks, assigns each to a separate Claude Code instance, and runs them in parallel across PandaMUX terminal panes. Agents are organized into waves: wave 1 handles foundations (types, shared interfaces), subsequent waves handle work that depends on earlier output, and a final automated reviewer checks cross-agent consistency and fixes minor issues. The result is faster execution with full visibility -- you watch every agent work in real-time and can intervene in any pane mid-flight.
 
 ## How it works
 
@@ -60,16 +60,16 @@ What happens next:
 1. The orchestrator analyzes your codebase and builds a wave plan
 2. You see the plan with agent assignments, file zones, and wave dependencies
 3. You approve, adjust, or cancel
-4. On approval, agents spawn across PandaMUX Everywhere panes (or as native subagents without PandaMUX Everywhere)
+4. On approval, agents spawn across PandaMUX panes (or as native subagents without PandaMUX)
 5. A live markdown dashboard tracks progress per agent
 6. When all waves finish, the reviewer checks consistency, runs tests, and fixes minor issues
 7. You get a summary with options: commit, view diff, or abort
 
-## With vs without PandaMUX Everywhere
+## With vs without PandaMUX
 
-The plugin works in both environments. PandaMUX Everywhere provides the full experience; without it, you get the same orchestration logic through Claude Code's native Agent tool.
+The plugin works in both environments. PandaMUX provides the full experience; without it, you get the same orchestration logic through Claude Code's native Agent tool.
 
-| Capability              | With PandaMUX Everywhere           | Without PandaMUX Everywhere (degraded) |
+| Capability              | With PandaMUX           | Without PandaMUX (degraded) |
 |-------------------------|------------------------------------|---------------------------------|
 | Task decomposition      | Full analysis + wave planning      | Same                            |
 | Plan presentation       | Structured plan with approval      | Same                            |
@@ -89,7 +89,7 @@ The plugin works in both environments. PandaMUX Everywhere provides the full exp
 - **Live dashboard** -- markdown pane updated in real-time with per-agent status, tool use counts, and activity log
 - **Crash recovery** -- `SessionStart` hook detects interrupted orchestrations and offers to resume
 - **Decomposition patterns** -- built-in guide for layer-based, feature-based, component-based, and migration splits
-- **Graceful degradation** -- full functionality without PandaMUX Everywhere using Claude Code's native Agent tool
+- **Graceful degradation** -- full functionality without PandaMUX using Claude Code's native Agent tool
 - **Git worktree isolation** -- optional `--worktree` flag to isolate each agent in a separate worktree
 
 ## Architecture
@@ -98,7 +98,7 @@ The plugin uses three coordination layers:
 
 - **Skills** handle the intelligence: codebase analysis, task decomposition, plan presentation, and review. The orchestrator skill drives the main flow; the reviewer skill runs after all waves complete.
 - **Hooks** handle reactivity: `PostToolUse` tracks agent activity, `SubagentStop` triggers wave transitions, `SessionStart` handles crash recovery, `Stop` warns about active orchestrations.
-- **Scripts** handle PandaMUX Everywhere operations: spawning agents in panes, updating the dashboard, managing state, and collecting results.
+- **Scripts** handle PandaMUX operations: spawning agents in panes, updating the dashboard, managing state, and collecting results.
 
 The shared coordination layer is a JSON state file in a temp directory (`/tmp/pandamux-orch-{id}/`), written by scripts and read by skills. No daemon, no persistent process -- purely event-driven.
 
@@ -118,7 +118,7 @@ pandamux-orchestrator/
     reviewer/
       SKILL.md                      # Post-orchestration review and auto-fix
     pandamux-detect/
-      SKILL.md                      # Detect PandaMUX Everywhere availability, set fallback mode
+      SKILL.md                      # Detect PandaMUX availability, set fallback mode
   hooks/
     hooks.json                      # PostToolUse, SubagentStop, Stop, SessionStart
   agents/
@@ -129,7 +129,7 @@ pandamux-orchestrator/
     check-status.sh                 # Read-only status check for dashboard
     collect-results.sh              # Aggregate agent result files
     update-dashboard.sh             # Refresh the live markdown dashboard
-    detect-pandamux.sh              # Check if PandaMUX Everywhere is running (pipe test)
+    detect-pandamux.sh              # Check if PandaMUX is running (pipe test)
     on-tool-use.sh                  # Hook: increment tool use counter
     on-agent-stop.sh                # Hook: wave transition logic
     on-stop.sh                      # Hook: warn if orchestration is active
@@ -143,10 +143,10 @@ pandamux-orchestrator/
 - **Claude Code** -- the plugin runs inside Claude Code's plugin system
 - **bash** -- all scripts target bash (available on Windows via Git Bash/MSYS2, which Claude Code uses by default)
 - **Node.js** -- used by scripts for JSON state manipulation (always available since Claude Code runs on Node.js)
-- **PandaMUX Everywhere** (optional) -- required for the full multi-pane visual experience; without it, the plugin falls back to native Claude Code subagents
+- **PandaMUX** (optional) -- required for the full multi-pane visual experience; without it, the plugin falls back to native Claude Code subagents
 
 ## Links
 
-- **PandaMUX Everywhere** -- [pandamux.boardpandas.ai](https://pandamux.boardpandas.ai)
+- **PandaMUX** -- [pandamux.boardpandas.ai](https://pandamux.boardpandas.ai)
 - **GitHub** -- [github.com/BoardPandas/Pandamux](https://github.com/BoardPandas/Pandamux)
 - **License** -- MIT

@@ -1,5 +1,5 @@
 project:
-  name: "PandaMUX Everywhere"
+  name: "PandaMUX"
   description: "Electron-based Windows terminal multiplexer for AI agents, with keep-alive split panes, a named-pipe control plane, a CLI, and a CDP-driven browser panel."
   repo_base_url: "https://github.com/BoardPandas/Pandamux/blob"
   ref_commit_hash: "0ab9e6463a9017a7b8ea98f10b3f847507658ac4"
@@ -11,7 +11,7 @@ pages:
     title: "Overview"
     folder: ""
     filename: "OVERVIEW.md"
-    description: "What PandaMUX Everywhere is, its stack, repo layout, and where to start reading."
+    description: "What PandaMUX is, its stack, repo layout, and where to start reading."
     category: overview
     source_files:
       - "README.md"
@@ -739,7 +739,7 @@ pages:
     title: "Glossary"
     folder: ""
     filename: "GLOSSARY.md"
-    description: "Domain terms and branded ID types used across PandaMUX Everywhere."
+    description: "Domain terms and branded ID types used across PandaMUX."
     category: glossary
     source_files:
       - "src/shared/types.ts"
