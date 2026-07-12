@@ -82,10 +82,16 @@ fn is_shell_available(shell: &str) -> bool {
         return Path::new(shell).exists();
     }
     let locator = if cfg!(windows) { "where" } else { "which" };
-    Command::new(locator)
-        .arg(shell)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+    let mut command = Command::new(locator);
+    command.arg(shell).stdout(Stdio::null()).stderr(Stdio::null());
+    // Suppress the console window a GUI-subsystem pandamux.exe would otherwise
+    // pop for this console child. 0x0800_0000 == CREATE_NO_WINDOW.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+    command
         .status()
         .map(|status| status.success())
         .unwrap_or(false)

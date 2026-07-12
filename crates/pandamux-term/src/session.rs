@@ -327,6 +327,7 @@ impl PtySession {
 fn tree_kill(pid: u32) {
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
         use std::path::Path;
         use std::process::{Command, Stdio};
         let system_root = std::env::var("SystemRoot")
@@ -335,10 +336,13 @@ fn tree_kill(pid: u32) {
         let taskkill = Path::new(&system_root)
             .join("System32")
             .join("taskkill.exe");
+        // CREATE_NO_WINDOW (0x0800_0000): don't pop a console window for taskkill
+        // now that pandamux.exe has no console of its own to inherit.
         let _ = Command::new(taskkill)
             .args(["/PID", &pid.to_string(), "/T", "/F"])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
+            .creation_flags(0x0800_0000)
             .spawn();
     }
     #[cfg(not(windows))]

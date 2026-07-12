@@ -52,12 +52,15 @@ async fn poll_git(cwd: PathBuf) -> Option<(Option<String>, u32)> {
 }
 
 async fn run_git(cwd: &PathBuf, args: &[&str]) -> Option<String> {
-    let output = tokio::process::Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .await
-        .ok()?;
+    let mut command = tokio::process::Command::new("git");
+    command.args(args).current_dir(cwd);
+    // pandamux.exe ships as a GUI-subsystem binary (no inherited console), so
+    // each console-subsystem child (git.exe) would otherwise pop a fresh console
+    // window on every poll and steal keyboard focus. CREATE_NO_WINDOW suppresses
+    // it. 0x0800_0000 == CREATE_NO_WINDOW.
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000);
+    let output = command.output().await.ok()?;
     if !output.status.success() {
         return None;
     }

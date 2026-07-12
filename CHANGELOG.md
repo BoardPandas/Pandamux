@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.3]
+
+### Fixed
+
+- **A console window popped up every few seconds and keyboard input stopped reaching the panes.** After 0.35.2 shipped `pandamux.exe` as a GUI-subsystem binary (no console of its own), every console-subsystem child process it spawned got a brand-new console window. The status-bar git poller runs `git` every 5 seconds, so a window flashed on screen repeatedly and stole focus from the app, which is why typing into terminals appeared to do nothing. All background console children (the `git` status poll, the `where`/`which` shell-availability check, and the `taskkill` tree-kill on shell exit) now spawn with `CREATE_NO_WINDOW`, so no window appears and focus stays in PandaMUX.
+
 ## [0.35.2]
 
 ### Changed
