@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.35.4]
+## [0.35.5]
+
+### Fixed
+
+- **Could not type into any terminal (PowerShell, cmd, WSL, or SSH).** Local panes rendered shell output but never accepted keyboard input: the Iced shell only forwarded Ctrl chrome shortcuts, so ordinary keystrokes were dropped instead of being written to the pane's PTY. The focused pane's terminal now receives typed text, Enter, Backspace, Tab/Shift+Tab, arrow and Home/End/Delete/PageUp/PageDown keys, and unmapped Ctrl combinations as their control codes (e.g. Ctrl+C). Input is routed to the local PTY or SSH channel of the focused pane and is suppressed while a centered overlay (command palette, settings, quick-launch) is open so those keep their own text fields.
 
 ### Changed
 

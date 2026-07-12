@@ -445,9 +445,22 @@ impl NativeShellRuntime {
             }
             ShellMessage::NewSessionRequested => self.open_overlay(Overlay::QuickLaunch),
             ShellMessage::OverlayDismissed => {
+                let had_overlay = self.chrome.active_overlay != Overlay::None;
+                let had_drag = self.drag.is_some();
                 self.chrome.active_overlay = Overlay::None;
                 // Esc also cancels an in-flight drag.
                 self.drag = None;
+                // A bare Esc with nothing to dismiss goes to the terminal.
+                if !had_overlay && !had_drag {
+                    self.write_terminal_input(&[0x1b]);
+                }
+            }
+            ShellMessage::TerminalInput(bytes) => {
+                // Suppressed while an overlay is open; its own text inputs consume
+                // typing (the global key subscription still fires in parallel).
+                if self.chrome.active_overlay == Overlay::None {
+                    self.write_terminal_input(&bytes);
+                }
             }
             ShellMessage::TabDragArmed {
                 surface_id,
@@ -498,7 +511,13 @@ impl NativeShellRuntime {
                 self.palette.selected = 0;
             }
             ShellMessage::PaletteMoveSelection(delta) => {
-                // Arrow keys only navigate while the palette is open.
+                // With no overlay open, Up/Down are terminal history navigation.
+                if self.chrome.active_overlay == Overlay::None {
+                    let seq: &[u8] = if delta < 0 { b"\x1b[A" } else { b"\x1b[B" };
+                    self.write_terminal_input(seq);
+                    return;
+                }
+                // Otherwise arrows only navigate while the palette is open.
                 if self.chrome.active_overlay != Overlay::CommandPalette {
                     return;
                 }
@@ -510,6 +529,11 @@ impl NativeShellRuntime {
                 }
             }
             ShellMessage::PaletteActivate => {
+                // With no overlay open, plain Enter is a terminal carriage return.
+                if self.chrome.active_overlay == Overlay::None {
+                    self.write_terminal_input(b"\r");
+                    return;
+                }
                 // Enter only activates a palette item while the palette is open.
                 if self.chrome.active_overlay != Overlay::CommandPalette {
                     return;
@@ -938,6 +962,31 @@ impl NativeShellRuntime {
             .and_then(|pane| pane.active_surface_id)
     }
 
+    /// Write raw input bytes to the focused pane's live terminal (local PTY or
+    /// SSH channel). No-op when the focused surface is not a live terminal, so a
+    /// keystroke over a markdown/diff surface is harmlessly dropped.
+    fn write_terminal_input(&mut self, bytes: &[u8]) {
+        if bytes.is_empty() || !self.live_ptys {
+            return;
+        }
+        let Some(surface_id) = self.active_surface_id() else {
+            return;
+        };
+        let id = surface_id.as_str();
+        let result = if self.remotes.has(id) {
+            self.remotes.write_all(id, bytes)
+        } else if self.ptys.has(id) {
+            self.ptys
+                .write_all(id, bytes)
+                .map_err(|error| error.to_string())
+        } else {
+            return;
+        };
+        if let Err(error) = result {
+            self.last_error = Some(error);
+        }
+    }
+
     /// The focused pane of the active workspace, if any (keyboard shortcuts that
     /// act on "the focused pane" resolve it here).
     fn focused_pane_id(&self) -> Option<PaneId> {
@@ -1213,35 +1262,107 @@ where
 }
 
 fn map_key_event(event: keyboard::Event) -> ShellMessage {
-    use keyboard::key::Named;
     use keyboard::{Event, Key};
-    if let Event::KeyPressed { key, modifiers, .. } = event {
-        match key.as_ref() {
-            Key::Character(character) => {
-                return shortcut_for(
-                    modifiers.control(),
-                    modifiers.shift(),
-                    &character.to_ascii_lowercase(),
-                );
-            }
-            // Escape dismisses any open centered overlay (no-op otherwise).
-            Key::Named(Named::Escape) => return ShellMessage::OverlayDismissed,
-            // Arrow keys drive command-palette selection (no-op when it is closed).
-            Key::Named(Named::ArrowUp) => return ShellMessage::PaletteMoveSelection(-1),
-            Key::Named(Named::ArrowDown) => return ShellMessage::PaletteMoveSelection(1),
-            // Ctrl+Enter zooms the focused pane; plain Enter activates the
-            // highlighted palette item (both no-op when not applicable).
-            Key::Named(Named::Enter) => {
-                return if modifiers.control() {
-                    ShellMessage::ZoomFocusedPane
-                } else {
-                    ShellMessage::PaletteActivate
-                };
-            }
-            _ => {}
-        }
+    let Event::KeyPressed {
+        key,
+        modifiers,
+        text,
+        ..
+    } = event
+    else {
+        return ShellMessage::Noop;
+    };
+    let ctrl = modifiers.control();
+    let shift = modifiers.shift();
+    match key.as_ref() {
+        Key::Character(character) => decode_character(character, text.as_deref(), ctrl, shift),
+        Key::Named(named) => map_named_key(named, ctrl, shift),
+        _ => ShellMessage::Noop,
     }
-    ShellMessage::Noop
+}
+
+/// Decode a character key into either a chrome shortcut or terminal bytes. Split
+/// out from `map_key_event` so it is testable without constructing a full
+/// keyboard event. `text` is the composed text the OS produced (honours shift +
+/// keyboard layout); it is preferred over the base `character` for plain typing.
+fn decode_character(character: &str, text: Option<&str>, ctrl: bool, shift: bool) -> ShellMessage {
+    if ctrl {
+        // A mapped Ctrl chrome shortcut wins; an unmapped Ctrl+key still reaches
+        // the terminal as its control code (Ctrl+C, Ctrl+L, ...).
+        let shortcut = shortcut_for(true, shift, &character.to_ascii_lowercase());
+        if shortcut != ShellMessage::Noop {
+            return shortcut;
+        }
+        return match control_byte(character) {
+            Some(byte) => ShellMessage::TerminalInput(vec![byte]),
+            None => ShellMessage::Noop,
+        };
+    }
+    let content = text
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| character.to_string());
+    ShellMessage::TerminalInput(content.into_bytes())
+}
+
+/// Decode a named key into either a chrome message or terminal bytes. The three
+/// context-sensitive keys (Escape / Up / Down / Enter) keep their chrome message;
+/// their handlers forward the key to the terminal when no overlay is open. The
+/// rest are pure terminal navigation/editing keys with no chrome conflict.
+fn map_named_key(named: keyboard::key::Named, ctrl: bool, shift: bool) -> ShellMessage {
+    use keyboard::key::Named;
+    match named {
+        // Escape dismisses an open overlay, else sends ESC to the terminal.
+        Named::Escape => ShellMessage::OverlayDismissed,
+        // Arrows drive palette selection when it is open, else terminal history.
+        Named::ArrowUp => ShellMessage::PaletteMoveSelection(-1),
+        Named::ArrowDown => ShellMessage::PaletteMoveSelection(1),
+        // Ctrl+Enter zooms the focused pane; plain Enter activates a palette item
+        // when open, else sends a carriage return to the terminal.
+        Named::Enter => {
+            if ctrl {
+                ShellMessage::ZoomFocusedPane
+            } else {
+                ShellMessage::PaletteActivate
+            }
+        }
+        Named::Space => ShellMessage::TerminalInput(vec![b' ']),
+        Named::Backspace => ShellMessage::TerminalInput(vec![0x7f]),
+        Named::Tab => ShellMessage::TerminalInput(if shift {
+            b"\x1b[Z".to_vec()
+        } else {
+            vec![b'\t']
+        }),
+        Named::ArrowLeft => ShellMessage::TerminalInput(b"\x1b[D".to_vec()),
+        Named::ArrowRight => ShellMessage::TerminalInput(b"\x1b[C".to_vec()),
+        Named::Home => ShellMessage::TerminalInput(b"\x1b[H".to_vec()),
+        Named::End => ShellMessage::TerminalInput(b"\x1b[F".to_vec()),
+        Named::Delete => ShellMessage::TerminalInput(b"\x1b[3~".to_vec()),
+        Named::Insert => ShellMessage::TerminalInput(b"\x1b[2~".to_vec()),
+        Named::PageUp => ShellMessage::TerminalInput(b"\x1b[5~".to_vec()),
+        Named::PageDown => ShellMessage::TerminalInput(b"\x1b[6~".to_vec()),
+        _ => ShellMessage::Noop,
+    }
+}
+
+/// Map a single character to its Ctrl control code (Ctrl+A == 0x01, ...). Returns
+/// `None` for multi-character input or keys with no control encoding.
+fn control_byte(character: &str) -> Option<u8> {
+    let mut chars = character.chars();
+    let first = chars.next()?;
+    if chars.next().is_some() {
+        return None;
+    }
+    match first.to_ascii_lowercase() {
+        c @ 'a'..='z' => Some((c as u8 - b'a') + 1),
+        '@' | ' ' => Some(0x00),
+        '[' => Some(0x1b),
+        '\\' => Some(0x1c),
+        ']' => Some(0x1d),
+        '^' => Some(0x1e),
+        '_' | '?' => Some(0x1f),
+        _ => None,
+    }
 }
 
 /// Pure shortcut table (Ctrl-based). Kept separate from event decoding so it is
@@ -2072,6 +2193,129 @@ mod tests {
             Some(first_surface)
         );
         assert_eq!(runtime.last_error(), None);
+    }
+
+    #[test]
+    fn decode_character_routes_typing_and_control_codes() {
+        // Plain characters become terminal bytes, preferring the OS-composed text
+        // (so shift + layout land the right glyph).
+        assert_eq!(
+            decode_character("a", Some("a"), false, false),
+            ShellMessage::TerminalInput(b"a".to_vec())
+        );
+        assert_eq!(
+            decode_character("a", Some("A"), false, true),
+            ShellMessage::TerminalInput(b"A".to_vec())
+        );
+        assert_eq!(
+            decode_character("1", Some("!"), false, true),
+            ShellMessage::TerminalInput(b"!".to_vec())
+        );
+        // No composed text: fall back to the base character.
+        assert_eq!(
+            decode_character("z", None, false, false),
+            ShellMessage::TerminalInput(b"z".to_vec())
+        );
+        // Ctrl+C is not a chrome shortcut, so it reaches the terminal as 0x03.
+        assert_eq!(
+            decode_character("c", None, true, false),
+            ShellMessage::TerminalInput(vec![0x03])
+        );
+        // Ctrl+D IS a chrome shortcut (split), so it wins over the control code.
+        assert_eq!(
+            decode_character("d", None, true, false),
+            ShellMessage::SplitFocused(SplitDirection::Horizontal)
+        );
+    }
+
+    #[test]
+    fn named_keys_map_to_terminal_sequences() {
+        use keyboard::key::Named;
+        assert_eq!(
+            map_named_key(Named::Backspace, false, false),
+            ShellMessage::TerminalInput(vec![0x7f])
+        );
+        assert_eq!(
+            map_named_key(Named::Tab, false, false),
+            ShellMessage::TerminalInput(vec![b'\t'])
+        );
+        assert_eq!(
+            map_named_key(Named::Tab, false, true),
+            ShellMessage::TerminalInput(b"\x1b[Z".to_vec())
+        );
+        assert_eq!(
+            map_named_key(Named::ArrowLeft, false, false),
+            ShellMessage::TerminalInput(b"\x1b[D".to_vec())
+        );
+        // Context keys keep their chrome message; handlers add the terminal path.
+        assert_eq!(
+            map_named_key(Named::Enter, false, false),
+            ShellMessage::PaletteActivate
+        );
+        assert_eq!(
+            map_named_key(Named::Enter, true, false),
+            ShellMessage::ZoomFocusedPane
+        );
+        assert_eq!(
+            map_named_key(Named::Escape, false, false),
+            ShellMessage::OverlayDismissed
+        );
+    }
+
+    #[test]
+    fn control_byte_maps_letters_and_symbols() {
+        assert_eq!(control_byte("a"), Some(0x01));
+        assert_eq!(control_byte("C"), Some(0x03));
+        assert_eq!(control_byte("z"), Some(0x1a));
+        assert_eq!(control_byte("["), Some(0x1b));
+        assert_eq!(control_byte(" "), Some(0x00));
+        assert_eq!(control_byte("ab"), None);
+        assert_eq!(control_byte("1"), None);
+    }
+
+    #[test]
+    fn terminal_input_is_suppressed_while_an_overlay_is_open() {
+        let mut runtime = NativeShellRuntime::default();
+        // Open the command palette, then "type": the char must not leak to a
+        // terminal write path; it belongs to the palette's own text input.
+        runtime.update_shell(ShellMessage::OverlayRequested(RailItem::CommandPalette));
+        runtime.update_shell(ShellMessage::TerminalInput(b"l".to_vec()));
+        assert_eq!(
+            runtime.view_model().chrome.active_overlay,
+            Overlay::CommandPalette
+        );
+        assert_eq!(runtime.last_error(), None);
+    }
+
+    #[test]
+    #[ignore = "spawns a real shell through ConPTY, run manually during Iced runtime work"]
+    fn live_typing_reaches_pty() {
+        // End-to-end: drive the public keyboard path (TerminalInput per keystroke
+        // + Enter via the PaletteActivate fallback) and confirm the echoed marker
+        // shows up in the terminal snapshot.
+        let mut runtime = NativeShellRuntime::new(true);
+        let marker = "PANDAMUX_TYPING_E2E_OK";
+        for byte in format!("Write-Output {marker}").into_bytes() {
+            runtime.update_shell(ShellMessage::TerminalInput(vec![byte]));
+        }
+        // No overlay is open, so PaletteActivate sends a carriage return.
+        runtime.update_shell(ShellMessage::PaletteActivate);
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            runtime.refresh_terminal_snapshots();
+            if runtime
+                .view_model()
+                .terminals
+                .iter()
+                .flat_map(|terminal| terminal.lines.iter())
+                .any(|line| line.contains(marker))
+            {
+                return;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        panic!("typed command output never appeared in terminal snapshots");
     }
 
     #[test]

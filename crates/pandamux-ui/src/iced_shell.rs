@@ -138,6 +138,10 @@ pub enum ShellMessage {
         id: u64,
         payload: String,
     },
+    /// Raw bytes decoded from a key press, to be written to the focused
+    /// terminal's PTY (or SSH channel). Suppressed while a centered overlay is
+    /// open, since the overlay's own text inputs consume typing.
+    TerminalInput(Vec<u8>),
     /// No-op (e.g. an unmapped key press); ignored by the runtime.
     Noop,
 }
