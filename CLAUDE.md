@@ -17,14 +17,19 @@ Native Windows terminal multiplexer for AI agents. Rust workspace: Iced (GPU UI)
 Rust stable toolchain (rustup) + MSVC build tools (Windows target). No Node/pnpm anymore.
 
 ```bash
-# GUI app (the Iced shell needs the iced-runtime feature)
-cargo run -p pandamux-app --features iced-runtime -- --iced-shell        # interactive window
+# GUI app (the Iced shell needs the iced-runtime feature). With that feature the
+# window opens by DEFAULT (no flag): the installed Start Menu shortcut runs
+# `pandamux.exe` with no args, so the argument-less path must be the GUI. The
+# feature build is a Windows GUI-subsystem binary, so no console window appears.
+cargo run -p pandamux-app --features iced-runtime                        # interactive window (default)
+cargo run -p pandamux-app --features iced-runtime -- --iced-shell        # same; flag kept for back-compat
 cargo run -p pandamux-app --features iced-runtime -- --iced-shell-smoke  # noninteractive CI smoke
 cargo build --release -p pandamux-app --features iced-runtime            # release GUI (pandamux.exe)
 
 # CLI (pandamux-cli.exe) + headless pipe server
 cargo build --release -p pandamux-cli
 cargo run  -p pandamux-app                                               # headless pipe server (no GUI)
+cargo run  -p pandamux-app --features iced-runtime -- --headless         # force the pipe server in the GUI build
 
 # Checks
 cargo fmt --all --check

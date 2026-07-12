@@ -1,3 +1,9 @@
+// Ship the GUI build as a Windows GUI-subsystem binary so double-clicking the
+// exe (or the Start Menu shortcut) does NOT pop a console/terminal window. The
+// headless build (no `iced-runtime` feature) stays a console app so the pipe
+// server and CLI-style invocations keep their stdout/stderr.
+#![cfg_attr(all(windows, feature = "iced-runtime"), windows_subsystem = "windows")]
+
 mod backend;
 mod clipboard_os;
 // In-app update check (Phase 7). The decision logic is always compiled/tested;
@@ -22,18 +28,12 @@ mod pipe_server;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     set_app_user_model_id();
 
-    #[cfg(feature = "iced-runtime")]
-    if std::env::args().any(|arg| arg == "--iced-shell") {
-        // Make Claude Code aware of PandaMUX and install the
-        // orchestrator plugin (best-effort; never aborts launch). Not run for
-        // the headless pipe server or the `--iced-shell-smoke` CI path.
-        claude_context::run_startup_integration();
-        iced_runtime::run_iced_shell()?;
-        return Ok(());
-    }
+    let has_flag = |name: &str| std::env::args().any(|arg| arg == name);
 
+    // Noninteractive CI smoke: build the shell view once and exit. Must be
+    // checked before the default-GUI launch below.
     #[cfg(feature = "iced-runtime")]
-    if std::env::args().any(|arg| arg == "--iced-shell-smoke") {
+    if has_flag("--iced-shell-smoke") {
         iced_runtime::run_iced_shell_smoke()?;
         return Ok(());
     }
@@ -41,8 +41,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Opt-in live SSH smoke (plan F2): connect to a real host through the same
     // RemoteSessionManager the runtime uses, run a durable tmux command, and read
     // it back. Reuses the Phase 2 auth matrix. Never runs in CI (flag-gated).
-    if std::env::args().any(|arg| arg == "--ssh-smoke") {
+    if has_flag("--ssh-smoke") {
         return run_ssh_smoke();
+    }
+
+    // In the GUI build, open the window by DEFAULT. The installed Start Menu
+    // shortcut runs `pandamux.exe` with no arguments (cargo-packager's NSIS
+    // config cannot pass shortcut args), so the argument-less path must be the
+    // GUI, not the headless pipe server. `--iced-shell` is kept for backward
+    // compatibility; `--headless`/`--pipe-server` forces the standalone server.
+    #[cfg(feature = "iced-runtime")]
+    if !has_flag("--headless") && !has_flag("--pipe-server") {
+        // Make Claude Code aware of PandaMUX and install the orchestrator
+        // plugin (best-effort; never aborts launch). Not run for the headless
+        // pipe server or the `--iced-shell-smoke` CI path.
+        claude_context::run_startup_integration();
+        iced_runtime::run_iced_shell()?;
+        return Ok(());
     }
 
     let pipe_name =

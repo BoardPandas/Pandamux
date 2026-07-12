@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Dropped "Everywhere" from the product name; the brand is now simply PandaMUX.** The titlebar no longer shows the "Everywhere" subtitle, and the embedded Windows `pandamux.exe` metadata, docs, marketing site, installer/winget metadata, orchestrator plugin, and release/tag naming now read "PandaMUX". No CLI command, package, executable, named-pipe, or environment-variable names change (those were already `pandamux`).
 
+### Fixed
+
+- **Installed app launched a bare terminal window instead of the UI.** Clicking the Start Menu shortcut ran `pandamux.exe` with no arguments, which fell through to the headless pipe server, and the binary shipped as a console-subsystem app, so all the user saw was an empty console window. The GUI build now (1) opens the window by default when launched with no arguments (the `--iced-shell` flag is still accepted; `--headless`/`--pipe-server` forces the standalone pipe server) and (2) is built as a Windows GUI-subsystem binary so no console window appears. The headless build (without the `iced-runtime` feature) stays a console app and keeps its stdout.
+
 ## [0.35.1]
 
 ### Changed
