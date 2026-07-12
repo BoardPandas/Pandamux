@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.4]
+
+### Changed
+
+- Bumped GitHub Actions release/CI workflows to their latest majors: `actions/checkout` `v4` -> `v7`, `actions/upload-artifact` `v4` -> `v7`, and `softprops/action-gh-release` `v2` -> `v3`. This clears the runner's Node 20 deprecation warning (checkout/upload-artifact v7 run on Node 24) and keeps the release pipeline on supported action versions.
+
 ## [0.35.3]
 
 ### Fixed

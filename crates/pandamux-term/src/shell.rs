@@ -83,7 +83,10 @@ fn is_shell_available(shell: &str) -> bool {
     }
     let locator = if cfg!(windows) { "where" } else { "which" };
     let mut command = Command::new(locator);
-    command.arg(shell).stdout(Stdio::null()).stderr(Stdio::null());
+    command
+        .arg(shell)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     // Suppress the console window a GUI-subsystem pandamux.exe would otherwise
     // pop for this console child. 0x0800_0000 == CREATE_NO_WINDOW.
     #[cfg(windows)]
