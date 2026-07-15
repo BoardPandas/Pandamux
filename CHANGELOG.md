@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.6]
+
+### Removed
+
+- **PandaMUX no longer writes anything into `~/.claude` on launch.** The startup integration that injected a marker-delimited PandaMUX block into `~/.claude/CLAUDE.md` and auto-installed/enabled the orchestrator plugin (`installed_plugins.json` + `settings.json`) has been removed entirely, along with the `claude-instructions.md` payload that fed it. The orchestrator plugin is still bundled on disk under `resources/pandamux-orchestrator/` for manual use; it is simply no longer installed automatically.
+
 ## [0.35.5]
 
 ### Fixed

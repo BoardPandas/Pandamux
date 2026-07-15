@@ -59,7 +59,6 @@ icons = ["../../resources/icons/icon.ico", "../../resources/icons/icon.png"]
 formats = ["nsis"]
 binaries = [{ path = "pandamux", main = true }]
 resources = [
-  { src = "../../resources/claude-instructions.md", target = "resources/claude-instructions.md" },
   { src = "../../resources/themes", target = "resources/themes" },
   { src = "../../resources/sounds", target = "resources/sounds" },
   { src = "../../resources/icons", target = "resources/icons" },
