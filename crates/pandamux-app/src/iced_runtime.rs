@@ -1466,20 +1466,32 @@ fn terminal_snapshots(
                 return None;
             }
             let is_remote = remote_configs.contains_key(&surface_id);
-            let lines = if is_remote {
-                // Remote surfaces render from the SSH-fed grid.
-                let text = remotes
-                    .screen_text_lines(surface_id.as_str(), 30)
-                    .unwrap_or_default();
-                non_empty_lines(text)
+            // Pull the styled grid (per-cell color + cursor). A remote read error
+            // yields an empty screen (pane still renders); a live-PTY read error
+            // skips the pane, matching the previous text-path behavior.
+            let screen = if is_remote {
+                remotes.screen_cells(surface_id.as_str()).ok()
             } else if live_ptys {
-                let text = ptys
-                    .screen_text_lines(surface_id.as_str(), 30)
-                    .map_err(|error| error.to_string())
-                    .ok()?;
-                non_empty_lines(text)
+                Some(
+                    ptys.screen_cells(surface_id.as_str())
+                        .map_err(|error| error.to_string())
+                        .ok()?,
+                )
             } else {
-                fallback_lines()
+                None
+            };
+
+            // Derive plain-text rows (for link detection + text consumers) from
+            // the same rows the viewport renders, so line indices stay aligned.
+            let (lines, cells, cursor, columns, rows) = match screen {
+                Some(screen) => {
+                    let lines = cells_to_lines(&screen.rows);
+                    let columns = screen.rows.iter().map(|row| row.len()).max().unwrap_or(120);
+                    let rows = screen.rows.len();
+                    (lines, screen.rows, screen.cursor, columns, rows)
+                }
+                None if is_remote => (Vec::new(), Vec::new(), (0, 0), 120, 30),
+                None => (fallback_lines(), Vec::new(), (0, 0), 120, 30),
             };
             let links = detect_links(&lines)
                 .into_iter()
@@ -1495,8 +1507,10 @@ fn terminal_snapshots(
             Some(TerminalSnapshot {
                 surface_id,
                 lines,
-                columns: 120,
-                rows: 30,
+                cells,
+                cursor,
+                columns,
+                rows,
                 links,
                 remote_host,
             })
@@ -1598,13 +1612,17 @@ fn fallback_lines() -> Vec<String> {
     ]
 }
 
-fn non_empty_lines(text: String) -> Vec<String> {
-    let lines = text.lines().map(ToString::to_string).collect::<Vec<_>>();
-    if lines.iter().any(|line| !line.trim().is_empty()) {
-        lines
-    } else {
-        vec![String::new()]
-    }
+/// Flatten styled grid rows into trimmed plain-text lines for link detection and
+/// other text consumers, keeping one line per grid row (indices stay aligned with
+/// the styled `cells`).
+fn cells_to_lines(rows: &[Vec<pandamux_term::StyledCell>]) -> Vec<String> {
+    rows.iter()
+        .map(|row| {
+            let mut line: String = row.iter().map(|cell| cell.c).collect();
+            line.truncate(line.trim_end().len());
+            line
+        })
+        .collect()
 }
 
 fn terminal_surface_ids(tree: &SplitNode) -> Vec<SurfaceId> {

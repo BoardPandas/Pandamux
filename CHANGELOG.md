@@ -7,7 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.36.0]
+## [0.37.0]
+
+### Added
+
+- **The terminal now renders colors, bold, and highlights instead of flat monochrome text.** Each character cell is drawn with its real foreground and background color (ANSI 16, xterm-256, and true-color), bold weight, and reverse-video, so colored prompts (oh-my-posh style segments, git status), syntax-highlighted output, and selection/menu highlights all look right. In particular, PSReadLine's history and completion menus now show the highlighted entry with its background bar, which previously vanished into the surrounding text.
+
+### Fixed
+
+- **The block cursor now sits where you are actually typing.** The viewport previously guessed the cursor position ("just past the last non-empty line"), which drifted from the real caret whenever the shell redrew its prompt or a menu. It now uses the true grid cursor position reported by the terminal engine.
 
 ### Added
 

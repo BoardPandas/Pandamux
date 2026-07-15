@@ -4,8 +4,110 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{ClipboardType, Config, Osc52, Term, TermMode};
-use alacritty_terminal::vte::ansi;
+use alacritty_terminal::vte::ansi::{self, Color, NamedColor};
 use std::sync::{Arc, Mutex};
+
+/// A resolved terminal cell color. Concrete (non-default) colors are resolved to
+/// RGB here in the term layer (using the standard ANSI 16 + xterm-256 palette) so
+/// the UI never sees an `alacritty_terminal` type (crate-isolation invariant).
+/// Default foreground/background stay symbolic so the UI can substitute the
+/// active theme's colors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CellColor {
+    /// The theme's default foreground (text) color.
+    Default,
+    /// The theme's default background color.
+    Background,
+    /// A concrete color.
+    Rgb(u8, u8, u8),
+}
+
+/// A single rendered grid cell with resolved styling. Reverse-video (`INVERSE`)
+/// is already applied by swapping `fg`/`bg`, so the UI does not special-case it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StyledCell {
+    pub c: char,
+    pub fg: CellColor,
+    pub bg: CellColor,
+    pub bold: bool,
+}
+
+/// The visible screen as styled cells (one row per screen line, full width, not
+/// trimmed so trailing background colors survive), plus the write-cursor position
+/// as `(row, column)`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ScreenCells {
+    pub rows: Vec<Vec<StyledCell>>,
+    pub cursor: (usize, usize),
+}
+
+/// Standard VGA/xterm palette for ANSI colors 0..=15.
+const ANSI_16: [(u8, u8, u8); 16] = [
+    (0x00, 0x00, 0x00), // 0  black
+    (0x80, 0x00, 0x00), // 1  red
+    (0x00, 0x80, 0x00), // 2  green
+    (0x80, 0x80, 0x00), // 3  yellow
+    (0x00, 0x00, 0x80), // 4  blue
+    (0x80, 0x00, 0x80), // 5  magenta
+    (0x00, 0x80, 0x80), // 6  cyan
+    (0xc0, 0xc0, 0xc0), // 7  white
+    (0x80, 0x80, 0x80), // 8  bright black
+    (0xff, 0x00, 0x00), // 9  bright red
+    (0x00, 0xff, 0x00), // 10 bright green
+    (0xff, 0xff, 0x00), // 11 bright yellow
+    (0x00, 0x00, 0xff), // 12 bright blue
+    (0xff, 0x00, 0xff), // 13 bright magenta
+    (0x00, 0xff, 0xff), // 14 bright cyan
+    (0xff, 0xff, 0xff), // 15 bright white
+];
+
+/// Resolve an xterm 256-color index to RGB (16 base + 6x6x6 cube + grayscale).
+fn indexed_rgb(index: u8) -> (u8, u8, u8) {
+    match index {
+        0..=15 => ANSI_16[index as usize],
+        16..=231 => {
+            let i = index - 16;
+            let step = |v: u8| if v == 0 { 0 } else { 55 + v * 40 };
+            (step(i / 36), step((i % 36) / 6), step(i % 6))
+        }
+        232..=255 => {
+            let level = 8 + (index - 232) * 10;
+            (level, level, level)
+        }
+    }
+}
+
+/// Map an alacritty cell color to a [`CellColor`], resolving named/indexed
+/// colors to RGB and leaving the default fg/bg symbolic.
+fn resolve_color(color: Color) -> CellColor {
+    match color {
+        Color::Spec(rgb) => CellColor::Rgb(rgb.r, rgb.g, rgb.b),
+        Color::Indexed(index) => {
+            let (r, g, b) = indexed_rgb(index);
+            CellColor::Rgb(r, g, b)
+        }
+        Color::Named(named) => match named {
+            NamedColor::Background => CellColor::Background,
+            NamedColor::Foreground
+            | NamedColor::BrightForeground
+            | NamedColor::DimForeground
+            | NamedColor::Cursor => CellColor::Default,
+            other => {
+                let n = other as usize;
+                if n < 16 {
+                    let (r, g, b) = ANSI_16[n];
+                    CellColor::Rgb(r, g, b)
+                } else if (259..=266).contains(&n) {
+                    // Dim black..dim white -> their normal base color (0..=7).
+                    let (r, g, b) = ANSI_16[n - 259];
+                    CellColor::Rgb(r, g, b)
+                } else {
+                    CellColor::Default
+                }
+            }
+        },
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GridSize {
@@ -167,6 +269,47 @@ impl TerminalGrid {
             .collect()
     }
 
+    /// The visible screen as styled cells plus the cursor position. Wide-char
+    /// spacer cells are collapsed (matching [`Self::row_text`]); rows keep their
+    /// full width so a reverse-video highlight that runs to the line end (e.g. a
+    /// PSReadLine menu selection) still paints its background.
+    pub fn visible_cells(&self) -> ScreenCells {
+        let grid = self.term.grid();
+        let columns = self.term.columns();
+        let rows = (0..self.term.screen_lines())
+            .map(|row| {
+                let line = Line(row as i32);
+                let mut cells = Vec::with_capacity(columns);
+                for col in 0..columns {
+                    let cell = &grid[line][Column(col)];
+                    if cell
+                        .flags
+                        .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                    {
+                        continue;
+                    }
+                    let mut fg = resolve_color(cell.fg);
+                    let mut bg = resolve_color(cell.bg);
+                    // Reverse video: swap fg/bg up front so the UI stays dumb.
+                    if cell.flags.contains(Flags::INVERSE) {
+                        std::mem::swap(&mut fg, &mut bg);
+                    }
+                    cells.push(StyledCell {
+                        c: cell.c,
+                        fg,
+                        bg,
+                        bold: cell.flags.contains(Flags::BOLD),
+                    });
+                }
+                cells
+            })
+            .collect();
+        ScreenCells {
+            rows,
+            cursor: self.cursor(),
+        }
+    }
+
     /// Visible screen as newline-joined text (unchanged behavior).
     pub fn snapshot_text(&self) -> String {
         self.visible_lines().join("\n")
@@ -278,6 +421,37 @@ mod tests {
         let links = grid.links();
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].url, "https://example.com/docs");
+    }
+
+    #[test]
+    fn visible_cells_resolve_color_and_reverse_video() {
+        let mut grid = TerminalGrid::new(GridSize::new(20, 3));
+        // "A" default, "R" red foreground, "V" reverse-video (SGR 7), then reset.
+        grid.advance(b"A\x1b[31mR\x1b[0m\x1b[7mV\x1b[0m");
+        let screen = grid.visible_cells();
+        let row = &screen.rows[0];
+
+        // Plain cell keeps the default (symbolic) foreground.
+        assert_eq!(row[0].c, 'A');
+        assert_eq!(row[0].fg, CellColor::Default);
+        assert_eq!(row[0].bg, CellColor::Background);
+
+        // Red foreground resolves to the ANSI-16 red RGB.
+        assert_eq!(row[1].c, 'R');
+        assert_eq!(row[1].fg, CellColor::Rgb(0x80, 0x00, 0x00));
+
+        // Reverse video swaps default fg/bg so the cell paints an inverted block.
+        assert_eq!(row[2].c, 'V');
+        assert_eq!(row[2].fg, CellColor::Background);
+        assert_eq!(row[2].bg, CellColor::Default);
+    }
+
+    #[test]
+    fn visible_cells_report_cursor_position() {
+        let mut grid = TerminalGrid::new(GridSize::new(20, 3));
+        grid.advance(b"hi");
+        let screen = grid.visible_cells();
+        assert_eq!(screen.cursor, (0, 2));
     }
 
     #[test]

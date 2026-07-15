@@ -156,6 +156,17 @@ impl PtySessionManager {
         Ok(session.grid.snapshot_text())
     }
 
+    /// Styled visible screen (per-cell color/attrs) plus cursor position, for the
+    /// GPU viewport. Polls first so the grid reflects the latest PTY output.
+    pub fn screen_cells(&mut self, session_id: &str) -> PtyResult<crate::grid::ScreenCells> {
+        self.poll(session_id)?;
+        let session = self
+            .sessions
+            .get(session_id)
+            .ok_or_else(|| format!("pty session not found: {session_id}"))?;
+        Ok(session.grid.visible_cells())
+    }
+
     pub fn screen_text_lines(&mut self, session_id: &str, lines: usize) -> PtyResult<String> {
         let text = self.screen_text(session_id)?;
         if lines == 0 {

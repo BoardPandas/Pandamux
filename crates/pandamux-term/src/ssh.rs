@@ -253,6 +253,17 @@ impl RemoteSessionManager {
         Ok(session.grid.snapshot_text())
     }
 
+    /// Styled visible screen (per-cell color/attrs) plus cursor position for a
+    /// remote surface, mirroring [`crate::PtySessionManager::screen_cells`].
+    pub fn screen_cells(&mut self, surface_id: &str) -> SshResult<crate::grid::ScreenCells> {
+        self.poll(surface_id)?;
+        let session = self
+            .sessions
+            .get(surface_id)
+            .ok_or_else(|| format!("remote session not found: {surface_id}"))?;
+        Ok(session.grid.visible_cells())
+    }
+
     pub fn screen_text_lines(&mut self, surface_id: &str, lines: usize) -> SshResult<String> {
         let text = self.screen_text(surface_id)?;
         if lines == 0 {

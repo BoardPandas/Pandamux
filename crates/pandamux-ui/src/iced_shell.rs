@@ -22,6 +22,7 @@ use iced::{
     mouse,
 };
 use pandamux_core::{DropZone, PaneId, SplitDirection, SurfaceId, SurfaceType, WorkspaceId};
+use pandamux_term::{CellColor, StyledCell};
 use std::collections::HashMap;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -178,7 +179,15 @@ pub struct LinkSpan {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TerminalSnapshot {
     pub surface_id: SurfaceId,
+    /// Plain-text rows (used for link detection and text consumers). Kept in sync
+    /// with `cells` when styled data is available.
     pub lines: Vec<String>,
+    /// Styled per-cell rows (color + attributes) from the grid. Empty for
+    /// placeholder/text-only snapshots, in which case the viewport falls back to
+    /// rendering `lines` in the scheme's default color.
+    pub cells: Vec<Vec<StyledCell>>,
+    /// The write-cursor position as `(row, column)` in grid coordinates.
+    pub cursor: (usize, usize),
     pub columns: usize,
     pub rows: usize,
     /// Detected link spans on the visible screen (underlined by the viewport).
@@ -189,11 +198,14 @@ pub struct TerminalSnapshot {
 }
 
 impl TerminalSnapshot {
-    /// Convenience constructor for snapshots without links (tests, placeholders).
+    /// Convenience constructor for text-only snapshots without styled cells or
+    /// links (tests, placeholders).
     pub fn new(surface_id: SurfaceId, lines: Vec<String>, columns: usize, rows: usize) -> Self {
         Self {
             surface_id,
             lines,
+            cells: Vec::new(),
+            cursor: (0, 0),
             columns,
             rows,
             links: Vec::new(),
@@ -246,6 +258,11 @@ pub struct ShellViewModel {
 #[derive(Debug, Clone)]
 pub struct TerminalViewport {
     lines: Vec<String>,
+    /// Styled per-cell rows. When non-empty the viewport paints per-cell
+    /// backgrounds and colored text; when empty it falls back to `lines`.
+    cells: Vec<Vec<StyledCell>>,
+    /// Real write-cursor position `(row, column)` from the grid, when available.
+    cursor_pos: Option<(usize, usize)>,
     columns: usize,
     rows: usize,
     show_cursor: bool,
@@ -258,6 +275,8 @@ impl TerminalViewport {
     pub fn new(lines: Vec<String>, columns: usize, rows: usize) -> Self {
         Self {
             lines,
+            cells: Vec::new(),
+            cursor_pos: None,
             columns,
             rows,
             show_cursor: false,
@@ -269,6 +288,15 @@ impl TerminalViewport {
 
     pub fn with_cursor(mut self, show_cursor: bool) -> Self {
         self.show_cursor = show_cursor;
+        self
+    }
+
+    /// Supply styled per-cell rows and the real cursor position from the grid.
+    pub fn with_cells(mut self, cells: Vec<Vec<StyledCell>>, cursor: (usize, usize)) -> Self {
+        if !cells.is_empty() {
+            self.cells = cells;
+            self.cursor_pos = Some(cursor);
+        }
         self
     }
 
@@ -287,8 +315,25 @@ impl TerminalViewport {
         self
     }
 
-    /// Column of the block cursor: just past the last non-empty line's content.
+    /// Resolve a [`CellColor`] against the active scheme (default fg/bg become the
+    /// scheme's text/background colors).
+    fn resolve(&self, color: CellColor) -> Color {
+        match color {
+            CellColor::Default => self.scheme.text,
+            CellColor::Background => self.scheme.background,
+            CellColor::Rgb(r, g, b) => Color::from_rgb8(r, g, b),
+        }
+    }
+
+    /// Column of the block cursor: the real grid cursor when available, else just
+    /// past the last non-empty line's content.
     fn cursor_cell(&self) -> (usize, usize) {
+        if let Some((row, col)) = self.cursor_pos {
+            return (
+                row.min(self.rows.saturating_sub(1)),
+                col.min(self.columns.saturating_sub(1)),
+            );
+        }
         let last_row = self
             .lines
             .iter()
@@ -323,7 +368,32 @@ impl<Message> canvas::Program<Message> for TerminalViewport {
         let cell_h = theme::term::CELL_HEIGHT;
         let cell_w = theme::term::CELL_WIDTH;
 
-        // Current find match highlight (drawn behind the text).
+        // Per-cell backgrounds (reverse video, colored prompts, menu highlights),
+        // drawn first so everything else composits over them. Contiguous cells
+        // with the same background are batched into one rectangle.
+        if !self.cells.is_empty() {
+            for (row_index, cells) in self.cells.iter().take(self.rows).enumerate() {
+                let y = pad + row_index as f32 * cell_h;
+                let mut col = 0;
+                while col < cells.len() {
+                    let bg = self.resolve(cells[col].bg);
+                    if bg == self.scheme.background {
+                        col += 1;
+                        continue;
+                    }
+                    let start = col;
+                    while col < cells.len() && self.resolve(cells[col].bg) == bg {
+                        col += 1;
+                    }
+                    let x = pad + start as f32 * cell_w;
+                    let width = (col - start) as f32 * cell_w;
+                    let rect = canvas::Path::rectangle(Point::new(x, y), Size::new(width, cell_h));
+                    frame.fill(&rect, bg);
+                }
+            }
+        }
+
+        // Current find match highlight (drawn over cell backgrounds, behind text).
         if let Some(span) = self.highlight
             && span.line < self.rows
             && span.end > span.start
@@ -335,18 +405,60 @@ impl<Message> canvas::Program<Message> for TerminalViewport {
             frame.fill(&rect, theme::with_alpha(theme::Accent::Gold.color(), 0.35));
         }
 
-        for (row_index, line) in self.lines.iter().take(self.rows).enumerate() {
-            frame.fill_text(canvas::Text {
-                content: line.clone(),
-                position: Point::new(pad, pad + row_index as f32 * cell_h),
-                max_width: (bounds.width - pad * 2.0).max(0.0),
-                color: self.scheme.text,
-                size: Pixels(theme::SIZE_TERMINAL),
-                line_height: iced::widget::text::LineHeight::Absolute(Pixels(cell_h)),
-                font: theme::MONO_FONT,
-                shaping: iced::widget::text::Shaping::Advanced,
-                ..canvas::Text::default()
-            });
+        if self.cells.is_empty() {
+            // Text-only fallback (placeholders, tests): one draw call per line.
+            for (row_index, line) in self.lines.iter().take(self.rows).enumerate() {
+                frame.fill_text(canvas::Text {
+                    content: line.clone(),
+                    position: Point::new(pad, pad + row_index as f32 * cell_h),
+                    max_width: (bounds.width - pad * 2.0).max(0.0),
+                    color: self.scheme.text,
+                    size: Pixels(theme::SIZE_TERMINAL),
+                    line_height: iced::widget::text::LineHeight::Absolute(Pixels(cell_h)),
+                    font: theme::MONO_FONT,
+                    shaping: iced::widget::text::Shaping::Advanced,
+                    ..canvas::Text::default()
+                });
+            }
+        } else {
+            // Styled text: batch contiguous cells sharing (foreground, bold) into
+            // one draw call. Runs of blank cells are skipped.
+            for (row_index, cells) in self.cells.iter().take(self.rows).enumerate() {
+                let y = pad + row_index as f32 * cell_h;
+                let mut col = 0;
+                while col < cells.len() {
+                    let fg = self.resolve(cells[col].fg);
+                    let bold = cells[col].bold;
+                    let start = col;
+                    let mut content = String::new();
+                    while col < cells.len()
+                        && self.resolve(cells[col].fg) == fg
+                        && cells[col].bold == bold
+                    {
+                        content.push(cells[col].c);
+                        col += 1;
+                    }
+                    if content.trim().is_empty() {
+                        continue;
+                    }
+                    let weight = if bold {
+                        iced::font::Weight::Bold
+                    } else {
+                        iced::font::Weight::Normal
+                    };
+                    frame.fill_text(canvas::Text {
+                        content,
+                        position: Point::new(pad + start as f32 * cell_w, y),
+                        max_width: (bounds.width - pad * 2.0).max(0.0),
+                        color: fg,
+                        size: Pixels(theme::SIZE_TERMINAL),
+                        line_height: iced::widget::text::LineHeight::Absolute(Pixels(cell_h)),
+                        font: theme::mono(weight),
+                        shaping: iced::widget::text::Shaping::Advanced,
+                        ..canvas::Text::default()
+                    });
+                }
+            }
         }
 
         // Underline detected links (accent, 1px) beneath their character span.
@@ -597,6 +709,7 @@ fn pane_view<'a>(
             match active_terminal {
                 Some(snapshot) => canvas::Canvas::new(
                     TerminalViewport::new(snapshot.lines.clone(), snapshot.columns, snapshot.rows)
+                        .with_cells(snapshot.cells.clone(), snapshot.cursor)
                         .with_cursor(is_focused && cursor_on)
                         .with_links(snapshot.links.clone())
                         .with_highlight(highlight)
@@ -1038,6 +1151,34 @@ mod tests {
             term_scheme: TermScheme::default(),
             surface_term_schemes: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn styled_viewport_uses_real_cursor_and_resolves_colors() {
+        let cell = |c: char, fg: CellColor, bg: CellColor| StyledCell {
+            c,
+            fg,
+            bg,
+            bold: false,
+        };
+        let cells = vec![vec![
+            cell('h', CellColor::Default, CellColor::Background),
+            cell('i', CellColor::Rgb(0x80, 0x00, 0x00), CellColor::Background),
+        ]];
+        let scheme = TermScheme::default();
+        let viewport = TerminalViewport::new(vec!["hi".to_string()], 80, 24)
+            .with_cells(cells, (5, 12))
+            .with_scheme(scheme);
+
+        // The real grid cursor position wins over the "past last content" heuristic.
+        assert_eq!(viewport.cursor_cell(), (5, 12));
+        // Default resolves to the scheme text color; RGB resolves literally.
+        assert_eq!(viewport.resolve(CellColor::Default), scheme.text);
+        assert_eq!(viewport.resolve(CellColor::Background), scheme.background);
+        assert_eq!(
+            viewport.resolve(CellColor::Rgb(0x80, 0x00, 0x00)),
+            Color::from_rgb8(0x80, 0x00, 0x00)
+        );
     }
 
     #[test]

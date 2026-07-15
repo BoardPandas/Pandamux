@@ -10,7 +10,7 @@ pub mod ssh;
 
 pub use clipboard::{ClipboardKind, ClipboardPolicy, ClipboardStore, wrap_paste};
 pub use cwd::CwdScanner;
-pub use grid::{GridSize, TerminalGrid, render_bytes_to_text};
+pub use grid::{CellColor, GridSize, ScreenCells, StyledCell, TerminalGrid, render_bytes_to_text};
 pub use links::{DetectedLink, detect_links};
 pub use pty::{PtyCapture, PtyCommand, capture_pty_command, shell_marker_command};
 pub use search::{SearchMatch, SearchOptions, search_lines};
