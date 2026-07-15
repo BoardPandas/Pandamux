@@ -76,6 +76,12 @@ pub enum ShellMessage {
         workspace_id: WorkspaceId,
         surface_id: SurfaceId,
     },
+    /// Close a session (a shell context) from the session panel. Cascades in the
+    /// runtime: drops the surface, its pane, or its whole workspace as needed.
+    SessionClosed {
+        workspace_id: WorkspaceId,
+        surface_id: SurfaceId,
+    },
     SessionGroupingChanged(SessionGrouping),
     NewSessionRequested,
     // Overlays (command palette / quick-launch / settings)

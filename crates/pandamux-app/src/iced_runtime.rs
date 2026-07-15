@@ -5,7 +5,8 @@ use pandamux_core::{
     AgentRegistry, AppIntent, AppState, ClipboardConfig, Localizer, NewNotification,
     NotificationSource, Notifications, PaneId, PaneIntent, SidebarState, SplitDirection, SplitNode,
     SplitPaneParams, SshProfiles, SurfaceContents, SurfaceId, SurfaceIntent, SurfaceType,
-    ThemeStore, WorkspaceIntent, get_all_pane_ids, parse_ghostty_theme,
+    ThemeStore, WorkspaceId, WorkspaceIntent, find_leaf, find_pane_id_for_surface,
+    get_all_pane_ids, parse_ghostty_theme,
 };
 use pandamux_term::{
     GridSize, PtyCommand, PtySessionManager, RemoteSessionManager, SearchOptions, SshConfig,
@@ -691,12 +692,64 @@ impl NativeShellRuntime {
                     let _ = tx.send(reply);
                 }
             }
+            ShellMessage::SurfaceClosed(surface_id) => {
+                // The tab X lives on the active workspace's active pane.
+                self.close_session(None, surface_id);
+            }
+            ShellMessage::SessionClosed {
+                workspace_id,
+                surface_id,
+            } => {
+                self.close_session(Some(workspace_id), surface_id);
+            }
             core_message => {
                 let result = self.apply_core_message(core_message);
                 self.last_error = result.err();
             }
         }
         self.refresh_terminal_snapshots();
+    }
+
+    /// Close the terminal behind a tab or session row. A "tab" is a surface
+    /// inside a pane, so the X can hit three different structural cases; the user
+    /// only cares that the terminal goes away. We cascade: drop the surface if
+    /// its pane has sibling tabs, else drop the whole pane, else drop the whole
+    /// workspace. The very last surface in the app is left in place (there is
+    /// nothing to fall back to, and an empty window is worse than a no-op). This
+    /// keeps the core `surface.close` / `pane.close` intents (and their CLI
+    /// contract) unchanged: the cascade is UI-layer close policy.
+    fn close_session(&mut self, workspace_id: Option<WorkspaceId>, surface_id: SurfaceId) {
+        let workspace_id =
+            workspace_id.unwrap_or_else(|| self.app_state.active_workspace_id.clone());
+        let Some(workspace) = self.app_state.workspace(&workspace_id) else {
+            self.last_error = Some(format!("workspace not found: {workspace_id}"));
+            return;
+        };
+        let Some(pane_id) = find_pane_id_for_surface(&workspace.split_tree, &surface_id) else {
+            self.last_error = Some(format!("surface not found: {surface_id}"));
+            return;
+        };
+        let surfaces_in_pane = find_leaf(&workspace.split_tree, &pane_id)
+            .map(|leaf| leaf.surfaces.len())
+            .unwrap_or(0);
+        let pane_count = get_all_pane_ids(&workspace.split_tree).len();
+        let intent = if surfaces_in_pane > 1 {
+            AppIntent::Surface(SurfaceIntent::Close {
+                workspace_id: Some(workspace_id),
+                surface_id,
+            })
+        } else if pane_count > 1 {
+            AppIntent::Pane(PaneIntent::Close {
+                workspace_id: Some(workspace_id),
+                pane_id,
+            })
+        } else if self.app_state.workspaces.len() > 1 {
+            AppIntent::Workspace(WorkspaceIntent::Close { workspace_id })
+        } else {
+            // Last terminal in the app: nothing to fall back to.
+            return;
+        };
+        self.last_error = self.app_state.apply(intent).err();
     }
 
     fn apply_core_message(&mut self, message: ShellMessage) -> Result<(), String> {
@@ -730,10 +783,6 @@ impl NativeShellRuntime {
                 })
             }
             ShellMessage::SurfaceFocused(surface_id) => AppIntent::Surface(SurfaceIntent::Focus {
-                workspace_id: None,
-                surface_id,
-            }),
-            ShellMessage::SurfaceClosed(surface_id) => AppIntent::Surface(SurfaceIntent::Close {
                 workspace_id: None,
                 surface_id,
             }),
@@ -1715,6 +1764,64 @@ mod tests {
 
         runtime.update_shell(ShellMessage::PaneClosed(pane_to_close));
 
+        assert_eq!(runtime.view_model().projection.visible_panes.len(), 1);
+        assert_eq!(runtime.last_error(), None);
+    }
+
+    #[test]
+    fn closing_the_only_tab_in_a_pane_cascades_to_the_workspace() {
+        let mut runtime = NativeShellRuntime::default();
+        // The default workspace has a single pane with a single surface, so its
+        // tab X hits the "last surface in a pane" guard. Capture its ids first.
+        let default_ws = runtime.app_state.active_workspace_id.clone();
+        let surface_id = runtime
+            .view_model()
+            .projection
+            .visible_panes
+            .first()
+            .and_then(|pane| pane.surfaces.first())
+            .expect("default surface")
+            .id
+            .clone();
+
+        // A second workspace makes the default one closable.
+        runtime
+            .app_state
+            .apply(AppIntent::Workspace(WorkspaceIntent::Create {
+                title: Some("Second".to_string()),
+                shell: None,
+            }))
+            .expect("create workspace");
+
+        // Closing that sole tab cascades to closing the whole workspace instead
+        // of silently failing on the last-surface guard.
+        runtime.update_shell(ShellMessage::SessionClosed {
+            workspace_id: default_ws.clone(),
+            surface_id,
+        });
+
+        assert_eq!(runtime.app_state.workspaces.len(), 1);
+        assert!(runtime.app_state.workspace(&default_ws).is_none());
+        assert_eq!(runtime.last_error(), None);
+    }
+
+    #[test]
+    fn closing_the_only_session_in_the_app_is_a_noop() {
+        let mut runtime = NativeShellRuntime::default();
+        let surface_id = runtime
+            .view_model()
+            .projection
+            .visible_panes
+            .first()
+            .and_then(|pane| pane.surfaces.first())
+            .expect("default surface")
+            .id
+            .clone();
+
+        runtime.update_shell(ShellMessage::SurfaceClosed(surface_id));
+
+        // The very last terminal stays put; no error is raised.
+        assert_eq!(runtime.app_state.workspaces.len(), 1);
         assert_eq!(runtime.view_model().projection.visible_panes.len(), 1);
         assert_eq!(runtime.last_error(), None);
     }

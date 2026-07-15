@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.36.0]
+
+### Added
+
+- **Close a session from the left Sessions rail.** Each session row now carries a small close (X) button (dim by default, brighter on hover) that shuts that session down: it removes the session's terminal, and its pane or workspace when the terminal was the last one there.
+
+### Fixed
+
+- **The X on a terminal tab now actually closes the tab.** Clicking the close button on a single-tab terminal previously did nothing, and no error was shown: the close was rejected internally because the tab was the only one in its pane, and the failure was swallowed. Closing now cascades to the right level: it drops the tab when the pane has other tabs, otherwise closes the whole pane, otherwise closes the whole workspace. The very last terminal in the app is intentionally left open, since there is nothing to fall back to.
+
 ## [0.35.6]
 
 ### Removed

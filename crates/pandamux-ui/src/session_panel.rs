@@ -361,7 +361,7 @@ fn session_row<'a>(entry: &'a SessionEntry, palette: Palette) -> Element<'a, She
         .width(Length::Fill);
 
     let is_active = entry.is_active;
-    button(content)
+    let select = button(content)
         .padding(Padding::from([7.0, 8.0]))
         .width(Length::Fill)
         .on_press(ShellMessage::SessionSelected {
@@ -393,7 +393,35 @@ fn session_row<'a>(entry: &'a SessionEntry, palette: Palette) -> Element<'a, She
                 ),
                 ..Default::default()
             }
+        });
+
+    // A small X to close the session (removes its surface / pane / workspace via
+    // the runtime cascade). Dim by default, brightening on hover so the row stays
+    // calm until you reach for it.
+    let close = button(text("\u{00d7}").size(theme::SIZE_BODY).color(palette.t4))
+        .padding(Padding::from([3.0, 6.0]))
+        .on_press(ShellMessage::SessionClosed {
+            workspace_id: entry.workspace_id.clone(),
+            surface_id: entry.surface_id.clone(),
         })
+        .style(move |_theme, status| {
+            let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+            button::Style {
+                background: if hovered {
+                    Some(palette.ov(0.08).into())
+                } else {
+                    None
+                },
+                text_color: if hovered { palette.t1 } else { palette.t4 },
+                border: theme::border(Color::TRANSPARENT, 0.0, theme::RADIUS_ROW),
+                ..Default::default()
+            }
+        });
+
+    row![select, close]
+        .spacing(2)
+        .align_y(Alignment::Center)
+        .width(Length::Fill)
         .into()
 }
 
