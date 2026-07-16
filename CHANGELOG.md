@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Documented the approved SSH Project session-launcher design.** The implementation specification covers multiple saved Windows OpenSSH connections, local and remote folder selection, automatic shell startup in the selected folder, Project-based session grouping, Project-level session creation, secure host-key handling, persistence, migration, and validation expectations.
+
 ### Fixed
 
 - **Terminal text is sharper, properly aligned, and easier to read.** The viewport now uses a guaranteed monospaced face with tighter native-terminal metrics, preventing colored prompt fragments and brackets from drifting apart when JetBrains Mono is not installed. ANSI colors now follow the selected terminal theme instead of the low-contrast legacy VGA palette, restoring clear yellows, cyans, greens, and bright text.
