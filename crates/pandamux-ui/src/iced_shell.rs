@@ -174,6 +174,14 @@ pub enum ShellMessage {
     /// terminal's PTY (or SSH channel). Suppressed while a centered overlay is
     /// open, since the overlay's own text inputs consume typing.
     TerminalInput(Vec<u8>),
+    /// The terminal canvas measured a pane size whose grid dimensions differ
+    /// from the engine grid. The runtime debounces these and resizes the
+    /// engine + PTY/SSH channel to match (spec 1.1).
+    ViewportResized {
+        surface_id: SurfaceId,
+        columns: usize,
+        rows: usize,
+    },
     /// No-op (e.g. an unmapped key press); ignored by the runtime.
     Noop,
 }
@@ -281,8 +289,19 @@ pub struct ShellViewModel {
 // Terminal viewport (fixed-dark scheme + block cursor)
 // ---------------------------------------------------------------------------
 
+/// Canvas-local interaction state for [`TerminalViewport`].
+#[derive(Debug, Clone, Default)]
+pub struct ViewportState {
+    /// The last grid size published as a resize intent, deduping republication
+    /// while the runtime's debounce is still in flight.
+    last_published: Option<(usize, usize)>,
+}
+
 #[derive(Debug, Clone)]
 pub struct TerminalViewport {
+    /// The surface this viewport renders; resize intents carry it. Placeholder
+    /// viewports have none and never publish.
+    surface_id: Option<SurfaceId>,
     lines: Vec<String>,
     /// Styled per-cell rows. When non-empty the viewport paints per-cell
     /// backgrounds and colored text; when empty it falls back to `lines`.
@@ -295,11 +314,13 @@ pub struct TerminalViewport {
     links: Vec<LinkSpan>,
     highlight: Option<LinkSpan>,
     scheme: TermScheme,
+    metrics: crate::metrics::CellMetrics,
 }
 
 impl TerminalViewport {
     pub fn new(lines: Vec<String>, columns: usize, rows: usize) -> Self {
         Self {
+            surface_id: None,
             lines,
             cells: Vec::new(),
             cursor_pos: None,
@@ -309,12 +330,28 @@ impl TerminalViewport {
             links: Vec::new(),
             highlight: None,
             scheme: TermScheme::default(),
+            metrics: crate::metrics::CellMetrics::get(),
         }
+    }
+
+    /// Attach the surface identity so the canvas can publish resize intents.
+    pub fn with_surface(mut self, surface_id: SurfaceId) -> Self {
+        self.surface_id = Some(surface_id);
+        self
     }
 
     pub fn with_cursor(mut self, show_cursor: bool) -> Self {
         self.show_cursor = show_cursor;
         self
+    }
+
+    /// Grid dimensions that fit `bounds` at the measured cell metrics, with a
+    /// small floor so degenerate layouts never produce a broken PTY size.
+    fn grid_size_for(&self, bounds: Rectangle) -> (usize, usize) {
+        let pad = theme::TERMINAL_PADDING * 2.0;
+        let columns = ((((bounds.width - pad) / self.metrics.width) as usize).max(20)).min(1000);
+        let rows = ((((bounds.height - pad) / self.metrics.height) as usize).max(5)).min(500);
+        (columns, rows)
     }
 
     /// Supply styled per-cell rows and the real cursor position from the grid.
@@ -387,8 +424,43 @@ impl TerminalViewport {
     }
 }
 
-impl<Message> canvas::Program<Message> for TerminalViewport {
-    type State = ();
+impl canvas::Program<ShellMessage> for TerminalViewport {
+    type State = ViewportState;
+
+    fn update(
+        &self,
+        state: &mut Self::State,
+        event: &canvas::Event,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Option<canvas::Action<ShellMessage>> {
+        let surface_id = self.surface_id.as_ref()?;
+        // The size check runs on redraws (each ~100ms tick repaints) and mouse
+        // events; anything else cannot have changed the layout.
+        let relevant = matches!(
+            event,
+            canvas::Event::Window(iced::window::Event::RedrawRequested(_))
+                | canvas::Event::Mouse(_)
+        );
+        if !relevant {
+            return None;
+        }
+        let (columns, rows) = self.grid_size_for(bounds);
+        if (columns, rows) == (self.columns, self.rows) {
+            // The engine already matches this pane; re-arm publishing.
+            state.last_published = None;
+            return None;
+        }
+        if state.last_published == Some((columns, rows)) {
+            return None;
+        }
+        state.last_published = Some((columns, rows));
+        Some(canvas::Action::publish(ShellMessage::ViewportResized {
+            surface_id: surface_id.clone(),
+            columns,
+            rows,
+        }))
+    }
 
     fn draw(
         &self,
@@ -403,8 +475,8 @@ impl<Message> canvas::Program<Message> for TerminalViewport {
         frame.fill(&background, self.scheme.background);
 
         let pad = theme::TERMINAL_PADDING;
-        let cell_h = theme::term::CELL_HEIGHT;
-        let cell_w = theme::term::CELL_WIDTH;
+        let cell_h = self.metrics.height;
+        let cell_w = self.metrics.width;
 
         // Per-cell backgrounds (reverse video, colored prompts, menu highlights),
         // drawn first so everything else composits over them. Contiguous cells
@@ -528,11 +600,11 @@ impl<Message> canvas::Program<Message> for TerminalViewport {
     }
 }
 
-pub fn terminal_viewport<'a, Message: 'a>(
+pub fn terminal_viewport<'a>(
     lines: Vec<String>,
     columns: usize,
     rows: usize,
-) -> Element<'a, Message> {
+) -> Element<'a, ShellMessage> {
     canvas::Canvas::new(TerminalViewport::new(lines, columns, rows))
         .width(Length::Fill)
         .height(Length::Fill)
@@ -747,6 +819,7 @@ fn pane_view<'a>(
             match active_terminal {
                 Some(snapshot) => canvas::Canvas::new(
                     TerminalViewport::new(snapshot.lines.clone(), snapshot.columns, snapshot.rows)
+                        .with_surface(snapshot.surface_id.clone())
                         .with_cells(snapshot.cells.clone(), snapshot.cursor)
                         .with_cursor(is_focused && cursor_on)
                         .with_links(snapshot.links.clone())

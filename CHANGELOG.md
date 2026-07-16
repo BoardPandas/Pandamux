@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.39.1]
+## [0.40.0]
+
+### Fixed
+
+- **The terminal now fills its entire pane.** Every session used to render a fixed 120x30 grid inside the pane, leaving dead space below (the "half-height" bug) and telling the shell the wrong size. The viewport now measures its real pixel size and keeps the terminal grid, the PTY, and SSH remote terminals in step with it, so full-screen TUI apps (Claude Code, vim, htop) draw edge to edge.
+- **Resizing the window, splitting panes, collapsing the sidebar, and zooming a pane all reflow the terminal correctly**, with live window drags collapsed into a single resize so the shell does not repaint on every frame.
+
+### Changed
+
+- **Terminal cell metrics are now measured from the actual monospace font** the renderer resolves on this machine instead of hardcoded constants, so column math matches what is drawn.
 
 ### Fixed
 

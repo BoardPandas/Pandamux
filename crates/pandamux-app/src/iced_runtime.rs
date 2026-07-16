@@ -38,6 +38,9 @@ type PipeRegistry = Arc<StdMutex<HashMap<u64, oneshot::Sender<String>>>>;
 const CURSOR_BLINK_TICKS: u64 = 11;
 /// Ticks between session autosaves (~30s at a 100ms tick).
 const AUTOSAVE_TICKS: u64 = 300;
+/// Ticks a viewport-reported size must hold steady before the engine and
+/// PTY/SSH channel are resized (~200ms, absorbing live window drags).
+const RESIZE_SETTLE_TICKS: u64 = 2;
 /// Interval between GitHub release update checks (6 hours).
 const UPDATE_CHECK_INTERVAL_SECS: u64 = 6 * 60 * 60;
 
@@ -72,6 +75,10 @@ pub struct NativeShellRuntime {
     remotes: RemoteSessionManager,
     /// Which surfaces are SSH-remote and how to reach them.
     remote_configs: HashMap<SurfaceId, SshConfig>,
+    /// Last viewport-derived grid size per surface (drives spawns and resizes).
+    viewport_sizes: HashMap<SurfaceId, GridSize>,
+    /// Debounced pending engine/PTY resizes: surface -> (target, tick recorded).
+    pending_resizes: HashMap<SurfaceId, (GridSize, u64)>,
     /// Saved SSH host profiles.
     ssh_profiles: SshProfiles,
     credential_cache: HashMap<SshProfileId, EphemeralCredential>,
@@ -168,6 +175,8 @@ impl NativeShellRuntime {
             surface_schemes: HashMap::new(),
             remotes: RemoteSessionManager::default(),
             remote_configs: HashMap::new(),
+            viewport_sizes: HashMap::new(),
+            pending_resizes: HashMap::new(),
             ssh_profiles,
             credential_cache: HashMap::new(),
             launcher: SessionLauncherViewState::default(),
@@ -382,12 +391,9 @@ impl NativeShellRuntime {
             self.credential_cache.get(&profile_id),
             self.launcher_trust_unknown,
         )?;
+        let size = self.spawn_size(&target.surface_id);
         self.remotes
-            .connect(
-                target.surface_id.to_string(),
-                config.clone(),
-                DEFAULT_GRID_SIZE,
-            )
+            .connect(target.surface_id.to_string(), config.clone(), size)
             .map_err(|message| {
                 ProjectError::new(
                     "ssh_pty_start_failed",
@@ -417,11 +423,13 @@ impl NativeShellRuntime {
             };
             self.start_remote_launch(profile_id, path)
         } else {
+            let size = self.focused_viewport_size();
             crate::project_launcher::launch_local(
                 &mut self.app_state,
                 &mut self.ptys,
                 path.clone(),
                 self.live_ptys,
+                size,
             )
             .map(|_| {
                 self.profile_config.last_selected_local_folder = Some(path);
@@ -517,11 +525,13 @@ impl NativeShellRuntime {
         };
         match location {
             ProjectLocation::Local { cwd, .. } => {
+                let size = self.focused_viewport_size();
                 if let Err(error) = crate::project_launcher::launch_local(
                     &mut self.app_state,
                     &mut self.ptys,
                     cwd,
                     self.live_ptys,
+                    size,
                 ) {
                     self.last_error = Some(error.message);
                 } else if self.live_ptys {
@@ -824,8 +834,22 @@ impl NativeShellRuntime {
             ShellMessage::Tick => {
                 self.tick = self.tick.wrapping_add(1);
                 self.poll_pending_remote_launch();
+                self.flush_pending_resizes();
                 self.autosave_if_due();
                 self.refresh_terminal_snapshots();
+                return;
+            }
+            ShellMessage::ViewportResized {
+                surface_id,
+                columns,
+                rows,
+            } => {
+                // Record only; the flush on a later tick applies it once the
+                // size has settled. Skipping the snapshot refresh here keeps a
+                // live window drag from re-snapshotting every frame.
+                let size = GridSize::new(columns, rows);
+                self.viewport_sizes.insert(surface_id.clone(), size);
+                self.pending_resizes.insert(surface_id, (size, self.tick));
                 return;
             }
             ShellMessage::Noop
@@ -1668,6 +1692,52 @@ impl NativeShellRuntime {
         }
     }
 
+    /// Apply viewport-driven resizes that have settled for
+    /// [`RESIZE_SETTLE_TICKS`], collapsing a live window drag into one
+    /// engine + PTY/SSH resize.
+    fn flush_pending_resizes(&mut self) {
+        if self.pending_resizes.is_empty() {
+            return;
+        }
+        let due: Vec<SurfaceId> = self
+            .pending_resizes
+            .iter()
+            .filter(|(_, (_, recorded))| self.tick.wrapping_sub(*recorded) >= RESIZE_SETTLE_TICKS)
+            .map(|(surface_id, _)| surface_id.clone())
+            .collect();
+        for surface_id in due {
+            let Some((size, _)) = self.pending_resizes.remove(&surface_id) else {
+                continue;
+            };
+            let id = surface_id.to_string();
+            if self.remotes.has(&id) {
+                let _ = self.remotes.resize(&id, size);
+            } else if self.ptys.has(&id) {
+                let _ = self.ptys.resize(&id, size);
+            }
+        }
+    }
+
+    /// The grid size for a new or restored session: the surface's last
+    /// viewport-derived size, else the focused pane's, else the default. A
+    /// brand-new surface corrects itself on its first redraw.
+    fn spawn_size(&self, surface_id: &SurfaceId) -> GridSize {
+        if let Some(size) = self.viewport_sizes.get(surface_id) {
+            return *size;
+        }
+        self.focused_viewport_size()
+    }
+
+    /// The focused pane's viewport size, or the default before any pane has
+    /// reported one. Used as the first guess for surfaces that do not exist in
+    /// the layout yet (launcher flows).
+    fn focused_viewport_size(&self) -> GridSize {
+        self.active_surface_id()
+            .and_then(|surface_id| self.viewport_sizes.get(&surface_id))
+            .copied()
+            .unwrap_or(DEFAULT_GRID_SIZE)
+    }
+
     fn sync_terminal_sessions(&mut self) -> Result<(), String> {
         if !self.live_ptys {
             return Ok(());
@@ -1704,11 +1774,9 @@ impl NativeShellRuntime {
                             false,
                         ) {
                             Ok(config) => {
-                                self.remotes.connect(
-                                    session_id.clone(),
-                                    config.clone(),
-                                    DEFAULT_GRID_SIZE,
-                                )?;
+                                let size = self.spawn_size(&surface_id);
+                                self.remotes
+                                    .connect(session_id.clone(), config.clone(), size)?;
                                 self.remote_configs.insert(surface_id.clone(), config);
                             }
                             Err(error) => self.last_error = Some(error.message),
@@ -1728,8 +1796,9 @@ impl NativeShellRuntime {
                         .with_env(crate::backend::pandamux_env(&session_id, None)),
                     ProjectLocation::Ssh { .. } => unreachable!(),
                 };
+                let size = self.spawn_size(&surface_id);
                 self.ptys
-                    .spawn(session_id, &command, DEFAULT_GRID_SIZE)
+                    .spawn(session_id, &command, size)
                     .map_err(|error| error.to_string())?;
             }
         }
@@ -2885,6 +2954,58 @@ mod tests {
     #[test]
     fn iced_shell_smoke_builds_view_once() {
         run_iced_shell_smoke().expect("smoke should build the shell view");
+    }
+
+    #[test]
+    fn viewport_resize_records_size_and_debounces_the_flush() {
+        let mut runtime = NativeShellRuntime::default();
+        let surface_id = runtime
+            .active_surface_id()
+            .expect("default workspace has a focused surface");
+
+        runtime.update_shell(ShellMessage::ViewportResized {
+            surface_id: surface_id.clone(),
+            columns: 200,
+            rows: 48,
+        });
+        assert_eq!(
+            runtime.viewport_sizes.get(&surface_id),
+            Some(&GridSize::new(200, 48))
+        );
+        assert!(runtime.pending_resizes.contains_key(&surface_id));
+        // The recorded size drives the next spawn for this surface.
+        assert_eq!(runtime.spawn_size(&surface_id), GridSize::new(200, 48));
+
+        // Two settled ticks flush the pending entry (no live session exists in
+        // the hermetic runtime, so the flush is a clean no-op on the managers).
+        runtime.update_shell(ShellMessage::Tick);
+        assert!(runtime.pending_resizes.contains_key(&surface_id));
+        runtime.update_shell(ShellMessage::Tick);
+        runtime.update_shell(ShellMessage::Tick);
+        assert!(runtime.pending_resizes.is_empty());
+        // The last known size survives the flush for future spawns.
+        assert_eq!(runtime.spawn_size(&surface_id), GridSize::new(200, 48));
+    }
+
+    #[test]
+    fn spawn_size_falls_back_to_focused_pane_then_default() {
+        let mut runtime = NativeShellRuntime::default();
+        let focused = runtime
+            .active_surface_id()
+            .expect("default workspace has a focused surface");
+        let unknown = SurfaceId::generate();
+
+        // No viewport reported yet: everything falls back to the default.
+        assert_eq!(runtime.spawn_size(&unknown), DEFAULT_GRID_SIZE);
+
+        // Once the focused pane has a real size, new surfaces inherit it as
+        // their first guess.
+        runtime.update_shell(ShellMessage::ViewportResized {
+            surface_id: focused,
+            columns: 132,
+            rows: 40,
+        });
+        assert_eq!(runtime.spawn_size(&unknown), GridSize::new(132, 40));
     }
 
     #[test]

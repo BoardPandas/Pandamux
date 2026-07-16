@@ -8,7 +8,7 @@ use pandamux_core::{
     strip_windows_verbatim,
 };
 use pandamux_term::{
-    DEFAULT_GRID_SIZE, PtyCommand, PtySessionManager, RemoteSessionManager, SshAuth, SshConfig,
+    GridSize, PtyCommand, PtySessionManager, RemoteSessionManager, SshAuth, SshConfig,
     SshErrorCategory, SshFailure, browse_remote_folders, resolve_powershell,
 };
 use std::collections::HashMap;
@@ -136,6 +136,7 @@ pub fn launch_local(
     ptys: &mut PtySessionManager,
     cwd: String,
     spawn_pty: bool,
+    size: GridSize,
 ) -> Result<LaunchSuccess, ProjectError> {
     let shell = resolve_powershell().ok_or_else(|| {
         ProjectError::new(
@@ -154,7 +155,7 @@ pub fn launch_local(
         let command = PtyCommand::new(shell.clone()).with_cwd(Some(cwd)).with_env(
             crate::backend::pandamux_env(target.surface_id.as_str(), None),
         );
-        ptys.spawn(target.surface_id.to_string(), &command, DEFAULT_GRID_SIZE)
+        ptys.spawn(target.surface_id.to_string(), &command, size)
             .map_err(|error| {
                 ProjectError::new(
                     "local_pty_start_failed",
@@ -184,6 +185,7 @@ pub fn launch_remote_blocking(
     credential: Option<&EphemeralCredential>,
     trust_unknown_host: bool,
     spawn_pty: bool,
+    size: GridSize,
 ) -> Result<LaunchSuccess, ProjectError> {
     let location = ProjectLocation::Ssh {
         profile_id: profile.id.clone(),
@@ -196,7 +198,7 @@ pub fn launch_remote_blocking(
             .connect_ready(
                 target.surface_id.to_string(),
                 config.clone(),
-                DEFAULT_GRID_SIZE,
+                size,
                 Duration::from_secs(30),
             )
             .map_err(|message| {

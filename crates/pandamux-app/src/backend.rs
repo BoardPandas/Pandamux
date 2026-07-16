@@ -975,7 +975,7 @@ fn launch_project_location(
 ) -> Result<crate::project_launcher::LaunchSuccess, ProjectError> {
     match location {
         ProjectLocation::Local { cwd, .. } => {
-            crate::project_launcher::launch_local(app, ptys, cwd, spawn_ptys)
+            crate::project_launcher::launch_local(app, ptys, cwd, spawn_ptys, DEFAULT_GRID_SIZE)
         }
         ProjectLocation::Ssh {
             profile_id,
@@ -998,6 +998,7 @@ fn launch_project_location(
                 None,
                 trust_unknown_host,
                 spawn_ptys,
+                DEFAULT_GRID_SIZE,
             )
         }
         ProjectLocation::Legacy => Err(ProjectError::new(

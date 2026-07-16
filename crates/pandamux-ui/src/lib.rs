@@ -9,6 +9,8 @@ pub mod iced_shell;
 #[cfg(feature = "iced-runtime")]
 pub mod icons;
 #[cfg(feature = "iced-runtime")]
+pub mod metrics;
+#[cfg(feature = "iced-runtime")]
 pub mod overlays;
 #[cfg(feature = "iced-runtime")]
 pub mod session_launcher;
@@ -33,6 +35,8 @@ pub use iced_shell::{
 };
 #[cfg(feature = "iced-runtime")]
 pub use icons::{Icon, icon};
+#[cfg(feature = "iced-runtime")]
+pub use metrics::CellMetrics;
 #[cfg(feature = "iced-runtime")]
 pub use overlays::{FindViewState, NotificationCard, NotificationsViewState};
 #[cfg(feature = "iced-runtime")]

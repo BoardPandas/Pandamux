@@ -7,7 +7,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-iced = { version = "=0.14.0", features = ["canvas", "tokio"], optional = true }
+iced = { version = "=0.14.0", features = ["canvas", "tokio", "advanced"], optional = true }
 pandamux-core = { path = "../pandamux-core" }
 pandamux-term = { path = "../pandamux-term" }
 
