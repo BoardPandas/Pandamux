@@ -10,7 +10,7 @@ resolver = "3"
 exclude = ["spikes/phase2-native-terminal"]
 
 [workspace.package]
-version = "0.39.0"
+version = "0.39.1"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/BoardPandas/Pandamux"

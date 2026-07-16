@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.39.0]
+## [0.39.1]
+
+### Fixed
+
+- **Resizing a terminal no longer wipes its screen and scrollback.** Local sessions used to rebuild the grid on every resize, losing all history; the grid now reflows in place, so contents and scrollback survive window and pane size changes.
+- **Resizing an SSH session now keeps the local view in step with the remote terminal.** The resize was sent to the server but the local grid stayed at the old dimensions, and a reconnect re-requested the PTY at the original launch size instead of the current one.
+
+### Changed
+
+- **Terminal scrollback now retains 10,000 lines per session** (previously about four screens' worth) and the engine supports changing the limit at runtime, ahead of the scrollback setting arriving in Settings.
+- Groundwork for upcoming terminal features: the engine now exposes viewport scrolling, mouse selection (character, word, and line), select-all, clear-buffer, and terminal mode flags, all consumed by the scrollback and selection work that follows.
 
 ### Added
 

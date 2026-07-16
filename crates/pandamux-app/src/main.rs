@@ -69,7 +69,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///   PANDAMUX_SSH_SMOKE_PASSWORD or PANDAMUX_SSH_SMOKE_KEY as applicable.
 /// Prints `PANDAMUX_SSH_SMOKE_OK` on success.
 fn run_ssh_smoke() -> Result<(), Box<dyn std::error::Error>> {
-    use pandamux_term::{GridSize, RemoteSessionManager, SshAuth, SshConfig};
+    use pandamux_term::{DEFAULT_GRID_SIZE, RemoteSessionManager, SshAuth, SshConfig};
     use std::time::{Duration, Instant};
 
     let host =
@@ -106,7 +106,7 @@ fn run_ssh_smoke() -> Result<(), Box<dyn std::error::Error>> {
     manager.connect_ready(
         "surf-ssh-smoke",
         config,
-        GridSize::new(120, 30),
+        DEFAULT_GRID_SIZE,
         Duration::from_secs(30),
     )?;
     println!("connecting to {host} ...");

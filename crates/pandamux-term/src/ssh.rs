@@ -189,6 +189,7 @@ struct SftpRequest {
 pub struct RemoteSessionManager {
     runtime: Arc<Runtime>,
     sessions: HashMap<String, RemoteSession>,
+    scrollback_lines: usize,
 }
 
 impl RemoteSessionManager {
@@ -200,7 +201,17 @@ impl RemoteSessionManager {
         Ok(Self {
             runtime: Arc::new(runtime),
             sessions: HashMap::new(),
+            scrollback_lines: crate::grid::DEFAULT_SCROLLBACK_LINES,
         })
+    }
+
+    /// Change how much history every remote session (current and future)
+    /// retains locally.
+    pub fn set_scrollback_lines(&mut self, lines: usize) {
+        self.scrollback_lines = lines;
+        for session in self.sessions.values_mut() {
+            session.grid.set_scrollback(lines);
+        }
     }
 
     pub fn has(&self, surface_id: &str) -> bool {
@@ -242,7 +253,7 @@ impl RemoteSessionManager {
         self.sessions.insert(
             surface_id,
             RemoteSession {
-                grid: TerminalGrid::new(size),
+                grid: TerminalGrid::with_scrollback(size, self.scrollback_lines),
                 size,
                 rx: event_rx,
                 control: control_tx,
@@ -257,6 +268,7 @@ impl RemoteSessionManager {
 
     /// Drain pending events for a session into its grid. Non-blocking.
     pub fn poll(&mut self, surface_id: &str) -> SshResult<()> {
+        let scrollback_lines = self.scrollback_lines;
         let session = self
             .sessions
             .get_mut(surface_id)
@@ -266,8 +278,10 @@ impl RemoteSessionManager {
                 Ok(RemoteEvent::Data(bytes)) => session.grid.advance(&bytes),
                 Ok(RemoteEvent::Reattached) => {
                     // Reset-on-reattach: discard stale local grid state so the
-                    // server's full repaint lands on a clean buffer.
-                    session.grid = TerminalGrid::new(session.size);
+                    // server's full repaint lands on a clean buffer. Local
+                    // scrollback is lost by design here; tmux holds the durable
+                    // history server-side.
+                    session.grid = TerminalGrid::with_scrollback(session.size, scrollback_lines);
                 }
                 Ok(RemoteEvent::Status(status)) => session.status = status,
                 Ok(RemoteEvent::Closed(error)) => {
@@ -391,6 +405,10 @@ impl RemoteSessionManager {
             return Ok(());
         }
         session.size = size;
+        // Keep the local grid in step with the remote PTY: without this the
+        // window_change lands server-side while the local render grid stays at
+        // the old dimensions (a latent desync).
+        session.grid.resize(size);
         session
             .control
             .send(RemoteControl::Resize {
@@ -453,6 +471,94 @@ impl RemoteSessionManager {
             .get(surface_id)
             .map(|session| session.running)
             .unwrap_or(false)
+    }
+
+    /// Scroll a remote surface's local viewport. Unknown surfaces are a no-op.
+    pub fn scroll_display(&mut self, surface_id: &str, amount: crate::grid::ScrollAmount) {
+        let _ = self.poll(surface_id);
+        if let Some(session) = self.sessions.get_mut(surface_id) {
+            session.grid.scroll_display(amount);
+        }
+    }
+
+    /// Lines above the tail the surface's view is scrolled (0 = following).
+    pub fn display_offset(&self, surface_id: &str) -> usize {
+        self.sessions
+            .get(surface_id)
+            .map(|session| session.grid.display_offset())
+            .unwrap_or(0)
+    }
+
+    /// Begin a mouse selection at a display coordinate.
+    pub fn start_selection(
+        &mut self,
+        surface_id: &str,
+        mode: crate::grid::SelectionMode,
+        line: usize,
+        col: usize,
+        right_half: bool,
+    ) {
+        let _ = self.poll(surface_id);
+        if let Some(session) = self.sessions.get_mut(surface_id) {
+            session.grid.start_selection(mode, line, col, right_half);
+        }
+    }
+
+    /// Extend the active selection to a display coordinate (mouse drag).
+    pub fn update_selection(
+        &mut self,
+        surface_id: &str,
+        line: usize,
+        col: usize,
+        right_half: bool,
+    ) {
+        if let Some(session) = self.sessions.get_mut(surface_id) {
+            session.grid.update_selection(line, col, right_half);
+        }
+    }
+
+    pub fn clear_selection(&mut self, surface_id: &str) {
+        if let Some(session) = self.sessions.get_mut(surface_id) {
+            session.grid.clear_selection();
+        }
+    }
+
+    pub fn has_selection(&self, surface_id: &str) -> bool {
+        self.sessions
+            .get(surface_id)
+            .map(|session| session.grid.has_selection())
+            .unwrap_or(false)
+    }
+
+    /// The selected text, if a non-empty selection exists.
+    pub fn selection_text(&mut self, surface_id: &str) -> Option<String> {
+        let _ = self.poll(surface_id);
+        self.sessions
+            .get(surface_id)
+            .and_then(|session| session.grid.selection_text())
+    }
+
+    /// Select the whole local buffer (scrollback + visible screen).
+    pub fn select_all(&mut self, surface_id: &str) {
+        let _ = self.poll(surface_id);
+        if let Some(session) = self.sessions.get_mut(surface_id) {
+            session.grid.select_all();
+        }
+    }
+
+    /// Drop the surface's local scrollback history and snap back to the tail.
+    pub fn clear_buffer(&mut self, surface_id: &str) {
+        if let Some(session) = self.sessions.get_mut(surface_id) {
+            session.grid.clear_buffer();
+        }
+    }
+
+    /// Terminal mode flags for UI input routing (defaults for unknown surfaces).
+    pub fn modes(&self, surface_id: &str) -> crate::grid::TermModes {
+        self.sessions
+            .get(surface_id)
+            .map(|session| session.grid.modes())
+            .unwrap_or_default()
     }
 
     /// Upload a local image (or any file) to the remote host over SFTP and
@@ -797,6 +903,9 @@ impl RemoteDriver {
                         let _ = channel.data(&bytes[..]).await;
                     }
                     Some(RemoteControl::Resize { cols, rows }) => {
+                        // Remember the size so a reconnect re-requests the PTY
+                        // at the current dimensions, not the launch dimensions.
+                        self.size = GridSize::new(cols as usize, rows as usize);
                         let _ = channel.window_change(cols, rows, 0, 0).await;
                     }
                     Some(RemoteControl::Kill) | None => {
@@ -1209,7 +1318,7 @@ mod tests {
             .connect_ready(
                 "surf-ssh-project-cwd-smoke",
                 config,
-                GridSize::new(120, 30),
+                crate::grid::DEFAULT_GRID_SIZE,
                 Duration::from_secs(30),
             )
             .expect("remote PTY ready");

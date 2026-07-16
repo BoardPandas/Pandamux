@@ -1,5 +1,7 @@
 use crate::cwd::CwdScanner;
-use crate::grid::{GridSize, TerminalGrid};
+use crate::grid::{
+    DEFAULT_SCROLLBACK_LINES, GridSize, ScrollAmount, SelectionMode, TermModes, TerminalGrid,
+};
 use crate::links::DetectedLink;
 use crate::pty::{PtyCommand, PtyResult};
 use crate::search::{SearchMatch, SearchOptions};
@@ -12,6 +14,7 @@ use std::thread;
 
 pub struct PtySessionManager {
     sessions: HashMap<String, PtySession>,
+    scrollback_lines: usize,
 }
 
 struct PtySession {
@@ -30,6 +33,15 @@ impl PtySessionManager {
     pub fn new() -> Self {
         Self {
             sessions: HashMap::new(),
+            scrollback_lines: DEFAULT_SCROLLBACK_LINES,
+        }
+    }
+
+    /// Change how much history every session (current and future) retains.
+    pub fn set_scrollback_lines(&mut self, lines: usize) {
+        self.scrollback_lines = lines;
+        for session in self.sessions.values_mut() {
+            session.grid.set_scrollback(lines);
         }
     }
 
@@ -78,7 +90,7 @@ impl PtySessionManager {
         self.sessions.insert(
             session_id,
             PtySession {
-                grid: TerminalGrid::new(size),
+                grid: TerminalGrid::with_scrollback(size, self.scrollback_lines),
                 size,
                 _master: pair.master,
                 writer,
@@ -135,7 +147,9 @@ impl PtySessionManager {
             pixel_height: 0,
         })?;
         session.size = size;
-        session.grid = TerminalGrid::new(size);
+        // Content-preserving resize: alacritty reflows the screen and keeps the
+        // scrollback, where recreating the grid used to wipe both.
+        session.grid.resize(size);
         Ok(())
     }
 
@@ -248,6 +262,96 @@ impl PtySessionManager {
             .get(session_id)
             .ok_or_else(|| format!("pty session not found: {session_id}"))?;
         Ok(session.grid.cursor())
+    }
+
+    /// Scroll a session's viewport within scrollback. Unknown sessions are a
+    /// no-op: view gestures should never error a dying surface.
+    pub fn scroll_display(&mut self, session_id: &str, amount: ScrollAmount) {
+        let _ = self.poll(session_id);
+        if let Some(session) = self.sessions.get_mut(session_id) {
+            session.grid.scroll_display(amount);
+        }
+    }
+
+    /// Lines above the tail the session's view is scrolled (0 = following, and
+    /// the default for unknown sessions).
+    pub fn display_offset(&self, session_id: &str) -> usize {
+        self.sessions
+            .get(session_id)
+            .map(|session| session.grid.display_offset())
+            .unwrap_or(0)
+    }
+
+    /// Begin a mouse selection at a display coordinate.
+    pub fn start_selection(
+        &mut self,
+        session_id: &str,
+        mode: SelectionMode,
+        line: usize,
+        col: usize,
+        right_half: bool,
+    ) {
+        let _ = self.poll(session_id);
+        if let Some(session) = self.sessions.get_mut(session_id) {
+            session.grid.start_selection(mode, line, col, right_half);
+        }
+    }
+
+    /// Extend the active selection to a display coordinate (mouse drag).
+    pub fn update_selection(
+        &mut self,
+        session_id: &str,
+        line: usize,
+        col: usize,
+        right_half: bool,
+    ) {
+        if let Some(session) = self.sessions.get_mut(session_id) {
+            session.grid.update_selection(line, col, right_half);
+        }
+    }
+
+    pub fn clear_selection(&mut self, session_id: &str) {
+        if let Some(session) = self.sessions.get_mut(session_id) {
+            session.grid.clear_selection();
+        }
+    }
+
+    pub fn has_selection(&self, session_id: &str) -> bool {
+        self.sessions
+            .get(session_id)
+            .map(|session| session.grid.has_selection())
+            .unwrap_or(false)
+    }
+
+    /// The selected text, if a non-empty selection exists.
+    pub fn selection_text(&mut self, session_id: &str) -> Option<String> {
+        let _ = self.poll(session_id);
+        self.sessions
+            .get(session_id)
+            .and_then(|session| session.grid.selection_text())
+    }
+
+    /// Select the whole buffer (scrollback + visible screen).
+    pub fn select_all(&mut self, session_id: &str) {
+        let _ = self.poll(session_id);
+        if let Some(session) = self.sessions.get_mut(session_id) {
+            session.grid.select_all();
+        }
+    }
+
+    /// Drop the session's scrollback history and snap back to the tail.
+    pub fn clear_buffer(&mut self, session_id: &str) {
+        if let Some(session) = self.sessions.get_mut(session_id) {
+            session.grid.clear_buffer();
+        }
+    }
+
+    /// Terminal mode flags for UI input routing (defaults for unknown sessions).
+    pub fn modes(&self, session_id: &str) -> TermModes {
+        self.sessions
+            .get(session_id)
+            .map(|session| session.grid.modes())
+            .unwrap_or_default()
     }
 
     /// Kill the session, tree-killing the shell's whole process subtree first on

@@ -21,8 +21,8 @@ use pandamux_core::{
     get_all_pane_ids, import_windows_terminal, parse_ghostty_theme,
 };
 use pandamux_term::{
-    ClipboardStore, GridSize, PtyCommand, PtySessionManager, RemoteSessionManager, SshAuth,
-    SshConfig, wrap_paste,
+    ClipboardStore, DEFAULT_GRID_SIZE, GridSize, PtyCommand, PtySessionManager,
+    RemoteSessionManager, SshAuth, SshConfig, wrap_paste,
 };
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
@@ -737,7 +737,7 @@ fn spawn_agent(
     if spawn_ptys {
         let pty_command = parse_command(&command, cwd.clone())
             .with_env(pandamux_env(&surface_id.to_string(), Some(&agent_id)));
-        ptys.spawn(surface_id.to_string(), &pty_command, GridSize::new(120, 30))
+        ptys.spawn(surface_id.to_string(), &pty_command, DEFAULT_GRID_SIZE)
             .map_err(|error| (-32000, error.to_string()))?;
     }
 
@@ -1057,7 +1057,7 @@ fn dispatch_ssh(
                     .connect_ready(
                         surface_id.to_string(),
                         config.clone(),
-                        GridSize::new(120, 30),
+                        DEFAULT_GRID_SIZE,
                         std::time::Duration::from_secs(30),
                     )
                     .map_err(|error| (-32000, error))?;
@@ -1877,7 +1877,7 @@ pub fn sync_terminal_sessions(
                     .with_env(pandamux_env(&session_id, None)),
                 ProjectLocation::Ssh { .. } => unreachable!(),
             };
-            ptys.spawn(session_id, &command, GridSize::new(120, 30))
+            ptys.spawn(session_id, &command, DEFAULT_GRID_SIZE)
                 .map_err(|error| error.to_string())?;
         }
     }

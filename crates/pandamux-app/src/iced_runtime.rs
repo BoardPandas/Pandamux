@@ -10,8 +10,8 @@ use pandamux_core::{
     WorkspaceIntent, find_leaf, find_pane_id_for_surface, get_all_pane_ids, parse_ghostty_theme,
 };
 use pandamux_term::{
-    GridSize, PtyCommand, PtySessionManager, RemoteSessionManager, RemoteStatus, SearchOptions,
-    SshConfig, detect_links, search_lines,
+    DEFAULT_GRID_SIZE, GridSize, PtyCommand, PtySessionManager, RemoteSessionManager, RemoteStatus,
+    SearchOptions, SshConfig, detect_links, search_lines,
 };
 use pandamux_ui::{
     ChromeState, DragView, FindViewState, LauncherStep, LinkSpan, NotificationCard,
@@ -386,7 +386,7 @@ impl NativeShellRuntime {
             .connect(
                 target.surface_id.to_string(),
                 config.clone(),
-                GridSize::new(120, 30),
+                DEFAULT_GRID_SIZE,
             )
             .map_err(|message| {
                 ProjectError::new(
@@ -1707,7 +1707,7 @@ impl NativeShellRuntime {
                                 self.remotes.connect(
                                     session_id.clone(),
                                     config.clone(),
-                                    GridSize::new(120, 30),
+                                    DEFAULT_GRID_SIZE,
                                 )?;
                                 self.remote_configs.insert(surface_id.clone(), config);
                             }
@@ -1729,7 +1729,7 @@ impl NativeShellRuntime {
                     ProjectLocation::Ssh { .. } => unreachable!(),
                 };
                 self.ptys
-                    .spawn(session_id, &command, GridSize::new(120, 30))
+                    .spawn(session_id, &command, DEFAULT_GRID_SIZE)
                     .map_err(|error| error.to_string())?;
             }
         }
