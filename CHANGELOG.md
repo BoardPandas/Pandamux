@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.2]
+
+### Fixed
+
+- Release CI: the NSIS packaging step now retries (up to 4 attempts with backoff) so a transient network drop while `cargo-packager` downloads NSIS or the `nsis_tauri_utils.dll` plugin no longer fails the whole release.
+
 ## [0.37.1]
 
 ### Changed

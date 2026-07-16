@@ -96,8 +96,28 @@ jobs:
       # the signed target/release/pandamux.exe. NOTE: cargo-packager resolves a
       # relative --out-dir against the package manifest dir (crates/pandamux-app)
       # on the runner, so pass an absolute path for a deterministic location.
+      # cargo-packager fetches NSIS + the nsis_tauri_utils.dll plugin from
+      # GitHub at bundle time and has no built-in retry, so a transient TLS
+      # reset (os error 10054) fails the whole release. Retry the step; the
+      # tool caches assets it already downloaded under %LOCALAPPDATA%\
+      # cargo-packager, so each attempt only re-fetches what actually failed.
       - name: Package NSIS installer
-        run: cargo packager --release --formats nsis --out-dir "${{ github.workspace }}\dist"
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $max = 4
+          for ($i = 1; $i -le $max; $i++) {
+            Write-Host "cargo packager attempt $i/$max"
+            cargo packager --release --formats nsis --out-dir "${{ github.workspace }}\dist"
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            if ($i -lt $max) {
+              $wait = 15 * $i
+              Write-Host "packager failed (exit $LASTEXITCODE); retrying in ${wait}s"
+              Start-Sleep -Seconds $wait
+            }
+          }
+          Write-Error "cargo packager failed after $max attempts"
+          exit 1
 
       - name: Normalize installer name
         id: installer
