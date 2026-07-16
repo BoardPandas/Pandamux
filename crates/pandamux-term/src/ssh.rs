@@ -505,16 +505,35 @@ fn sanitize_tmux(surface_id: &str) -> String {
         .collect()
 }
 
-/// The tmux-wrapped remote command: attach-or-create a durable session, falling
-/// back to a plain login shell when tmux is absent (degraded, no durability).
 fn quote_posix(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-fn remote_command(tmux_session: &str, remote_cwd: Option<&str>) -> String {
+/// Quote a path with POSIX double quotes for use inside the launch body.
+/// Double quotes (not single) keep backslashes away from single quotes in
+/// the final `sh -c` payload; fish treats a backslash-quote pair inside
+/// single quotes as an escape, unlike POSIX shells, so that adjacency is
+/// the one thing the payload must never contain.
+fn quote_posix_double(value: &str) -> String {
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('"');
+    for c in value.chars() {
+        if matches!(c, '"' | '$' | '`' | '\\') {
+            quoted.push('\\');
+        }
+        quoted.push(c);
+    }
+    quoted.push('"');
+    quoted
+}
+
+/// The tmux-wrapped POSIX body of the startup command: attach-or-create a
+/// durable session, falling back to a plain login shell when tmux is absent
+/// (degraded, no durability).
+fn posix_launch_command(tmux_session: &str, remote_cwd: Option<&str>) -> String {
     match remote_cwd {
         Some(remote_cwd) => {
-            let cwd = quote_posix(remote_cwd);
+            let cwd = quote_posix_double(remote_cwd);
             format!(
                 "tmux new-session -A -s {tmux_session} -c {cwd} 2>/dev/null || {{ cd {cwd} && exec \"${{SHELL:-/bin/sh}}\" -l; }}"
             )
@@ -523,6 +542,19 @@ fn remote_command(tmux_session: &str, remote_cwd: Option<&str>) -> String {
             "tmux new-session -A -s {tmux_session} 2>/dev/null || exec \"${{SHELL:-/bin/sh}}\" -l"
         ),
     }
+}
+
+/// The exec-request command sent over the SSH channel. sshd hands this string
+/// to the user's login shell (`$SHELL -c ...`), which can be fish or csh;
+/// neither parses the POSIX body (`${...}` expansion, `{ ...; }` grouping).
+/// Wrapping the body in `sh -c` means the login shell only has to tokenize
+/// `exec sh -c <one single-quoted word>`, which POSIX shells, fish, and csh
+/// all read identically (including the `'\''` quote escapes).
+fn remote_command(tmux_session: &str, remote_cwd: Option<&str>) -> String {
+    format!(
+        "exec sh -c {}",
+        quote_posix(&posix_launch_command(tmux_session, remote_cwd))
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1073,21 +1105,52 @@ mod tests {
     }
 
     #[test]
-    fn remote_command_wraps_tmux_with_shell_fallback() {
-        let command = remote_command("pandamux-surf-1", None);
+    fn posix_launch_command_wraps_tmux_with_shell_fallback() {
+        let command = posix_launch_command("pandamux-surf-1", None);
         assert!(command.contains("tmux new-session -A -s pandamux-surf-1"));
         assert!(command.contains("|| exec"));
     }
 
     #[test]
-    fn remote_command_quotes_project_cwd_for_tmux_and_fallback() {
-        let command = remote_command(
+    fn posix_launch_command_quotes_project_cwd_for_tmux_and_fallback() {
+        let command = posix_launch_command(
             "pandamux-surf-2",
-            Some("/srv/agent's projects/Panda MUX; echo nope"),
+            Some("/srv/agent's projects/Panda $MUX; echo nope"),
         );
-        assert!(command.contains("-c '/srv/agent'\\''s projects/Panda MUX; echo nope'"));
-        assert!(command.contains("cd '/srv/agent'\\''s projects/Panda MUX; echo nope'"));
+        assert!(command.contains("-c \"/srv/agent's projects/Panda \\$MUX; echo nope\""));
+        assert!(command.contains("cd \"/srv/agent's projects/Panda \\$MUX; echo nope\""));
         assert_eq!(command.matches("echo nope").count(), 2);
+    }
+
+    /// Reverse of `quote_posix`: strips the outer quotes and collapses the
+    /// `'\''` escapes, i.e. what any login shell hands to `sh -c`.
+    fn unquote_posix(word: &str) -> String {
+        word.strip_prefix('\'')
+            .and_then(|rest| rest.strip_suffix('\''))
+            .expect("payload is a single-quoted word")
+            .replace("'\\''", "'")
+    }
+
+    #[test]
+    fn remote_command_is_login_shell_agnostic() {
+        // fish and csh cannot parse the POSIX body directly, so the exec
+        // request must keep it inside one single-quoted `sh -c` payload.
+        let cwd = Some("/srv/agent's projects/Panda MUX");
+        let command = remote_command("pandamux-surf-3", cwd);
+        let payload = command
+            .strip_prefix("exec sh -c ")
+            .expect("command starts with the sh -c wrapper");
+        assert_eq!(
+            unquote_posix(payload),
+            posix_launch_command("pandamux-surf-3", cwd)
+        );
+        // fish tokenizes backslash-quote and backslash-backslash pairs inside
+        // single quotes as escapes; POSIX shells take them literally. The
+        // body must never contain either pair or the two login shells would
+        // hand `sh` different payloads.
+        let body = posix_launch_command("pandamux-surf-3", cwd);
+        assert!(!body.contains("\\'"));
+        assert!(!body.contains("\\\\"));
     }
 
     #[test]

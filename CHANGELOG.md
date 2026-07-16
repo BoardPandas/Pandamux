@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.1]
+
+### Fixed
+
+- **SSH Project sessions now start correctly when the remote login shell is fish (or csh).** The remote startup command was written in POSIX shell syntax, but sshd hands it to the account's login shell; fish could not parse it, so the session died on launch and reconnected in a visible loop. The launcher now wraps the command in `sh -c`, which every login shell forwards identically, and quotes project paths so folders with spaces, quotes, or `$` characters launch safely.
+
 ## [0.38.0]
 
 ### Added
