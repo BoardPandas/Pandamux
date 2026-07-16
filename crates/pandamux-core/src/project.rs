@@ -79,6 +79,10 @@ pub struct FolderListing {
     pub parent_path: Option<String>,
     pub breadcrumbs: Vec<FolderBreadcrumb>,
     pub directories: Vec<FolderEntry>,
+    /// Ready local drive roots (e.g. `C:\`), for the Windows drive switcher.
+    /// Empty for remote listings and on non-Windows hosts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub drives: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -278,6 +282,20 @@ pub fn posix_breadcrumbs(path: &str) -> Vec<FolderBreadcrumb> {
     crumbs
 }
 
+/// Strip the Windows verbatim (`\\?\`) prefix `std::fs::canonicalize` adds, so
+/// stored and displayed local paths read like Explorer paths (`D:\Dev`, not
+/// `\\?\D:\Dev`). UNC verbatim paths (`\\?\UNC\server\share`) collapse back to
+/// `\\server\share`. Non-verbatim paths pass through unchanged.
+pub fn strip_windows_verbatim(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix("\\\\?\\UNC\\") {
+        format!("\\\\{rest}")
+    } else if let Some(rest) = path.strip_prefix("\\\\?\\") {
+        rest.to_string()
+    } else {
+        path.to_string()
+    }
+}
+
 pub fn sort_directories(directories: &mut [FolderEntry]) {
     directories.sort_by(|left, right| {
         left.name
@@ -390,6 +408,21 @@ mod tests {
             }),
             "Panda MUX"
         );
+    }
+
+    #[test]
+    fn verbatim_prefixes_are_stripped_for_drive_and_unc_paths() {
+        assert_eq!(
+            strip_windows_verbatim("\\\\?\\D:\\Dev\\Repo"),
+            "D:\\Dev\\Repo"
+        );
+        assert_eq!(strip_windows_verbatim("\\\\?\\C:\\"), "C:\\");
+        assert_eq!(
+            strip_windows_verbatim("\\\\?\\UNC\\server\\share\\folder"),
+            "\\\\server\\share\\folder"
+        );
+        assert_eq!(strip_windows_verbatim("D:\\Dev"), "D:\\Dev");
+        assert_eq!(strip_windows_verbatim("/home/chaz"), "/home/chaz");
     }
 
     #[test]

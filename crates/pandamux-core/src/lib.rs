@@ -22,6 +22,7 @@ pub use project::{
     FolderBreadcrumb, FolderEntry, FolderListing, ProjectError, ProjectErrorCategory, ProjectKey,
     ProjectLocation, ProjectSpec, local_breadcrumbs, local_parent, normalize_posix_path,
     normalize_windows_path, posix_breadcrumbs, posix_parent, project_title, sort_directories,
+    strip_windows_verbatim,
 };
 pub use protocol::{RpcError, RpcRequest, RpcResponse};
 pub use sidebar::{LogEntry, Progress, SidebarState, StatusEntry};

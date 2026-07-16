@@ -118,6 +118,7 @@ pub enum ShellMessage {
     LauncherHostTrustConfirmed,
     LauncherPathChanged(String),
     LauncherFolderGo,
+    LauncherFolderHome,
     LauncherFolderNavigate(String),
     LauncherFolderLoaded(Result<pandamux_core::FolderListing, pandamux_core::ProjectError>),
     LauncherFolderSelected,

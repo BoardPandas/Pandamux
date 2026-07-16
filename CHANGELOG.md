@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.39.0]
+
+### Added
+
+- **Windows drive switcher and Home shortcut in the folder browser.** Selecting a local folder now shows one chip per ready drive (C:, D:, ...) for one-click drive switching, plus a Home chip that jumps to the user profile folder locally or the SSH login home remotely.
+- **The folder browser starts somewhere useful.** Selecting a remote folder opens at the last folder chosen for that connection, or the SSH user's home folder on first use (previously the filesystem root). Selecting a local folder starts at the last chosen folder or the user profile folder.
+
+### Changed
+
+- **The New Session launcher now matches the application theme.** Every step (connection list, SSH connection form, credentials, host-key confirmation, folder browser) uses the shell's design language: themed list rows with PS/SSH badges, accent call-to-action buttons, styled inputs, breadcrumb chips, folder line icons, and light/dark theme support, replacing the unstyled default-blue widgets. Clicking outside the dialog now dismisses it, like other overlays.
+
+### Fixed
+
+- **Local folders no longer display or save with the raw `\\?\` path prefix.** Browsing local folders showed Windows verbatim paths (`\\?\D:\Dev\...`) in the path field and breadcrumbs; paths now read like Explorer paths.
+
 ## [0.38.1]
 
 ### Fixed

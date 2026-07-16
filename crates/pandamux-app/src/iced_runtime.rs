@@ -344,12 +344,14 @@ impl NativeShellRuntime {
             return Task::none();
         }
         self.launcher.step = LauncherStep::Folder;
+        // "." canonicalizes to the SFTP login home, so a first browse starts at
+        // the user's home folder rather than the filesystem root.
         self.launcher.path = self
             .profile_config
             .last_selected_folder_by_profile
             .get(&profile_id)
             .cloned()
-            .unwrap_or_else(|| "/".to_string());
+            .unwrap_or_else(|| ".".to_string());
         self.launcher_folder_task()
     }
 
@@ -664,12 +666,23 @@ impl NativeShellRuntime {
                     .profile_config
                     .last_selected_local_folder
                     .clone()
+                    .or_else(crate::project_launcher::local_home_folder)
                     .or_else(|| {
                         std::env::current_dir()
                             .ok()
                             .map(|path| path.to_string_lossy().to_string())
                     })
                     .unwrap_or_else(|| "C:\\".to_string());
+                self.launcher_folder_task()
+            }
+            ShellMessage::LauncherFolderHome => {
+                // "." canonicalizes to the SFTP login home on the remote side.
+                self.launcher.path = if self.launcher.remote {
+                    ".".to_string()
+                } else {
+                    crate::project_launcher::local_home_folder()
+                        .unwrap_or_else(|| "C:\\".to_string())
+                };
                 self.launcher_folder_task()
             }
             ShellMessage::LauncherProfileSelected(profile_id) => {
@@ -707,7 +720,7 @@ impl NativeShellRuntime {
                         .last_selected_folder_by_profile
                         .get(&profile_id)
                         .cloned()
-                        .unwrap_or_else(|| "/".to_string());
+                        .unwrap_or_else(|| ".".to_string());
                     self.launcher_folder_task()
                 }
             }
@@ -985,6 +998,7 @@ impl NativeShellRuntime {
             | ShellMessage::LauncherCredentialSubmit
             | ShellMessage::LauncherHostTrustConfirmed
             | ShellMessage::LauncherFolderGo
+            | ShellMessage::LauncherFolderHome
             | ShellMessage::LauncherFolderNavigate(_)
             | ShellMessage::LauncherFolderSelected => {
                 // These messages return tasks from `update`.
@@ -2292,6 +2306,7 @@ mod tests {
             parent_path: None,
             breadcrumbs: Vec::new(),
             directories: Vec::new(),
+            drives: Vec::new(),
         });
         runtime.start_selected_folder();
         runtime.start_selected_folder();

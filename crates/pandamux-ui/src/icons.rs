@@ -32,6 +32,9 @@ pub enum Icon {
     Close,
     Minimize,
     Maximize,
+    Folder,
+    Home,
+    Drive,
 }
 
 /// A line icon drawn into a `size` x `size` canvas in `color`. Stroke ~1.3px.
@@ -223,6 +226,44 @@ fn paths_for(kind: Icon, grid: &Grid) -> Vec<canvas::Path> {
             grid.size(1.0, 1.0),
             iced::border::Radius::from(2.0),
         )],
+        Icon::Folder => vec![canvas::Path::new(|b| {
+            // Folder outline with a raised tab across the top-left.
+            b.move_to(grid.p(0.02, 0.88));
+            b.line_to(grid.p(0.02, 0.18));
+            b.line_to(grid.p(0.36, 0.18));
+            b.line_to(grid.p(0.46, 0.32));
+            b.line_to(grid.p(0.98, 0.32));
+            b.line_to(grid.p(0.98, 0.88));
+            b.close();
+        })],
+        Icon::Home => vec![
+            canvas::Path::new(|b| {
+                // Roof.
+                b.move_to(grid.p(0.02, 0.5));
+                b.line_to(grid.p(0.5, 0.08));
+                b.line_to(grid.p(0.98, 0.5));
+            }),
+            canvas::Path::new(|b| {
+                // Walls and a door opening.
+                b.move_to(grid.p(0.15, 0.45));
+                b.line_to(grid.p(0.15, 0.92));
+                b.line_to(grid.p(0.4, 0.92));
+                b.line_to(grid.p(0.4, 0.62));
+                b.line_to(grid.p(0.6, 0.62));
+                b.line_to(grid.p(0.6, 0.92));
+                b.line_to(grid.p(0.85, 0.92));
+                b.line_to(grid.p(0.85, 0.45));
+            }),
+        ],
+        Icon::Drive => vec![
+            canvas::Path::rounded_rectangle(
+                grid.p(0.0, 0.25),
+                grid.size(1.0, 0.5),
+                iced::border::Radius::from(2.0),
+            ),
+            canvas::Path::circle(grid.p(0.78, 0.5), grid.r(0.05)),
+            canvas::Path::line(grid.p(0.12, 0.5), grid.p(0.45, 0.5)),
+        ],
     }
 }
 
@@ -230,7 +271,7 @@ fn paths_for(kind: Icon, grid: &Grid) -> Vec<canvas::Path> {
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 15] = [
+    const ALL: [Icon; 18] = [
         Icon::Search,
         Icon::Bell,
         Icon::Settings,
@@ -246,6 +287,9 @@ mod tests {
         Icon::Close,
         Icon::Minimize,
         Icon::Maximize,
+        Icon::Folder,
+        Icon::Home,
+        Icon::Drive,
     ];
 
     #[test]

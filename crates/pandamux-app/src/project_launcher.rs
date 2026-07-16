@@ -5,6 +5,7 @@ use pandamux_core::{
     ProjectErrorCategory, ProjectKey, ProjectLocation, ProjectSpec, SshAuthConfig, SshHostProfile,
     SurfaceId, SurfaceIntent, SurfaceType, WorkspaceId, WorkspaceIntent, local_breadcrumbs,
     local_parent, posix_breadcrumbs, posix_parent, project_title, sort_directories,
+    strip_windows_verbatim,
 };
 use pandamux_term::{
     GridSize, PtyCommand, PtySessionManager, RemoteSessionManager, SshAuth, SshConfig,
@@ -298,7 +299,9 @@ pub async fn list_local_folders(path: String) -> Result<FolderListing, ProjectEr
             false,
         ));
     }
-    let canonical_path = canonical.to_string_lossy().to_string();
+    // canonicalize returns Windows verbatim paths (`\\?\D:\...`); strip the
+    // prefix so stored Project locations and the browser UI read naturally.
+    let canonical_path = strip_windows_verbatim(&canonical.to_string_lossy());
     let mut reader = tokio::fs::read_dir(&canonical).await.map_err(|error| {
         ProjectError::new(
             "local_folder_access_denied",
@@ -322,7 +325,7 @@ pub async fn list_local_folders(path: String) -> Result<FolderListing, ProjectEr
         if file_type.is_dir() {
             directories.push(FolderEntry {
                 name: entry.file_name().to_string_lossy().to_string(),
-                canonical_path: entry.path().to_string_lossy().to_string(),
+                canonical_path: strip_windows_verbatim(&entry.path().to_string_lossy()),
             });
         }
     }
@@ -332,7 +335,46 @@ pub async fn list_local_folders(path: String) -> Result<FolderListing, ProjectEr
         breadcrumbs: local_breadcrumbs(&canonical_path),
         canonical_path,
         directories,
+        drives: list_local_drives().await,
     })
+}
+
+/// The user's local home folder (`%USERPROFILE%` on Windows, `$HOME` off it),
+/// used as the folder browser's starting point and Home shortcut.
+pub fn local_home_folder() -> Option<String> {
+    std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
+/// The local drive roots (`C:\`, `D:\`, ...) that are ready right now, probed
+/// concurrently with a short timeout so an unplugged card reader or a stale
+/// network mapping cannot stall the folder browser. Empty off Windows.
+#[cfg(windows)]
+async fn list_local_drives() -> Vec<String> {
+    let mut probes = Vec::new();
+    for letter in b'A'..=b'Z' {
+        let root = format!("{}:\\", letter as char);
+        probes.push(tokio::spawn(async move {
+            tokio::time::timeout(Duration::from_millis(400), tokio::fs::metadata(&root))
+                .await
+                .is_ok_and(|result| result.is_ok())
+                .then_some(root)
+        }));
+    }
+    let mut drives = Vec::new();
+    for probe in probes {
+        if let Ok(Some(root)) = probe.await {
+            drives.push(root);
+        }
+    }
+    drives
+}
+
+#[cfg(not(windows))]
+async fn list_local_drives() -> Vec<String> {
+    Vec::new()
 }
 
 pub async fn list_remote_folders(
@@ -356,6 +398,7 @@ pub async fn list_remote_folders(
         breadcrumbs: posix_breadcrumbs(&listing.canonical_path),
         canonical_path: listing.canonical_path,
         directories,
+        drives: Vec::new(),
     })
 }
 
