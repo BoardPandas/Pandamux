@@ -8,12 +8,12 @@ mod backend;
 mod clipboard_os;
 // In-app update check (Phase 7). The decision logic is always compiled/tested;
 // the network fetch is gated behind `iced-runtime`.
-#[allow(dead_code)]
-mod updater;
 #[cfg(feature = "iced-runtime")]
 mod iced_runtime;
 #[cfg(feature = "iced-runtime")]
 mod pollers;
+#[allow(dead_code)]
+mod updater;
 // The runtime uses the auto-session half now; the named-session API (save/load/
 // list/delete) is a complete, tested surface the Phase 5 command palette and
 // session panel will call, so its as-yet-unwired items are allowed to be idle.

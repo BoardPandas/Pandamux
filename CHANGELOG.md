@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.1]
+
+### Changed
+
+- Internal: reordered module declarations in `pandamux-app` to satisfy `cargo fmt`; no behavior change.
+
 ## [0.37.0]
 
 ### Added
