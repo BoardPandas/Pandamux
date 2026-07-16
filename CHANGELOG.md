@@ -7,7 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.40.0]
+## [0.41.0]
+
+### Added
+
+- **Terminal scrollback is now fully usable.** Mouse wheel and trackpad scrolling scroll the history; an auto-hiding scrollbar appears on hover or scroll and can be dragged (clicking the track pages toward the pointer); Shift+PageUp / Shift+PageDown page through history, matching Windows Terminal.
+- **Scrolled-up views stay put.** New output never yanks the view back to the bottom; a "lines below" pill appears while scrolled up and jumps back to the tail in one click. Typing or sending input snaps back to the bottom automatically.
+- **Scroll position and buffer survive switching tabs**, and full-screen apps behave like Windows Terminal: on the alternate screen (vim, htop, Claude Code) the wheel becomes arrow keys when the app opts in, and the scrollbar hides itself.
 
 ### Fixed
 

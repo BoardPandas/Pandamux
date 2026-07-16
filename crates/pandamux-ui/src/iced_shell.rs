@@ -23,8 +23,9 @@ use iced::{
     mouse,
 };
 use pandamux_core::{DropZone, PaneId, SplitDirection, SurfaceId, SurfaceType, WorkspaceId};
-use pandamux_term::{CellColor, StyledCell};
+use pandamux_term::{CellColor, SelectionSpan, StyledCell, TermModes};
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ShellMessage {
@@ -182,6 +183,21 @@ pub enum ShellMessage {
         columns: usize,
         rows: usize,
     },
+    /// Wheel/trackpad scrolling over a terminal canvas (positive scrolls up
+    /// into history). The runtime routes it to the engine scrollback, or
+    /// translates it to arrow keys for alternate-screen apps (spec 1.2).
+    ViewportScrolled {
+        surface_id: SurfaceId,
+        lines: i32,
+    },
+    /// Absolute scroll to a history offset (scrollbar drag; offset 0 is the
+    /// jump-to-bottom pill).
+    ViewportScrollTo {
+        surface_id: SurfaceId,
+        offset: usize,
+    },
+    /// Shift+PageUp (-1) / Shift+PageDown (+1) scrolls the focused surface.
+    ScrollPageFocused(i8),
     /// No-op (e.g. an unmapped key press); ignored by the runtime.
     Noop,
 }
@@ -228,6 +244,16 @@ pub struct TerminalSnapshot {
     /// The SSH host this surface is connected to, if it is a remote surface
     /// (plan F2). Drives the SSH context chip on the pane.
     pub remote_host: Option<String>,
+    /// Lines above the tail the view is scrolled (0 = following new output).
+    pub display_offset: usize,
+    /// Scrollback lines above the visible screen (sizes the scrollbar).
+    pub history_size: usize,
+    /// Selection highlight spans on the visible rows.
+    pub selection: Vec<SelectionSpan>,
+    /// False while scrolled up into history (the write cursor is off-screen).
+    pub cursor_visible: bool,
+    /// Terminal mode flags for input routing (alt screen, mouse reporting).
+    pub modes: TermModes,
 }
 
 impl TerminalSnapshot {
@@ -243,6 +269,11 @@ impl TerminalSnapshot {
             rows,
             links: Vec::new(),
             remote_host: None,
+            display_offset: 0,
+            history_size: 0,
+            selection: Vec::new(),
+            cursor_visible: true,
+            modes: TermModes::default(),
         }
     }
 
@@ -295,6 +326,70 @@ pub struct ViewportState {
     /// The last grid size published as a resize intent, deduping republication
     /// while the runtime's debounce is still in flight.
     last_published: Option<(usize, usize)>,
+    /// Fractional wheel-line accumulator (trackpads scroll in pixels).
+    scroll_accum: f32,
+    /// When the user last wheel-scrolled or dragged (keeps the scrollbar shown).
+    scroll_activity: Option<Instant>,
+    /// Active scrollbar-thumb drag: the pointer's grab offset inside the thumb.
+    scrollbar_drag: Option<f32>,
+}
+
+/// How long the scrollbar stays visible after scroll activity without hover.
+const SCROLLBAR_LINGER: Duration = Duration::from_millis(1200);
+const SCROLLBAR_TRACK_WIDTH: f32 = 6.0;
+const SCROLLBAR_MARGIN: f32 = 3.0;
+const SCROLLBAR_MIN_THUMB: f32 = 24.0;
+
+/// Scrollbar track and thumb rectangles in viewport-relative coordinates.
+/// `None` when there is no history to scroll. Offset 0 = bottom of history.
+fn scrollbar_layout(
+    size: Size,
+    rows: usize,
+    history_size: usize,
+    display_offset: usize,
+) -> Option<(Rectangle, Rectangle)> {
+    if history_size == 0 || rows == 0 {
+        return None;
+    }
+    let track = Rectangle {
+        x: size.width - SCROLLBAR_TRACK_WIDTH - SCROLLBAR_MARGIN,
+        y: SCROLLBAR_MARGIN,
+        width: SCROLLBAR_TRACK_WIDTH,
+        height: (size.height - SCROLLBAR_MARGIN * 2.0).max(0.0),
+    };
+    let total = (rows + history_size) as f32;
+    let thumb_height = (track.height * rows as f32 / total).max(SCROLLBAR_MIN_THUMB);
+    let travel = (track.height - thumb_height).max(0.0);
+    let fraction = display_offset as f32 / history_size as f32;
+    let thumb = Rectangle {
+        x: track.x,
+        y: track.y + travel * (1.0 - fraction),
+        width: track.width,
+        height: thumb_height.min(track.height),
+    };
+    Some((track, thumb))
+}
+
+/// Map a dragged thumb-top position back to a history offset.
+fn offset_for_thumb_top(size: Size, rows: usize, history_size: usize, thumb_top: f32) -> usize {
+    let Some((track, thumb)) = scrollbar_layout(size, rows, history_size, 0) else {
+        return 0;
+    };
+    let travel = (track.height - thumb.height).max(1.0);
+    let fraction = 1.0 - ((thumb_top - track.y) / travel).clamp(0.0, 1.0);
+    (fraction * history_size as f32).round() as usize
+}
+
+/// The jump-to-bottom pill, shown while scrolled up (viewport-relative).
+fn jump_pill_rect(size: Size) -> Rectangle {
+    let width = 118.0_f32.min(size.width * 0.6);
+    let height = 24.0;
+    Rectangle {
+        x: (size.width - width - 18.0).max(0.0),
+        y: (size.height - height - 12.0).max(0.0),
+        width,
+        height,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -315,6 +410,12 @@ pub struct TerminalViewport {
     highlight: Option<LinkSpan>,
     scheme: TermScheme,
     metrics: crate::metrics::CellMetrics,
+    /// Lines above the tail the view is scrolled (0 = following).
+    display_offset: usize,
+    /// Scrollback lines above the visible screen (0 hides the scrollbar).
+    history_size: usize,
+    /// Selection spans to highlight, in rendered-cell indices.
+    selection: Vec<SelectionSpan>,
 }
 
 impl TerminalViewport {
@@ -331,12 +432,28 @@ impl TerminalViewport {
             highlight: None,
             scheme: TermScheme::default(),
             metrics: crate::metrics::CellMetrics::get(),
+            display_offset: 0,
+            history_size: 0,
+            selection: Vec::new(),
         }
     }
 
     /// Attach the surface identity so the canvas can publish resize intents.
     pub fn with_surface(mut self, surface_id: SurfaceId) -> Self {
         self.surface_id = Some(surface_id);
+        self
+    }
+
+    /// Supply the scroll state (offset + history) and selection spans.
+    pub fn with_view_state(
+        mut self,
+        display_offset: usize,
+        history_size: usize,
+        selection: Vec<SelectionSpan>,
+    ) -> Self {
+        self.display_offset = display_offset;
+        self.history_size = history_size;
+        self.selection = selection;
         self
     }
 
@@ -352,6 +469,26 @@ impl TerminalViewport {
         let columns = ((((bounds.width - pad) / self.metrics.width) as usize).max(20)).min(1000);
         let rows = ((((bounds.height - pad) / self.metrics.height) as usize).max(5)).min(500);
         (columns, rows)
+    }
+
+    /// Whether the scrollbar renders and hit-tests: history exists and the
+    /// pointer is over the pane, scrolling happened recently, or a drag is
+    /// live (auto-hide when idle).
+    fn scrollbar_visible(
+        &self,
+        state: &ViewportState,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> bool {
+        if self.history_size == 0 {
+            return false;
+        }
+        if state.scrollbar_drag.is_some() || cursor.is_over(bounds) {
+            return true;
+        }
+        state
+            .scroll_activity
+            .is_some_and(|at| at.elapsed() < SCROLLBAR_LINGER)
     }
 
     /// Supply styled per-cell rows and the real cursor position from the grid.
@@ -432,9 +569,108 @@ impl canvas::Program<ShellMessage> for TerminalViewport {
         state: &mut Self::State,
         event: &canvas::Event,
         bounds: Rectangle,
-        _cursor: mouse::Cursor,
+        cursor: mouse::Cursor,
     ) -> Option<canvas::Action<ShellMessage>> {
         let surface_id = self.surface_id.as_ref()?;
+
+        // Pointer interactions: wheel scroll, scrollbar drag, jump pill.
+        match event {
+            canvas::Event::Mouse(mouse::Event::WheelScrolled { delta })
+                if cursor.is_over(bounds) =>
+            {
+                let lines = match delta {
+                    mouse::ScrollDelta::Lines { y, .. } => y * 3.0,
+                    mouse::ScrollDelta::Pixels { y, .. } => y / self.metrics.height,
+                };
+                state.scroll_accum += lines;
+                let whole = state.scroll_accum.trunc() as i32;
+                if whole != 0 {
+                    state.scroll_accum -= whole as f32;
+                    state.scroll_activity = Some(Instant::now());
+                    return Some(
+                        canvas::Action::publish(ShellMessage::ViewportScrolled {
+                            surface_id: surface_id.clone(),
+                            lines: whole,
+                        })
+                        .and_capture(),
+                    );
+                }
+                return Some(canvas::Action::capture());
+            }
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                if let Some(position) = cursor.position_in(bounds) {
+                    if self.display_offset > 0 && jump_pill_rect(bounds.size()).contains(position) {
+                        state.scroll_activity = Some(Instant::now());
+                        return Some(
+                            canvas::Action::publish(ShellMessage::ViewportScrollTo {
+                                surface_id: surface_id.clone(),
+                                offset: 0,
+                            })
+                            .and_capture(),
+                        );
+                    }
+                    if let Some((track, thumb)) = scrollbar_layout(
+                        bounds.size(),
+                        self.rows,
+                        self.history_size,
+                        self.display_offset,
+                    ) && self.scrollbar_visible(state, bounds, cursor)
+                    {
+                        if thumb.contains(position) {
+                            state.scrollbar_drag = Some(position.y - thumb.y);
+                            state.scroll_activity = Some(Instant::now());
+                            return Some(canvas::Action::capture());
+                        }
+                        if track.contains(position) {
+                            // Track click pages toward the pointer.
+                            let lines = if position.y < thumb.y {
+                                self.rows as i32
+                            } else {
+                                -(self.rows as i32)
+                            };
+                            state.scroll_activity = Some(Instant::now());
+                            return Some(
+                                canvas::Action::publish(ShellMessage::ViewportScrolled {
+                                    surface_id: surface_id.clone(),
+                                    lines,
+                                })
+                                .and_capture(),
+                            );
+                        }
+                    }
+                }
+            }
+            canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+                if let Some(grab) = state.scrollbar_drag
+                    && let Some(position) = cursor.position_in(bounds)
+                {
+                    state.scroll_activity = Some(Instant::now());
+                    let offset = offset_for_thumb_top(
+                        bounds.size(),
+                        self.rows,
+                        self.history_size,
+                        position.y - grab,
+                    );
+                    if offset != self.display_offset {
+                        return Some(
+                            canvas::Action::publish(ShellMessage::ViewportScrollTo {
+                                surface_id: surface_id.clone(),
+                                offset,
+                            })
+                            .and_capture(),
+                        );
+                    }
+                    return Some(canvas::Action::capture());
+                }
+            }
+            canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                if state.scrollbar_drag.take().is_some() {
+                    return Some(canvas::Action::capture());
+                }
+            }
+            _ => {}
+        }
+
         // The size check runs on redraws (each ~100ms tick repaints) and mouse
         // events; anything else cannot have changed the layout.
         let relevant = matches!(
@@ -464,11 +700,11 @@ impl canvas::Program<ShellMessage> for TerminalViewport {
 
     fn draw(
         &self,
-        _state: &Self::State,
+        state: &Self::State,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
-        _cursor: mouse::Cursor,
+        cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
         let mut frame = canvas::Frame::new(renderer, bounds.size());
         let background = canvas::Path::rectangle(Point::ORIGIN, bounds.size());
@@ -501,6 +737,18 @@ impl canvas::Program<ShellMessage> for TerminalViewport {
                     frame.fill(&rect, bg);
                 }
             }
+        }
+
+        // Selection highlight: over per-cell backgrounds, behind text.
+        for span in self.selection.iter().take(1024) {
+            if span.line >= self.rows || span.end < span.start {
+                continue;
+            }
+            let x = pad + span.start as f32 * cell_w;
+            let width = (span.end - span.start + 1) as f32 * cell_w;
+            let y = pad + span.line as f32 * cell_h;
+            let rect = canvas::Path::rectangle(Point::new(x, y), Size::new(width, cell_h));
+            frame.fill(&rect, theme::with_alpha(self.scheme.text, 0.25));
         }
 
         // Current find match highlight (drawn over cell backgrounds, behind text).
@@ -588,12 +836,64 @@ impl canvas::Program<ShellMessage> for TerminalViewport {
             let (crow, ccol) = self.cursor_cell();
             let cursor_x = pad + ccol as f32 * cell_w;
             let cursor_y = pad + crow as f32 * cell_h + (cell_h - theme::term::CURSOR_HEIGHT) / 2.0;
-            let cursor = canvas::Path::rectangle(
+            let cursor_rect = canvas::Path::rectangle(
                 Point::new(cursor_x, cursor_y),
                 Size::new(theme::term::CURSOR_WIDTH, theme::term::CURSOR_HEIGHT),
             );
             // Cursor uses the active scheme's prompt/cursor color.
-            frame.fill(&cursor, self.scheme.cursor);
+            frame.fill(&cursor_rect, self.scheme.cursor);
+        }
+
+        // Scrollback affordances: an auto-hide scrollbar at the right edge and
+        // a jump-to-bottom pill while scrolled up (spec 1.2).
+        if self.scrollbar_visible(state, bounds, cursor)
+            && let Some((track, thumb)) = scrollbar_layout(
+                bounds.size(),
+                self.rows,
+                self.history_size,
+                self.display_offset,
+            )
+        {
+            let track_path = canvas::Path::rounded_rectangle(
+                Point::new(track.x, track.y),
+                Size::new(track.width, track.height),
+                (track.width / 2.0).into(),
+            );
+            frame.fill(&track_path, theme::with_alpha(self.scheme.text, 0.08));
+            let thumb_path = canvas::Path::rounded_rectangle(
+                Point::new(thumb.x, thumb.y),
+                Size::new(thumb.width, thumb.height),
+                (thumb.width / 2.0).into(),
+            );
+            let thumb_alpha = if state.scrollbar_drag.is_some() {
+                0.55
+            } else {
+                0.35
+            };
+            frame.fill(
+                &thumb_path,
+                theme::with_alpha(self.scheme.text, thumb_alpha),
+            );
+        }
+        if self.display_offset > 0 {
+            let pill = jump_pill_rect(bounds.size());
+            let pill_path = canvas::Path::rounded_rectangle(
+                Point::new(pill.x, pill.y),
+                Size::new(pill.width, pill.height),
+                (pill.height / 2.0).into(),
+            );
+            frame.fill(&pill_path, theme::with_alpha(self.scheme.text, 0.18));
+            frame.fill_text(canvas::Text {
+                content: format!("v {} lines below", self.display_offset),
+                position: Point::new(pill.x + 10.0, pill.y + (pill.height - 12.0) / 2.0),
+                max_width: pill.width - 16.0,
+                color: self.scheme.text,
+                size: Pixels(11.0),
+                line_height: iced::widget::text::LineHeight::Absolute(Pixels(12.0)),
+                font: theme::MONO_FONT,
+                shaping: iced::widget::text::Shaping::Advanced,
+                ..canvas::Text::default()
+            });
         }
 
         vec![frame.into_geometry()]
@@ -820,8 +1120,13 @@ fn pane_view<'a>(
                 Some(snapshot) => canvas::Canvas::new(
                     TerminalViewport::new(snapshot.lines.clone(), snapshot.columns, snapshot.rows)
                         .with_surface(snapshot.surface_id.clone())
+                        .with_view_state(
+                            snapshot.display_offset,
+                            snapshot.history_size,
+                            snapshot.selection.clone(),
+                        )
                         .with_cells(snapshot.cells.clone(), snapshot.cursor)
-                        .with_cursor(is_focused && cursor_on)
+                        .with_cursor(is_focused && cursor_on && snapshot.cursor_visible)
                         .with_links(snapshot.links.clone())
                         .with_highlight(highlight)
                         .with_scheme(scheme),
@@ -1263,6 +1568,46 @@ mod tests {
             term_scheme: TermScheme::default(),
             surface_term_schemes: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn scrollbar_layout_round_trips_offsets() {
+        let size = Size::new(800.0, 600.0);
+        // No history: no scrollbar at all.
+        assert!(scrollbar_layout(size, 40, 0, 0).is_none());
+
+        let (track, thumb_bottom) = scrollbar_layout(size, 40, 960, 0).expect("scrollbar");
+        let (_, thumb_top) = scrollbar_layout(size, 40, 960, 960).expect("scrollbar");
+        // Following the tail puts the thumb at the bottom of the track; fully
+        // scrolled up puts it at the top.
+        assert!(thumb_bottom.y > thumb_top.y);
+        assert!((thumb_top.y - track.y).abs() < 0.5);
+        assert!(
+            (thumb_bottom.y + thumb_bottom.height - (track.y + track.height)).abs() < 0.5,
+            "thumb should rest at the track bottom when following"
+        );
+        // The thumb never collapses below the minimum grab size.
+        assert!(thumb_bottom.height >= SCROLLBAR_MIN_THUMB);
+
+        // Dragging the thumb back to where the layout placed it recovers the
+        // same offset (round trip within a line).
+        for offset in [0_usize, 137, 480, 960] {
+            let (_, thumb) = scrollbar_layout(size, 40, 960, offset).expect("scrollbar");
+            let recovered = offset_for_thumb_top(size, 40, 960, thumb.y);
+            assert!(
+                (recovered as i64 - offset as i64).abs() <= 1,
+                "offset {offset} round-tripped to {recovered}"
+            );
+        }
+    }
+
+    #[test]
+    fn jump_pill_sits_inside_the_viewport() {
+        let size = Size::new(800.0, 600.0);
+        let pill = jump_pill_rect(size);
+        assert!(pill.x >= 0.0 && pill.y >= 0.0);
+        assert!(pill.x + pill.width <= size.width);
+        assert!(pill.y + pill.height <= size.height);
     }
 
     #[test]

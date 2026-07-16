@@ -3391,7 +3391,7 @@ dependencies = [
 
 [[package]]
 name = "pandamux-app"
-version = "0.39.1"
+version = "0.40.0"
 dependencies = [
  "arboard",
  "iced",
@@ -3407,7 +3407,7 @@ dependencies = [
 
 [[package]]
 name = "pandamux-cli"
-version = "0.39.1"
+version = "0.40.0"
 dependencies = [
  "pandamux-core",
  "serde_json",
@@ -3416,7 +3416,7 @@ dependencies = [
 
 [[package]]
 name = "pandamux-core"
-version = "0.39.1"
+version = "0.40.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3425,7 +3425,7 @@ dependencies = [
 
 [[package]]
 name = "pandamux-term"
-version = "0.39.1"
+version = "0.40.0"
 dependencies = [
  "alacritty_terminal",
  "portable-pty",
@@ -3438,7 +3438,7 @@ dependencies = [
 
 [[package]]
 name = "pandamux-ui"
-version = "0.39.1"
+version = "0.40.0"
 dependencies = [
  "iced",
  "pandamux-core",

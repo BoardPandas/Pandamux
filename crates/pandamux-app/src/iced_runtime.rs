@@ -11,7 +11,7 @@ use pandamux_core::{
 };
 use pandamux_term::{
     DEFAULT_GRID_SIZE, GridSize, PtyCommand, PtySessionManager, RemoteSessionManager, RemoteStatus,
-    SearchOptions, SshConfig, detect_links, search_lines,
+    ScrollAmount, SearchOptions, SelectionSpan, SshConfig, TermModes, detect_links, search_lines,
 };
 use pandamux_ui::{
     ChromeState, DragView, FindViewState, LauncherStep, LinkSpan, NotificationCard,
@@ -852,6 +852,22 @@ impl NativeShellRuntime {
                 self.pending_resizes.insert(surface_id, (size, self.tick));
                 return;
             }
+            ShellMessage::ViewportScrolled { surface_id, lines } => {
+                self.scroll_surface(&surface_id, lines);
+            }
+            ShellMessage::ViewportScrollTo { surface_id, offset } => {
+                self.scroll_surface_to(&surface_id, offset);
+            }
+            ShellMessage::ScrollPageFocused(direction) => {
+                if let Some(surface_id) = self.active_surface_id() {
+                    let amount = if direction < 0 {
+                        ScrollAmount::PageUp
+                    } else {
+                        ScrollAmount::PageDown
+                    };
+                    self.scroll_surface_amount(&surface_id, amount);
+                }
+            }
             ShellMessage::Noop
             | ShellMessage::WindowDragStarted
             | ShellMessage::WindowMinimizePressed
@@ -1631,6 +1647,16 @@ impl NativeShellRuntime {
         let Some(surface_id) = self.active_surface_id() else {
             return;
         };
+        // Typing snaps the view back to the tail (spec 1.2).
+        self.scroll_surface_amount(&surface_id, ScrollAmount::Bottom);
+        self.write_surface_input(&surface_id, bytes);
+    }
+
+    /// Write bytes to a specific surface's PTY or SSH channel.
+    fn write_surface_input(&mut self, surface_id: &SurfaceId, bytes: &[u8]) {
+        if bytes.is_empty() || !self.live_ptys {
+            return;
+        }
         let id = surface_id.as_str();
         let result = if self.remotes.has(id) {
             self.remotes.write_all(id, bytes)
@@ -1643,6 +1669,63 @@ impl NativeShellRuntime {
         };
         if let Err(error) = result {
             self.last_error = Some(error);
+        }
+    }
+
+    /// Route a wheel gesture: engine scrollback normally; arrow-key translation
+    /// on the alternate screen when the app opted into AlternateScroll (the
+    /// Windows Terminal behavior); nothing while the app owns the mouse (full
+    /// SGR mouse forwarding is a documented fast-follow).
+    fn scroll_surface(&mut self, surface_id: &SurfaceId, lines: i32) {
+        let id = surface_id.as_str();
+        let modes = if self.remotes.has(id) {
+            self.remotes.modes(id)
+        } else {
+            self.ptys.modes(id)
+        };
+        if modes.mouse_reporting {
+            return;
+        }
+        if modes.alt_screen {
+            if modes.alternate_scroll {
+                let sequence: &[u8] = match (lines > 0, modes.app_cursor) {
+                    (true, true) => b"\x1bOA",
+                    (true, false) => b"\x1b[A",
+                    (false, true) => b"\x1bOB",
+                    (false, false) => b"\x1b[B",
+                };
+                let count = lines.unsigned_abs().min(120) as usize;
+                let mut bytes = Vec::with_capacity(count * sequence.len());
+                for _ in 0..count {
+                    bytes.extend_from_slice(sequence);
+                }
+                self.write_surface_input(surface_id, &bytes);
+            }
+            return;
+        }
+        self.scroll_surface_amount(surface_id, ScrollAmount::Lines(lines));
+    }
+
+    fn scroll_surface_amount(&mut self, surface_id: &SurfaceId, amount: ScrollAmount) {
+        let id = surface_id.as_str();
+        if self.remotes.has(id) {
+            self.remotes.scroll_display(id, amount);
+        } else {
+            self.ptys.scroll_display(id, amount);
+        }
+    }
+
+    /// Scroll a surface to an absolute history offset (scrollbar drag / pill).
+    fn scroll_surface_to(&mut self, surface_id: &SurfaceId, offset: usize) {
+        let id = surface_id.as_str();
+        let current = if self.remotes.has(id) {
+            self.remotes.display_offset(id)
+        } else {
+            self.ptys.display_offset(id)
+        };
+        let delta = (offset as i64 - current as i64).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+        if delta != 0 {
+            self.scroll_surface_amount(surface_id, ScrollAmount::Lines(delta));
         }
     }
 
@@ -2084,8 +2167,22 @@ fn map_named_key(named: keyboard::key::Named, ctrl: bool, shift: bool) -> ShellM
         Named::End => ShellMessage::TerminalInput(b"\x1b[F".to_vec()),
         Named::Delete => ShellMessage::TerminalInput(b"\x1b[3~".to_vec()),
         Named::Insert => ShellMessage::TerminalInput(b"\x1b[2~".to_vec()),
-        Named::PageUp => ShellMessage::TerminalInput(b"\x1b[5~".to_vec()),
-        Named::PageDown => ShellMessage::TerminalInput(b"\x1b[6~".to_vec()),
+        // Shift+PageUp/PageDown scroll the viewport (Windows Terminal
+        // convention); unshifted stays terminal input.
+        Named::PageUp => {
+            if shift {
+                ShellMessage::ScrollPageFocused(-1)
+            } else {
+                ShellMessage::TerminalInput(b"\x1b[5~".to_vec())
+            }
+        }
+        Named::PageDown => {
+            if shift {
+                ShellMessage::ScrollPageFocused(1)
+            } else {
+                ShellMessage::TerminalInput(b"\x1b[6~".to_vec())
+            }
+        }
         _ => ShellMessage::Noop,
     }
 }
@@ -2179,16 +2276,38 @@ fn terminal_snapshots(
 
             // Derive plain-text rows (for link detection + text consumers) from
             // the same rows the viewport renders, so line indices stay aligned.
-            let (lines, cells, cursor, columns, rows) = match screen {
+            let default_view = || (0_usize, 0_usize, Vec::new(), true, TermModes::default());
+            let (view, lines, cells, cursor, columns, rows) = match screen {
                 Some(screen) => {
                     let lines = cells_to_lines(&screen.rows);
                     let columns = screen.rows.iter().map(|row| row.len()).max().unwrap_or(120);
                     let rows = screen.rows.len();
-                    (lines, screen.rows, screen.cursor, columns, rows)
+                    (
+                        (
+                            screen.display_offset,
+                            screen.history_size,
+                            screen.selection,
+                            screen.cursor_visible,
+                            screen.modes,
+                        ),
+                        lines,
+                        screen.rows,
+                        screen.cursor,
+                        columns,
+                        rows,
+                    )
                 }
-                None if is_remote => (Vec::new(), Vec::new(), (0, 0), 120, 30),
-                None => (fallback_lines(), Vec::new(), (0, 0), 120, 30),
+                None if is_remote => (default_view(), Vec::new(), Vec::new(), (0, 0), 120, 30),
+                None => (
+                    default_view(),
+                    fallback_lines(),
+                    Vec::new(),
+                    (0, 0),
+                    120,
+                    30,
+                ),
             };
+            let (display_offset, history_size, selection, cursor_visible, modes) = view;
             let links = detect_links(&lines)
                 .into_iter()
                 .map(|link| LinkSpan {
@@ -2209,6 +2328,11 @@ fn terminal_snapshots(
                 rows,
                 links,
                 remote_host,
+                display_offset,
+                history_size,
+                selection,
+                cursor_visible,
+                modes,
             })
         })
         .collect();
@@ -2881,6 +3005,43 @@ mod tests {
         );
         assert_eq!(shortcut_for(false, false, "b"), ShellMessage::Noop);
         assert_eq!(shortcut_for(true, false, "z"), ShellMessage::Noop);
+    }
+
+    #[test]
+    fn shift_page_keys_scroll_while_plain_page_keys_stay_terminal_input() {
+        use keyboard::key::Named;
+        assert_eq!(
+            map_named_key(Named::PageUp, false, true),
+            ShellMessage::ScrollPageFocused(-1)
+        );
+        assert_eq!(
+            map_named_key(Named::PageDown, false, true),
+            ShellMessage::ScrollPageFocused(1)
+        );
+        assert_eq!(
+            map_named_key(Named::PageUp, false, false),
+            ShellMessage::TerminalInput(b"\x1b[5~".to_vec())
+        );
+        assert_eq!(
+            map_named_key(Named::PageDown, false, false),
+            ShellMessage::TerminalInput(b"\x1b[6~".to_vec())
+        );
+    }
+
+    #[test]
+    fn scroll_messages_are_safe_without_live_sessions() {
+        let mut runtime = NativeShellRuntime::default();
+        let surface_id = runtime.active_surface_id().expect("focused surface");
+        runtime.update_shell(ShellMessage::ViewportScrolled {
+            surface_id: surface_id.clone(),
+            lines: 5,
+        });
+        runtime.update_shell(ShellMessage::ViewportScrollTo {
+            surface_id,
+            offset: 0,
+        });
+        runtime.update_shell(ShellMessage::ScrollPageFocused(-1));
+        assert_eq!(runtime.last_error(), None);
     }
 
     #[test]
