@@ -54,10 +54,22 @@ pub struct GridLayoutResult {
 }
 
 pub fn create_leaf(pane_id: Option<PaneId>, surface_type: SurfaceType) -> SplitNode {
+    create_leaf_with_ids(
+        pane_id.unwrap_or_else(PaneId::generate),
+        SurfaceId::generate(),
+        surface_type,
+    )
+}
+
+pub fn create_leaf_with_ids(
+    pane_id: PaneId,
+    surface_id: SurfaceId,
+    surface_type: SurfaceType,
+) -> SplitNode {
     SplitNode::Leaf(LeafNode {
-        pane_id: pane_id.unwrap_or_else(PaneId::generate),
+        pane_id,
         surfaces: vec![SurfaceRef {
-            id: SurfaceId::generate(),
+            id: surface_id,
             surface_type,
         }],
         active_surface_index: 0,

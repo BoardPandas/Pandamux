@@ -7,8 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.0]
+
 ### Added
 
+- **Launch named Projects into local or SSH folders from one guided flow.** The session launcher saves reusable OpenSSH connections, browses local and remote folders asynchronously, starts shells in the selected working directory, groups sessions by Project, and lets each Project create additional sessions without repeating its connection setup. SSH launches verify host keys, support the user's OpenSSH configuration, and use remote tmux sessions so reconnecting preserves terminal state.
+- **Project launches now work consistently through the UI, CLI, and named-pipe API.** Saved Projects and SSH profiles survive restarts, older state migrates automatically with a backup, and restore failures are isolated so one unavailable remote host does not prevent PandaMUX from opening.
 - **Documented the approved SSH Project session-launcher design.** The implementation specification covers multiple saved Windows OpenSSH connections, local and remote folder selection, automatic shell startup in the selected folder, Project-based session grouping, Project-level session creation, secure host-key handling, persistence, migration, and validation expectations.
 
 ### Fixed

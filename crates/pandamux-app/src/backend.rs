@@ -14,10 +14,11 @@
 use pandamux_core::{
     AgentInfo, AgentRegistry, AgentStatus, AppDelta, AppIntent, AppState, ClipboardConfig,
     DropZone, LayoutGridParams, Locale, Localizer, NewNotification, NotificationSource,
-    Notifications, PaneId, PaneIntent, RpcRequest, RpcResponse, SidebarState, SpawnStrategy,
-    SplitDirection, SplitNode, SplitPaneParams, SshAuthConfig, SshHostProfile, SshProfiles,
-    SurfaceContents, SurfaceId, SurfaceIntent, SurfaceType, SystemIntent, ThemeStore, WorkspaceId,
-    WorkspaceIntent, find_leaf, get_all_pane_ids, import_windows_terminal, parse_ghostty_theme,
+    Notifications, PaneId, PaneIntent, ProjectError, ProjectLocation, RpcRequest, RpcResponse,
+    SidebarState, SpawnStrategy, SplitDirection, SplitNode, SplitPaneParams, SshAuthConfig,
+    SshHostProfile, SshProfileId, SshProfiles, SurfaceContents, SurfaceId, SurfaceIntent,
+    SurfaceType, SystemIntent, ThemeStore, WorkspaceId, WorkspaceIntent, find_leaf,
+    get_all_pane_ids, import_windows_terminal, parse_ghostty_theme,
 };
 use pandamux_term::{
     ClipboardStore, GridSize, PtyCommand, PtySessionManager, RemoteSessionManager, SshAuth,
@@ -259,6 +260,18 @@ fn dispatch(request: &RpcRequest, ctx: DispatchCtx<'_>) -> Result<Value, (i32, S
     }
 
     if let Some(result) = dispatch_agents(request, app, ptys, agents, spawn_ptys)? {
+        return Ok(result);
+    }
+
+    if let Some(result) = dispatch_projects(
+        request,
+        app,
+        ptys,
+        remotes,
+        remote_configs,
+        ssh_profiles,
+        spawn_ptys,
+    )? {
         return Ok(result);
     }
 
@@ -834,6 +847,188 @@ fn agent_json(info: &AgentInfo) -> Value {
 }
 
 // ---------------------------------------------------------------------------
+// Project launcher operations
+// ---------------------------------------------------------------------------
+
+fn dispatch_projects(
+    request: &RpcRequest,
+    app: &mut AppState,
+    ptys: &mut PtySessionManager,
+    remotes: &mut RemoteSessionManager,
+    remote_configs: &mut HashMap<SurfaceId, SshConfig>,
+    ssh_profiles: &SshProfiles,
+    spawn_ptys: bool,
+) -> Result<Option<Value>, (i32, String)> {
+    match request.method.as_str() {
+        "project.list" => Ok(Some(json!({
+            "projects": app.workspaces.iter().map(|workspace| json!({
+                "workspaceId": workspace.id,
+                "title": workspace.title,
+                "location": workspace.project.location,
+            })).collect::<Vec<_>>()
+        }))),
+        "project.create" => {
+            let location_value = request
+                .params
+                .get("location")
+                .cloned()
+                .unwrap_or_else(|| request.params.clone());
+            let location: ProjectLocation = serde_json::from_value(location_value)
+                .map_err(|error| (-32602, format!("invalid Project location: {error}")))?;
+            let result = launch_project_location(
+                app,
+                ptys,
+                remotes,
+                remote_configs,
+                ssh_profiles,
+                location,
+                request
+                    .params
+                    .get("trustUnknownHost")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                spawn_ptys,
+            );
+            Ok(Some(project_launch_result(result)))
+        }
+        "project.add_session" => {
+            let workspace_id: WorkspaceId = required_id(&request.params, &["workspaceId", "id"])?;
+            let location = app
+                .workspace(&workspace_id)
+                .ok_or_else(|| (-32000, format!("workspace not found: {workspace_id}")))?
+                .project
+                .location
+                .clone();
+            if matches!(location, ProjectLocation::Legacy) {
+                return Ok(Some(project_error_result(ProjectError::new(
+                    "legacy_project_needs_folder",
+                    pandamux_core::ProjectErrorCategory::Validation,
+                    "Legacy Projects require folder selection before adding a session",
+                    true,
+                ))));
+            }
+            let result = launch_project_location(
+                app,
+                ptys,
+                remotes,
+                remote_configs,
+                ssh_profiles,
+                location,
+                false,
+                spawn_ptys,
+            );
+            Ok(Some(project_launch_result(result)))
+        }
+        "ssh.folder.list" => {
+            let profile_id: SshProfileId = required_id(&request.params, &["profileId", "id"])?;
+            let profile = ssh_profiles
+                .get(&profile_id)
+                .ok_or_else(|| (-32000, format!("SSH profile not found: {profile_id}")))?;
+            let path = opt_string(&request.params, "path").unwrap_or_else(|| "/".to_string());
+            let config = match crate::project_launcher::ssh_config(
+                profile,
+                path.clone(),
+                None,
+                request
+                    .params
+                    .get("trustUnknownHost")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            ) {
+                Ok(config) => config,
+                Err(error) => return Ok(Some(project_error_result(error))),
+            };
+            let result = remotes
+                .browse_folders_blocking(config, path, std::time::Duration::from_secs(30))
+                .map(|listing| {
+                    let canonical_path = listing.canonical_path;
+                    json!({
+                        "canonicalPath": canonical_path,
+                        "parentPath": pandamux_core::posix_parent(&canonical_path),
+                        "breadcrumbs": pandamux_core::posix_breadcrumbs(&canonical_path),
+                        "directories": listing.directories.into_iter().map(|entry| json!({
+                            "name": entry.name,
+                            "canonicalPath": entry.canonical_path,
+                        })).collect::<Vec<_>>(),
+                    })
+                });
+            match result {
+                Ok(listing) => Ok(Some(json!({ "ok": true, "listing": listing }))),
+                Err(error) => Ok(Some(project_error_result(
+                    crate::project_launcher::project_error_from_ssh(error),
+                ))),
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+fn launch_project_location(
+    app: &mut AppState,
+    ptys: &mut PtySessionManager,
+    remotes: &mut RemoteSessionManager,
+    remote_configs: &mut HashMap<SurfaceId, SshConfig>,
+    ssh_profiles: &SshProfiles,
+    location: ProjectLocation,
+    trust_unknown_host: bool,
+    spawn_ptys: bool,
+) -> Result<crate::project_launcher::LaunchSuccess, ProjectError> {
+    match location {
+        ProjectLocation::Local { cwd, .. } => {
+            crate::project_launcher::launch_local(app, ptys, cwd, spawn_ptys)
+        }
+        ProjectLocation::Ssh {
+            profile_id,
+            remote_cwd,
+        } => {
+            let profile = ssh_profiles.get(&profile_id).ok_or_else(|| {
+                ProjectError::new(
+                    "ssh_profile_missing",
+                    pandamux_core::ProjectErrorCategory::ProfileMissing,
+                    format!("SSH profile not found: {profile_id}"),
+                    false,
+                )
+            })?;
+            crate::project_launcher::launch_remote_blocking(
+                app,
+                remotes,
+                remote_configs,
+                profile,
+                remote_cwd,
+                None,
+                trust_unknown_host,
+                spawn_ptys,
+            )
+        }
+        ProjectLocation::Legacy => Err(ProjectError::new(
+            "legacy_project_needs_folder",
+            pandamux_core::ProjectErrorCategory::Validation,
+            "Legacy Projects require folder selection",
+            true,
+        )),
+    }
+}
+
+fn project_launch_result(
+    result: Result<crate::project_launcher::LaunchSuccess, ProjectError>,
+) -> Value {
+    match result {
+        Ok(success) => json!({
+            "ok": true,
+            "workspaceId": success.workspace_id,
+            "paneId": success.pane_id,
+            "surfaceId": success.surface_id,
+            "reusedProject": success.reused_project,
+        }),
+        Err(error) => project_error_result(error),
+    }
+}
+
+fn project_error_result(error: ProjectError) -> Value {
+    json!({ "ok": false, "error": error })
+}
+
+// ---------------------------------------------------------------------------
 // SSH remote surfaces (plan F2 / F3)
 // ---------------------------------------------------------------------------
 
@@ -848,14 +1043,38 @@ fn dispatch_ssh(
     match request.method.as_str() {
         "ssh.connect" => {
             let config = ssh_config_from_params(&request.params)?;
-            // A remote surface is a terminal surface whose bytes come from SSH.
+            let workspace_id = opt_id(&request.params, "workspaceId")
+                .unwrap_or_else(|| app.active_workspace_id.clone());
+            let pane_id = opt_id(&request.params, "paneId").or_else(|| {
+                app.workspace(&workspace_id)
+                    .and_then(|workspace| workspace.focused_pane_id.clone())
+            });
+            let surface_id = SurfaceId::generate();
+            // Preserve the historical RPC meaning, but prestart before the core
+            // mutation so an async connection failure cannot leave ghost state.
+            if spawn_ptys {
+                remotes
+                    .connect_ready(
+                        surface_id.to_string(),
+                        config.clone(),
+                        GridSize::new(120, 30),
+                        std::time::Duration::from_secs(30),
+                    )
+                    .map_err(|error| (-32000, error))?;
+            }
             let delta = app
-                .apply(AppIntent::Surface(SurfaceIntent::Create {
-                    workspace_id: opt_id(&request.params, "workspaceId"),
-                    pane_id: opt_id(&request.params, "paneId"),
+                .apply(AppIntent::Surface(SurfaceIntent::CreateWithId {
+                    workspace_id,
+                    pane_id,
+                    surface_id: surface_id.clone(),
                     surface_type: SurfaceType::Terminal,
                 }))
-                .map_err(|message| (-32000, message))?;
+                .map_err(|message| {
+                    if spawn_ptys {
+                        let _ = remotes.kill(surface_id.as_str());
+                    }
+                    (-32000, message)
+                })?;
             let (workspace_id, pane_id, surface_id) = match delta {
                 AppDelta::SurfaceCreated {
                     workspace_id,
@@ -864,17 +1083,6 @@ fn dispatch_ssh(
                 } => (workspace_id, pane_id, surface.id),
                 _ => return Err((-32000, "remote surface was not created".to_string())),
             };
-            // Only the live runtime opens the socket; the headless/test backend
-            // records the config so the surface is known-remote without I/O.
-            if spawn_ptys {
-                remotes
-                    .connect(
-                        surface_id.to_string(),
-                        config.clone(),
-                        GridSize::new(120, 30),
-                    )
-                    .map_err(|error| (-32000, error))?;
-            }
             remote_configs.insert(surface_id.clone(), config.clone());
             Ok(Some(json!({
                 "ok": true,
@@ -911,20 +1119,39 @@ fn dispatch_ssh(
                 .collect();
             Ok(Some(json!({ "sessions": sessions })))
         }
-        "ssh.profiles" => Ok(Some(json!({ "profiles": ssh_profiles.list() }))),
-        "ssh.save_profile" => {
-            let profile = ssh_profile_from_params(&request.params)?;
+        "ssh.profiles" | "ssh.profile.list" => Ok(Some(json!({ "profiles": ssh_profiles.list() }))),
+        "ssh.save_profile" | "ssh.profile.save" => {
+            let mut profile = ssh_profile_from_params(&request.params)?;
+            if request.method == "ssh.save_profile"
+                && request.params.get("profileId").is_none()
+                && request.params.get("id").is_none()
+                && let Some(existing) = ssh_profiles.get_by_name(&profile.name)
+            {
+                profile.id = existing.id.clone();
+            }
             let name = profile.name.clone();
+            if ssh_profiles.has_duplicate_name(&profile.name, Some(&profile.id)) {
+                return Err((
+                    -32602,
+                    format!("SSH profile name already exists: {}", profile.name),
+                ));
+            }
+            let id = profile.id.clone();
             ssh_profiles.upsert(profile);
-            Ok(Some(json!({ "ok": true, "name": name })))
+            Ok(Some(json!({ "ok": true, "id": id, "name": name })))
         }
         "ssh.remove_profile" => {
             let name = opt_string(&request.params, "name")
                 .ok_or_else(|| (-32602, "ssh.remove_profile requires name".to_string()))?;
-            let removed = ssh_profiles.remove(&name);
+            let removed = ssh_profiles.remove_by_name(&name);
             Ok(Some(json!({ "ok": removed })))
         }
-        "ssh.import_config" => {
+        "ssh.profile.remove" => {
+            let id: SshProfileId = required_id(&request.params, &["profileId", "id"])?;
+            let removed = ssh_profiles.remove(&id);
+            Ok(Some(json!({ "ok": removed })))
+        }
+        "ssh.import_config" | "ssh.profile.import_config" => {
             let content = match opt_string(&request.params, "content") {
                 Some(content) => content,
                 None => {
@@ -989,6 +1216,9 @@ fn ssh_profile_from_params(params: &Value) -> Result<SshHostProfile, (i32, Strin
         .ok_or_else(|| (-32602, "ssh.save_profile requires user".to_string()))?;
     let name = opt_string(params, "name").unwrap_or_else(|| host.clone());
     let mut profile = SshHostProfile::new(name, host, user);
+    if let Some(id) = opt_id::<SshProfileId>(params, "profileId").or_else(|| opt_id(params, "id")) {
+        profile.id = id;
+    }
     if let Some(port) = params.get("port").and_then(Value::as_u64) {
         profile.port = port as u16;
     }
@@ -1628,6 +1858,9 @@ pub fn sync_terminal_sessions(
     for workspace in &app.workspaces {
         for surface_id in terminal_surface_ids(&workspace.split_tree) {
             let session_id = surface_id.to_string();
+            if matches!(workspace.project.location, ProjectLocation::Ssh { .. }) {
+                continue;
+            }
             // A remote surface has an SSH session, not a local PTY: leave it be.
             if remotes.has(&session_id) {
                 continue;
@@ -1636,8 +1869,14 @@ pub fn sync_terminal_sessions(
             if ptys.has(&session_id) {
                 continue;
             }
-            let command =
-                PtyCommand::new(workspace.shell.clone()).with_env(pandamux_env(&session_id, None));
+            let command = match &workspace.project.location {
+                ProjectLocation::Local { cwd, shell } => PtyCommand::new(shell.clone())
+                    .with_cwd(Some(cwd.clone()))
+                    .with_env(pandamux_env(&session_id, None)),
+                ProjectLocation::Legacy => PtyCommand::new(workspace.shell.clone())
+                    .with_env(pandamux_env(&session_id, None)),
+                ProjectLocation::Ssh { .. } => unreachable!(),
+            };
             ptys.spawn(session_id, &command, GridSize::new(120, 30))
                 .map_err(|error| error.to_string())?;
         }

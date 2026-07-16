@@ -43,6 +43,15 @@ pub fn resolve_shell(preferred: Option<&str>) -> String {
     resolve_shell_with(preferred, &default_candidates(), is_shell_available)
 }
 
+/// Resolve the Project launcher shell contract: PowerShell 7 first, then
+/// Windows PowerShell. Unlike the legacy resolver this never falls back to cmd.
+pub fn resolve_powershell() -> Option<String> {
+    ["pwsh.exe", "powershell.exe"]
+        .into_iter()
+        .find(|candidate| is_shell_available(candidate))
+        .map(str::to_string)
+}
+
 fn resolve_shell_with(
     preferred: Option<&str>,
     candidates: &[String],

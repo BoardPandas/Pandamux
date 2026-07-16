@@ -10,8 +10,10 @@
 //! [`SessionStore`] takes its base directory by value so it is unit-testable
 //! against a temp dir; [`SessionStore::default_dir`] resolves the real location.
 
-use pandamux_core::AppState;
+use pandamux_core::{AppState, SshHostProfile, SshProfileId, SshProfiles};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -35,6 +37,140 @@ pub struct NamedSessionSummary {
 
 pub struct SessionStore {
     base: PathBuf,
+}
+
+const SSH_PROFILE_SCHEMA_VERSION: u32 = 1;
+
+/// Secretless SSH connection settings. Credentials intentionally have no field
+/// in this schema, so they cannot leak through a future save call.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshProfileConfig {
+    #[serde(default)]
+    pub version: u32,
+    #[serde(default)]
+    pub profiles: Vec<SshHostProfile>,
+    #[serde(default)]
+    pub last_selected_folder_by_profile: BTreeMap<SshProfileId, String>,
+    #[serde(default)]
+    pub last_selected_local_folder: Option<String>,
+}
+
+impl Default for SshProfileConfig {
+    fn default() -> Self {
+        Self {
+            version: SSH_PROFILE_SCHEMA_VERSION,
+            profiles: Vec::new(),
+            last_selected_folder_by_profile: BTreeMap::new(),
+            last_selected_local_folder: None,
+        }
+    }
+}
+
+impl SshProfileConfig {
+    pub fn registry(&self) -> SshProfiles {
+        SshProfiles {
+            profiles: self.profiles.clone(),
+        }
+    }
+
+    pub fn set_registry(&mut self, profiles: &SshProfiles) {
+        self.profiles = profiles.profiles.clone();
+    }
+}
+
+#[derive(Debug)]
+pub enum SshProfileStoreError {
+    Io(io::Error),
+    Corrupt { path: PathBuf, message: String },
+    UnsupportedVersion(u32),
+}
+
+impl fmt::Display for SshProfileStoreError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(error) => write!(formatter, "{error}"),
+            Self::Corrupt { path, message } => {
+                write!(
+                    formatter,
+                    "SSH profile file {} is corrupt: {message}",
+                    path.display()
+                )
+            }
+            Self::UnsupportedVersion(version) => {
+                write!(
+                    formatter,
+                    "unsupported SSH profile schema version {version}"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for SshProfileStoreError {}
+
+impl From<io::Error> for SshProfileStoreError {
+    fn from(value: io::Error) -> Self {
+        Self::Io(value)
+    }
+}
+
+pub struct SshProfileStore {
+    base: PathBuf,
+}
+
+impl SshProfileStore {
+    pub fn new(base: impl Into<PathBuf>) -> Self {
+        Self { base: base.into() }
+    }
+
+    pub fn default_dir() -> PathBuf {
+        SessionStore::default_dir().join("config")
+    }
+
+    pub fn path(&self) -> PathBuf {
+        self.base.join("ssh-profiles.json")
+    }
+
+    pub fn save(&self, config: &SshProfileConfig) -> Result<(), SshProfileStoreError> {
+        fs::create_dir_all(&self.base)?;
+        let mut config = config.clone();
+        config.version = SSH_PROFILE_SCHEMA_VERSION;
+        let json = serde_json::to_string_pretty(&config).map_err(io::Error::other)?;
+        atomic_write(&self.path(), &json)?;
+        Ok(())
+    }
+
+    /// Load and, when needed, migrate with a version-stamped backup written
+    /// before the original file is replaced. Invalid JSON is left untouched.
+    pub fn load(&self) -> Result<SshProfileConfig, SshProfileStoreError> {
+        let path = self.path();
+        let raw = match fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(SshProfileConfig::default());
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let mut config: SshProfileConfig =
+            serde_json::from_str(&raw).map_err(|error| SshProfileStoreError::Corrupt {
+                path: path.clone(),
+                message: error.to_string(),
+            })?;
+        if config.version > SSH_PROFILE_SCHEMA_VERSION {
+            return Err(SshProfileStoreError::UnsupportedVersion(config.version));
+        }
+        if config.version < SSH_PROFILE_SCHEMA_VERSION {
+            let backup = self
+                .base
+                .join(format!("ssh-profiles.v{}.bak.json", config.version));
+            fs::create_dir_all(&self.base)?;
+            fs::copy(&path, backup)?;
+            config.version = SSH_PROFILE_SCHEMA_VERSION;
+            self.save(&config)?;
+        }
+        Ok(config)
+    }
 }
 
 impl SessionStore {
@@ -200,6 +336,12 @@ mod tests {
         SessionStore::new(dir)
     }
 
+    fn temp_profile_store(tag: &str) -> SshProfileStore {
+        let dir = std::env::temp_dir().join(format!("pandamux-profile-test-{tag}"));
+        let _ = fs::remove_dir_all(&dir);
+        SshProfileStore::new(dir)
+    }
+
     fn split_state() -> AppState {
         let mut state = AppState::default();
         state
@@ -274,5 +416,77 @@ mod tests {
     #[test]
     fn names_are_sanitized() {
         assert_eq!(sanitize_name("a/b:c*?"), "a_b_c__");
+    }
+
+    #[test]
+    fn ssh_profiles_roundtrip_and_rename_by_id() {
+        let store = temp_profile_store("roundtrip");
+        let first = SshHostProfile::new("One", "one.example", "chaz");
+        let second = SshHostProfile::new("Two", "two.example", "chaz");
+        let first_id = first.id.clone();
+        let mut config = SshProfileConfig {
+            profiles: vec![first, second],
+            ..SshProfileConfig::default()
+        };
+        config
+            .last_selected_folder_by_profile
+            .insert(first_id.clone(), "/home/chaz/one".to_string());
+        store.save(&config).expect("save profiles");
+
+        let mut loaded = store.load().expect("load profiles");
+        loaded
+            .profiles
+            .iter_mut()
+            .find(|profile| profile.id == first_id)
+            .expect("first profile")
+            .name = "Renamed".to_string();
+        store.save(&loaded).expect("save rename");
+        let reloaded = store.load().expect("reload profiles");
+        assert_eq!(reloaded.profiles.len(), 2);
+        assert_eq!(reloaded.profiles[0].name, "Renamed");
+    }
+
+    #[test]
+    fn profile_migration_backs_up_before_rewrite() {
+        let store = temp_profile_store("migration");
+        fs::create_dir_all(&store.base).expect("create config dir");
+        fs::write(
+            store.path(),
+            r#"{"version":0,"profiles":[],"lastSelectedFolderByProfile":{}}"#,
+        )
+        .expect("write v0");
+        let loaded = store.load().expect("migrate");
+        assert_eq!(loaded.version, SSH_PROFILE_SCHEMA_VERSION);
+        assert!(store.base.join("ssh-profiles.v0.bak.json").is_file());
+        let disk: SshProfileConfig = read_json(&store.path()).expect("rewritten json");
+        assert_eq!(disk.version, SSH_PROFILE_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn corrupt_profile_file_is_preserved() {
+        let store = temp_profile_store("corrupt");
+        fs::create_dir_all(&store.base).expect("create config dir");
+        fs::write(store.path(), "{not-json").expect("write corrupt file");
+        assert!(matches!(
+            store.load(),
+            Err(SshProfileStoreError::Corrupt { .. })
+        ));
+        assert_eq!(fs::read_to_string(store.path()).unwrap(), "{not-json");
+    }
+
+    #[test]
+    fn persisted_profile_schema_has_no_secret_fields() {
+        let store = temp_profile_store("secretless");
+        let mut profile = SshHostProfile::new("Password", "host", "user");
+        profile.auth = pandamux_core::SshAuthConfig::Password;
+        store
+            .save(&SshProfileConfig {
+                profiles: vec![profile],
+                ..SshProfileConfig::default()
+            })
+            .expect("save password mode");
+        let raw = fs::read_to_string(store.path()).unwrap();
+        assert!(!raw.contains("passphrase"));
+        assert!(!raw.contains("\"password\":"));
     }
 }

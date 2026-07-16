@@ -15,5 +15,8 @@ pub use links::{DetectedLink, detect_links};
 pub use pty::{PtyCapture, PtyCommand, capture_pty_command, shell_marker_command};
 pub use search::{SearchMatch, SearchOptions, search_lines};
 pub use session::PtySessionManager;
-pub use shell::{ShellType, chunk_write, resolve_shell, shell_type};
-pub use ssh::{RemoteSessionManager, SshAuth, SshConfig};
+pub use shell::{ShellType, chunk_write, resolve_powershell, resolve_shell, shell_type};
+pub use ssh::{
+    RemoteFolderEntry, RemoteFolderListing, RemoteSessionManager, RemoteStatus, SshAuth, SshConfig,
+    SshErrorCategory, SshFailure, browse_remote_folders,
+};

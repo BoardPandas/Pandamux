@@ -13,7 +13,11 @@ use crate::iced_shell::ShellMessage;
 use crate::theme::{self, Palette, ShellKind};
 use iced::widget::{Space, button, column, container, row, scrollable, text};
 use iced::{Alignment, Color, Element, Length, Padding};
-use pandamux_core::{AppState, SplitNode, SurfaceId, SurfaceType, WorkspaceId, WorkspaceState};
+use pandamux_core::{
+    AppState, ProjectLocation, SplitNode, SshProfiles, SurfaceId, SurfaceType, WorkspaceId,
+    WorkspaceState,
+};
+use std::collections::HashSet;
 
 /// How the panel groups sessions. The switcher regroups live.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -47,6 +51,7 @@ pub struct SessionEntry {
     pub workspace_id: WorkspaceId,
     pub name: String,
     pub meta: String,
+    pub host: String,
     pub kind: ShellKind,
     pub activity: SessionActivity,
     pub is_active: bool,
@@ -56,6 +61,8 @@ pub struct SessionEntry {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionGroup {
     pub key: String,
+    pub workspace_id: Option<WorkspaceId>,
+    pub add_pending: bool,
     pub entries: Vec<SessionEntry>,
 }
 
@@ -75,25 +82,73 @@ pub fn project_sessions(
     open: bool,
     active_surface_id: Option<&SurfaceId>,
 ) -> SessionsViewState {
+    project_sessions_with_profiles(
+        app,
+        &SshProfiles::new(),
+        grouping,
+        open,
+        active_surface_id,
+        &HashSet::new(),
+    )
+}
+
+pub fn project_sessions_with_profiles(
+    app: &AppState,
+    profiles: &SshProfiles,
+    grouping: SessionGrouping,
+    open: bool,
+    active_surface_id: Option<&SurfaceId>,
+    pending_projects: &HashSet<WorkspaceId>,
+) -> SessionsViewState {
     let mut entries: Vec<SessionEntry> = Vec::new();
     for workspace in &app.workspaces {
         let terminals = terminal_surfaces(&workspace.split_tree);
         let multiple = terminals.len() > 1;
         for (index, surface_id) in terminals.into_iter().enumerate() {
-            let kind = ShellKind::classify(&workspace.shell);
-            let host = host_label(&workspace.shell);
+            let (kind, host, meta) = match &workspace.project.location {
+                ProjectLocation::Local { cwd, .. } => (
+                    ShellKind::PowerShell,
+                    "Local".to_string(),
+                    format!("PowerShell \u{00b7} {cwd}"),
+                ),
+                ProjectLocation::Ssh {
+                    profile_id,
+                    remote_cwd,
+                } => {
+                    let profile = profiles.get(profile_id);
+                    let name = profile
+                        .map(|profile| profile.name.clone())
+                        .unwrap_or_else(|| "Missing connection".to_string());
+                    let host = profile
+                        .map(|profile| profile.host.clone())
+                        .unwrap_or_else(|| "Missing connection".to_string());
+                    (
+                        ShellKind::Ssh,
+                        host,
+                        format!("SSH \u{00b7} {name} \u{00b7} {remote_cwd}"),
+                    )
+                }
+                ProjectLocation::Legacy => {
+                    let host = host_label(&workspace.shell);
+                    (
+                        ShellKind::classify(&workspace.shell),
+                        host.clone(),
+                        format!("{} \u{00b7} {host}", workspace.shell),
+                    )
+                }
+            };
             let name = if multiple {
                 format!("{} \u{00b7} {}", workspace.title, index + 1)
             } else {
                 workspace.title.clone()
             };
-            let meta = format!("{} \u{00b7} {}", workspace.shell, host);
             entries.push(SessionEntry {
                 is_active: active_surface_id == Some(&surface_id),
                 surface_id,
                 workspace_id: workspace.id.clone(),
                 name,
                 meta,
+                host,
                 kind,
                 activity: activity_for(workspace, active_surface_id),
             });
@@ -101,7 +156,7 @@ pub fn project_sessions(
     }
 
     let total = entries.len();
-    let groups = group_entries(entries, grouping, app);
+    let groups = group_entries(entries, grouping, app, pending_projects);
     SessionsViewState {
         open,
         grouping,
@@ -114,6 +169,7 @@ fn group_entries(
     entries: Vec<SessionEntry>,
     grouping: SessionGrouping,
     app: &AppState,
+    pending_projects: &HashSet<WorkspaceId>,
 ) -> Vec<SessionGroup> {
     let mut groups: Vec<SessionGroup> = Vec::new();
     for entry in entries {
@@ -123,12 +179,21 @@ fn group_entries(
                 .map(|workspace| workspace.title.clone())
                 .unwrap_or_else(|| "Workspace".to_string()),
             SessionGrouping::Type => entry.kind.abbreviation().to_string(),
-            SessionGrouping::Host => host_from_meta(&entry.meta),
+            SessionGrouping::Host => entry.host.clone(),
         };
-        match groups.iter_mut().find(|group| group.key == key) {
+        let workspace_id =
+            (grouping == SessionGrouping::Project).then(|| entry.workspace_id.clone());
+        match groups
+            .iter_mut()
+            .find(|group| group.key == key && group.workspace_id == workspace_id)
+        {
             Some(group) => group.entries.push(entry),
             None => groups.push(SessionGroup {
                 key,
+                add_pending: workspace_id
+                    .as_ref()
+                    .is_some_and(|id| pending_projects.contains(id)),
+                workspace_id,
                 entries: vec![entry],
             }),
         }
@@ -172,13 +237,6 @@ fn host_label(shell: &str) -> String {
     }
 }
 
-fn host_from_meta(meta: &str) -> String {
-    meta.rsplit(" \u{00b7} ")
-        .next()
-        .unwrap_or("local")
-        .to_string()
-}
-
 fn terminal_surfaces(tree: &SplitNode) -> Vec<SurfaceId> {
     match tree {
         SplitNode::Leaf(leaf) => leaf
@@ -220,7 +278,7 @@ pub fn session_panel<'a>(
 
     let mut list = column![].spacing(10).width(Length::Fill);
     for group in &state.groups {
-        list = list.push(group_header(&group.key, palette));
+        list = list.push(group_header(group, palette));
         for entry in &group.entries {
             list = list.push(session_row(entry, palette));
         }
@@ -297,12 +355,32 @@ fn grouping_switcher<'a>(active: SessionGrouping, palette: Palette) -> Element<'
         .into()
 }
 
-fn group_header<'a>(key: &str, palette: Palette) -> Element<'a, ShellMessage> {
-    text(key.to_uppercase())
+fn group_header<'a>(group: &'a SessionGroup, palette: Palette) -> Element<'a, ShellMessage> {
+    let label = text(group.key.to_uppercase())
         .size(theme::SIZE_GROUP_HEADER)
         .font(theme::ui(iced::font::Weight::Semibold))
-        .color(palette.t4)
-        .into()
+        .color(palette.t4);
+    let mut header = row![label, Space::new().width(Length::Fill)].align_y(Alignment::Center);
+    if let Some(workspace_id) = &group.workspace_id {
+        let mut add = button(
+            text(if group.add_pending { "..." } else { "+" })
+                .size(theme::SIZE_BODY)
+                .color(palette.t3),
+        )
+        .padding(Padding::from([1.0, 6.0]))
+        .style(move |_theme, status| button::Style {
+            background: matches!(status, button::Status::Hovered | button::Status::Pressed)
+                .then(|| palette.ov(0.08).into()),
+            text_color: palette.t3,
+            border: theme::border(palette.ov(0.1), 1.0, theme::RADIUS_CHIP),
+            ..Default::default()
+        });
+        if !group.add_pending {
+            add = add.on_press(ShellMessage::ProjectSessionRequested(workspace_id.clone()));
+        }
+        header = header.push(add);
+    }
+    header.into()
 }
 
 fn session_row<'a>(entry: &'a SessionEntry, palette: Palette) -> Element<'a, ShellMessage> {

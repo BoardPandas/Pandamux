@@ -33,6 +33,37 @@ async fn run() -> Result<(), Box<dyn Error>> {
             print_json(send_v2("workspace.rename", rename_workspace_params(&args[1..])?).await?)
         }
         "close-workspace" => print_json(send_v2("workspace.close", id_param(&args[1..])?).await?),
+        "project" => match args.get(1).map(String::as_str) {
+            Some("list") => print_json(send_v2("project.list", json!({})).await?),
+            Some("create-local") => {
+                let cwd = args
+                    .get(2)
+                    .ok_or("project create-local requires <folder>")?;
+                print_json(
+                    send_v2(
+                        "project.create",
+                        json!({ "location": { "type": "local", "cwd": cwd, "shell": "pwsh.exe" } }),
+                    )
+                    .await?,
+                )
+            }
+            Some("add-session") => {
+                let workspace_id = args
+                    .get(2)
+                    .ok_or("project add-session requires <workspaceId>")?;
+                print_json(
+                    send_v2(
+                        "project.add_session",
+                        json!({ "workspaceId": workspace_id }),
+                    )
+                    .await?,
+                )
+            }
+            _ => return Err(
+                "usage: pandamux project <list|create-local <folder>|add-session <workspaceId>>"
+                    .into(),
+            ),
+        },
         "split" => print_json(send_v2("pane.split", split_params(&args[1..])?).await?),
         "close-pane" => {
             print_json(send_v2("pane.close", id_with_optional_workspace_param(&args[1..])?).await?)
@@ -194,6 +225,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             }
             Some("list") => print_json(send_v2("ssh.list", json!({})).await?),
             Some("profiles") => print_json(send_v2("ssh.profiles", json!({})).await?),
+            Some("profile-list") => print_json(send_v2("ssh.profile.list", json!({})).await?),
             Some("save-profile") => {
                 print_json(send_v2("ssh.save_profile", ssh_connect_params(&args[2..])?).await?)
             }
@@ -203,10 +235,29 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     .map_err(|error| format!("read {path}: {error}"))?;
                 print_json(send_v2("ssh.import_config", json!({ "content": content })).await?)
             }
+            Some("profile-remove") => {
+                let profile_id = args
+                    .get(2)
+                    .ok_or("ssh profile-remove requires <profileId>")?;
+                print_json(send_v2("ssh.profile.remove", json!({ "profileId": profile_id })).await?)
+            }
+            Some("folder-list") => {
+                let profile_id = args
+                    .get(2)
+                    .ok_or("ssh folder-list requires <profileId> <path>")?;
+                let path = args.get(3).map(String::as_str).unwrap_or("/");
+                print_json(
+                    send_v2(
+                        "ssh.folder.list",
+                        json!({ "profileId": profile_id, "path": path }),
+                    )
+                    .await?,
+                )
+            }
             _ => {
                 print_usage();
                 return Err(
-                    "usage: pandamux ssh <connect|disconnect|list|profiles|save-profile|import>"
+                    "usage: pandamux ssh <connect|disconnect|list|profiles|profile-list|save-profile|profile-remove|import|folder-list>"
                         .into(),
                 );
             }

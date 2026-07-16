@@ -20,6 +20,8 @@ mod updater;
 #[allow(dead_code)]
 mod persistence;
 mod pipe_server;
+#[cfg_attr(not(feature = "iced-runtime"), allow(dead_code))]
+mod project_launcher;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     set_app_user_model_id();
@@ -93,14 +95,27 @@ fn run_ssh_smoke() -> Result<(), Box<dyn std::error::Error>> {
         },
     };
 
-    let config = SshConfig::new(host.clone(), user, auth);
+    let remote_cwd =
+        std::env::var("PANDAMUX_SSH_SMOKE_CWD").map_err(|_| "set PANDAMUX_SSH_SMOKE_CWD")?;
+    let trust_unknown = std::env::var("PANDAMUX_SSH_SMOKE_TRUST_UNKNOWN")
+        .is_ok_and(|value| value.eq_ignore_ascii_case("true"));
+    let config = SshConfig::new(host.clone(), user, auth)
+        .with_remote_cwd(remote_cwd.clone())
+        .with_unknown_host_trust(trust_unknown);
     let mut manager = RemoteSessionManager::new()?;
-    manager.connect("surf-ssh-smoke", config, GridSize::new(120, 30))?;
+    manager.connect_ready(
+        "surf-ssh-smoke",
+        config,
+        GridSize::new(120, 30),
+        Duration::from_secs(30),
+    )?;
     println!("connecting to {host} ...");
 
     // Wait for the shell/tmux to come up, then run a marker command and read it.
-    std::thread::sleep(Duration::from_secs(3));
-    manager.write_all("surf-ssh-smoke", b"echo PANDAMUX_SSH_SMOKE_MARKER\n")?;
+    manager.write_all(
+        "surf-ssh-smoke",
+        b"printf 'PANDAMUX_SSH_SMOKE_MARKER\\n'; pwd\n",
+    )?;
 
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut screen = String::new();
@@ -115,7 +130,7 @@ fn run_ssh_smoke() -> Result<(), Box<dyn std::error::Error>> {
     }
     let _ = manager.kill("surf-ssh-smoke");
 
-    if screen.contains("PANDAMUX_SSH_SMOKE_MARKER") {
+    if screen.contains("PANDAMUX_SSH_SMOKE_MARKER") && screen.contains(&remote_cwd) {
         println!("--- remote screen tail ---\n{screen}\n---");
         println!("PANDAMUX_SSH_SMOKE_OK");
         Ok(())

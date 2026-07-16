@@ -21,8 +21,8 @@
 use crate::grid::{GridSize, TerminalGrid};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -34,7 +34,7 @@ use russh::{ChannelMsg, Disconnect, client};
 
 /// How to authenticate an SSH connection. Mirrors the auth matrix proven in the
 /// Phase 2 spike: a private key file, the Windows OpenSSH-compatible agent named
-/// pipe (covers 1Password when present), or a password.
+/// pipe, or a password.
 #[derive(Clone, Debug)]
 pub enum SshAuth {
     KeyFile {
@@ -58,6 +58,12 @@ pub struct SshConfig {
     pub port: u16,
     pub user: String,
     pub auth: SshAuth,
+    /// Explicit remote Project root. `None` preserves the historical login-home
+    /// behavior for legacy `ssh.connect` callers.
+    pub remote_cwd: Option<String>,
+    /// One-shot decision from an explicit fingerprint confirmation. Unknown
+    /// keys are learned only when this is true. Changed keys remain blocked.
+    pub trust_unknown_host: bool,
 }
 
 impl SshConfig {
@@ -67,6 +73,8 @@ impl SshConfig {
             port: 22,
             user: user.into(),
             auth,
+            remote_cwd: None,
+            trust_unknown_host: false,
         }
     }
 
@@ -74,6 +82,66 @@ impl SshConfig {
         self.port = port;
         self
     }
+
+    pub fn with_remote_cwd(mut self, remote_cwd: impl Into<String>) -> Self {
+        self.remote_cwd = Some(remote_cwd.into());
+        self
+    }
+
+    pub fn with_unknown_host_trust(mut self, trust: bool) -> Self {
+        self.trust_unknown_host = trust;
+        self
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SshErrorCategory {
+    Connection,
+    HostKeyUnknown,
+    HostKeyChanged,
+    Authentication,
+    RemotePath,
+    PtyStart,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SshFailure {
+    pub code: &'static str,
+    pub category: SshErrorCategory,
+    pub message: String,
+    pub retryable: bool,
+    pub fingerprint: Option<String>,
+    pub known_hosts_line: Option<usize>,
+}
+
+impl std::fmt::Display for SshFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for SshFailure {}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RemoteStatus {
+    Connecting,
+    Ready,
+    Disconnected,
+    Retrying,
+    Failed,
+    Closed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteFolderEntry {
+    pub name: String,
+    pub canonical_path: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteFolderListing {
+    pub canonical_path: String,
+    pub directories: Vec<RemoteFolderEntry>,
 }
 
 pub type SshResult<T> = Result<T, String>;
@@ -84,8 +152,7 @@ enum RemoteEvent {
     /// A reconnection re-attached to the durable session; the grid must reset so
     /// the server repaint reconciles rather than appends (reset-on-reattach).
     Reattached,
-    /// The connection dropped and reconnection is in progress.
-    Disconnected,
+    Status(RemoteStatus),
     /// The session ended permanently (auth failure, killed, or gave up).
     Closed(Option<String>),
 }
@@ -107,6 +174,7 @@ struct RemoteSession {
     sftp: UnboundedSender<SftpRequest>,
     running: bool,
     last_error: Option<String>,
+    status: RemoteStatus,
 }
 
 struct SftpRequest {
@@ -181,6 +249,7 @@ impl RemoteSessionManager {
                 sftp: sftp_tx,
                 running: true,
                 last_error: None,
+                status: RemoteStatus::Connecting,
             },
         );
         Ok(())
@@ -200,7 +269,7 @@ impl RemoteSessionManager {
                     // server's full repaint lands on a clean buffer.
                     session.grid = TerminalGrid::new(session.size);
                 }
-                Ok(RemoteEvent::Disconnected) => {}
+                Ok(RemoteEvent::Status(status)) => session.status = status,
                 Ok(RemoteEvent::Closed(error)) => {
                     session.running = false;
                     session.last_error = error;
@@ -213,6 +282,93 @@ impl RemoteSessionManager {
             }
         }
         Ok(())
+    }
+
+    pub fn status(&self, surface_id: &str) -> Option<RemoteStatus> {
+        self.sessions.get(surface_id).map(|session| session.status)
+    }
+
+    pub fn last_error(&self, surface_id: &str) -> Option<&str> {
+        self.sessions
+            .get(surface_id)
+            .and_then(|session| session.last_error.as_deref())
+    }
+
+    pub fn browse_folders_blocking(
+        &self,
+        config: SshConfig,
+        path: String,
+        timeout: Duration,
+    ) -> Result<RemoteFolderListing, SshFailure> {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        self.runtime.spawn(async move {
+            let _ = sender.send(browse_remote_folders(config, path).await);
+        });
+        receiver.recv_timeout(timeout).map_err(|_| SshFailure {
+            code: "ssh_folder_list_timeout",
+            category: SshErrorCategory::Connection,
+            message: "SSH folder listing timed out".to_string(),
+            retryable: true,
+            fingerprint: None,
+            known_hosts_line: None,
+        })?
+    }
+
+    /// Start a remote surface and wait until authentication, PTY allocation and
+    /// command acceptance have all succeeded. On failure the prestarted session
+    /// is removed so callers can commit canonical state transactionally.
+    pub fn connect_ready(
+        &mut self,
+        surface_id: impl Into<String>,
+        config: SshConfig,
+        size: GridSize,
+        timeout: Duration,
+    ) -> SshResult<()> {
+        let surface_id = surface_id.into();
+        self.connect(surface_id.clone(), config, size)?;
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                let _ = self.kill(&surface_id);
+                return Err("ssh PTY start timed out before ready".to_string());
+            }
+            let event = {
+                let session = self
+                    .sessions
+                    .get_mut(&surface_id)
+                    .ok_or_else(|| format!("remote session not found: {surface_id}"))?;
+                session.rx.recv_timeout(remaining)
+            };
+            match event {
+                Ok(RemoteEvent::Data(bytes)) => {
+                    if let Some(session) = self.sessions.get_mut(&surface_id) {
+                        session.grid.advance(&bytes);
+                    }
+                }
+                Ok(RemoteEvent::Reattached) => {}
+                Ok(RemoteEvent::Status(RemoteStatus::Ready)) => {
+                    if let Some(session) = self.sessions.get_mut(&surface_id) {
+                        session.status = RemoteStatus::Ready;
+                    }
+                    return Ok(());
+                }
+                Ok(RemoteEvent::Status(status)) => {
+                    if let Some(session) = self.sessions.get_mut(&surface_id) {
+                        session.status = status;
+                    }
+                }
+                Ok(RemoteEvent::Closed(error)) => {
+                    let message = error.unwrap_or_else(|| "remote session closed".to_string());
+                    self.sessions.remove(&surface_id);
+                    return Err(message);
+                }
+                Err(_) => {
+                    self.sessions.remove(&surface_id);
+                    return Err("remote session ended before ready".to_string());
+                }
+            }
+        }
     }
 
     pub fn write_all(&mut self, surface_id: &str, bytes: &[u8]) -> SshResult<()> {
@@ -351,8 +507,22 @@ fn sanitize_tmux(surface_id: &str) -> String {
 
 /// The tmux-wrapped remote command: attach-or-create a durable session, falling
 /// back to a plain login shell when tmux is absent (degraded, no durability).
-fn remote_command(tmux_session: &str) -> String {
-    format!("tmux new-session -A -s {tmux_session} 2>/dev/null || exec \"${{SHELL:-/bin/sh}}\" -l")
+fn quote_posix(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn remote_command(tmux_session: &str, remote_cwd: Option<&str>) -> String {
+    match remote_cwd {
+        Some(remote_cwd) => {
+            let cwd = quote_posix(remote_cwd);
+            format!(
+                "tmux new-session -A -s {tmux_session} -c {cwd} 2>/dev/null || {{ cd {cwd} && exec \"${{SHELL:-/bin/sh}}\" -l; }}"
+            )
+        }
+        None => format!(
+            "tmux new-session -A -s {tmux_session} 2>/dev/null || exec \"${{SHELL:-/bin/sh}}\" -l"
+        ),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -368,52 +538,142 @@ struct RemoteDriver {
     sftp: UnboundedReceiver<SftpRequest>,
 }
 
-struct ClientHandler;
+struct ClientHandler {
+    host: String,
+    port: u16,
+    trust_unknown_host: bool,
+    failure: Arc<Mutex<Option<SshFailure>>>,
+}
 
 impl client::Handler for ClientHandler {
     type Error = russh::Error;
 
     async fn check_server_key(
         &mut self,
-        _server_public_key: &russh::keys::ssh_key::PublicKey,
+        server_public_key: &russh::keys::ssh_key::PublicKey,
     ) -> Result<bool, Self::Error> {
-        // TODO(phase6-followup): known-hosts verification. Accepting for now
-        // matches the Phase 2 spike; the connection manager will add pinning.
-        Ok(true)
+        match russh::keys::check_known_hosts(&self.host, self.port, server_public_key) {
+            Ok(true) => Ok(true),
+            Ok(false) if self.trust_unknown_host => {
+                match russh::keys::known_hosts::learn_known_hosts(
+                    &self.host,
+                    self.port,
+                    server_public_key,
+                ) {
+                    Ok(()) => Ok(true),
+                    Err(error) => {
+                        *self.failure.lock().expect("host failure lock") = Some(SshFailure {
+                            code: "ssh_host_key_write_failed",
+                            category: SshErrorCategory::HostKeyUnknown,
+                            message: format!(
+                                "could not save the confirmed host key for {}: {error}",
+                                self.host
+                            ),
+                            retryable: true,
+                            fingerprint: Some(
+                                server_public_key
+                                    .fingerprint(russh::keys::ssh_key::HashAlg::Sha256)
+                                    .to_string(),
+                            ),
+                            known_hosts_line: None,
+                        });
+                        Ok(false)
+                    }
+                }
+            }
+            Ok(false) => {
+                let fingerprint = server_public_key
+                    .fingerprint(russh::keys::ssh_key::HashAlg::Sha256)
+                    .to_string();
+                *self.failure.lock().expect("host failure lock") = Some(SshFailure {
+                    code: "ssh_host_key_unknown",
+                    category: SshErrorCategory::HostKeyUnknown,
+                    message: format!(
+                        "{} is not in known_hosts; confirm fingerprint {fingerprint}",
+                        self.host
+                    ),
+                    retryable: true,
+                    fingerprint: Some(fingerprint),
+                    known_hosts_line: None,
+                });
+                Ok(false)
+            }
+            Err(russh::keys::Error::KeyChanged { line }) => {
+                *self.failure.lock().expect("host failure lock") = Some(SshFailure {
+                    code: "ssh_host_key_changed",
+                    category: SshErrorCategory::HostKeyChanged,
+                    message: format!(
+                        "host key for {} changed; remove or repair known_hosts line {line} outside PandaMUX",
+                        self.host
+                    ),
+                    retryable: false,
+                    fingerprint: None,
+                    known_hosts_line: Some(line),
+                });
+                Ok(false)
+            }
+            Err(error) => {
+                *self.failure.lock().expect("host failure lock") = Some(SshFailure {
+                    code: "ssh_host_key_check_failed",
+                    category: SshErrorCategory::Connection,
+                    message: format!("check known_hosts for {}: {error}", self.host),
+                    retryable: true,
+                    fingerprint: None,
+                    known_hosts_line: None,
+                });
+                Ok(false)
+            }
+        }
     }
 }
 
 impl RemoteDriver {
     async fn run(mut self) {
         let mut backoff = Duration::from_millis(500);
-        let mut first_attempt = true;
+        let mut ever_ready = false;
+        let _ = self
+            .events
+            .send(RemoteEvent::Status(RemoteStatus::Connecting));
 
         loop {
             match self.connect().await {
                 Ok(handle) => {
                     backoff = Duration::from_millis(500);
-                    if !first_attempt {
-                        let _ = self.events.send(RemoteEvent::Reattached);
-                    }
-                    first_attempt = false;
-                    match self.session_loop(handle).await {
-                        SessionOutcome::Killed => {
+                    match self.session_loop(handle, ever_ready).await {
+                        Ok(SessionOutcome::Killed) => {
+                            let _ = self.events.send(RemoteEvent::Status(RemoteStatus::Closed));
                             let _ = self.events.send(RemoteEvent::Closed(None));
                             return;
                         }
-                        SessionOutcome::Disconnected => {
-                            let _ = self.events.send(RemoteEvent::Disconnected);
+                        Ok(SessionOutcome::Disconnected) => {
+                            ever_ready = true;
+                            let _ = self
+                                .events
+                                .send(RemoteEvent::Status(RemoteStatus::Disconnected));
+                        }
+                        Err(error) if !ever_ready => {
+                            let _ = self.events.send(RemoteEvent::Status(RemoteStatus::Failed));
+                            let _ = self.events.send(RemoteEvent::Closed(Some(error)));
+                            return;
+                        }
+                        Err(_) => {
+                            let _ = self
+                                .events
+                                .send(RemoteEvent::Status(RemoteStatus::Disconnected));
                         }
                     }
                 }
                 Err(error) => {
-                    if first_attempt {
+                    if !ever_ready {
                         // A failure on the very first attempt is terminal (bad
                         // host/auth); do not spin forever.
+                        let _ = self.events.send(RemoteEvent::Status(RemoteStatus::Failed));
                         let _ = self.events.send(RemoteEvent::Closed(Some(error)));
                         return;
                     }
-                    let _ = self.events.send(RemoteEvent::Disconnected);
+                    let _ = self
+                        .events
+                        .send(RemoteEvent::Status(RemoteStatus::Disconnected));
                 }
             }
 
@@ -422,6 +682,9 @@ impl RemoteDriver {
                 let _ = self.events.send(RemoteEvent::Closed(None));
                 return;
             }
+            let _ = self
+                .events
+                .send(RemoteEvent::Status(RemoteStatus::Retrying));
             tokio::time::sleep(backoff).await;
             backoff = (backoff * 2).min(Duration::from_secs(10));
         }
@@ -437,28 +700,20 @@ impl RemoteDriver {
     }
 
     async fn connect(&self) -> Result<client::Handle<ClientHandler>, String> {
-        let client_config = client::Config {
-            inactivity_timeout: Some(Duration::from_secs(60)),
-            keepalive_interval: Some(Duration::from_secs(15)),
-            ..Default::default()
-        };
-        let mut handle = client::connect(
-            Arc::new(client_config),
-            (self.config.host.as_str(), self.config.port),
-            ClientHandler,
-        )
-        .await
-        .map_err(|error| format!("ssh connect {}: {error}", self.config.host))?;
-
-        authenticate(&mut handle, &self.config).await?;
-        Ok(handle)
+        connect_client(&self.config)
+            .await
+            .map_err(|failure| failure.to_string())
     }
 
-    async fn session_loop(&mut self, handle: client::Handle<ClientHandler>) -> SessionOutcome {
-        let mut channel = match handle.channel_open_session().await {
-            Ok(channel) => channel,
-            Err(_) => return SessionOutcome::Disconnected,
-        };
+    async fn session_loop(
+        &mut self,
+        handle: client::Handle<ClientHandler>,
+        reattaching: bool,
+    ) -> Result<SessionOutcome, String> {
+        let mut channel = handle
+            .channel_open_session()
+            .await
+            .map_err(|error| format!("open SSH session channel: {error}"))?;
         if channel
             .request_pty(
                 false,
@@ -472,29 +727,36 @@ impl RemoteDriver {
             .await
             .is_err()
         {
-            return SessionOutcome::Disconnected;
+            return Err("remote server rejected the PTY request".to_string());
         }
         if channel
-            .exec(true, remote_command(&self.tmux_session).into_bytes())
+            .exec(
+                true,
+                remote_command(&self.tmux_session, self.config.remote_cwd.as_deref()).into_bytes(),
+            )
             .await
             .is_err()
         {
-            return SessionOutcome::Disconnected;
+            return Err("remote server rejected the startup command".to_string());
         }
+        if reattaching {
+            let _ = self.events.send(RemoteEvent::Reattached);
+        }
+        let _ = self.events.send(RemoteEvent::Status(RemoteStatus::Ready));
 
         loop {
             tokio::select! {
                 message = channel.wait() => match message {
                     Some(ChannelMsg::Data { data }) => {
                         if self.events.send(RemoteEvent::Data(data.to_vec())).is_err() {
-                            return SessionOutcome::Killed;
+                            return Ok(SessionOutcome::Killed);
                         }
                     }
                     Some(ChannelMsg::ExtendedData { data, .. }) => {
                         let _ = self.events.send(RemoteEvent::Data(data.to_vec()));
                     }
                     Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => {
-                        return SessionOutcome::Disconnected;
+                        return Ok(SessionOutcome::Disconnected);
                     }
                     Some(_) => {}
                 },
@@ -510,7 +772,7 @@ impl RemoteDriver {
                         let _ = handle
                             .disconnect(Disconnect::ByApplication, "pandamux close", "")
                             .await;
-                        return SessionOutcome::Killed;
+                        return Ok(SessionOutcome::Killed);
                     }
                 },
                 request = self.sftp.recv() => {
@@ -527,6 +789,139 @@ impl RemoteDriver {
 enum SessionOutcome {
     Killed,
     Disconnected,
+}
+
+async fn connect_client(config: &SshConfig) -> Result<client::Handle<ClientHandler>, SshFailure> {
+    let client_config = client::Config {
+        inactivity_timeout: Some(Duration::from_secs(60)),
+        keepalive_interval: Some(Duration::from_secs(15)),
+        ..Default::default()
+    };
+    let host_failure = Arc::new(Mutex::new(None));
+    let handler = ClientHandler {
+        host: config.host.clone(),
+        port: config.port,
+        trust_unknown_host: config.trust_unknown_host,
+        failure: Arc::clone(&host_failure),
+    };
+    let mut handle = client::connect(
+        Arc::new(client_config),
+        (config.host.as_str(), config.port),
+        handler,
+    )
+    .await
+    .map_err(|error| {
+        host_failure
+            .lock()
+            .expect("host failure lock")
+            .clone()
+            .unwrap_or_else(|| SshFailure {
+                code: "ssh_connection_failed",
+                category: SshErrorCategory::Connection,
+                message: format!("SSH connection to {} failed: {error}", config.host),
+                retryable: true,
+                fingerprint: None,
+                known_hosts_line: None,
+            })
+    })?;
+
+    authenticate(&mut handle, config)
+        .await
+        .map_err(|message| SshFailure {
+            code: "ssh_auth_failed",
+            category: SshErrorCategory::Authentication,
+            message,
+            retryable: true,
+            fingerprint: None,
+            known_hosts_line: None,
+        })?;
+    Ok(handle)
+}
+
+/// Open a temporary SSH/SFTP connection, canonicalize `path`, and list only
+/// directories. This channel is independent from durable terminal sessions and
+/// is closed before the result is returned.
+pub async fn browse_remote_folders(
+    config: SshConfig,
+    path: String,
+) -> Result<RemoteFolderListing, SshFailure> {
+    use russh_sftp::client::SftpSession;
+
+    let handle = connect_client(&config).await?;
+    let result = async {
+        let channel = handle
+            .channel_open_session()
+            .await
+            .map_err(|error| remote_path_failure(format!("open SFTP channel: {error}")))?;
+        channel
+            .request_subsystem(true, "sftp")
+            .await
+            .map_err(|error| remote_path_failure(format!("request SFTP subsystem: {error}")))?;
+        let sftp = SftpSession::new(channel.into_stream())
+            .await
+            .map_err(|error| remote_path_failure(format!("start SFTP session: {error}")))?;
+        let canonical_path = sftp.canonicalize(path.clone()).await.map_err(|error| {
+            remote_path_failure(format!("remote folder {path} is unavailable: {error}"))
+        })?;
+        let metadata = sftp
+            .metadata(canonical_path.clone())
+            .await
+            .map_err(|error| {
+                remote_path_failure(format!("read remote folder {canonical_path}: {error}"))
+            })?;
+        if !metadata.is_dir() {
+            return Err(remote_path_failure(format!(
+                "remote path {canonical_path} is not a directory"
+            )));
+        }
+        let entries = sftp
+            .read_dir(canonical_path.clone())
+            .await
+            .map_err(|error| {
+                remote_path_failure(format!("list remote folder {canonical_path}: {error}"))
+            })?;
+        let mut directories = Vec::new();
+        for entry in entries {
+            let entry_path = entry.path();
+            let Ok(resolved) = sftp.canonicalize(entry_path).await else {
+                continue;
+            };
+            let Ok(metadata) = sftp.metadata(resolved.clone()).await else {
+                continue;
+            };
+            if metadata.is_dir() {
+                directories.push(RemoteFolderEntry {
+                    name: entry.file_name(),
+                    canonical_path: resolved,
+                });
+            }
+        }
+        let _ = sftp.close().await;
+        Ok(RemoteFolderListing {
+            canonical_path,
+            directories,
+        })
+    }
+    .await;
+    let _ = handle
+        .disconnect(
+            Disconnect::ByApplication,
+            "pandamux folder browse complete",
+            "",
+        )
+        .await;
+    result
+}
+
+fn remote_path_failure(message: String) -> SshFailure {
+    SshFailure {
+        code: "ssh_remote_path_failed",
+        category: SshErrorCategory::RemotePath,
+        message,
+        retryable: true,
+        fingerprint: None,
+        known_hosts_line: None,
+    }
 }
 
 async fn authenticate(
@@ -679,9 +1074,20 @@ mod tests {
 
     #[test]
     fn remote_command_wraps_tmux_with_shell_fallback() {
-        let command = remote_command("pandamux-surf-1");
+        let command = remote_command("pandamux-surf-1", None);
         assert!(command.contains("tmux new-session -A -s pandamux-surf-1"));
         assert!(command.contains("|| exec"));
+    }
+
+    #[test]
+    fn remote_command_quotes_project_cwd_for_tmux_and_fallback() {
+        let command = remote_command(
+            "pandamux-surf-2",
+            Some("/srv/agent's projects/Panda MUX; echo nope"),
+        );
+        assert!(command.contains("-c '/srv/agent'\\''s projects/Panda MUX; echo nope'"));
+        assert!(command.contains("cd '/srv/agent'\\''s projects/Panda MUX; echo nope'"));
+        assert_eq!(command.matches("echo nope").count(), 2);
     }
 
     #[test]
@@ -702,5 +1108,66 @@ mod tests {
         );
         assert_eq!(config.port, 22);
         assert_eq!(config.with_port(2222).port, 2222);
+    }
+
+    #[test]
+    #[ignore = "requires PANDAMUX_SSH_SMOKE_* environment and a reachable SSH host"]
+    fn ssh_project_cwd_and_folder_listing_smoke() {
+        let host = std::env::var("PANDAMUX_SSH_SMOKE_HOST").expect("set smoke host");
+        let user = std::env::var("PANDAMUX_SSH_SMOKE_USER").expect("set smoke user");
+        let cwd = std::env::var("PANDAMUX_SSH_SMOKE_CWD").expect("set smoke cwd");
+        let auth = match std::env::var("PANDAMUX_SSH_SMOKE_AUTH")
+            .unwrap_or_else(|_| "agent".to_string())
+            .as_str()
+        {
+            "password" => SshAuth::Password {
+                password: std::env::var("PANDAMUX_SSH_SMOKE_PASSWORD").expect("set smoke password"),
+            },
+            "key" => SshAuth::KeyFile {
+                path: std::env::var("PANDAMUX_SSH_SMOKE_KEY")
+                    .expect("set smoke key")
+                    .into(),
+                passphrase: std::env::var("PANDAMUX_SSH_SMOKE_PASSPHRASE").ok(),
+            },
+            _ => SshAuth::Agent {
+                pipe_path: r"\\.\pipe\openssh-ssh-agent".to_string(),
+            },
+        };
+        let trust_unknown = std::env::var("PANDAMUX_SSH_SMOKE_TRUST_UNKNOWN")
+            .is_ok_and(|value| value.eq_ignore_ascii_case("true"));
+        let config = SshConfig::new(host, user, auth).with_unknown_host_trust(trust_unknown);
+        let mut manager = RemoteSessionManager::new().expect("SSH runtime");
+        let listing = manager
+            .browse_folders_blocking(config.clone(), cwd.clone(), Duration::from_secs(30))
+            .expect("remote folder listing");
+        let canonical_cwd = listing.canonical_path;
+        let config = config.with_remote_cwd(canonical_cwd.clone());
+        manager
+            .connect_ready(
+                "surf-ssh-project-cwd-smoke",
+                config,
+                GridSize::new(120, 30),
+                Duration::from_secs(30),
+            )
+            .expect("remote PTY ready");
+        manager
+            .write_all("surf-ssh-project-cwd-smoke", b"pwd\n")
+            .expect("write pwd");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let mut screen = String::new();
+        while std::time::Instant::now() < deadline {
+            screen = manager
+                .screen_text("surf-ssh-project-cwd-smoke")
+                .expect("read screen");
+            if screen.contains(&canonical_cwd) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let _ = manager.kill("surf-ssh-project-cwd-smoke");
+        assert!(
+            screen.contains(&canonical_cwd),
+            "remote screen did not show {canonical_cwd}"
+        );
     }
 }

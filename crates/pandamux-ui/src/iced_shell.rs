@@ -12,6 +12,7 @@ use crate::chrome::{self, ChromeState, Overlay, RailItem};
 use crate::command_palette::{self, PaletteViewState, QuickLaunchViewState};
 use crate::icons::{Icon, icon};
 use crate::overlays;
+use crate::session_launcher::{self, SessionLauncherViewState};
 use crate::session_panel::{self, SessionGrouping, SessionsViewState};
 use crate::settings::{self, SettingsSection, SettingsViewState};
 use crate::shell_projection::{ColumnProjection, PaneProjection, SurfaceProjection};
@@ -85,6 +86,7 @@ pub enum ShellMessage {
     },
     SessionGroupingChanged(SessionGrouping),
     NewSessionRequested,
+    ProjectSessionRequested(WorkspaceId),
     // Overlays (command palette / quick-launch / settings)
     /// Dismiss whatever centered overlay is open (backdrop click / Esc).
     OverlayDismissed,
@@ -98,6 +100,28 @@ pub enum ShellMessage {
         shell: String,
         title: String,
     },
+    LauncherLocalSelected,
+    LauncherProfileSelected(pandamux_core::SshProfileId),
+    LauncherProfileAdd,
+    LauncherProfileEdit(pandamux_core::SshProfileId),
+    LauncherProfileDelete(pandamux_core::SshProfileId),
+    LauncherProfileImport,
+    LauncherProfilesImported(Result<String, pandamux_core::ProjectError>),
+    LauncherProfileNameChanged(String),
+    LauncherProfileHostChanged(String),
+    LauncherProfilePortChanged(String),
+    LauncherProfileAuthChanged(pandamux_core::SshAuthConfig),
+    LauncherIdentityFileChanged(String),
+    LauncherProfileSave,
+    LauncherCredentialChanged(String),
+    LauncherCredentialSubmit,
+    LauncherHostTrustConfirmed,
+    LauncherPathChanged(String),
+    LauncherFolderGo,
+    LauncherFolderNavigate(String),
+    LauncherFolderLoaded(Result<pandamux_core::FolderListing, pandamux_core::ProjectError>),
+    LauncherFolderSelected,
+    LauncherBack,
     SettingsSectionSelected(SettingsSection),
     AccentSelected(Accent),
     // Status-bar pollers (git / ports)
@@ -239,6 +263,7 @@ pub struct ShellViewModel {
     pub palette: PaletteViewState,
     /// Quick-launch profile list.
     pub quick_launch: QuickLaunchViewState,
+    pub launcher: SessionLauncherViewState,
     /// Settings modal projection.
     pub settings: SettingsViewState,
     /// Markdown/diff content keyed by surface id, rendered by non-terminal panes.
@@ -571,7 +596,7 @@ pub fn app_view(model: &ShellViewModel) -> Element<'_, ShellMessage> {
             layers = layers.push(command_palette::command_palette(&model.palette, palette));
         }
         Overlay::QuickLaunch => {
-            layers = layers.push(command_palette::quick_launch(&model.quick_launch, palette));
+            layers = layers.push(session_launcher::session_launcher(&model.launcher, palette));
         }
         Overlay::Settings => {
             layers = layers.push(settings::settings_modal(&model.settings, palette));
@@ -1157,6 +1182,7 @@ mod tests {
             sessions: SessionsViewState::default(),
             palette: PaletteViewState::default(),
             quick_launch: QuickLaunchViewState::default(),
+            launcher: SessionLauncherViewState::default(),
             settings: SettingsViewState::default(),
             surface_contents: HashMap::new(),
             drag: None,

@@ -1,8 +1,9 @@
 use crate::ids::{PaneId, SurfaceId, WorkspaceId};
+use crate::project::{ProjectKey, ProjectSpec};
 use crate::split_tree::{
     DropZone, GridLayoutResult, MoveResult, SplitDirection, SplitNode, SurfaceRef, SurfaceType,
-    build_grid_layout, create_leaf, find_leaf, find_pane_id_for_surface, get_all_pane_ids,
-    move_surface, remove_leaf, replace_leaf, split_node,
+    build_grid_layout, create_leaf, create_leaf_with_ids, find_leaf, find_pane_id_for_surface,
+    get_all_pane_ids, move_surface, remove_leaf, replace_leaf, split_node,
 };
 use serde::{Deserialize, Serialize};
 
@@ -19,6 +20,8 @@ pub struct WorkspaceState {
     pub id: WorkspaceId,
     pub title: String,
     pub shell: String,
+    #[serde(default)]
+    pub project: ProjectSpec,
     pub split_tree: SplitNode,
     pub focused_pane_id: Option<PaneId>,
     pub zoomed_pane_id: Option<PaneId>,
@@ -30,6 +33,7 @@ pub struct WorkspaceSummary {
     pub id: WorkspaceId,
     pub title: String,
     pub shell: String,
+    pub project: ProjectSpec,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,6 +67,16 @@ pub enum WorkspaceIntent {
     Create {
         title: Option<String>,
         shell: Option<String>,
+    },
+    /// Transactional Project creation with caller-provided ids. The caller can
+    /// prestart a terminal using these ids and commit only after it is ready.
+    CreateProject {
+        workspace_id: WorkspaceId,
+        pane_id: PaneId,
+        surface_id: SurfaceId,
+        title: String,
+        shell: String,
+        project: ProjectSpec,
     },
     Select {
         workspace_id: WorkspaceId,
@@ -105,6 +119,13 @@ pub enum SurfaceIntent {
     Create {
         workspace_id: Option<WorkspaceId>,
         pane_id: Option<PaneId>,
+        surface_type: SurfaceType,
+    },
+    /// Add a surface whose id was preallocated by the launch coordinator.
+    CreateWithId {
+        workspace_id: WorkspaceId,
+        pane_id: Option<PaneId>,
+        surface_id: SurfaceId,
         surface_type: SurfaceType,
     },
     Focus {
@@ -247,6 +268,7 @@ impl Default for AppState {
                 id: workspace_id.clone(),
                 title: "Workspace".to_string(),
                 shell: "pwsh".to_string(),
+                project: ProjectSpec::default(),
                 split_tree: create_leaf(Some(PaneId::from("pane-default")), SurfaceType::Terminal),
                 focused_pane_id: Some(PaneId::from("pane-default")),
                 zoomed_pane_id: None,
@@ -274,6 +296,16 @@ impl AppState {
         self.workspaces
             .iter()
             .find(|workspace| &workspace.id == workspace_id)
+    }
+
+    pub fn workspace_by_project_key(&self, key: &ProjectKey) -> Option<&WorkspaceState> {
+        self.workspaces.iter().find(|workspace| {
+            ProjectKey::from_location(&workspace.project.location)
+                .ok()
+                .flatten()
+                .as_ref()
+                == Some(key)
+        })
     }
 
     fn workspace_mut(&mut self, workspace_id: &WorkspaceId) -> Option<&mut WorkspaceState> {
@@ -323,8 +355,45 @@ impl AppState {
                     id: workspace_id.clone(),
                     title: title.unwrap_or_else(|| "Workspace".to_string()),
                     shell: shell.unwrap_or_else(|| "pwsh".to_string()),
+                    project: ProjectSpec::default(),
                     split_tree,
                     focused_pane_id,
+                    zoomed_pane_id: None,
+                };
+                let summary = workspace.summary();
+                let tree = workspace.split_tree.clone();
+                self.workspaces.push(workspace);
+                self.active_workspace_id = workspace_id;
+                Ok(AppDelta::WorkspaceCreated {
+                    workspace: summary,
+                    tree,
+                })
+            }
+            WorkspaceIntent::CreateProject {
+                workspace_id,
+                pane_id,
+                surface_id,
+                title,
+                shell,
+                project,
+            } => {
+                if self.workspace(&workspace_id).is_some() {
+                    return Err(format!("workspace already exists: {workspace_id}"));
+                }
+                if let Some(key) = ProjectKey::from_location(&project.location)?
+                    && self.workspace_by_project_key(&key).is_some()
+                {
+                    return Err(format!("project already exists: {}", key.as_str()));
+                }
+                let split_tree =
+                    create_leaf_with_ids(pane_id.clone(), surface_id, SurfaceType::Terminal);
+                let workspace = WorkspaceState {
+                    id: workspace_id.clone(),
+                    title,
+                    shell,
+                    project,
+                    split_tree,
+                    focused_pane_id: Some(pane_id),
                     zoomed_pane_id: None,
                 };
                 let summary = workspace.summary();
@@ -563,6 +632,41 @@ impl AppState {
                     surface,
                 })
             }
+            SurfaceIntent::CreateWithId {
+                workspace_id,
+                pane_id,
+                surface_id,
+                surface_type,
+            } => {
+                if self.workspaces.iter().any(|workspace| {
+                    find_pane_id_for_surface(&workspace.split_tree, &surface_id).is_some()
+                }) {
+                    return Err(format!("surface already exists: {surface_id}"));
+                }
+                let workspace = self
+                    .workspace_mut(&workspace_id)
+                    .ok_or_else(|| format!("workspace not found: {workspace_id}"))?;
+                let pane_id = pane_id
+                    .or_else(|| workspace.focused_pane_id.clone())
+                    .or_else(|| first_pane_id(&workspace.split_tree))
+                    .ok_or_else(|| "pane not found".to_string())?;
+                let leaf = find_leaf(&workspace.split_tree, &pane_id)
+                    .ok_or_else(|| format!("pane not found: {pane_id}"))?;
+                let mut leaf = leaf.clone();
+                let surface = SurfaceRef {
+                    id: surface_id,
+                    surface_type,
+                };
+                leaf.surfaces.push(surface.clone());
+                leaf.active_surface_index = leaf.surfaces.len() - 1;
+                workspace.split_tree = replace_leaf(&workspace.split_tree, &pane_id, leaf);
+                workspace.focused_pane_id = Some(pane_id.clone());
+                Ok(AppDelta::SurfaceCreated {
+                    workspace_id,
+                    pane_id,
+                    surface,
+                })
+            }
             SurfaceIntent::Focus {
                 workspace_id,
                 surface_id,
@@ -680,6 +784,7 @@ impl WorkspaceState {
             id: self.id.clone(),
             title: self.title.clone(),
             shell: self.shell.clone(),
+            project: self.project.clone(),
         }
     }
 }

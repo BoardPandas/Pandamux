@@ -3,7 +3,7 @@ use std::fmt;
 
 macro_rules! prefixed_id {
     ($name:ident, $prefix:literal) => {
-        #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
         pub struct $name(String);
 
         impl $name {
@@ -44,3 +44,4 @@ prefixed_id!(WorkspaceId, "ws-");
 prefixed_id!(PaneId, "pane-");
 prefixed_id!(SurfaceId, "surf-");
 prefixed_id!(WindowId, "win-");
+prefixed_id!(SshProfileId, "ssh-");

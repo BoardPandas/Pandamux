@@ -210,4 +210,30 @@ mod tests {
         assert!(capture.output.contains(marker));
         assert!(capture.screen_text.contains(marker));
     }
+
+    #[test]
+    #[cfg(windows)]
+    #[ignore = "spawns a real PowerShell through ConPTY, run manually during Project launcher work"]
+    fn captures_selected_project_cwd() {
+        let cwd = std::env::temp_dir().join("pandamux selected cwd");
+        std::fs::create_dir_all(&cwd).expect("create selected cwd");
+        let marker = "PANDAMUX_PROJECT_CWD_OK";
+        let shell = crate::resolve_powershell().expect("PowerShell is installed");
+        let command = PtyCommand::new(shell)
+            .with_cwd(Some(cwd.to_string_lossy().to_string()))
+            .with_args([
+                "-NoLogo",
+                "-NoProfile",
+                "-Command",
+                &format!("Get-Location; Write-Output {marker}"),
+            ]);
+        let capture = capture_pty_command(
+            &command,
+            marker,
+            GridSize::new(120, 24),
+            Duration::from_secs(10),
+        )
+        .expect("PowerShell should start in selected cwd");
+        assert!(capture.output.contains("pandamux selected cwd"));
+    }
 }

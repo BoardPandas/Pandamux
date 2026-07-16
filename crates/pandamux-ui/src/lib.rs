@@ -11,6 +11,8 @@ pub mod icons;
 #[cfg(feature = "iced-runtime")]
 pub mod overlays;
 #[cfg(feature = "iced-runtime")]
+pub mod session_launcher;
+#[cfg(feature = "iced-runtime")]
 pub mod session_panel;
 #[cfg(feature = "iced-runtime")]
 pub mod settings;
@@ -34,8 +36,13 @@ pub use icons::{Icon, icon};
 #[cfg(feature = "iced-runtime")]
 pub use overlays::{FindViewState, NotificationCard, NotificationsViewState};
 #[cfg(feature = "iced-runtime")]
+pub use session_launcher::{
+    LauncherStep, SessionLauncherViewState, SshProfileForm, session_launcher,
+};
+#[cfg(feature = "iced-runtime")]
 pub use session_panel::{
-    SessionEntry, SessionGroup, SessionGrouping, SessionsViewState, project_sessions, session_panel,
+    SessionEntry, SessionGroup, SessionGrouping, SessionsViewState, project_sessions,
+    project_sessions_with_profiles, session_panel,
 };
 #[cfg(feature = "iced-runtime")]
 pub use settings::{SettingsSection, SettingsViewState};

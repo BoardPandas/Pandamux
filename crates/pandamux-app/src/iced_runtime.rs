@@ -1,22 +1,24 @@
-use crate::persistence::SessionStore;
+use crate::persistence::{SessionStore, SshProfileConfig, SshProfileStore};
+use crate::project_launcher::{EphemeralCredential, LaunchTarget};
 use iced::futures::SinkExt;
 use iced::{Element, Size, Subscription, Task, Theme, application, keyboard, stream, time, window};
 use pandamux_core::{
     AgentRegistry, AppIntent, AppState, ClipboardConfig, Localizer, NewNotification,
-    NotificationSource, Notifications, PaneId, PaneIntent, SidebarState, SplitDirection, SplitNode,
-    SplitPaneParams, SshProfiles, SurfaceContents, SurfaceId, SurfaceIntent, SurfaceType,
-    ThemeStore, WorkspaceId, WorkspaceIntent, find_leaf, find_pane_id_for_surface,
-    get_all_pane_ids, parse_ghostty_theme,
+    NotificationSource, Notifications, PaneId, PaneIntent, ProjectError, ProjectErrorCategory,
+    ProjectLocation, SidebarState, SplitDirection, SplitNode, SplitPaneParams, SshProfileId,
+    SshProfiles, SurfaceContents, SurfaceId, SurfaceIntent, SurfaceType, ThemeStore, WorkspaceId,
+    WorkspaceIntent, find_leaf, find_pane_id_for_surface, get_all_pane_ids, parse_ghostty_theme,
 };
 use pandamux_term::{
-    GridSize, PtyCommand, PtySessionManager, RemoteSessionManager, SearchOptions, SshConfig,
-    detect_links, search_lines,
+    GridSize, PtyCommand, PtySessionManager, RemoteSessionManager, RemoteStatus, SearchOptions,
+    SshConfig, detect_links, search_lines,
 };
 use pandamux_ui::{
-    ChromeState, DragView, FindViewState, LinkSpan, NotificationCard, NotificationsViewState,
-    Overlay, PaletteItem, PaletteViewState, QuickLaunchViewState, RailItem, SessionActivity,
-    SessionsViewState, SettingsSection, SettingsViewState, ShellKind, ShellMessage, ShellViewModel,
-    TermScheme, TerminalSnapshot, UiTheme, app_view, filter_items, project_sessions,
+    ChromeState, DragView, FindViewState, LauncherStep, LinkSpan, NotificationCard,
+    NotificationsViewState, Overlay, PaletteItem, PaletteViewState, QuickLaunchViewState, RailItem,
+    SessionActivity, SessionLauncherViewState, SessionsViewState, SettingsSection,
+    SettingsViewState, ShellKind, ShellMessage, ShellViewModel, SshProfileForm, TermScheme,
+    TerminalSnapshot, UiTheme, app_view, filter_items, project_sessions_with_profiles,
     project_workspace_shell, shell_view,
 };
 use std::collections::{HashMap, HashSet};
@@ -46,6 +48,9 @@ pub struct NativeShellRuntime {
     chrome: ChromeState,
     tick: u64,
     store: SessionStore,
+    profile_store: SshProfileStore,
+    profile_config: SshProfileConfig,
+    profile_store_available: bool,
     find: FindViewState,
     find_matches: Vec<(usize, usize, usize)>,
     notifications: Notifications,
@@ -69,6 +74,11 @@ pub struct NativeShellRuntime {
     remote_configs: HashMap<SurfaceId, SshConfig>,
     /// Saved SSH host profiles.
     ssh_profiles: SshProfiles,
+    credential_cache: HashMap<SshProfileId, EphemeralCredential>,
+    launcher: SessionLauncherViewState,
+    launcher_trust_unknown: bool,
+    pending_remote_launch: Option<PendingRemoteLaunch>,
+    pending_plus_workspace: Option<WorkspaceId>,
     /// Persistent clipboard policy (plan F1).
     clipboard_config: ClipboardConfig,
     /// Active drag-and-drop of a tab, if any (plan Section 12.3).
@@ -95,6 +105,12 @@ pub struct NativeShellRuntime {
     update_checked_once: bool,
 }
 
+#[derive(Clone, Debug)]
+struct PendingRemoteLaunch {
+    target: LaunchTarget,
+    config: SshConfig,
+}
+
 impl Default for NativeShellRuntime {
     fn default() -> Self {
         Self::new(false)
@@ -104,6 +120,16 @@ impl Default for NativeShellRuntime {
 impl NativeShellRuntime {
     pub fn new(live_ptys: bool) -> Self {
         let store = SessionStore::new(SessionStore::default_dir());
+        let profile_store = SshProfileStore::new(SshProfileStore::default_dir());
+        let (profile_config, profile_load_error, profile_store_available) = if live_ptys {
+            match profile_store.load() {
+                Ok(config) => (config, None, true),
+                Err(error) => (SshProfileConfig::default(), Some(error.to_string()), false),
+            }
+        } else {
+            (SshProfileConfig::default(), None, true)
+        };
+        let ssh_profiles = profile_config.registry();
         // Only the real (live) app touches disk. Tests/smoke use default state so
         // they stay hermetic. On a version change the volatile auto-session is
         // cleared, so we start clean; otherwise restore the last layout.
@@ -126,6 +152,9 @@ impl NativeShellRuntime {
             chrome,
             tick: 0,
             store,
+            profile_store,
+            profile_config,
+            profile_store_available,
             find: FindViewState::default(),
             find_matches: Vec::new(),
             notifications: Notifications::new(),
@@ -139,7 +168,12 @@ impl NativeShellRuntime {
             surface_schemes: HashMap::new(),
             remotes: RemoteSessionManager::default(),
             remote_configs: HashMap::new(),
-            ssh_profiles: SshProfiles::new(),
+            ssh_profiles,
+            credential_cache: HashMap::new(),
+            launcher: SessionLauncherViewState::default(),
+            launcher_trust_unknown: false,
+            pending_remote_launch: None,
+            pending_plus_workspace: None,
             clipboard_config: ClipboardConfig::default(),
             drag: None,
             copy_mode: false,
@@ -147,7 +181,7 @@ impl NativeShellRuntime {
             settings_section: SettingsSection::default(),
             view_model,
             terminals: Vec::new(),
-            last_error: None,
+            last_error: profile_load_error,
             pipe_name: std::env::var("PANDAMUX_PIPE")
                 .unwrap_or_else(|_| r"\\.\pipe\pandamux".to_string()),
             pipe_registry: Arc::new(StdMutex::new(HashMap::new())),
@@ -223,7 +257,296 @@ impl NativeShellRuntime {
             self.palette.query.clear();
             self.palette.selected = 0;
         }
+        if overlay == Overlay::QuickLaunch {
+            self.launcher = SessionLauncherViewState {
+                profiles: self.ssh_profiles.list().to_vec(),
+                ..SessionLauncherViewState::default()
+            };
+            self.launcher_trust_unknown = false;
+            self.pending_plus_workspace = None;
+        }
         self.chrome.active_overlay = overlay;
+    }
+
+    fn save_profiles(&mut self) {
+        if !self.profile_store_available {
+            self.last_error = Some(
+                "SSH profile file needs repair before connection changes can be saved".to_string(),
+            );
+            return;
+        }
+        self.profile_config.set_registry(&self.ssh_profiles);
+        if self.live_ptys
+            && let Err(error) = self.profile_store.save(&self.profile_config)
+        {
+            self.last_error = Some(format!("save SSH profiles: {error}"));
+        }
+        self.launcher.profiles = self.ssh_profiles.list().to_vec();
+    }
+
+    fn launcher_folder_task(&mut self) -> Task<ShellMessage> {
+        self.launcher.loading = true;
+        self.launcher.error = None;
+        self.view_model.launcher = self.launcher.clone();
+        let path = self.launcher.path.clone();
+        if self.launcher.remote {
+            let Some(profile_id) = self.launcher.selected_profile_id.clone() else {
+                return Task::none();
+            };
+            let Some(profile) = self.ssh_profiles.get(&profile_id).cloned() else {
+                self.launcher.loading = false;
+                self.launcher.error = Some(ProjectError::new(
+                    "ssh_profile_missing",
+                    ProjectErrorCategory::ProfileMissing,
+                    "The selected SSH profile no longer exists",
+                    false,
+                ));
+                return Task::none();
+            };
+            let credential = self.credential_cache.get(&profile_id);
+            let config = match crate::project_launcher::ssh_config(
+                &profile,
+                path.clone(),
+                credential,
+                self.launcher_trust_unknown,
+            ) {
+                Ok(config) => config,
+                Err(error) => {
+                    self.launcher.loading = false;
+                    self.launcher.error = Some(error);
+                    return Task::none();
+                }
+            };
+            Task::perform(
+                crate::project_launcher::list_remote_folders(config, path),
+                ShellMessage::LauncherFolderLoaded,
+            )
+        } else {
+            Task::perform(
+                crate::project_launcher::list_local_folders(path),
+                ShellMessage::LauncherFolderLoaded,
+            )
+        }
+    }
+
+    fn select_launcher_profile(&mut self, profile_id: SshProfileId) -> Task<ShellMessage> {
+        self.launcher.selected_profile_id = Some(profile_id.clone());
+        self.launcher.remote = true;
+        self.launcher.error = None;
+        let Some(profile) = self.ssh_profiles.get(&profile_id) else {
+            return Task::none();
+        };
+        if matches!(profile.auth, pandamux_core::SshAuthConfig::Password)
+            && !self.credential_cache.contains_key(&profile_id)
+        {
+            self.launcher.step = LauncherStep::Credential;
+            self.view_model.launcher = self.launcher.clone();
+            return Task::none();
+        }
+        self.launcher.step = LauncherStep::Folder;
+        self.launcher.path = self
+            .profile_config
+            .last_selected_folder_by_profile
+            .get(&profile_id)
+            .cloned()
+            .unwrap_or_else(|| "/".to_string());
+        self.launcher_folder_task()
+    }
+
+    fn start_remote_launch(
+        &mut self,
+        profile_id: SshProfileId,
+        remote_cwd: String,
+    ) -> Result<(), ProjectError> {
+        if self.pending_remote_launch.is_some() {
+            return Ok(());
+        }
+        let profile = self.ssh_profiles.get(&profile_id).cloned().ok_or_else(|| {
+            ProjectError::new(
+                "ssh_profile_missing",
+                ProjectErrorCategory::ProfileMissing,
+                format!("SSH profile not found: {profile_id}"),
+                false,
+            )
+        })?;
+        let location = ProjectLocation::Ssh {
+            profile_id: profile_id.clone(),
+            remote_cwd: remote_cwd.clone(),
+        };
+        let target = crate::project_launcher::prepare_launch(&self.app_state, location)?;
+        let config = crate::project_launcher::ssh_config(
+            &profile,
+            remote_cwd,
+            self.credential_cache.get(&profile_id),
+            self.launcher_trust_unknown,
+        )?;
+        self.remotes
+            .connect(
+                target.surface_id.to_string(),
+                config.clone(),
+                GridSize::new(120, 30),
+            )
+            .map_err(|message| {
+                ProjectError::new(
+                    "ssh_pty_start_failed",
+                    ProjectErrorCategory::PtyStart,
+                    message,
+                    true,
+                )
+            })?;
+        self.launcher.step = LauncherStep::Launching;
+        self.launcher.launching = true;
+        self.pending_remote_launch = Some(PendingRemoteLaunch { target, config });
+        Ok(())
+    }
+
+    fn start_selected_folder(&mut self) {
+        if self.launcher.launching {
+            return;
+        }
+        let Some(listing) = self.launcher.listing.as_ref() else {
+            return;
+        };
+        self.launcher.launching = true;
+        let path = listing.canonical_path.clone();
+        let result = if self.launcher.remote {
+            let Some(profile_id) = self.launcher.selected_profile_id.clone() else {
+                return;
+            };
+            self.start_remote_launch(profile_id, path)
+        } else {
+            crate::project_launcher::launch_local(
+                &mut self.app_state,
+                &mut self.ptys,
+                path.clone(),
+                self.live_ptys,
+            )
+            .map(|_| {
+                self.profile_config.last_selected_local_folder = Some(path);
+                self.save_profiles();
+                if self.live_ptys {
+                    let _ = self.store.save_session(&self.app_state);
+                }
+                self.chrome.active_overlay = Overlay::None;
+            })
+        };
+        if let Err(error) = result {
+            self.launcher.error = Some(error);
+            self.launcher.step = LauncherStep::Folder;
+            self.launcher.launching = false;
+        }
+        self.view_model.launcher = self.launcher.clone();
+    }
+
+    fn poll_pending_remote_launch(&mut self) {
+        let Some(pending) = self.pending_remote_launch.clone() else {
+            return;
+        };
+        let id = pending.target.surface_id.as_str();
+        let _ = self.remotes.poll(id);
+        match self.remotes.status(id) {
+            Some(RemoteStatus::Ready) => {
+                match crate::project_launcher::commit_prestarted(
+                    &mut self.app_state,
+                    &pending.target,
+                    "ssh",
+                ) {
+                    Ok(_) => {
+                        self.remote_configs
+                            .insert(pending.target.surface_id.clone(), pending.config);
+                        if let ProjectLocation::Ssh {
+                            profile_id,
+                            remote_cwd,
+                        } = &pending.target.location
+                        {
+                            self.profile_config
+                                .last_selected_folder_by_profile
+                                .insert(profile_id.clone(), remote_cwd.clone());
+                            self.save_profiles();
+                        }
+                        if self.live_ptys {
+                            let _ = self.store.save_session(&self.app_state);
+                        }
+                        self.chrome.active_overlay = Overlay::None;
+                        self.launcher.launching = false;
+                        self.pending_remote_launch = None;
+                        self.pending_plus_workspace = None;
+                    }
+                    Err(error) => {
+                        let _ = self.remotes.kill(id);
+                        self.launcher.error = Some(error);
+                        self.launcher.step = LauncherStep::Folder;
+                        self.launcher.launching = false;
+                        self.pending_remote_launch = None;
+                    }
+                }
+            }
+            Some(RemoteStatus::Failed | RemoteStatus::Closed) | None => {
+                let message = self
+                    .remotes
+                    .last_error(id)
+                    .unwrap_or("SSH terminal failed before ready")
+                    .to_string();
+                let _ = self.remotes.kill(id);
+                self.launcher.error = Some(ProjectError::new(
+                    "ssh_pty_start_failed",
+                    ProjectErrorCategory::PtyStart,
+                    message,
+                    true,
+                ));
+                self.launcher.step = LauncherStep::Folder;
+                self.launcher.launching = false;
+                self.pending_remote_launch = None;
+            }
+            _ => {}
+        }
+    }
+
+    fn add_project_session(&mut self, workspace_id: WorkspaceId) {
+        if self.pending_remote_launch.is_some() {
+            return;
+        }
+        let Some(location) = self
+            .app_state
+            .workspace(&workspace_id)
+            .map(|workspace| workspace.project.location.clone())
+        else {
+            return;
+        };
+        match location {
+            ProjectLocation::Local { cwd, .. } => {
+                if let Err(error) = crate::project_launcher::launch_local(
+                    &mut self.app_state,
+                    &mut self.ptys,
+                    cwd,
+                    self.live_ptys,
+                ) {
+                    self.last_error = Some(error.message);
+                } else if self.live_ptys {
+                    let _ = self.store.save_session(&self.app_state);
+                }
+            }
+            ProjectLocation::Ssh {
+                profile_id,
+                remote_cwd,
+            } => {
+                let needs_password = self.ssh_profiles.get(&profile_id).is_some_and(|profile| {
+                    matches!(profile.auth, pandamux_core::SshAuthConfig::Password)
+                }) && !self.credential_cache.contains_key(&profile_id);
+                if needs_password {
+                    self.open_overlay(Overlay::QuickLaunch);
+                    self.pending_plus_workspace = Some(workspace_id);
+                    self.launcher.selected_profile_id = Some(profile_id);
+                    self.launcher.remote = true;
+                    self.launcher.step = LauncherStep::Credential;
+                } else if let Err(error) = self.start_remote_launch(profile_id, remote_cwd) {
+                    self.last_error = Some(error.message);
+                }
+            }
+            ProjectLocation::Legacy => {
+                self.open_overlay(Overlay::QuickLaunch);
+            }
+        }
     }
 
     /// Advance the current find match by `delta`, wrapping around.
@@ -334,6 +657,94 @@ impl NativeShellRuntime {
     /// core-intent path.
     pub fn update(&mut self, message: ShellMessage) -> Task<ShellMessage> {
         match message {
+            ShellMessage::LauncherLocalSelected => {
+                self.launcher.remote = false;
+                self.launcher.step = LauncherStep::Folder;
+                self.launcher.path = self
+                    .profile_config
+                    .last_selected_local_folder
+                    .clone()
+                    .or_else(|| {
+                        std::env::current_dir()
+                            .ok()
+                            .map(|path| path.to_string_lossy().to_string())
+                    })
+                    .unwrap_or_else(|| "C:\\".to_string());
+                self.launcher_folder_task()
+            }
+            ShellMessage::LauncherProfileSelected(profile_id) => {
+                self.select_launcher_profile(profile_id)
+            }
+            ShellMessage::LauncherCredentialSubmit => {
+                let Some(profile_id) = self.launcher.selected_profile_id.clone() else {
+                    return Task::none();
+                };
+                let credential = if self.ssh_profiles.get(&profile_id).is_some_and(|profile| {
+                    matches!(profile.auth, pandamux_core::SshAuthConfig::Password)
+                }) {
+                    EphemeralCredential::Password(std::mem::take(&mut self.launcher.credential))
+                } else {
+                    EphemeralCredential::KeyPassphrase(std::mem::take(
+                        &mut self.launcher.credential,
+                    ))
+                };
+                self.credential_cache.insert(profile_id.clone(), credential);
+                if let Some(workspace_id) = self.pending_plus_workspace.clone()
+                    && let Some(ProjectLocation::Ssh { remote_cwd, .. }) = self
+                        .app_state
+                        .workspace(&workspace_id)
+                        .map(|workspace| workspace.project.location.clone())
+                {
+                    if let Err(error) = self.start_remote_launch(profile_id, remote_cwd) {
+                        self.launcher.error = Some(error);
+                    }
+                    self.view_model.launcher = self.launcher.clone();
+                    Task::none()
+                } else {
+                    self.launcher.step = LauncherStep::Folder;
+                    self.launcher.path = self
+                        .profile_config
+                        .last_selected_folder_by_profile
+                        .get(&profile_id)
+                        .cloned()
+                        .unwrap_or_else(|| "/".to_string());
+                    self.launcher_folder_task()
+                }
+            }
+            ShellMessage::LauncherFolderGo => self.launcher_folder_task(),
+            ShellMessage::LauncherFolderNavigate(path) => {
+                self.launcher.path = path;
+                self.launcher_folder_task()
+            }
+            ShellMessage::LauncherHostTrustConfirmed => {
+                self.launcher_trust_unknown = true;
+                self.launcher.step = LauncherStep::Folder;
+                self.launcher_folder_task()
+            }
+            ShellMessage::LauncherFolderSelected => {
+                self.start_selected_folder();
+                Task::none()
+            }
+            ShellMessage::LauncherProfileImport => {
+                let path = std::env::var("USERPROFILE")
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                    .join(".ssh")
+                    .join("config");
+                Task::perform(
+                    async move {
+                        tokio::fs::read_to_string(&path).await.map_err(|error| {
+                            ProjectError::new(
+                                "ssh_config_import_failed",
+                                ProjectErrorCategory::Filesystem,
+                                format!("read {}: {error}", path.display()),
+                                true,
+                            )
+                        })
+                    },
+                    ShellMessage::LauncherProfilesImported,
+                )
+            }
             ShellMessage::WindowDragStarted => window::latest().and_then(window::drag),
             ShellMessage::WindowMinimizePressed => {
                 window::latest().and_then(|id| window::minimize(id, true))
@@ -399,6 +810,7 @@ impl NativeShellRuntime {
         match message {
             ShellMessage::Tick => {
                 self.tick = self.tick.wrapping_add(1);
+                self.poll_pending_remote_launch();
                 self.autosave_if_due();
                 self.refresh_terminal_snapshots();
                 return;
@@ -445,6 +857,138 @@ impl NativeShellRuntime {
                 self.chrome.session_grouping = grouping;
             }
             ShellMessage::NewSessionRequested => self.open_overlay(Overlay::QuickLaunch),
+            ShellMessage::ProjectSessionRequested(workspace_id) => {
+                self.add_project_session(workspace_id);
+            }
+            ShellMessage::LauncherProfileAdd => {
+                self.launcher.form = SshProfileForm::default();
+                self.launcher.step = LauncherStep::ProfileForm;
+            }
+            ShellMessage::LauncherProfileEdit(profile_id) => {
+                if let Some(profile) = self.ssh_profiles.get(&profile_id) {
+                    self.launcher.form = SshProfileForm::from_profile(profile);
+                    self.launcher.step = LauncherStep::ProfileForm;
+                }
+            }
+            ShellMessage::LauncherProfileDelete(profile_id) => {
+                self.ssh_profiles.remove(&profile_id);
+                self.credential_cache.remove(&profile_id);
+                self.save_profiles();
+            }
+            ShellMessage::LauncherProfilesImported(result) => match result {
+                Ok(content) => {
+                    self.ssh_profiles.import_config(&content);
+                    self.save_profiles();
+                }
+                Err(error) => self.launcher.error = Some(error),
+            },
+            ShellMessage::LauncherProfileNameChanged(value) => self.launcher.form.name = value,
+            ShellMessage::LauncherProfileHostChanged(value) => self.launcher.form.host = value,
+            ShellMessage::LauncherProfilePortChanged(value) => self.launcher.form.port = value,
+            ShellMessage::LauncherProfileAuthChanged(auth) => self.launcher.form.auth = auth,
+            ShellMessage::LauncherIdentityFileChanged(value) => {
+                self.launcher.form.identity_file = value.clone();
+                self.launcher.form.auth = pandamux_core::SshAuthConfig::KeyFile { path: value };
+            }
+            ShellMessage::LauncherProfileSave => {
+                let form = self.launcher.form.clone();
+                let (user, host) = form.host.split_once('@').map_or_else(
+                    || {
+                        (
+                            if form.user.is_empty() {
+                                std::env::var("USERNAME").unwrap_or_else(|_| "root".to_string())
+                            } else {
+                                form.user.clone()
+                            },
+                            form.host.clone(),
+                        )
+                    },
+                    |(user, host)| (user.to_string(), host.to_string()),
+                );
+                let id = form.id.unwrap_or_else(SshProfileId::generate);
+                if self
+                    .ssh_profiles
+                    .has_duplicate_name(form.name.trim(), Some(&id))
+                {
+                    self.launcher.form.error = Some("Connection name already exists".to_string());
+                } else if let Ok(port) = form.port.parse::<u16>() {
+                    let auth = match form.auth {
+                        pandamux_core::SshAuthConfig::KeyFile { .. } => {
+                            pandamux_core::SshAuthConfig::KeyFile {
+                                path: form.identity_file,
+                            }
+                        }
+                        auth => auth,
+                    };
+                    self.ssh_profiles.upsert(pandamux_core::SshHostProfile {
+                        id,
+                        name: form.name.trim().to_string(),
+                        host,
+                        port,
+                        user,
+                        auth,
+                        jump: None,
+                    });
+                    self.save_profiles();
+                    self.launcher.step = LauncherStep::Connection;
+                }
+            }
+            ShellMessage::LauncherCredentialChanged(value) => self.launcher.credential = value,
+            ShellMessage::LauncherPathChanged(value) => self.launcher.path = value,
+            ShellMessage::LauncherFolderLoaded(result) => {
+                self.launcher.loading = false;
+                match result {
+                    Ok(listing) => {
+                        self.launcher.path = listing.canonical_path.clone();
+                        self.launcher.listing = Some(listing);
+                        self.launcher.error = None;
+                    }
+                    Err(error) if error.category == ProjectErrorCategory::HostKeyUnknown => {
+                        self.launcher.fingerprint = error.fingerprint.clone();
+                        self.launcher.error = Some(error);
+                        self.launcher.step = LauncherStep::HostConfirmation;
+                    }
+                    Err(error)
+                        if error.category == ProjectErrorCategory::Authentication
+                            && self
+                                .launcher
+                                .selected_profile_id
+                                .as_ref()
+                                .and_then(|id| self.ssh_profiles.get(id))
+                                .is_some_and(|profile| {
+                                    matches!(
+                                        profile.auth,
+                                        pandamux_core::SshAuthConfig::KeyFile { .. }
+                                    )
+                                }) =>
+                    {
+                        self.launcher.error = Some(error);
+                        self.launcher.step = LauncherStep::Credential;
+                    }
+                    Err(error) => self.launcher.error = Some(error),
+                }
+            }
+            ShellMessage::LauncherBack => {
+                self.launcher.error = None;
+                self.launcher.step = match self.launcher.step {
+                    LauncherStep::ProfileForm | LauncherStep::Credential => {
+                        LauncherStep::Connection
+                    }
+                    LauncherStep::HostConfirmation => LauncherStep::Folder,
+                    LauncherStep::Folder => LauncherStep::Connection,
+                    step => step,
+                };
+            }
+            ShellMessage::LauncherLocalSelected
+            | ShellMessage::LauncherProfileSelected(_)
+            | ShellMessage::LauncherProfileImport
+            | ShellMessage::LauncherCredentialSubmit
+            | ShellMessage::LauncherHostTrustConfirmed
+            | ShellMessage::LauncherFolderGo
+            | ShellMessage::LauncherFolderNavigate(_)
+            | ShellMessage::LauncherFolderSelected => {
+                // These messages return tasks from `update`.
+            }
             ShellMessage::OverlayDismissed => {
                 let had_overlay = self.chrome.active_overlay != Overlay::None;
                 let had_drag = self.drag.is_some();
@@ -686,6 +1230,26 @@ impl NativeShellRuntime {
                     spawn_ptys: self.live_ptys,
                 };
                 let reply = crate::backend::handle_line(&payload, ctx);
+                if let Ok(request) = serde_json::from_str::<pandamux_core::RpcRequest>(&payload) {
+                    if matches!(
+                        request.method.as_str(),
+                        "ssh.save_profile"
+                            | "ssh.remove_profile"
+                            | "ssh.import_config"
+                            | "ssh.profile.save"
+                            | "ssh.profile.remove"
+                            | "ssh.profile.import_config"
+                    ) {
+                        self.save_profiles();
+                    }
+                    if matches!(
+                        request.method.as_str(),
+                        "project.create" | "project.add_session"
+                    ) && self.live_ptys
+                    {
+                        let _ = self.store.save_session(&self.app_state);
+                    }
+                }
                 if let Ok(mut registry) = self.pipe_registry.lock()
                     && let Some(tx) = registry.remove(&id)
                 {
@@ -825,11 +1389,18 @@ impl NativeShellRuntime {
         self.recompute_find_matches();
         self.rebuild_chrome();
         let active_surface_id = self.active_surface_id();
-        let sessions = project_sessions(
+        let pending_projects = self
+            .pending_remote_launch
+            .as_ref()
+            .map(|pending| HashSet::from([pending.target.workspace_id.clone()]))
+            .unwrap_or_default();
+        let sessions = project_sessions_with_profiles(
             &self.app_state,
+            &self.ssh_profiles,
             self.chrome.session_grouping,
             self.chrome.session_panel_open,
             active_surface_id.as_ref(),
+            &pending_projects,
         );
         // Rebuild the palette item list, then filter it by the live query and
         // clamp the selection.
@@ -862,6 +1433,7 @@ impl NativeShellRuntime {
             sessions,
             palette: self.palette.clone(),
             quick_launch: QuickLaunchViewState::default(),
+            launcher: self.launcher.clone(),
             settings,
             surface_contents: self.contents.snapshot(),
             drag: self.drag.clone(),
@@ -1091,16 +1663,57 @@ impl NativeShellRuntime {
         for workspace in &self.app_state.workspaces {
             for surface_id in terminal_surface_ids(&workspace.split_tree) {
                 let session_id = surface_id.to_string();
-                // Remote (SSH-backed) surfaces have no local PTY; skip them.
-                if self.remotes.has(&session_id) {
+                if let ProjectLocation::Ssh {
+                    profile_id,
+                    remote_cwd,
+                } = &workspace.project.location
+                {
+                    if !self.remotes.has(&session_id) {
+                        let Some(profile) = self.ssh_profiles.get(profile_id) else {
+                            self.last_error = Some(format!(
+                                "SSH profile missing for Project {}: {profile_id}",
+                                workspace.title
+                            ));
+                            continue;
+                        };
+                        if matches!(profile.auth, pandamux_core::SshAuthConfig::Password) {
+                            self.last_error = Some(format!(
+                                "Project {} is waiting for SSH credentials",
+                                workspace.title
+                            ));
+                            continue;
+                        }
+                        match crate::project_launcher::ssh_config(
+                            profile,
+                            remote_cwd.clone(),
+                            self.credential_cache.get(profile_id),
+                            false,
+                        ) {
+                            Ok(config) => {
+                                self.remotes.connect(
+                                    session_id.clone(),
+                                    config.clone(),
+                                    GridSize::new(120, 30),
+                                )?;
+                                self.remote_configs.insert(surface_id.clone(), config);
+                            }
+                            Err(error) => self.last_error = Some(error.message),
+                        }
+                    }
                     continue;
                 }
                 expected_session_ids.insert(session_id.clone());
                 if self.ptys.has(&session_id) {
                     continue;
                 }
-                let command = PtyCommand::new(workspace.shell.clone())
-                    .with_env(crate::backend::pandamux_env(&session_id, None));
+                let command = match &workspace.project.location {
+                    ProjectLocation::Local { cwd, shell } => PtyCommand::new(shell.clone())
+                        .with_cwd(Some(cwd.clone()))
+                        .with_env(crate::backend::pandamux_env(&session_id, None)),
+                    ProjectLocation::Legacy => PtyCommand::new(workspace.shell.clone())
+                        .with_env(crate::backend::pandamux_env(&session_id, None)),
+                    ProjectLocation::Ssh { .. } => unreachable!(),
+                };
                 self.ptys
                     .spawn(session_id, &command, GridSize::new(120, 30))
                     .map_err(|error| error.to_string())?;
@@ -1536,6 +2149,7 @@ fn initial_view_model(app_state: &AppState, chrome: &ChromeState) -> ShellViewMo
         sessions: SessionsViewState::default(),
         palette: PaletteViewState::default(),
         quick_launch: QuickLaunchViewState::default(),
+        launcher: SessionLauncherViewState::default(),
         settings: SettingsViewState::default(),
         surface_contents: HashMap::new(),
         drag: None,
@@ -1659,6 +2273,29 @@ mod tests {
         assert_eq!(model.chrome.session_count, 1);
         assert_eq!(model.chrome.pane_count, 1);
         let _view = app_view(model);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn duplicate_launcher_submit_creates_at_most_one_project() {
+        let mut runtime = NativeShellRuntime::default();
+        let path = std::env::current_dir()
+            .unwrap()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        runtime.launcher.step = LauncherStep::Folder;
+        runtime.launcher.path = path.clone();
+        runtime.launcher.listing = Some(pandamux_core::FolderListing {
+            canonical_path: path,
+            parent_path: None,
+            breadcrumbs: Vec::new(),
+            directories: Vec::new(),
+        });
+        runtime.start_selected_folder();
+        runtime.start_selected_folder();
+        assert_eq!(runtime.app_state.workspaces.len(), 2);
     }
 
     #[test]

@@ -4,6 +4,21 @@ use pandamux_core::{
 };
 
 #[test]
+fn legacy_workspace_json_defaults_to_legacy_project() {
+    let value = serde_json::to_value(AppState::default()).unwrap();
+    let mut value = value;
+    value["workspaces"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("project");
+    let loaded: AppState = serde_json::from_value(value).unwrap();
+    assert!(matches!(
+        loaded.workspaces[0].project.location,
+        pandamux_core::ProjectLocation::Legacy
+    ));
+}
+
+#[test]
 fn default_state_reports_a_tree() {
     let mut state = AppState::default();
     let delta = state

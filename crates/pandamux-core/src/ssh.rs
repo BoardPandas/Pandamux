@@ -4,6 +4,7 @@
 //! are never stored here: a `Password` profile records only that a prompt is
 //! needed.
 
+use crate::SshProfileId;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
@@ -12,8 +13,8 @@ use std::collections::BTreeSet;
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SshAuthConfig {
-    /// The Windows OpenSSH-compatible agent named pipe (covers 1Password when
-    /// installed). This is the default and needs no stored material.
+    /// The Windows OpenSSH-compatible agent named pipe. This is the default and
+    /// needs no stored material.
     #[default]
     Agent,
     /// A private key file (`IdentityFile`).
@@ -26,6 +27,9 @@ pub enum SshAuthConfig {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SshHostProfile {
+    /// Stable identity used by Projects. Friendly names can be edited safely.
+    #[serde(default = "SshProfileId::generate")]
+    pub id: SshProfileId,
     /// Display name (the `Host` alias).
     pub name: String,
     pub host: String,
@@ -41,6 +45,7 @@ pub struct SshHostProfile {
 impl SshHostProfile {
     pub fn new(name: impl Into<String>, host: impl Into<String>, user: impl Into<String>) -> Self {
         Self {
+            id: SshProfileId::generate(),
             name: name.into(),
             host: host.into(),
             port: 22,
@@ -51,7 +56,7 @@ impl SshHostProfile {
     }
 }
 
-/// An in-memory registry of host profiles, keyed by name (last write wins).
+/// A registry of secretless host profiles, keyed by stable id.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SshProfiles {
@@ -63,23 +68,43 @@ impl SshProfiles {
         Self::default()
     }
 
-    /// Insert or replace a profile by name.
+    /// Insert or replace a profile by stable id.
     pub fn upsert(&mut self, profile: SshHostProfile) {
-        if let Some(existing) = self.profiles.iter_mut().find(|p| p.name == profile.name) {
+        if let Some(existing) = self.profiles.iter_mut().find(|p| p.id == profile.id) {
             *existing = profile;
         } else {
             self.profiles.push(profile);
         }
     }
 
-    pub fn get(&self, name: &str) -> Option<&SshHostProfile> {
-        self.profiles.iter().find(|p| p.name == name)
+    pub fn get(&self, id: &SshProfileId) -> Option<&SshHostProfile> {
+        self.profiles.iter().find(|p| &p.id == id)
     }
 
-    pub fn remove(&mut self, name: &str) -> bool {
+    pub fn get_by_name(&self, name: &str) -> Option<&SshHostProfile> {
+        self.profiles
+            .iter()
+            .find(|profile| profile.name.eq_ignore_ascii_case(name))
+    }
+
+    pub fn has_duplicate_name(&self, name: &str, except: Option<&SshProfileId>) -> bool {
+        self.profiles
+            .iter()
+            .any(|profile| profile.name.eq_ignore_ascii_case(name) && except != Some(&profile.id))
+    }
+
+    pub fn remove(&mut self, id: &SshProfileId) -> bool {
         let before = self.profiles.len();
-        self.profiles.retain(|p| p.name != name);
+        self.profiles.retain(|profile| &profile.id != id);
         self.profiles.len() != before
+    }
+
+    /// Compatibility helper for the historical name-based RPC.
+    pub fn remove_by_name(&mut self, name: &str) -> bool {
+        let Some(id) = self.get_by_name(name).map(|profile| profile.id.clone()) else {
+            return false;
+        };
+        self.remove(&id)
     }
 
     pub fn list(&self) -> &[SshHostProfile] {
@@ -91,7 +116,10 @@ impl SshProfiles {
     pub fn import_config(&mut self, text: &str) -> Vec<String> {
         let parsed = parse_ssh_config(text);
         let names = parsed.iter().map(|p| p.name.clone()).collect();
-        for profile in parsed {
+        for mut profile in parsed {
+            if let Some(existing) = self.get_by_name(&profile.name) {
+                profile.id = existing.id.clone();
+            }
             self.upsert(profile);
         }
         names
@@ -283,13 +311,18 @@ Host jumpbox
     }
 
     #[test]
-    fn profiles_upsert_by_name() {
+    fn profiles_upsert_by_id_and_allow_rename() {
         let mut store = SshProfiles::new();
-        store.upsert(SshHostProfile::new("a", "a.com", "root"));
-        store.upsert(SshHostProfile::new("a", "a2.com", "root"));
+        let mut profile = SshHostProfile::new("a", "a.com", "root");
+        let id = profile.id.clone();
+        store.upsert(profile.clone());
+        profile.name = "renamed".to_string();
+        profile.host = "a2.com".to_string();
+        store.upsert(profile);
         assert_eq!(store.list().len(), 1);
-        assert_eq!(store.get("a").unwrap().host, "a2.com");
-        assert!(store.remove("a"));
+        assert_eq!(store.get(&id).unwrap().name, "renamed");
+        assert_eq!(store.get(&id).unwrap().host, "a2.com");
+        assert!(store.remove(&id));
         assert!(store.list().is_empty());
     }
 
