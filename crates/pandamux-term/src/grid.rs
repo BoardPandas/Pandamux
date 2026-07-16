@@ -7,17 +7,18 @@ use alacritty_terminal::term::{ClipboardType, Config, Osc52, Term, TermMode};
 use alacritty_terminal::vte::ansi::{self, Color, NamedColor};
 use std::sync::{Arc, Mutex};
 
-/// A resolved terminal cell color. Concrete (non-default) colors are resolved to
-/// RGB here in the term layer (using the standard ANSI 16 + xterm-256 palette) so
-/// the UI never sees an `alacritty_terminal` type (crate-isolation invariant).
-/// Default foreground/background stay symbolic so the UI can substitute the
-/// active theme's colors.
+/// A terminal cell color independent of alacritty's internal types. Default and
+/// indexed colors stay symbolic so the UI can apply the active terminal theme;
+/// explicit RGB colors pass through unchanged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CellColor {
     /// The theme's default foreground (text) color.
     Default,
     /// The theme's default background color.
     Background,
+    /// An ANSI/xterm palette entry. The UI resolves the first 16 entries against
+    /// the active terminal theme and the remaining entries against xterm-256.
+    Indexed(u8),
     /// A concrete color.
     Rgb(u8, u8, u8),
 }
@@ -41,51 +42,11 @@ pub struct ScreenCells {
     pub cursor: (usize, usize),
 }
 
-/// Standard VGA/xterm palette for ANSI colors 0..=15.
-const ANSI_16: [(u8, u8, u8); 16] = [
-    (0x00, 0x00, 0x00), // 0  black
-    (0x80, 0x00, 0x00), // 1  red
-    (0x00, 0x80, 0x00), // 2  green
-    (0x80, 0x80, 0x00), // 3  yellow
-    (0x00, 0x00, 0x80), // 4  blue
-    (0x80, 0x00, 0x80), // 5  magenta
-    (0x00, 0x80, 0x80), // 6  cyan
-    (0xc0, 0xc0, 0xc0), // 7  white
-    (0x80, 0x80, 0x80), // 8  bright black
-    (0xff, 0x00, 0x00), // 9  bright red
-    (0x00, 0xff, 0x00), // 10 bright green
-    (0xff, 0xff, 0x00), // 11 bright yellow
-    (0x00, 0x00, 0xff), // 12 bright blue
-    (0xff, 0x00, 0xff), // 13 bright magenta
-    (0x00, 0xff, 0xff), // 14 bright cyan
-    (0xff, 0xff, 0xff), // 15 bright white
-];
-
-/// Resolve an xterm 256-color index to RGB (16 base + 6x6x6 cube + grayscale).
-fn indexed_rgb(index: u8) -> (u8, u8, u8) {
-    match index {
-        0..=15 => ANSI_16[index as usize],
-        16..=231 => {
-            let i = index - 16;
-            let step = |v: u8| if v == 0 { 0 } else { 55 + v * 40 };
-            (step(i / 36), step((i % 36) / 6), step(i % 6))
-        }
-        232..=255 => {
-            let level = 8 + (index - 232) * 10;
-            (level, level, level)
-        }
-    }
-}
-
-/// Map an alacritty cell color to a [`CellColor`], resolving named/indexed
-/// colors to RGB and leaving the default fg/bg symbolic.
+/// Map an alacritty cell color to PandaMUX's theme-independent representation.
 fn resolve_color(color: Color) -> CellColor {
     match color {
         Color::Spec(rgb) => CellColor::Rgb(rgb.r, rgb.g, rgb.b),
-        Color::Indexed(index) => {
-            let (r, g, b) = indexed_rgb(index);
-            CellColor::Rgb(r, g, b)
-        }
+        Color::Indexed(index) => CellColor::Indexed(index),
         Color::Named(named) => match named {
             NamedColor::Background => CellColor::Background,
             NamedColor::Foreground
@@ -95,12 +56,10 @@ fn resolve_color(color: Color) -> CellColor {
             other => {
                 let n = other as usize;
                 if n < 16 {
-                    let (r, g, b) = ANSI_16[n];
-                    CellColor::Rgb(r, g, b)
+                    CellColor::Indexed(n as u8)
                 } else if (259..=266).contains(&n) {
                     // Dim black..dim white -> their normal base color (0..=7).
-                    let (r, g, b) = ANSI_16[n - 259];
-                    CellColor::Rgb(r, g, b)
+                    CellColor::Indexed((n - 259) as u8)
                 } else {
                     CellColor::Default
                 }
@@ -436,9 +395,9 @@ mod tests {
         assert_eq!(row[0].fg, CellColor::Default);
         assert_eq!(row[0].bg, CellColor::Background);
 
-        // Red foreground resolves to the ANSI-16 red RGB.
+        // Named ANSI colors stay indexed for theme-aware resolution in the UI.
         assert_eq!(row[1].c, 'R');
-        assert_eq!(row[1].fg, CellColor::Rgb(0x80, 0x00, 0x00));
+        assert_eq!(row[1].fg, CellColor::Indexed(1));
 
         // Reverse video swaps default fg/bg so the cell paints an inverted block.
         assert_eq!(row[2].c, 'V');

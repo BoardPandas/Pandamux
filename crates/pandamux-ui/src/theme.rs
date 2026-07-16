@@ -133,11 +133,9 @@ pub const RADIUS_RAIL_BUTTON: f32 = 10.0;
 // Typography tokens
 // ---------------------------------------------------------------------------
 
-/// Named monospace face. The JetBrains Mono TTF is intended to be bundled and
-/// registered with the application; until the font bytes ship, this named font
-/// resolves to JetBrains Mono when installed and falls back to the system
-/// monospace otherwise. Keep this the single reference point for the mono face.
-pub const MONO_FONT: Font = Font::with_name("JetBrains Mono");
+/// Guaranteed generic monospace face. Requesting an unbundled font by name can
+/// fall back to proportional text, which breaks the terminal's fixed cell grid.
+pub const MONO_FONT: Font = Font::MONOSPACE;
 
 /// UI face: system-ui / Segoe UI on Windows.
 pub const UI_FONT: Font = Font::DEFAULT;
@@ -162,7 +160,7 @@ pub const SIZE_BODY: f32 = 12.5;
 pub const SIZE_SECONDARY: f32 = 11.0;
 pub const SIZE_GROUP_HEADER: f32 = 10.5;
 // Mono text sizes
-pub const SIZE_TERMINAL: f32 = 12.5;
+pub const SIZE_TERMINAL: f32 = 13.0;
 pub const SIZE_METADATA: f32 = 10.0;
 pub const SIZE_KBD: f32 = 10.5;
 pub const SIZE_STATUS_BAR: f32 = 10.5;
@@ -187,8 +185,29 @@ pub mod term {
     pub const CURSOR_WIDTH: f32 = 7.0;
     pub const CURSOR_HEIGHT: f32 = 15.0;
     /// Cell metrics used by the canvas viewport.
-    pub const CELL_WIDTH: f32 = 8.4;
-    pub const CELL_HEIGHT: f32 = 21.0;
+    pub const CELL_WIDTH: f32 = 7.8;
+    pub const CELL_HEIGHT: f32 = 19.0;
+
+    /// Default ANSI palette, tuned for the fixed-dark terminal surface rather
+    /// than the low-contrast legacy VGA colors.
+    pub const ANSI: [Color; 16] = [
+        Color::from_rgb8(0x18, 0x20, 0x24),
+        Color::from_rgb8(0xe0, 0x6c, 0x75),
+        SUCCESS,
+        GOLD,
+        Color::from_rgb8(0x61, 0xaf, 0xef),
+        Color::from_rgb8(0xc6, 0x78, 0xdd),
+        Color::from_rgb8(0x56, 0xb6, 0xc2),
+        TEXT,
+        DIM,
+        Color::from_rgb8(0xff, 0x7b, 0x86),
+        Color::from_rgb8(0x9a, 0xe6, 0xa8),
+        Color::from_rgb8(0xf1, 0xcf, 0x76),
+        Color::from_rgb8(0x80, 0xc7, 0xff),
+        Color::from_rgb8(0xda, 0x8f, 0xee),
+        Color::from_rgb8(0x75, 0xd5, 0xdf),
+        Color::from_rgb8(0xe8, 0xf0, 0xf0),
+    ];
 }
 
 /// The terminal color scheme applied to the canvas viewport. Defaults to the
@@ -203,6 +222,7 @@ pub struct TermScheme {
     pub success: Color,
     pub gold: Color,
     pub cursor: Color,
+    pub ansi: [Color; 16],
 }
 
 impl Default for TermScheme {
@@ -214,6 +234,7 @@ impl Default for TermScheme {
             success: term::SUCCESS,
             gold: term::GOLD,
             cursor: Accent::Teal.color(),
+            ansi: term::ANSI,
         }
     }
 }
@@ -241,6 +262,7 @@ impl TermScheme {
             success: palette(2, base.success),
             gold: palette(3, base.gold),
             cursor: hex(&theme.cursor, hex(&theme.foreground, base.text)),
+            ansi: std::array::from_fn(|index| palette(index, base.ansi[index])),
         }
     }
 }
@@ -451,6 +473,7 @@ mod tests {
         assert_eq!(scheme.background, Color::from_rgb8(0x10, 0x10, 0x10));
         assert_eq!(scheme.text, Color::from_rgb8(0xee, 0xee, 0xee));
         assert_eq!(scheme.success, Color::from_rgb8(0x00, 0xff, 0x00));
+        assert_eq!(scheme.ansi[2], Color::from_rgb8(0x00, 0xff, 0x00));
         // palette[3] (gold) absent -> falls back to the default scheme's gold.
         assert_eq!(scheme.gold, TermScheme::default().gold);
     }

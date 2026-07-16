@@ -321,6 +321,18 @@ impl TerminalViewport {
         match color {
             CellColor::Default => self.scheme.text,
             CellColor::Background => self.scheme.background,
+            CellColor::Indexed(index) => {
+                if let Some(color) = self.scheme.ansi.get(index as usize) {
+                    *color
+                } else if index <= 231 {
+                    let index = index - 16;
+                    let step = |value: u8| if value == 0 { 0 } else { 55 + value * 40 };
+                    Color::from_rgb8(step(index / 36), step((index % 36) / 6), step(index % 6))
+                } else {
+                    let level = 8 + (index - 232) * 10;
+                    Color::from_rgb8(level, level, level)
+                }
+            }
             CellColor::Rgb(r, g, b) => Color::from_rgb8(r, g, b),
         }
     }
@@ -1172,9 +1184,10 @@ mod tests {
 
         // The real grid cursor position wins over the "past last content" heuristic.
         assert_eq!(viewport.cursor_cell(), (5, 12));
-        // Default resolves to the scheme text color; RGB resolves literally.
+        // Defaults and indexed colors use the scheme; RGB resolves literally.
         assert_eq!(viewport.resolve(CellColor::Default), scheme.text);
         assert_eq!(viewport.resolve(CellColor::Background), scheme.background);
+        assert_eq!(viewport.resolve(CellColor::Indexed(3)), scheme.ansi[3]);
         assert_eq!(
             viewport.resolve(CellColor::Rgb(0x80, 0x00, 0x00)),
             Color::from_rgb8(0x80, 0x00, 0x00)
