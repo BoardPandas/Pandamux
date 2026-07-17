@@ -619,7 +619,7 @@ impl NativeShellRuntime {
                 }
             };
             Task::perform(
-                crate::project_launcher::list_remote_folders(config, path),
+                crate::project_launcher::list_remote_folders(self.remotes.pool(), config, path),
                 ShellMessage::LauncherFolderLoaded,
             )
         } else {
@@ -3508,12 +3508,13 @@ impl NativeShellRuntime {
         let tasks: Vec<Task<ShellMessage>> = pending
             .into_iter()
             .map(|(project_id, location, config)| {
-                Task::perform(fetch_git_remote(location, config), move |url| {
-                    ShellMessage::GitRemoteDiscovered {
+                Task::perform(
+                    fetch_git_remote(self.remotes.pool(), location, config),
+                    move |url| ShellMessage::GitRemoteDiscovered {
                         project_id: project_id.clone(),
                         url,
-                    }
-                })
+                    },
+                )
             })
             .collect();
         Task::batch(tasks)
@@ -4379,9 +4380,14 @@ fn fallback_terminal_snapshots(app_state: &AppState) -> Vec<TerminalSnapshot> {
 }
 
 /// Read a project's git remote URL for identity matching (spec 1.4). Local
-/// checkouts read `.git/config` via tokio::fs; SSH checkouts read it over a
-/// fresh SFTP session with a 2 second budget. Always best-effort.
-async fn fetch_git_remote(location: ProjectLocation, config: Option<SshConfig>) -> Option<String> {
+/// checkouts read `.git/config` via tokio::fs; SSH checkouts read it over an
+/// SFTP channel on the pooled host connection (spec 1.6) with a 2 second
+/// budget. Always best-effort.
+async fn fetch_git_remote(
+    pool: pandamux_term::SshConnectionPool,
+    location: ProjectLocation,
+    config: Option<SshConfig>,
+) -> Option<String> {
     match location {
         ProjectLocation::Local { cwd, .. } => {
             let path = std::path::Path::new(&cwd).join(".git").join("config");
@@ -4393,7 +4399,7 @@ async fn fetch_git_remote(location: ProjectLocation, config: Option<SshConfig>) 
             let path = format!("{}/.git/config", remote_cwd.trim_end_matches('/'));
             let text = tokio::time::timeout(
                 Duration::from_secs(2),
-                pandamux_term::read_remote_file(config, path, 64 * 1024),
+                pandamux_term::read_remote_file(&pool, config, path, 64 * 1024),
             )
             .await
             .ok()?

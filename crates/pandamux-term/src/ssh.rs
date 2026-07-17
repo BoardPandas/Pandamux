@@ -17,6 +17,15 @@
 //! The russh work is async, but the manager exposes a blocking API by owning a
 //! multi-thread tokio runtime and bridging bytes over channels (the same shape
 //! as `PtySessionManager`'s reader thread).
+//!
+//! Connection reuse (spec 1.6): one authenticated SSH connection per
+//! host/port/user/auth identity lives in a [`SshConnectionPool`]; every
+//! surface opens its own channel on the shared handle, so the second session
+//! on a connected host skips TCP + key exchange + auth entirely. Folder
+//! browsing and the git-hint SFTP reads route through the same pool, which
+//! pre-warms the connection while the user is still picking a folder. Idle
+//! pooled connections stay open (15s keepalives, no inactivity timeout);
+//! a dead handle is detected via `is_closed` and redialed on next use.
 
 use crate::grid::{GridSize, TerminalGrid};
 use std::collections::HashMap;
@@ -30,7 +39,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use russh::keys::agent::AgentIdentity;
 use russh::keys::agent::client::AgentClient;
 use russh::keys::{PrivateKeyWithHashAlg, load_secret_key};
-use russh::{ChannelMsg, Disconnect, client};
+use russh::{ChannelMsg, client};
 
 /// How to authenticate an SSH connection. Mirrors the auth matrix proven in the
 /// Phase 2 spike: a private key file, the Windows OpenSSH-compatible agent named
@@ -146,6 +155,82 @@ pub struct RemoteFolderListing {
 
 pub type SshResult<T> = Result<T, String>;
 
+// ---------------------------------------------------------------------------
+// Per-host connection pool (spec 1.6)
+// ---------------------------------------------------------------------------
+
+/// Identifies a shareable connection: host, port, user, and the auth
+/// IDENTITY (key path / agent pipe / "password"), never a secret.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct HostKey {
+    host: String,
+    port: u16,
+    user: String,
+    auth: String,
+}
+
+impl HostKey {
+    fn from_config(config: &SshConfig) -> Self {
+        let auth = match &config.auth {
+            SshAuth::KeyFile { path, .. } => format!("key:{}", path.display()),
+            SshAuth::Agent { pipe_path } => format!("agent:{pipe_path}"),
+            SshAuth::Password { .. } => "password".to_string(),
+        };
+        Self {
+            host: config.host.clone(),
+            port: config.port,
+            user: config.user.clone(),
+            auth,
+        }
+    }
+}
+
+type PooledHandle = Arc<client::Handle<ClientHandler>>;
+type HostSlot = Arc<tokio::sync::Mutex<Option<PooledHandle>>>;
+
+/// One authenticated `client::Handle` per host identity, shared by every
+/// consumer (terminal drivers, SFTP uploads, folder browsing, git hints).
+/// Cheap to clone; all clones share the same pool.
+///
+/// Only successfully authenticated handles are ever stored, so reuse never
+/// bypasses auth. The dial is single-flight PER HOST: concurrent acquires of
+/// the same key await one dial (the per-key mutex is held across it) while
+/// dials to different hosts proceed in parallel.
+#[derive(Clone, Default)]
+pub struct SshConnectionPool {
+    slots: Arc<tokio::sync::Mutex<HashMap<HostKey, HostSlot>>>,
+}
+
+impl SshConnectionPool {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// A live, authenticated handle for `config`: the pooled one when it is
+    /// still open, else a fresh dial (which replaces the dead entry).
+    async fn acquire(&self, config: &SshConfig) -> Result<PooledHandle, SshFailure> {
+        let slot = {
+            let mut slots = self.slots.lock().await;
+            slots
+                .entry(HostKey::from_config(config))
+                .or_default()
+                .clone()
+        };
+        // Held across the dial: the single-flight lock for this host.
+        let mut guard = slot.lock().await;
+        if let Some(handle) = guard.as_ref() {
+            if !handle.is_closed() {
+                return Ok(Arc::clone(handle));
+            }
+            // The connection died (network drop, server restart): invalidate.
+            *guard = None;
+        }
+        let handle = Arc::new(connect_client(config).await?);
+        *guard = Some(Arc::clone(&handle));
+        Ok(handle)
+    }
+}
+
 /// Events sent from the async driver task to the synchronous manager.
 enum RemoteEvent {
     Data(Vec<u8>),
@@ -190,6 +275,9 @@ pub struct RemoteSessionManager {
     runtime: Arc<Runtime>,
     sessions: HashMap<String, RemoteSession>,
     scrollback_lines: usize,
+    /// Shared per-host connections (spec 1.6); drivers, SFTP, and folder
+    /// browsing all draw from it.
+    pool: SshConnectionPool,
 }
 
 impl RemoteSessionManager {
@@ -202,7 +290,15 @@ impl RemoteSessionManager {
             runtime: Arc::new(runtime),
             sessions: HashMap::new(),
             scrollback_lines: crate::grid::DEFAULT_SCROLLBACK_LINES,
+            pool: SshConnectionPool::new(),
         })
+    }
+
+    /// A clone of the manager's connection pool, for consumers that run
+    /// outside it (the launcher's folder browsing, git-identity hints). Using
+    /// it pre-warms the connection the eventual terminal launch will reuse.
+    pub fn pool(&self) -> SshConnectionPool {
+        self.pool.clone()
     }
 
     /// Change how much history every remote session (current and future)
@@ -247,6 +343,7 @@ impl RemoteSessionManager {
             events: event_tx,
             control: control_rx,
             sftp: sftp_rx,
+            pool: self.pool.clone(),
         };
         self.runtime.spawn(driver.run());
 
@@ -315,8 +412,9 @@ impl RemoteSessionManager {
         timeout: Duration,
     ) -> Result<RemoteFolderListing, SshFailure> {
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let pool = self.pool.clone();
         self.runtime.spawn(async move {
-            let _ = sender.send(browse_remote_folders(config, path).await);
+            let _ = sender.send(browse_remote_folders(&pool, config, path).await);
         });
         receiver.recv_timeout(timeout).map_err(|_| SshFailure {
             code: "ssh_folder_list_timeout",
@@ -674,6 +772,9 @@ struct RemoteDriver {
     events: std::sync::mpsc::Sender<RemoteEvent>,
     control: UnboundedReceiver<RemoteControl>,
     sftp: UnboundedReceiver<SftpRequest>,
+    /// Shared per-host connections (spec 1.6): the driver only opens a
+    /// channel; dialing happens at most once per host identity.
+    pool: SshConnectionPool,
 }
 
 struct ClientHandler {
@@ -837,15 +938,16 @@ impl RemoteDriver {
         false
     }
 
-    async fn connect(&self) -> Result<client::Handle<ClientHandler>, String> {
-        connect_client(&self.config)
+    async fn connect(&self) -> Result<PooledHandle, String> {
+        self.pool
+            .acquire(&self.config)
             .await
             .map_err(|failure| failure.to_string())
     }
 
     async fn session_loop(
         &mut self,
-        handle: client::Handle<ClientHandler>,
+        handle: PooledHandle,
         reattaching: bool,
     ) -> Result<SessionOutcome, String> {
         let mut channel = handle
@@ -909,10 +1011,11 @@ impl RemoteDriver {
                         let _ = channel.window_change(cols, rows, 0, 0).await;
                     }
                     Some(RemoteControl::Kill) | None => {
+                        // Close only OUR channel: the connection is shared
+                        // with other surfaces on this host (spec 1.6). Idle
+                        // pooled connections stay open by design (v1).
                         let _ = channel.eof().await;
-                        let _ = handle
-                            .disconnect(Disconnect::ByApplication, "pandamux close", "")
-                            .await;
+                        let _ = channel.close().await;
                         return Ok(SessionOutcome::Killed);
                     }
                 },
@@ -934,7 +1037,9 @@ enum SessionOutcome {
 
 async fn connect_client(config: &SshConfig) -> Result<client::Handle<ClientHandler>, SshFailure> {
     let client_config = client::Config {
-        inactivity_timeout: Some(Duration::from_secs(60)),
+        // Pooled connections idle between sessions (spec 1.6): keepalives
+        // hold them open, and no inactivity timeout reaps them (v1 policy).
+        inactivity_timeout: None,
         keepalive_interval: Some(Duration::from_secs(15)),
         ..Default::default()
     };
@@ -979,16 +1084,18 @@ async fn connect_client(config: &SshConfig) -> Result<client::Handle<ClientHandl
     Ok(handle)
 }
 
-/// Open a temporary SSH/SFTP connection, canonicalize `path`, and list only
-/// directories. This channel is independent from durable terminal sessions and
-/// is closed before the result is returned.
+/// Canonicalize `path` on the remote host and list only directories, over a
+/// pooled connection (spec 1.6): browsing folders during launch pre-warms the
+/// connection the terminal will reuse. Only the SFTP channel is closed at the
+/// end; the shared connection stays open.
 pub async fn browse_remote_folders(
+    pool: &SshConnectionPool,
     config: SshConfig,
     path: String,
 ) -> Result<RemoteFolderListing, SshFailure> {
     use russh_sftp::client::SftpSession;
 
-    let handle = connect_client(&config).await?;
+    let handle = pool.acquire(&config).await?;
     let result = async {
         let channel = handle
             .channel_open_session()
@@ -1044,13 +1151,7 @@ pub async fn browse_remote_folders(
         })
     }
     .await;
-    let _ = handle
-        .disconnect(
-            Disconnect::ByApplication,
-            "pandamux folder browse complete",
-            "",
-        )
-        .await;
+    // No disconnect: the connection belongs to the pool now.
     result
 }
 
@@ -1168,10 +1269,12 @@ async fn authenticate_with_agent(
     Err("agent auth over named pipe is only implemented on Windows".to_string())
 }
 
-/// Read a small remote file over SFTP (best-effort, capped at `max_bytes`).
-/// Used for the git-remote project-identity hint (spec 1.4): reading
-/// `<project>/.git/config` is cheap and never blocks a launch.
+/// Read a small remote file over SFTP (best-effort, capped at `max_bytes`),
+/// on a pooled connection (spec 1.6). Used for the git-remote
+/// project-identity hint (spec 1.4): reading `<project>/.git/config` is
+/// cheap and never blocks a launch.
 pub async fn read_remote_file(
+    pool: &SshConnectionPool,
     config: SshConfig,
     path: String,
     max_bytes: usize,
@@ -1187,7 +1290,7 @@ pub async fn read_remote_file(
         fingerprint: None,
         known_hosts_line: None,
     };
-    let handle = connect_client(&config).await?;
+    let handle = pool.acquire(&config).await?;
     let channel = handle
         .channel_open_session()
         .await
@@ -1221,9 +1324,7 @@ pub async fn read_remote_file(
         }
     }
     let _ = sftp.close().await;
-    let _ = handle
-        .disconnect(Disconnect::ByApplication, "pandamux read", "")
-        .await;
+    // No disconnect: the connection belongs to the pool now.
     String::from_utf8(bytes).map_err(|error| sftp_failure(format!("decode {path}: {error}")))
 }
 
@@ -1326,6 +1427,86 @@ mod tests {
         let manager = RemoteSessionManager::new().expect("runtime builds");
         assert!(!manager.has("surf-1"));
         assert!(manager.session_ids().is_empty());
+        // The pool clone shares the same slots as the manager's own.
+        let _pool = manager.pool();
+    }
+
+    #[test]
+    fn host_key_shares_connections_per_identity_and_never_holds_secrets() {
+        let password = |password: &str| {
+            SshConfig::new(
+                "host.example",
+                "chaz",
+                SshAuth::Password {
+                    password: password.to_string(),
+                },
+            )
+        };
+        // Same host identity: one pooled connection even if the password
+        // string differs (only successfully authenticated handles are stored).
+        assert_eq!(
+            HostKey::from_config(&password("hunter2")),
+            HostKey::from_config(&password("other"))
+        );
+        // The secret itself never appears in the key.
+        let key = HostKey::from_config(&password("hunter2"));
+        assert!(!format!("{key:?}").contains("hunter2"));
+
+        // Different users, ports, or key identities do not share.
+        let with_user = SshConfig::new(
+            "host.example",
+            "brandon",
+            SshAuth::Password {
+                password: "x".to_string(),
+            },
+        );
+        assert_ne!(
+            HostKey::from_config(&password("x")),
+            HostKey::from_config(&with_user)
+        );
+        assert_ne!(
+            HostKey::from_config(&password("x")),
+            HostKey::from_config(&password("x").with_port(2222))
+        );
+        let key_a = SshConfig::new(
+            "host.example",
+            "chaz",
+            SshAuth::KeyFile {
+                path: PathBuf::from("/home/chaz/.ssh/id_a"),
+                passphrase: None,
+            },
+        );
+        let key_b = SshConfig::new(
+            "host.example",
+            "chaz",
+            SshAuth::KeyFile {
+                path: PathBuf::from("/home/chaz/.ssh/id_b"),
+                passphrase: None,
+            },
+        );
+        assert_ne!(HostKey::from_config(&key_a), HostKey::from_config(&key_b));
+    }
+
+    #[test]
+    fn pool_slots_are_shared_across_clones() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let pool = SshConnectionPool::new();
+        let clone = pool.clone();
+        runtime.block_on(async {
+            let key = HostKey::from_config(&SshConfig::new(
+                "host.example",
+                "chaz",
+                SshAuth::Password {
+                    password: "x".to_string(),
+                },
+            ));
+            pool.slots.lock().await.entry(key).or_default();
+            // The clone sees the same slot map (Arc-shared).
+            assert_eq!(clone.slots.lock().await.len(), 1);
+        });
     }
 
     #[test]

@@ -453,10 +453,13 @@ async fn list_local_drives() -> Vec<String> {
 }
 
 pub async fn list_remote_folders(
+    pool: pandamux_term::SshConnectionPool,
     config: SshConfig,
     path: String,
 ) -> Result<FolderListing, ProjectError> {
-    let listing = browse_remote_folders(config, path)
+    // Pooled (spec 1.6): browsing during launch pre-warms the connection the
+    // terminal session will reuse, so the launch itself skips the dial.
+    let listing = browse_remote_folders(&pool, config, path)
         .await
         .map_err(project_error_from_ssh)?;
     let mut directories = listing

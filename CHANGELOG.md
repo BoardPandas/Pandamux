@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.51.0]
+## [0.52.0]
+
+### Added
+
+- **SSH connections are now shared per host** (spec 1.6). The first session to a host dials and authenticates once; every further tab, SFTP image paste, folder listing, and git-identity probe on that host reuses the same connection and only opens a channel, so a second session on a connected host starts near-instantly (no TCP, key exchange, or auth). Browsing folders in the launcher warms up the very connection the terminal then launches over.
+
+### Changed
+
+- Closing an SSH tab now closes only that tab's channel; the host connection stays pooled for other tabs and future launches (15 second keepalives hold idle connections open, and a dead connection is redialed automatically on next use).
+- Connections to different hosts still dial in parallel; concurrent launches to the same host share a single dial instead of racing.
 
 ### Added
 
