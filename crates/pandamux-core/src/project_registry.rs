@@ -261,6 +261,41 @@ pub fn ensure_project_registry(app: &mut AppState, now_ms: u64) -> bool {
     changed
 }
 
+/// Resolve-or-create the registry record for one workspace's location and
+/// assign it (the per-launch path; [`ensure_project_registry`] is the bulk
+/// load-time path). Returns the assigned id.
+pub fn assign_workspace_project(
+    app: &mut AppState,
+    workspace_id: &crate::ids::WorkspaceId,
+    now_ms: u64,
+) -> Option<ProjectId> {
+    let workspace = app
+        .workspaces
+        .iter()
+        .find(|workspace| &workspace.id == workspace_id)?;
+    let location = workspace.project.location.clone();
+    let project_id = match workspace.project_id.clone() {
+        Some(project_id) => project_id,
+        None => match resolve_project_id(&app.projects, &location, None, now_ms)? {
+            ProjectResolution::Existing(project_id) => project_id,
+            ProjectResolution::New(record) => {
+                let project_id = record.id.clone();
+                app.projects.push(record);
+                project_id
+            }
+        },
+    };
+    record_location(&mut app.projects, &project_id, &location);
+    if let Some(workspace) = app
+        .workspaces
+        .iter_mut()
+        .find(|workspace| &workspace.id == workspace_id)
+    {
+        workspace.project_id = Some(project_id.clone());
+    }
+    Some(project_id)
+}
+
 /// Remember a location on a record (most recent first, deduped) and make sure
 /// its exact key matches next time.
 pub fn record_location(

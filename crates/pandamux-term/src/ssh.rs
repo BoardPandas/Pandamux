@@ -1168,6 +1168,65 @@ async fn authenticate_with_agent(
     Err("agent auth over named pipe is only implemented on Windows".to_string())
 }
 
+/// Read a small remote file over SFTP (best-effort, capped at `max_bytes`).
+/// Used for the git-remote project-identity hint (spec 1.4): reading
+/// `<project>/.git/config` is cheap and never blocks a launch.
+pub async fn read_remote_file(
+    config: SshConfig,
+    path: String,
+    max_bytes: usize,
+) -> Result<String, SshFailure> {
+    use russh_sftp::client::SftpSession;
+    use tokio::io::AsyncReadExt;
+
+    let sftp_failure = |message: String| SshFailure {
+        code: "ssh_read_file_failed",
+        category: SshErrorCategory::RemotePath,
+        message,
+        retryable: false,
+        fingerprint: None,
+        known_hosts_line: None,
+    };
+    let handle = connect_client(&config).await?;
+    let channel = handle
+        .channel_open_session()
+        .await
+        .map_err(|error| sftp_failure(format!("open sftp channel: {error}")))?;
+    channel
+        .request_subsystem(true, "sftp")
+        .await
+        .map_err(|error| sftp_failure(format!("request sftp subsystem: {error}")))?;
+    let sftp = SftpSession::new(channel.into_stream())
+        .await
+        .map_err(|error| sftp_failure(format!("start sftp session: {error}")))?;
+    let mut file = sftp
+        .open(&path)
+        .await
+        .map_err(|error| sftp_failure(format!("open remote {path}: {error}")))?;
+    let mut bytes = Vec::new();
+    let mut chunk = [0_u8; 8192];
+    loop {
+        let read = file
+            .read(&mut chunk)
+            .await
+            .map_err(|error| sftp_failure(format!("read remote {path}: {error}")))?;
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..read]);
+        if bytes.len() > max_bytes {
+            return Err(sftp_failure(format!(
+                "remote file {path} exceeds {max_bytes} bytes"
+            )));
+        }
+    }
+    let _ = sftp.close().await;
+    let _ = handle
+        .disconnect(Disconnect::ByApplication, "pandamux read", "")
+        .await;
+    String::from_utf8(bytes).map_err(|error| sftp_failure(format!("decode {path}: {error}")))
+}
+
 async fn upload_via_sftp(
     handle: &client::Handle<ClientHandler>,
     request: &SftpRequest,

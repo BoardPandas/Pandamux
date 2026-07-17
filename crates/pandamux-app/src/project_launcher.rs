@@ -2,14 +2,14 @@
 
 use pandamux_core::{
     AppDelta, AppIntent, AppState, FolderEntry, FolderListing, PaneId, ProjectError,
-    ProjectErrorCategory, ProjectKey, ProjectLocation, ProjectSpec, SshAuthConfig, SshHostProfile,
-    SurfaceId, SurfaceIntent, SurfaceType, WorkspaceId, WorkspaceIntent, local_breadcrumbs,
-    local_parent, posix_breadcrumbs, posix_parent, project_title, sort_directories,
-    strip_windows_verbatim,
+    ProjectErrorCategory, ProjectId, ProjectKey, ProjectLocation, ProjectSpec, SessionType,
+    SshAuthConfig, SshHostProfile, SurfaceId, SurfaceIntent, SurfaceType, WorkspaceId,
+    WorkspaceIntent, local_breadcrumbs, local_parent, posix_breadcrumbs, posix_parent,
+    project_title, sort_directories, strip_windows_verbatim,
 };
 use pandamux_term::{
-    GridSize, PtyCommand, PtySessionManager, RemoteSessionManager, SshAuth, SshConfig,
-    SshErrorCategory, SshFailure, browse_remote_folders, resolve_powershell,
+    GridSize, PtyCommand, PtySessionManager, RemoteSessionManager, ShellType, SshAuth, SshConfig,
+    SshErrorCategory, SshFailure, browse_remote_folders, resolve_powershell, shell_type,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -37,6 +37,62 @@ pub struct LaunchSuccess {
     pub pane_id: PaneId,
     pub surface_id: SurfaceId,
     pub reused_project: bool,
+    /// The registry identity the workspace resolved to (spec 1.4); feeds the
+    /// async git-remote hint and favorites/recents.
+    pub project_id: Option<ProjectId>,
+}
+
+/// The local PTY command a session type launches (spec 2.2/2.7). Agent and
+/// custom types run INSIDE the shell (pwsh -NoExit -Command / cmd /K) so PATH
+/// shims resolve (npm-installed CLIs are .cmd wrappers CreateProcess cannot
+/// exec directly) and the pane drops back to a prompt when the tool exits.
+/// ConPTY owns the console, so no extra window can appear.
+pub fn spawn_spec(
+    session: &SessionType,
+    shell: &str,
+    cwd: Option<String>,
+    surface_id: &str,
+) -> PtyCommand {
+    let command = match session {
+        SessionType::Terminal => PtyCommand::new(shell.to_string()),
+        SessionType::PowerShell { program } => PtyCommand::new(program.clone()),
+        SessionType::Claude => shell_wrapped(shell, "claude"),
+        SessionType::Codex => shell_wrapped(shell, "codex"),
+        SessionType::Gemini => shell_wrapped(shell, "gemini"),
+        SessionType::Custom { command } => shell_wrapped(shell, command),
+    };
+    command
+        .with_cwd(cwd)
+        .with_env(crate::backend::pandamux_env(surface_id, None))
+}
+
+fn shell_wrapped(shell: &str, tool_command: &str) -> PtyCommand {
+    match shell_type(shell) {
+        ShellType::PowerShell => PtyCommand::new(shell.to_string()).with_args([
+            "-NoExit".to_string(),
+            "-Command".to_string(),
+            tool_command.to_string(),
+        ]),
+        ShellType::Cmd => PtyCommand::new(shell.to_string())
+            .with_args(["/K".to_string(), tool_command.to_string()]),
+        // WSL / POSIX shells: run the tool, then drop to an interactive shell.
+        _ => PtyCommand::new(shell.to_string())
+            .with_args(["-c".to_string(), format!("{tool_command}; exec {shell}")]),
+    }
+}
+
+/// The line typed into a freshly-ready SSH session for non-Terminal types.
+/// Remote sessions run inside tmux on the server; sending the tool command
+/// once the PTY is ready is the documented v1 approach (an explicit
+/// user-selected launch, never blind injection).
+pub fn remote_initial_command(session: &SessionType) -> Option<String> {
+    match session {
+        SessionType::Terminal | SessionType::PowerShell { .. } => None,
+        SessionType::Claude => Some("claude".to_string()),
+        SessionType::Codex => Some("codex".to_string()),
+        SessionType::Gemini => Some("gemini".to_string()),
+        SessionType::Custom { command } => Some(command.clone()),
+    }
 }
 
 pub fn prepare_launch(
@@ -79,6 +135,7 @@ pub fn commit_prestarted(
     app: &mut AppState,
     target: &LaunchTarget,
     shell: &str,
+    session: &SessionType,
 ) -> Result<LaunchSuccess, ProjectError> {
     let delta = if target.existing_workspace {
         app.apply(AppIntent::Surface(SurfaceIntent::CreateWithId {
@@ -123,11 +180,23 @@ pub fn commit_prestarted(
         } => (workspace_id, pane_id, surface.id),
         _ => unreachable!("Project commit returned an unrelated delta"),
     };
+    if *session != SessionType::Terminal {
+        let _ = app.apply(AppIntent::Surface(SurfaceIntent::SetSessionType {
+            workspace_id: Some(workspace_id.clone()),
+            surface_id: surface_id.clone(),
+            session: session.clone(),
+        }));
+    }
+    // Resolve the workspace's stable project identity (spec 1.4) and record
+    // this location as its most recent.
+    let project_id =
+        pandamux_core::assign_workspace_project(app, &workspace_id, crate::backend::now_ms());
     Ok(LaunchSuccess {
         workspace_id,
         pane_id,
         surface_id,
         reused_project: target.existing_workspace,
+        project_id,
     })
 }
 
@@ -137,6 +206,7 @@ pub fn launch_local(
     cwd: String,
     spawn_pty: bool,
     size: GridSize,
+    session: &SessionType,
 ) -> Result<LaunchSuccess, ProjectError> {
     let shell = resolve_powershell().ok_or_else(|| {
         ProjectError::new(
@@ -152,20 +222,18 @@ pub fn launch_local(
     };
     let target = prepare_launch(app, location)?;
     if spawn_pty {
-        let command = PtyCommand::new(shell.clone()).with_cwd(Some(cwd)).with_env(
-            crate::backend::pandamux_env(target.surface_id.as_str(), None),
-        );
+        let command = spawn_spec(session, &shell, Some(cwd), target.surface_id.as_str());
         ptys.spawn(target.surface_id.to_string(), &command, size)
             .map_err(|error| {
                 ProjectError::new(
                     "local_pty_start_failed",
                     ProjectErrorCategory::PtyStart,
-                    format!("start PowerShell Project: {error}"),
+                    format!("start local Project session: {error}"),
                     true,
                 )
             })?;
     }
-    match commit_prestarted(app, &target, &shell) {
+    match commit_prestarted(app, &target, &shell, session) {
         Ok(success) => Ok(success),
         Err(error) => {
             if spawn_pty {
@@ -186,6 +254,7 @@ pub fn launch_remote_blocking(
     trust_unknown_host: bool,
     spawn_pty: bool,
     size: GridSize,
+    session: &SessionType,
 ) -> Result<LaunchSuccess, ProjectError> {
     let location = ProjectLocation::Ssh {
         profile_id: profile.id.clone(),
@@ -209,8 +278,16 @@ pub fn launch_remote_blocking(
                     true,
                 )
             })?;
+        // Non-Terminal types: the session is Ready, type the tool command
+        // into the remote shell (explicit user-selected launch).
+        if let Some(command) = remote_initial_command(session) {
+            let _ = remotes.write_all(
+                target.surface_id.as_str(),
+                format!("{command}\n").as_bytes(),
+            );
+        }
     }
-    match commit_prestarted(app, &target, "ssh") {
+    match commit_prestarted(app, &target, "ssh", session) {
         Ok(success) => {
             remote_configs.insert(target.surface_id, config);
             Ok(success)
@@ -444,7 +521,7 @@ mod tests {
             },
         )
         .unwrap();
-        commit_prestarted(&mut app, &target, "pwsh.exe").unwrap();
+        commit_prestarted(&mut app, &target, "pwsh.exe", &SessionType::Terminal).unwrap();
         app.apply(AppIntent::Workspace(WorkspaceIntent::Rename {
             workspace_id: target.workspace_id.clone(),
             title: "Edited".to_string(),
@@ -477,7 +554,7 @@ mod tests {
                 shell: "pwsh.exe".to_string(),
             },
         };
-        assert!(commit_prestarted(&mut app, &target, "pwsh.exe").is_err());
+        assert!(commit_prestarted(&mut app, &target, "pwsh.exe", &SessionType::Terminal).is_err());
         assert_eq!(app, before);
     }
 

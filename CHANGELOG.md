@@ -7,7 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.44.0]
+## [0.45.0]
+
+### Added
+
+- **Sessions launch and restore with their tool.** A session's type (Claude, Codex, Gemini, PowerShell flavor, custom command) now drives what actually spawns: agents launch inside the shell so PATH shims resolve, restored agent tabs come back running their agent instead of a bare shell, SSH sessions type the tool command once the remote is ready, and agent panes spawned over the pipe are tagged with their type.
+- **Project identity is confirmed by git.** After a launch, PandaMUX reads the project's `.git/config` (locally or over SFTP with a 2 second budget, never blocking the launch) and attaches the normalized remote URL to the project's identity, automatically merging duplicate entries that turn out to be the same repository.
+- **Pipe/CLI parity for the new model**: `project.list` now returns registry-shaped entries (one per project identity with its sessions from every host nested), `project.create`/`project.add_session` accept a `session` type, and new methods `project.rename`, `project.merge`, `project.split`, `surface.rename`, `surface.set_session_type`, and `workspace.close_all` are available.
 
 ### Added
 

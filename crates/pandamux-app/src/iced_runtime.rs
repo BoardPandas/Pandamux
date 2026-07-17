@@ -5,10 +5,10 @@ use iced::{Element, Size, Subscription, Task, Theme, application, keyboard, stre
 use pandamux_core::{
     AgentRegistry, AppIntent, AppState, ClipboardConfig, Localizer, NewNotification,
     NotificationSource, Notifications, PaneId, PaneIntent, ProjectError, ProjectErrorCategory,
-    ProjectLocation, SidebarState, SplitDirection, SplitNode, SplitPaneParams, SshProfileId,
-    SshProfiles, SurfaceContents, SurfaceId, SurfaceIntent, SurfaceType, ThemeStore, UserSettings,
-    WorkspaceId, WorkspaceIntent, find_leaf, find_pane_id_for_surface, get_all_pane_ids,
-    parse_ghostty_theme,
+    ProjectId, ProjectIntent, ProjectLocation, ProjectMatcher, SessionType, SidebarState,
+    SplitDirection, SplitNode, SplitPaneParams, SshProfileId, SshProfiles, SurfaceContents,
+    SurfaceId, SurfaceIntent, SurfaceType, ThemeStore, UserSettings, WorkspaceId, WorkspaceIntent,
+    find_leaf, find_pane_id_for_surface, get_all_pane_ids, parse_ghostty_theme,
 };
 use pandamux_term::{
     DEFAULT_GRID_SIZE, GridSize, PtyCommand, PtySessionManager, RemoteSessionManager, RemoteStatus,
@@ -97,6 +97,9 @@ pub struct NativeShellRuntime {
     /// In-flight launch timings, reported on first output (spec 1.6). Also
     /// drives the "Starting..." feedback for young blank local sessions.
     timings: HashMap<SurfaceId, crate::latency::LaunchTimeline>,
+    /// Queued git-remote identity probes (spec 1.4), drained into async tasks
+    /// on the next tick so launch paths never block on IO.
+    pending_git_hints: Vec<(ProjectId, ProjectLocation, Option<SshConfig>)>,
     /// Saved SSH host profiles.
     ssh_profiles: SshProfiles,
     credential_cache: HashMap<SshProfileId, EphemeralCredential>,
@@ -136,6 +139,8 @@ pub struct NativeShellRuntime {
 struct PendingRemoteLaunch {
     target: LaunchTarget,
     config: SshConfig,
+    /// What to run once the remote PTY is ready (Terminal = nothing extra).
+    session: SessionType,
 }
 
 impl Default for NativeShellRuntime {
@@ -214,6 +219,7 @@ impl NativeShellRuntime {
             viewport_sizes: HashMap::new(),
             pending_resizes: HashMap::new(),
             timings: HashMap::new(),
+            pending_git_hints: Vec::new(),
             ssh_profiles,
             credential_cache: HashMap::new(),
             launcher: SessionLauncherViewState::default(),
@@ -447,7 +453,11 @@ impl NativeShellRuntime {
             })?;
         self.launcher.step = LauncherStep::Launching;
         self.launcher.launching = true;
-        self.pending_remote_launch = Some(PendingRemoteLaunch { target, config });
+        self.pending_remote_launch = Some(PendingRemoteLaunch {
+            target,
+            config,
+            session: SessionType::Terminal,
+        });
         Ok(())
     }
 
@@ -473,12 +483,23 @@ impl NativeShellRuntime {
                 path.clone(),
                 self.live_ptys,
                 size,
+                &SessionType::Terminal,
             )
             .map(|success| {
                 self.timings.insert(
                     success.surface_id,
                     crate::latency::LaunchTimeline::start("local shell"),
                 );
+                if let Some(project_id) = success.project_id {
+                    self.pending_git_hints.push((
+                        project_id,
+                        ProjectLocation::Local {
+                            cwd: path.clone(),
+                            shell: String::new(),
+                        },
+                        None,
+                    ));
+                }
                 self.profile_config.last_selected_local_folder = Some(path);
                 self.save_profiles();
                 if self.live_ptys {
@@ -510,8 +531,25 @@ impl NativeShellRuntime {
                     &mut self.app_state,
                     &pending.target,
                     "ssh",
+                    &pending.session,
                 ) {
-                    Ok(_) => {
+                    Ok(success) => {
+                        // Non-Terminal types: type the tool command into the
+                        // freshly ready remote shell (explicit user launch).
+                        if let Some(command) =
+                            crate::project_launcher::remote_initial_command(&pending.session)
+                        {
+                            let _ = self
+                                .remotes
+                                .write_all(id, format!("{command}\n").as_bytes());
+                        }
+                        if let Some(project_id) = success.project_id {
+                            self.pending_git_hints.push((
+                                project_id,
+                                pending.target.location.clone(),
+                                Some(pending.config.clone()),
+                            ));
+                        }
                         self.remote_configs
                             .insert(pending.target.surface_id.clone(), pending.config);
                         if let ProjectLocation::Ssh {
@@ -579,9 +617,10 @@ impl NativeShellRuntime {
                 match crate::project_launcher::launch_local(
                     &mut self.app_state,
                     &mut self.ptys,
-                    cwd,
+                    cwd.clone(),
                     self.live_ptys,
                     size,
+                    &SessionType::Terminal,
                 ) {
                     Err(error) => self.last_error = Some(error.message),
                     Ok(success) => {
@@ -589,6 +628,16 @@ impl NativeShellRuntime {
                             success.surface_id,
                             crate::latency::LaunchTimeline::start("local shell"),
                         );
+                        if let Some(project_id) = success.project_id {
+                            self.pending_git_hints.push((
+                                project_id,
+                                ProjectLocation::Local {
+                                    cwd,
+                                    shell: String::new(),
+                                },
+                                None,
+                            ));
+                        }
                         if self.live_ptys {
                             let _ = self.store.save_session(&self.app_state);
                         }
@@ -838,7 +887,7 @@ impl NativeShellRuntime {
             }
             ShellMessage::Tick => {
                 self.update_shell(ShellMessage::Tick);
-                self.settings_flush_task()
+                Task::batch([self.settings_flush_task(), self.drain_git_hint_tasks()])
             }
             ShellMessage::PollRequested => {
                 let cwd = self.focused_cwd();
@@ -1416,6 +1465,21 @@ impl NativeShellRuntime {
             ShellMessage::SettingsSaved(result) => {
                 if let Err(error) = result {
                     self.last_error = Some(format!("save settings: {error}"));
+                }
+            }
+            ShellMessage::GitRemoteDiscovered { project_id, url } => {
+                // Best-effort identity hint: attach the normalized remote as a
+                // matcher (may auto-merge machine-created duplicates).
+                if let Some(url) = url.as_deref().and_then(pandamux_core::normalize_git_remote) {
+                    let applied =
+                        self.app_state
+                            .apply(AppIntent::Project(ProjectIntent::AttachMatcher {
+                                project_id,
+                                matcher: ProjectMatcher::GitRemote { url },
+                            }));
+                    if applied.is_ok() && self.live_ptys {
+                        let _ = self.store.save_session(&self.app_state);
+                    }
                 }
             }
             ShellMessage::SplitFocused(direction) => {
@@ -2154,6 +2218,28 @@ impl NativeShellRuntime {
         )
     }
 
+    /// Turn queued git-remote probes into async tasks (spec 1.4). Each task
+    /// reads `.git/config` locally (tokio::fs) or over SFTP with a 2s timeout,
+    /// and reports back as `GitRemoteDiscovered`.
+    fn drain_git_hint_tasks(&mut self) -> Task<ShellMessage> {
+        if self.pending_git_hints.is_empty() {
+            return Task::none();
+        }
+        let pending = std::mem::take(&mut self.pending_git_hints);
+        let tasks: Vec<Task<ShellMessage>> = pending
+            .into_iter()
+            .map(|(project_id, location, config)| {
+                Task::perform(fetch_git_remote(location, config), move |url| {
+                    ShellMessage::GitRemoteDiscovered {
+                        project_id: project_id.clone(),
+                        url,
+                    }
+                })
+            })
+            .collect();
+        Task::batch(tasks)
+    }
+
     /// Synchronous flush used on window close (the async task would race the
     /// process exit).
     fn save_settings_now(&mut self) {
@@ -2217,7 +2303,8 @@ impl NativeShellRuntime {
 
         let mut expected_session_ids = HashSet::new();
         for workspace in &self.app_state.workspaces {
-            for surface_id in terminal_surface_ids(&workspace.split_tree) {
+            for surface in crate::backend::terminal_surfaces(&workspace.split_tree) {
+                let surface_id = surface.id.clone();
                 let session_id = surface_id.to_string();
                 if let ProjectLocation::Ssh {
                     profile_id,
@@ -2267,12 +2354,22 @@ impl NativeShellRuntime {
                 if self.ptys.has(&session_id) {
                     continue;
                 }
+                // Session-type-aware respawn: a restored Claude tab comes back
+                // as Claude, not a bare shell (spec 2.2).
+                let session = surface.session.clone().unwrap_or_default();
                 let command = match &workspace.project.location {
-                    ProjectLocation::Local { cwd, shell } => PtyCommand::new(shell.clone())
-                        .with_cwd(Some(cwd.clone()))
-                        .with_env(crate::backend::pandamux_env(&session_id, None)),
-                    ProjectLocation::Legacy => PtyCommand::new(workspace.shell.clone())
-                        .with_env(crate::backend::pandamux_env(&session_id, None)),
+                    ProjectLocation::Local { cwd, shell } => crate::project_launcher::spawn_spec(
+                        &session,
+                        shell,
+                        Some(cwd.clone()),
+                        &session_id,
+                    ),
+                    ProjectLocation::Legacy => crate::project_launcher::spawn_spec(
+                        &session,
+                        &workspace.shell,
+                        None,
+                        &session_id,
+                    ),
                     ProjectLocation::Ssh { .. } => unreachable!(),
                 };
                 let size = self.spawn_size(&surface_id);
@@ -2914,6 +3011,32 @@ fn fallback_terminal_snapshots(app_state: &AppState) -> Vec<TerminalSnapshot> {
         &mut HashMap::new(),
     )
     .unwrap_or_default()
+}
+
+/// Read a project's git remote URL for identity matching (spec 1.4). Local
+/// checkouts read `.git/config` via tokio::fs; SSH checkouts read it over a
+/// fresh SFTP session with a 2 second budget. Always best-effort.
+async fn fetch_git_remote(location: ProjectLocation, config: Option<SshConfig>) -> Option<String> {
+    match location {
+        ProjectLocation::Local { cwd, .. } => {
+            let path = std::path::Path::new(&cwd).join(".git").join("config");
+            let text = tokio::fs::read_to_string(path).await.ok()?;
+            pandamux_core::parse_git_remote_url(&text)
+        }
+        ProjectLocation::Ssh { remote_cwd, .. } => {
+            let config = config?;
+            let path = format!("{}/.git/config", remote_cwd.trim_end_matches('/'));
+            let text = tokio::time::timeout(
+                Duration::from_secs(2),
+                pandamux_term::read_remote_file(config, path, 64 * 1024),
+            )
+            .await
+            .ok()?
+            .ok()?;
+            pandamux_core::parse_git_remote_url(&text)
+        }
+        ProjectLocation::Legacy => None,
+    }
 }
 
 /// Short display name for a shell program path ("C:\\...\\pwsh.exe" -> "pwsh").

@@ -131,6 +131,12 @@ pub enum ShellMessage {
     TerminalSettingToggled(crate::settings::TerminalToggle),
     /// A debounced async settings save completed (Err surfaces in the status).
     SettingsSaved(Result<(), String>),
+    /// The async git-remote probe for a freshly launched project finished
+    /// (spec 1.4 identity hint; `None` when no remote could be read).
+    GitRemoteDiscovered {
+        project_id: pandamux_core::ProjectId,
+        url: Option<String>,
+    },
     // Status-bar pollers (git / ports)
     /// Timer tick asking the runtime to kick off a background poll.
     PollRequested,

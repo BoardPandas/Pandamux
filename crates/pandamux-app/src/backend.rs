@@ -791,6 +791,14 @@ fn spawn_agent(
         }
     };
 
+    // Tag the surface with its session type so restores and the rail/type
+    // grouping see the agent as an agent (spec 2.2).
+    let _ = app.apply(AppIntent::Surface(SurfaceIntent::SetSessionType {
+        workspace_id: Some(workspace_id.clone()),
+        surface_id: surface_id.clone(),
+        session: session_type_for_command(&command),
+    }));
+
     // Mint the id before spawning so the child carries PANDAMUX_AGENT_ID (the
     // orchestrator's on-agent-stop / on-tool-use hooks key per-agent state on it).
     let agent_id = agents.next_id();
@@ -831,6 +839,28 @@ pub(crate) fn pandamux_env(surface_id: &str, agent_id: Option<&str>) -> Vec<(Str
         env.push(("PANDAMUX_AGENT_ID".to_string(), agent_id.to_string()));
     }
     env
+}
+
+/// Classify an agent command line into a session type for badges/restores.
+fn session_type_for_command(command: &str) -> pandamux_core::SessionType {
+    let program = command
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or("")
+        .trim_end_matches(".exe")
+        .trim_end_matches(".cmd")
+        .to_ascii_lowercase();
+    match program.as_str() {
+        "claude" => pandamux_core::SessionType::Claude,
+        "codex" => pandamux_core::SessionType::Codex,
+        "gemini" => pandamux_core::SessionType::Gemini,
+        _ => pandamux_core::SessionType::Custom {
+            command: command.to_string(),
+        },
+    }
 }
 
 /// Parse a command line into a `PtyCommand` (naive whitespace split; quoting is
@@ -920,12 +950,32 @@ fn dispatch_projects(
     spawn_ptys: bool,
 ) -> Result<Option<Value>, (i32, String)> {
     match request.method.as_str() {
+        // Registry-shaped listing (spec 1.4): one entry per project identity,
+        // its workspaces nested (sessions from any host group under it).
+        // Legacy workspaces without an identity are listed separately.
         "project.list" => Ok(Some(json!({
-            "projects": app.workspaces.iter().map(|workspace| json!({
-                "workspaceId": workspace.id,
-                "title": workspace.title,
-                "location": workspace.project.location,
-            })).collect::<Vec<_>>()
+            "projects": app.projects.iter().map(|record| json!({
+                "projectId": record.id,
+                "name": record.name,
+                "manual": record.manual,
+                "matchers": record.matchers,
+                "workspaces": app.workspaces.iter()
+                    .filter(|workspace| workspace.project_id.as_ref() == Some(&record.id))
+                    .map(|workspace| json!({
+                        "workspaceId": workspace.id,
+                        "title": workspace.title,
+                        "location": workspace.project.location,
+                    }))
+                    .collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+            "unassignedWorkspaces": app.workspaces.iter()
+                .filter(|workspace| workspace.project_id.is_none())
+                .map(|workspace| json!({
+                    "workspaceId": workspace.id,
+                    "title": workspace.title,
+                    "location": workspace.project.location,
+                }))
+                .collect::<Vec<_>>(),
         }))),
         "project.create" => {
             let location_value = request
@@ -935,6 +985,7 @@ fn dispatch_projects(
                 .unwrap_or_else(|| request.params.clone());
             let location: ProjectLocation = serde_json::from_value(location_value)
                 .map_err(|error| (-32602, format!("invalid Project location: {error}")))?;
+            let session = session_type_param(&request.params)?;
             let result = launch_project_location(
                 app,
                 ptys,
@@ -948,6 +999,7 @@ fn dispatch_projects(
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
                 spawn_ptys,
+                &session,
             );
             Ok(Some(project_launch_result(result)))
         }
@@ -967,6 +1019,7 @@ fn dispatch_projects(
                     true,
                 ))));
             }
+            let session = session_type_param(&request.params)?;
             let result = launch_project_location(
                 app,
                 ptys,
@@ -976,6 +1029,7 @@ fn dispatch_projects(
                 location,
                 false,
                 spawn_ptys,
+                &session,
             );
             Ok(Some(project_launch_result(result)))
         }
@@ -1032,11 +1086,17 @@ fn launch_project_location(
     location: ProjectLocation,
     trust_unknown_host: bool,
     spawn_ptys: bool,
+    session: &pandamux_core::SessionType,
 ) -> Result<crate::project_launcher::LaunchSuccess, ProjectError> {
     match location {
-        ProjectLocation::Local { cwd, .. } => {
-            crate::project_launcher::launch_local(app, ptys, cwd, spawn_ptys, DEFAULT_GRID_SIZE)
-        }
+        ProjectLocation::Local { cwd, .. } => crate::project_launcher::launch_local(
+            app,
+            ptys,
+            cwd,
+            spawn_ptys,
+            DEFAULT_GRID_SIZE,
+            session,
+        ),
         ProjectLocation::Ssh {
             profile_id,
             remote_cwd,
@@ -1059,6 +1119,7 @@ fn launch_project_location(
                 trust_unknown_host,
                 spawn_ptys,
                 DEFAULT_GRID_SIZE,
+                session,
             )
         }
         ProjectLocation::Legacy => Err(ProjectError::new(
@@ -1654,8 +1715,55 @@ fn intent_for_request(request: &RpcRequest) -> Result<AppIntent, (i32, String)> 
             workspace_id: opt_id(&request.params, "workspaceId"),
             pane_id: opt_id(&request.params, "paneId"),
         })),
+        "surface.rename" => Ok(AppIntent::Surface(SurfaceIntent::Rename {
+            workspace_id: opt_id(&request.params, "workspaceId"),
+            surface_id: required_id(&request.params, &["id", "surfaceId"])?,
+            name: opt_string(&request.params, "name"),
+        })),
+        "surface.set_session_type" => Ok(AppIntent::Surface(SurfaceIntent::SetSessionType {
+            workspace_id: opt_id(&request.params, "workspaceId"),
+            surface_id: required_id(&request.params, &["id", "surfaceId"])?,
+            session: session_type_param(&request.params)?,
+        })),
+        "workspace.close_all" => Ok(AppIntent::Workspace(WorkspaceIntent::CloseAll {
+            project_id: opt_id(&request.params, "projectId"),
+        })),
+        "project.registry" => Ok(AppIntent::Project(pandamux_core::ProjectIntent::List)),
+        "project.rename" => Ok(AppIntent::Project(pandamux_core::ProjectIntent::Rename {
+            project_id: required_id(&request.params, &["id", "projectId"])?,
+            name: opt_string(&request.params, "name")
+                .ok_or_else(|| (-32602, "project.rename requires name".to_string()))?,
+        })),
+        "project.merge" => Ok(AppIntent::Project(pandamux_core::ProjectIntent::Merge {
+            source: required_id(&request.params, &["source", "sourceProjectId"])?,
+            target: required_id(&request.params, &["target", "targetProjectId"])?,
+        })),
+        "project.split" => Ok(AppIntent::Project(pandamux_core::ProjectIntent::Split {
+            workspace_id: required_id(&request.params, &["workspaceId", "id"])?,
+        })),
         _ => Err((-32601, format!("Method not found: {}", request.method))),
     }
+}
+
+/// Parse an optional session type from params ("session": tagged object or a
+/// plain string like "claude"). Missing means Terminal.
+fn session_type_param(params: &Value) -> Result<pandamux_core::SessionType, (i32, String)> {
+    let Some(value) = params.get("session").or_else(|| params.get("sessionType")) else {
+        return Ok(pandamux_core::SessionType::default());
+    };
+    if let Some(short) = value.as_str() {
+        return Ok(match short {
+            "terminal" => pandamux_core::SessionType::Terminal,
+            "claude" => pandamux_core::SessionType::Claude,
+            "codex" => pandamux_core::SessionType::Codex,
+            "gemini" => pandamux_core::SessionType::Gemini,
+            other => {
+                return Err((-32602, format!("unknown session type: {other}")));
+            }
+        });
+    }
+    serde_json::from_value(value.clone())
+        .map_err(|error| (-32602, format!("invalid session type: {error}")))
 }
 
 fn split_pane_params(params: &Value) -> Result<SplitPaneParams, (i32, String)> {
@@ -1965,8 +2073,8 @@ pub fn sync_terminal_sessions(
 
     let mut expected_session_ids = HashSet::new();
     for workspace in &app.workspaces {
-        for surface_id in terminal_surface_ids(&workspace.split_tree) {
-            let session_id = surface_id.to_string();
+        for surface in terminal_surfaces(&workspace.split_tree) {
+            let session_id = surface.id.to_string();
             if matches!(workspace.project.location, ProjectLocation::Ssh { .. }) {
                 continue;
             }
@@ -1978,12 +2086,22 @@ pub fn sync_terminal_sessions(
             if ptys.has(&session_id) {
                 continue;
             }
+            // Session-type-aware respawn: a restored Claude tab comes back as
+            // Claude, not a bare shell (spec 2.2).
+            let session = surface.session.clone().unwrap_or_default();
             let command = match &workspace.project.location {
-                ProjectLocation::Local { cwd, shell } => PtyCommand::new(shell.clone())
-                    .with_cwd(Some(cwd.clone()))
-                    .with_env(pandamux_env(&session_id, None)),
-                ProjectLocation::Legacy => PtyCommand::new(workspace.shell.clone())
-                    .with_env(pandamux_env(&session_id, None)),
+                ProjectLocation::Local { cwd, shell } => crate::project_launcher::spawn_spec(
+                    &session,
+                    shell,
+                    Some(cwd.clone()),
+                    &session_id,
+                ),
+                ProjectLocation::Legacy => crate::project_launcher::spawn_spec(
+                    &session,
+                    &workspace.shell,
+                    None,
+                    &session_id,
+                ),
                 ProjectLocation::Ssh { .. } => unreachable!(),
             };
             ptys.spawn(session_id, &command, DEFAULT_GRID_SIZE)
@@ -2021,17 +2139,26 @@ pub fn sync_remote_sessions(
 }
 
 pub fn terminal_surface_ids(tree: &SplitNode) -> Vec<SurfaceId> {
+    terminal_surfaces(tree)
+        .into_iter()
+        .map(|surface| surface.id)
+        .collect()
+}
+
+/// Every terminal [`pandamux_core::SurfaceRef`] in the tree, depth-first.
+/// Carries the session type + name so respawn paths restore agents as agents.
+pub fn terminal_surfaces(tree: &SplitNode) -> Vec<pandamux_core::SurfaceRef> {
     match tree {
         SplitNode::Leaf(leaf) => leaf
             .surfaces
             .iter()
             .filter(|surface| surface.surface_type == SurfaceType::Terminal)
-            .map(|surface| surface.id.clone())
+            .cloned()
             .collect(),
         SplitNode::Branch(branch) => {
-            let mut ids = terminal_surface_ids(&branch.children[0]);
-            ids.extend(terminal_surface_ids(&branch.children[1]));
-            ids
+            let mut surfaces = terminal_surfaces(&branch.children[0]);
+            surfaces.extend(terminal_surfaces(&branch.children[1]));
+            surfaces
         }
     }
 }
@@ -2124,6 +2251,94 @@ mod tests {
     fn handles_v1_ping() {
         let mut backend = Backend::new(false);
         assert_eq!(backend.handle_line("ping"), "pong");
+    }
+
+    #[test]
+    fn project_rpc_registry_rename_and_surface_rename() {
+        let mut backend = Backend::new(false);
+        // Build a project workspace directly: the local launch path needs a
+        // real shell on the box, and the surface under test here is the
+        // registry + rename RPC, not spawning.
+        let workspace_id = WorkspaceId::generate();
+        let surface_id = SurfaceId::generate();
+        backend
+            .app
+            .apply(AppIntent::Workspace(WorkspaceIntent::CreateProject {
+                workspace_id: workspace_id.clone(),
+                pane_id: PaneId::generate(),
+                surface_id: surface_id.clone(),
+                title: "Repo".to_string(),
+                shell: "pwsh".to_string(),
+                project: pandamux_core::ProjectSpec {
+                    location: ProjectLocation::Local {
+                        cwd: "C:\\Dev\\Repo".to_string(),
+                        shell: "pwsh".to_string(),
+                    },
+                },
+            }))
+            .expect("create project workspace");
+        pandamux_core::ensure_project_registry(&mut backend.app, 1);
+
+        // project.list is registry-shaped: one project entry with a name and
+        // its workspaces nested.
+        let parsed = handle(
+            &mut backend,
+            r#"{"method":"project.list","params":{},"id":2}"#,
+        );
+        let projects = parsed["result"]["projects"].as_array().unwrap().clone();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0]["name"], "Repo");
+        let project_id = projects[0]["projectId"].as_str().unwrap().to_string();
+        assert_eq!(projects[0]["workspaces"].as_array().unwrap().len(), 1);
+
+        // Rename the project and the surface over the pipe.
+        let parsed = handle(
+            &mut backend,
+            &format!(
+                r#"{{"method":"project.rename","params":{{"projectId":"{project_id}","name":"Better Name"}},"id":3}}"#
+            ),
+        );
+        assert_eq!(parsed["result"]["ok"], true, "reply = {parsed}");
+        assert_eq!(backend.app.projects[0].name, "Better Name");
+        assert!(backend.app.projects[0].manual);
+
+        let parsed = handle(
+            &mut backend,
+            &format!(
+                r#"{{"method":"surface.rename","params":{{"surfaceId":"{surface_id}","name":"Claude: auth"}},"id":4}}"#
+            ),
+        );
+        assert_eq!(parsed["result"]["ok"], true, "reply = {parsed}");
+
+        // surface.set_session_type tags the surface (short string form).
+        let parsed = handle(
+            &mut backend,
+            &format!(
+                r#"{{"method":"surface.set_session_type","params":{{"surfaceId":"{surface_id}","session":"claude"}},"id":5}}"#
+            ),
+        );
+        assert_eq!(parsed["result"]["ok"], true, "reply = {parsed}");
+        let workspace = backend.app.workspace(&workspace_id).unwrap();
+        let surfaces = terminal_surfaces(&workspace.split_tree);
+        assert_eq!(surfaces[0].name.as_deref(), Some("Claude: auth"));
+        assert_eq!(
+            surfaces[0].session,
+            Some(pandamux_core::SessionType::Claude)
+        );
+    }
+
+    #[test]
+    fn workspace_close_all_over_the_pipe_reaches_empty_state() {
+        let mut backend = Backend::new(false);
+        let parsed = handle(
+            &mut backend,
+            r#"{"method":"workspace.close_all","params":{},"id":1}"#,
+        );
+        assert_eq!(parsed["result"]["ok"], true);
+        assert!(backend.app.workspaces.is_empty());
+        // Follow-up calls error cleanly, never panic.
+        let parsed = handle(&mut backend, r#"{"method":"pane.list","params":{},"id":2}"#);
+        assert_eq!(parsed["error"]["code"], -32000);
     }
 
     #[test]

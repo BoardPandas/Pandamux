@@ -21,5 +21,5 @@ pub use session::PtySessionManager;
 pub use shell::{ShellType, chunk_write, resolve_powershell, resolve_shell, shell_type};
 pub use ssh::{
     RemoteFolderEntry, RemoteFolderListing, RemoteSessionManager, RemoteStatus, SshAuth, SshConfig,
-    SshErrorCategory, SshFailure, browse_remote_folders,
+    SshErrorCategory, SshFailure, browse_remote_folders, read_remote_file,
 };

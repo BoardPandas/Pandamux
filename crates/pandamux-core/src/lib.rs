@@ -27,9 +27,9 @@ pub use project::{
     strip_windows_verbatim,
 };
 pub use project_registry::{
-    ProjectMatcher, ProjectRecord, ProjectResolution, ensure_project_registry,
-    normalize_folder_name, normalize_git_remote, parse_git_remote_url, record_location,
-    resolve_project_id,
+    ProjectMatcher, ProjectRecord, ProjectResolution, assign_workspace_project,
+    ensure_project_registry, normalize_folder_name, normalize_git_remote, parse_git_remote_url,
+    record_location, resolve_project_id,
 };
 pub use protocol::{RpcError, RpcRequest, RpcResponse};
 pub use settings::{
