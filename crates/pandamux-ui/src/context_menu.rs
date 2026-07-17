@@ -155,6 +155,90 @@ fn menu_row<'a>(
     row.into()
 }
 
+// ---------------------------------------------------------------------------
+// Session-rail actions menu (spec 2.1 / 1.4)
+// ---------------------------------------------------------------------------
+
+/// An action from the rail's right-click menu (session rows and project
+/// headers). Rendered as a small centered card: rail rows have no cursor
+/// coordinates, and a centered mini-menu stays fully keyboard/mouse usable.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RailMenuAction {
+    RenameSession {
+        workspace_id: pandamux_core::WorkspaceId,
+        surface_id: SurfaceId,
+    },
+    DetachSession {
+        workspace_id: pandamux_core::WorkspaceId,
+    },
+    CloseSession {
+        workspace_id: pandamux_core::WorkspaceId,
+        surface_id: SurfaceId,
+    },
+    RenameProject {
+        project_id: pandamux_core::ProjectId,
+    },
+    MergeProject {
+        source: pandamux_core::ProjectId,
+        target: pandamux_core::ProjectId,
+    },
+    CloseAllInProject {
+        project_id: pandamux_core::ProjectId,
+    },
+}
+
+/// The open rail menu: a title plus its action rows (built by the runtime,
+/// which knows the registry for merge targets).
+#[derive(Clone, Debug, PartialEq)]
+pub struct RailMenuViewState {
+    pub title: String,
+    pub items: Vec<(String, RailMenuAction)>,
+}
+
+/// Centered mini-menu over a dismissing scrim.
+pub fn rail_menu_layer<'a>(
+    state: &'a RailMenuViewState,
+    palette: Palette,
+) -> Element<'a, ShellMessage> {
+    let mut rows = column![
+        text(state.title.clone())
+            .size(theme::SIZE_SECONDARY)
+            .color(palette.t3)
+    ]
+    .spacing(2)
+    .padding(MENU_PADDING)
+    .width(Length::Fixed(240.0));
+    for (label, action) in &state.items {
+        let action = action.clone();
+        rows = rows.push(
+            button(text(label.clone()).size(theme::SIZE_BODY).color(palette.t1))
+                .width(Length::Fill)
+                .padding(Padding::from([6.0, 10.0]))
+                .on_press(ShellMessage::RailMenuAction(action))
+                .style(move |_theme, status| {
+                    let hovered =
+                        matches!(status, button::Status::Hovered | button::Status::Pressed);
+                    button::Style {
+                        background: hovered.then(|| palette.ov(0.08).into()),
+                        text_color: palette.t1,
+                        border: theme::border(iced::Color::TRANSPARENT, 0.0, theme::RADIUS_ROW),
+                        ..button::Style::default()
+                    }
+                }),
+        );
+    }
+    let card = container(rows).style(move |_theme| overlay_card_style(palette));
+    let centered = container(card)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(iced::Alignment::Center)
+        .align_y(iced::Alignment::Center);
+    mouse_area(centered)
+        .on_press(ShellMessage::RailMenuDismissed)
+        .on_right_press(ShellMessage::RailMenuDismissed)
+        .into()
+}
+
 fn separator<'a>(palette: Palette) -> Element<'a, ShellMessage> {
     let line = container(Space::new().width(Length::Fill).height(Length::Fixed(1.0))).style(
         move |_theme| container::Style {

@@ -25,13 +25,15 @@ pub mod shell_projection;
 pub mod theme;
 
 #[cfg(feature = "iced-runtime")]
-pub use chrome::{ChromeState, Overlay, RailItem, SessionActivity};
+pub use chrome::{ChromeState, MainView, Overlay, RailItem, SessionActivity};
 #[cfg(feature = "iced-runtime")]
 pub use command_palette::{
     PaletteItem, PaletteViewState, QuickLaunchProfile, QuickLaunchViewState, filter_items,
 };
 #[cfg(feature = "iced-runtime")]
-pub use context_menu::{ContextMenuAction, ContextMenuViewState};
+pub use context_menu::{
+    ContextMenuAction, ContextMenuViewState, RailMenuAction, RailMenuViewState,
+};
 #[cfg(feature = "iced-runtime")]
 pub use iced_shell::{
     DragView, LinkSpan, ShellMessage, ShellViewModel, TerminalSnapshot, app_view, shell_view,
@@ -50,7 +52,7 @@ pub use session_launcher::{
 #[cfg(feature = "iced-runtime")]
 pub use session_panel::{
     SessionEntry, SessionGroup, SessionGrouping, SessionsViewState, project_sessions,
-    project_sessions_with_profiles, session_panel,
+    project_sessions_with_profiles, session_panel, terminal_surfaces,
 };
 #[cfg(feature = "iced-runtime")]
 pub use settings::{SettingsSection, SettingsViewState, TerminalToggle};

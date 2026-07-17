@@ -86,8 +86,27 @@ pub enum ShellMessage {
         surface_id: SurfaceId,
     },
     SessionGroupingChanged(SessionGrouping),
+    /// Switch the main area to the Home dashboard (spec 2.4/2.5).
+    HomeRequested,
     NewSessionRequested,
     ProjectSessionRequested(WorkspaceId),
+    /// Right-click on a session row / project header: open the actions menu.
+    SessionContextRequested {
+        workspace_id: WorkspaceId,
+        surface_id: SurfaceId,
+    },
+    ProjectContextRequested(pandamux_core::ProjectId),
+    RailMenuAction(crate::context_menu::RailMenuAction),
+    RailMenuDismissed,
+    /// Inline session rename lifecycle (spec 2.1).
+    SessionRenameEdited(String),
+    SessionRenameCommitted,
+    /// Inline project rename lifecycle (spec 1.4 manual path).
+    ProjectRenameEdited(String),
+    ProjectRenameCommitted,
+    /// Close every session of a project (or everything when None). Spec 1.5;
+    /// the confirm gate lands with the empty-state stage.
+    CloseAllRequested(Option<pandamux_core::ProjectId>),
     // Overlays (command palette / quick-launch / settings)
     /// Dismiss whatever centered overlay is open (backdrop click / Esc).
     OverlayDismissed,
@@ -361,6 +380,8 @@ pub struct ShellViewModel {
     pub surface_term_schemes: HashMap<SurfaceId, TermScheme>,
     /// The open right-click context menu, if any (spec 1.3).
     pub context_menu: Option<crate::context_menu::ContextMenuViewState>,
+    /// The open session-rail actions menu, if any (spec 2.1/1.4).
+    pub rail_menu: Option<crate::context_menu::RailMenuViewState>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1108,7 +1129,10 @@ pub fn app_view(model: &ShellViewModel) -> Element<'_, ShellMessage> {
     if model.sessions.open {
         body = body.push(session_panel::session_panel(&model.sessions, palette));
     }
-    body = body.push(workspace_view(model, palette));
+    body = body.push(match model.chrome.main_view {
+        chrome::MainView::Workspace => workspace_view(model, palette),
+        chrome::MainView::Home => home_placeholder_view(palette),
+    });
 
     let mut root = column![chrome::titlebar(&model.chrome, palette), body]
         .width(Length::Fill)
@@ -1159,7 +1183,10 @@ pub fn app_view(model: &ShellViewModel) -> Element<'_, ShellMessage> {
         }
     }
 
-    // The right-click context menu sits above every other overlay.
+    // The right-click context menus sit above every other overlay.
+    if let Some(menu) = &model.rail_menu {
+        layers = layers.push(crate::context_menu::rail_menu_layer(menu, palette));
+    }
     if let Some(menu) = &model.context_menu {
         layers = layers.push(crate::context_menu::context_menu_layer(menu, palette));
     }
@@ -1180,6 +1207,28 @@ pub fn app_view(model: &ShellViewModel) -> Element<'_, ShellMessage> {
 /// The pane workspace only (used by tests and the headless smoke path).
 pub fn shell_view(model: &ShellViewModel) -> Element<'_, ShellMessage> {
     workspace_view(model, model.chrome.palette())
+}
+
+/// Placeholder for the Home dashboard main area (the pinned cross-project
+/// split view lands in the Home stage; the view switch is already real).
+fn home_placeholder_view<'a>(palette: Palette) -> Element<'a, ShellMessage> {
+    let body = column![
+        text("Home")
+            .size(theme::SIZE_TITLE)
+            .font(theme::ui(iced::font::Weight::Semibold))
+            .color(palette.t1),
+        text("Your pinned cross-project dashboard arrives here: pin sessions from any project and they all stay visible at once.")
+            .size(theme::SIZE_BODY)
+            .color(palette.t3),
+    ]
+    .spacing(8)
+    .max_width(420.0);
+    container(body)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(Alignment::Center)
+        .align_y(Alignment::Center)
+        .into()
 }
 
 fn workspace_view<'a>(model: &'a ShellViewModel, palette: Palette) -> Element<'a, ShellMessage> {
@@ -1757,6 +1806,7 @@ mod tests {
             term_scheme: TermScheme::default(),
             surface_term_schemes: HashMap::new(),
             context_menu: None,
+            rail_menu: None,
         }
     }
 

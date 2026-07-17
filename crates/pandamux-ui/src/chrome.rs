@@ -48,6 +48,15 @@ pub enum Overlay {
     Settings,
 }
 
+/// What the main area shows: the active workspace's split view, or the Home
+/// dashboard (spec 2.4/2.5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum MainView {
+    #[default]
+    Workspace,
+    Home,
+}
+
 /// Activity state of the focused session, driving the status-bar dot color
 /// (running = accent, busy-agent = gold, idle = dim), mirroring the Electron
 /// `shellState` + Claude-activity signal.
@@ -70,8 +79,10 @@ pub struct ChromeState {
     pub active_session_name: String,
     /// Whether the 264px session panel is shown (toggled by the Sessions rail).
     pub session_panel_open: bool,
-    /// Current session-panel grouping (Project / Type / Host).
+    /// Current session-panel grouping (Projects / Type).
     pub session_grouping: SessionGrouping,
+    /// Whether the main area shows the workspace or the Home dashboard.
+    pub main_view: MainView,
     /// The currently open centered overlay (palette / quick-launch / settings).
     pub active_overlay: Overlay,
     pub unread_notifications: bool,
@@ -100,6 +111,7 @@ impl Default for ChromeState {
             active_session_name: "Workspace".to_string(),
             session_panel_open: true,
             session_grouping: SessionGrouping::default(),
+            main_view: MainView::default(),
             active_overlay: Overlay::None,
             unread_notifications: false,
             activity: SessionActivity::Idle,

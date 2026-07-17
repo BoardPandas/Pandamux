@@ -17,10 +17,11 @@ use pandamux_term::{
 };
 use pandamux_ui::{
     Accent, ChromeState, ContextMenuAction, ContextMenuViewState, DragView, FindViewState,
-    LauncherStep, LinkSpan, NotificationCard, NotificationsViewState, Overlay, PaletteItem,
-    PaletteViewState, QuickLaunchViewState, RailItem, SessionActivity, SessionLauncherViewState,
-    SessionsViewState, SettingsSection, SettingsViewState, ShellKind, ShellMessage, ShellViewModel,
-    SshProfileForm, TermScheme, TerminalSnapshot, TerminalToggle, UiTheme, app_view, filter_items,
+    LauncherStep, LinkSpan, MainView, NotificationCard, NotificationsViewState, Overlay,
+    PaletteItem, PaletteViewState, QuickLaunchViewState, RailItem, RailMenuAction,
+    RailMenuViewState, SessionActivity, SessionLauncherViewState, SessionsViewState,
+    SettingsSection, SettingsViewState, ShellKind, ShellMessage, ShellViewModel, SshProfileForm,
+    TermScheme, TerminalSnapshot, TerminalToggle, UiTheme, app_view, filter_items,
     project_sessions_with_profiles, project_workspace_shell, shell_view,
 };
 use std::collections::{HashMap, HashSet};
@@ -113,6 +114,12 @@ pub struct NativeShellRuntime {
     drag: Option<DragView>,
     /// The open right-click context menu, if any (spec 1.3).
     context_menu: Option<ContextMenuViewState>,
+    /// The open session-rail actions menu, if any (spec 2.1/1.4).
+    rail_menu: Option<RailMenuViewState>,
+    /// In-flight session rename: (workspace, surface, input text).
+    session_rename: Option<(WorkspaceId, SurfaceId, String)>,
+    /// In-flight project rename: (project, input text).
+    project_rename: Option<(ProjectId, String)>,
     copy_mode: bool,
     /// Command-palette state (query + selection persist across refreshes; items
     /// are rebuilt each refresh).
@@ -229,6 +236,9 @@ impl NativeShellRuntime {
             clipboard_config: ClipboardConfig::default(),
             drag: None,
             context_menu: None,
+            rail_menu: None,
+            session_rename: None,
+            project_rename: None,
             copy_mode: false,
             palette: PaletteViewState::default(),
             settings_section: SettingsSection::default(),
@@ -1119,8 +1129,161 @@ impl NativeShellRuntime {
                     });
                 self.last_error = result.err();
             }
+            ShellMessage::HomeRequested => {
+                self.chrome.main_view = MainView::Home;
+            }
+            ShellMessage::SessionContextRequested {
+                workspace_id,
+                surface_id,
+            } => {
+                let project_id = self
+                    .app_state
+                    .workspace(&workspace_id)
+                    .and_then(|workspace| workspace.project_id.clone());
+                let mut items = vec![
+                    (
+                        "Rename session".to_string(),
+                        RailMenuAction::RenameSession {
+                            workspace_id: workspace_id.clone(),
+                            surface_id: surface_id.clone(),
+                        },
+                    ),
+                    (
+                        "Close session".to_string(),
+                        RailMenuAction::CloseSession {
+                            workspace_id: workspace_id.clone(),
+                            surface_id,
+                        },
+                    ),
+                ];
+                // Detach makes sense only when the project has other workspaces
+                // to stay behind (the manual undo for a wrong merge).
+                let siblings = self
+                    .app_state
+                    .workspaces
+                    .iter()
+                    .filter(|workspace| project_id.is_some() && workspace.project_id == project_id)
+                    .count();
+                if siblings > 1 {
+                    items.insert(
+                        1,
+                        (
+                            "Detach into its own project".to_string(),
+                            RailMenuAction::DetachSession { workspace_id },
+                        ),
+                    );
+                }
+                self.rail_menu = Some(RailMenuViewState {
+                    title: "Session".to_string(),
+                    items,
+                });
+            }
+            ShellMessage::ProjectContextRequested(project_id) => {
+                let name = self
+                    .app_state
+                    .projects
+                    .iter()
+                    .find(|record| record.id == project_id)
+                    .map(|record| record.name.clone())
+                    .unwrap_or_else(|| "Project".to_string());
+                let mut items = vec![(
+                    "Rename project".to_string(),
+                    RailMenuAction::RenameProject {
+                        project_id: project_id.clone(),
+                    },
+                )];
+                for record in self
+                    .app_state
+                    .projects
+                    .iter()
+                    .filter(|record| record.id != project_id)
+                    .take(6)
+                {
+                    items.push((
+                        format!("Merge into {}", record.name),
+                        RailMenuAction::MergeProject {
+                            source: project_id.clone(),
+                            target: record.id.clone(),
+                        },
+                    ));
+                }
+                items.push((
+                    "Close all sessions in project".to_string(),
+                    RailMenuAction::CloseAllInProject { project_id },
+                ));
+                self.rail_menu = Some(RailMenuViewState { title: name, items });
+            }
+            ShellMessage::RailMenuDismissed => {
+                self.rail_menu = None;
+            }
+            ShellMessage::RailMenuAction(action) => {
+                self.rail_menu = None;
+                self.run_rail_menu_action(action);
+            }
+            ShellMessage::SessionRenameEdited(value) => {
+                if let Some((_, _, text)) = &mut self.session_rename {
+                    *text = value;
+                }
+            }
+            ShellMessage::SessionRenameCommitted => {
+                if let Some((workspace_id, surface_id, value)) = self.session_rename.take() {
+                    let name = Some(value).filter(|value| !value.trim().is_empty());
+                    let _ = self
+                        .app_state
+                        .apply(AppIntent::Surface(SurfaceIntent::Rename {
+                            workspace_id: Some(workspace_id),
+                            surface_id,
+                            name,
+                        }));
+                    if self.live_ptys {
+                        let _ = self.store.save_session(&self.app_state);
+                    }
+                }
+            }
+            ShellMessage::ProjectRenameEdited(value) => {
+                if let Some((_, text)) = &mut self.project_rename {
+                    *text = value;
+                }
+            }
+            ShellMessage::ProjectRenameCommitted => {
+                if let Some((project_id, value)) = self.project_rename.take() {
+                    let name = value.trim().to_string();
+                    if !name.is_empty() {
+                        let _ = self
+                            .app_state
+                            .apply(AppIntent::Project(ProjectIntent::Rename {
+                                project_id,
+                                name,
+                            }));
+                        if self.live_ptys {
+                            let _ = self.store.save_session(&self.app_state);
+                        }
+                    }
+                }
+            }
+            ShellMessage::CloseAllRequested(project_id) => {
+                let _ = self
+                    .app_state
+                    .apply(AppIntent::Workspace(WorkspaceIntent::CloseAll {
+                        project_id,
+                    }));
+                // Until the empty-state stage lands, an emptied app gets a
+                // fresh default workspace so the view stays valid.
+                if self.app_state.workspaces.is_empty() {
+                    let _ = self
+                        .app_state
+                        .apply(AppIntent::Workspace(WorkspaceIntent::Create {
+                            title: None,
+                            shell: None,
+                        }));
+                }
+                if self.live_ptys {
+                    let _ = self.store.save_session(&self.app_state);
+                }
+            }
             ShellMessage::SessionGroupingChanged(grouping) => {
                 self.chrome.session_grouping = grouping;
+                self.chrome.main_view = MainView::Workspace;
             }
             ShellMessage::NewSessionRequested => self.open_overlay(Overlay::QuickLaunch),
             ShellMessage::ProjectSessionRequested(workspace_id) => {
@@ -1259,11 +1422,17 @@ impl NativeShellRuntime {
             ShellMessage::OverlayDismissed => {
                 let had_overlay = self.chrome.active_overlay != Overlay::None;
                 let had_drag = self.drag.is_some();
-                let had_menu = self.context_menu.is_some();
+                let had_menu = self.context_menu.is_some()
+                    || self.rail_menu.is_some()
+                    || self.session_rename.is_some()
+                    || self.project_rename.is_some();
                 self.chrome.active_overlay = Overlay::None;
-                // Esc also cancels an in-flight drag and the context menu.
+                // Esc also cancels an in-flight drag, menus, and renames.
                 self.drag = None;
                 self.context_menu = None;
+                self.rail_menu = None;
+                self.session_rename = None;
+                self.project_rename = None;
                 // A bare Esc with nothing to dismiss goes to the terminal.
                 if !had_overlay && !had_drag && !had_menu {
                     self.write_terminal_input(&[0x1b]);
@@ -1728,7 +1897,7 @@ impl NativeShellRuntime {
             .as_ref()
             .map(|pending| HashSet::from([pending.target.workspace_id.clone()]))
             .unwrap_or_default();
-        let sessions = project_sessions_with_profiles(
+        let mut sessions = project_sessions_with_profiles(
             &self.app_state,
             &self.ssh_profiles,
             self.chrome.session_grouping,
@@ -1736,6 +1905,12 @@ impl NativeShellRuntime {
             active_surface_id.as_ref(),
             &pending_projects,
         );
+        sessions.home_active = self.chrome.main_view == MainView::Home;
+        sessions.rename = self
+            .session_rename
+            .as_ref()
+            .map(|(_, surface_id, value)| (surface_id.clone(), value.clone()));
+        sessions.project_rename = self.project_rename.clone();
         // Rebuild the palette item list, then filter it by the live query and
         // clamp the selection.
         let all_items = self.build_palette_items(&sessions);
@@ -1788,6 +1963,7 @@ impl NativeShellRuntime {
                 })
                 .collect(),
             context_menu: self.context_menu.clone(),
+            rail_menu: self.rail_menu.clone(),
         };
     }
 
@@ -2048,6 +2224,68 @@ impl NativeShellRuntime {
             self.ptys.clear_buffer(id);
         }
         self.write_surface_input(surface_id, &[0x0c]);
+    }
+
+    /// Dispatch a rail-menu action (session rows and project headers).
+    fn run_rail_menu_action(&mut self, action: RailMenuAction) {
+        match action {
+            RailMenuAction::RenameSession {
+                workspace_id,
+                surface_id,
+            } => {
+                // Prefill with the existing custom name (empty when derived).
+                let current = self
+                    .app_state
+                    .workspace(&workspace_id)
+                    .map(|workspace| {
+                        crate::backend::terminal_surfaces(&workspace.split_tree)
+                            .into_iter()
+                            .find(|surface| surface.id == surface_id)
+                            .and_then(|surface| surface.name)
+                            .unwrap_or_default()
+                    })
+                    .unwrap_or_default();
+                self.session_rename = Some((workspace_id, surface_id, current));
+            }
+            RailMenuAction::DetachSession { workspace_id } => {
+                let _ = self
+                    .app_state
+                    .apply(AppIntent::Project(ProjectIntent::Split { workspace_id }));
+                if self.live_ptys {
+                    let _ = self.store.save_session(&self.app_state);
+                }
+            }
+            RailMenuAction::CloseSession {
+                workspace_id,
+                surface_id,
+            } => self.close_session(Some(workspace_id), surface_id),
+            RailMenuAction::RenameProject { project_id } => {
+                let current = self
+                    .app_state
+                    .projects
+                    .iter()
+                    .find(|record| record.id == project_id)
+                    .map(|record| record.name.clone())
+                    .unwrap_or_default();
+                self.project_rename = Some((project_id, current));
+            }
+            RailMenuAction::MergeProject { source, target } => {
+                match self
+                    .app_state
+                    .apply(AppIntent::Project(ProjectIntent::Merge { source, target }))
+                {
+                    Ok(_) => {
+                        if self.live_ptys {
+                            let _ = self.store.save_session(&self.app_state);
+                        }
+                    }
+                    Err(error) => self.last_error = Some(error),
+                }
+            }
+            RailMenuAction::CloseAllInProject { project_id } => {
+                self.update_shell(ShellMessage::CloseAllRequested(Some(project_id)));
+            }
+        }
     }
 
     /// Dispatch a context-menu item against the surface the menu targeted.
@@ -2948,6 +3186,7 @@ fn initial_view_model(app_state: &AppState, chrome: &ChromeState) -> ShellViewMo
         term_scheme: TermScheme::default(),
         surface_term_schemes: HashMap::new(),
         context_menu: None,
+        rail_menu: None,
     }
 }
 
@@ -3773,6 +4012,78 @@ mod tests {
             TerminalToggle::ConfirmClose,
         ));
         assert!(!runtime.settings.terminal.confirm_close_on_running);
+    }
+
+    #[test]
+    fn home_switcher_toggles_main_view() {
+        let mut runtime = NativeShellRuntime::default();
+        assert_eq!(runtime.view_model().chrome.main_view, MainView::Workspace);
+        runtime.update_shell(ShellMessage::HomeRequested);
+        assert_eq!(runtime.view_model().chrome.main_view, MainView::Home);
+        assert!(runtime.view_model().sessions.home_active);
+        // Picking a grouping returns to the workspace view.
+        runtime.update_shell(ShellMessage::SessionGroupingChanged(
+            pandamux_ui::SessionGrouping::Type,
+        ));
+        assert_eq!(runtime.view_model().chrome.main_view, MainView::Workspace);
+        assert!(!runtime.view_model().sessions.home_active);
+        // The Home view still builds.
+        runtime.update_shell(ShellMessage::HomeRequested);
+        let _view = app_view(runtime.view_model());
+    }
+
+    #[test]
+    fn session_rename_flows_through_the_rail_menu() {
+        let mut runtime = NativeShellRuntime::default();
+        let surface_id = runtime.active_surface_id().expect("focused surface");
+        let workspace_id = runtime
+            .app_state
+            .active_workspace_id
+            .clone()
+            .expect("default workspace");
+
+        runtime.update_shell(ShellMessage::SessionContextRequested {
+            workspace_id: workspace_id.clone(),
+            surface_id: surface_id.clone(),
+        });
+        assert!(runtime.view_model().rail_menu.is_some());
+        runtime.update_shell(ShellMessage::RailMenuAction(
+            RailMenuAction::RenameSession {
+                workspace_id: workspace_id.clone(),
+                surface_id: surface_id.clone(),
+            },
+        ));
+        assert!(runtime.view_model().rail_menu.is_none());
+        runtime.update_shell(ShellMessage::SessionRenameEdited(
+            "Claude: auth refactor".to_string(),
+        ));
+        runtime.update_shell(ShellMessage::SessionRenameCommitted);
+
+        let workspace = runtime.app_state.workspace(&workspace_id).unwrap();
+        let renamed = crate::backend::terminal_surfaces(&workspace.split_tree)
+            .into_iter()
+            .find(|surface| surface.id == surface_id)
+            .and_then(|surface| surface.name);
+        assert_eq!(renamed.as_deref(), Some("Claude: auth refactor"));
+        // The rail entry shows the custom name.
+        let entry_name = runtime
+            .view_model()
+            .sessions
+            .groups
+            .iter()
+            .flat_map(|group| &group.entries)
+            .find(|entry| entry.surface_id == surface_id)
+            .map(|entry| entry.name.clone());
+        assert_eq!(entry_name.as_deref(), Some("Claude: auth refactor"));
+    }
+
+    #[test]
+    fn close_all_keeps_the_app_usable_until_empty_state_lands() {
+        let mut runtime = NativeShellRuntime::default();
+        runtime.update_shell(ShellMessage::CloseAllRequested(None));
+        assert!(!runtime.app_state.workspaces.is_empty());
+        assert!(runtime.app_state.active_workspace_id.is_some());
+        assert_eq!(runtime.last_error(), None);
     }
 
     #[test]

@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.45.0]
+## [0.46.0]
+
+### Added
+
+- **The sidebar switcher is now Home / Projects / Type** (spec 2.4). Home switches the main area to the upcoming pinned dashboard; Projects groups every session under its project identity, merging entries from different hosts and transports into one heading; Type groups all Claude sessions together, all PowerShell together, and so on. Each session still shows its host as a badge and in its detail line.
+- **Sessions can be renamed** (spec 2.1): right-click a session in the sidebar and pick Rename to give "Claude 3" a name like "Claude: auth refactor". Custom names persist with the session and travel with the tab when it moves.
+- **Projects have a right-click menu** (spec 1.4): Rename project, Merge into another project, and Close all sessions in the project; sessions get Rename, Detach into its own project (the undo for a wrong merge), and Close.
+
+### Removed
+
+- **The Host group-by is gone** from the sidebar (low value per the review); host information stays visible on every session entry.
 
 ### Added
 

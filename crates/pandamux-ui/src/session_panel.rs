@@ -11,35 +11,30 @@
 use crate::chrome::SessionActivity;
 use crate::iced_shell::ShellMessage;
 use crate::theme::{self, Palette, ShellKind};
-use iced::widget::{Space, button, column, container, row, scrollable, text};
+use iced::widget::{Space, button, column, container, mouse_area, row, scrollable, text};
 use iced::{Alignment, Color, Element, Length, Padding};
 use pandamux_core::{
-    AppState, ProjectLocation, SplitNode, SshProfiles, SurfaceId, SurfaceType, WorkspaceId,
-    WorkspaceState,
+    AppState, ProjectId, ProjectLocation, SessionType, SplitNode, SshProfiles, SurfaceId,
+    SurfaceRef, SurfaceType, WorkspaceId, WorkspaceState,
 };
 use std::collections::HashSet;
 
-/// How the panel groups sessions. The switcher regroups live.
+/// How the panel groups sessions. The Host group-by is gone (spec 2.4): hosts
+/// stay visible as per-session badges but never affect grouping.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum SessionGrouping {
     #[default]
     Project,
     Type,
-    Host,
 }
 
 impl SessionGrouping {
-    pub const ALL: [SessionGrouping; 3] = [
-        SessionGrouping::Project,
-        SessionGrouping::Type,
-        SessionGrouping::Host,
-    ];
+    pub const ALL: [SessionGrouping; 2] = [SessionGrouping::Project, SessionGrouping::Type];
 
     pub fn label(self) -> &'static str {
         match self {
-            SessionGrouping::Project => "Project",
+            SessionGrouping::Project => "Projects",
             SessionGrouping::Type => "Type",
-            SessionGrouping::Host => "Host",
         }
     }
 }
@@ -53,8 +48,32 @@ pub struct SessionEntry {
     pub meta: String,
     pub host: String,
     pub kind: ShellKind,
+    /// What runs in the session (drives the Type grouping and the badge).
+    pub session: SessionType,
     pub activity: SessionActivity,
     pub is_active: bool,
+}
+
+impl SessionEntry {
+    /// The Type-grouping key and badge label: the tool for agent sessions,
+    /// the shell flavor for plain terminals.
+    pub fn type_label(&self) -> String {
+        match &self.session {
+            SessionType::Terminal => self.kind.abbreviation().to_string(),
+            other => other.label().to_string(),
+        }
+    }
+
+    fn badge(&self) -> String {
+        match &self.session {
+            SessionType::Terminal => self.kind.abbreviation().to_string(),
+            SessionType::PowerShell { .. } => "PS".to_string(),
+            SessionType::Claude => "CL".to_string(),
+            SessionType::Codex => "CX".to_string(),
+            SessionType::Gemini => "GM".to_string(),
+            SessionType::Custom { .. } => "RUN".to_string(),
+        }
+    }
 }
 
 /// A named group of sessions (the group key depends on the active grouping).
@@ -62,6 +81,9 @@ pub struct SessionEntry {
 pub struct SessionGroup {
     pub key: String,
     pub workspace_id: Option<WorkspaceId>,
+    /// The registry identity behind a Projects-grouping header (context menu:
+    /// rename / merge / close all).
+    pub project_id: Option<ProjectId>,
     pub add_pending: bool,
     pub entries: Vec<SessionEntry>,
 }
@@ -70,8 +92,14 @@ pub struct SessionGroup {
 pub struct SessionsViewState {
     pub open: bool,
     pub grouping: SessionGrouping,
+    /// Whether the Home dashboard view is active (highlights the switcher).
+    pub home_active: bool,
     pub groups: Vec<SessionGroup>,
     pub total: usize,
+    /// In-flight session rename: (surface, current input text).
+    pub rename: Option<(SurfaceId, String)>,
+    /// In-flight project rename: (project, current input text).
+    pub project_rename: Option<(ProjectId, String)>,
 }
 
 /// Project canonical state into the session list. `active_surface_id` marks the
@@ -104,7 +132,9 @@ pub fn project_sessions_with_profiles(
     for workspace in &app.workspaces {
         let terminals = terminal_surfaces(&workspace.split_tree);
         let multiple = terminals.len() > 1;
-        for (index, surface_id) in terminals.into_iter().enumerate() {
+        for (index, surface) in terminals.into_iter().enumerate() {
+            let surface_id = surface.id.clone();
+            let session = surface.session.clone().unwrap_or_default();
             let (kind, host, meta) = match &workspace.project.location {
                 ProjectLocation::Local { cwd, .. } => (
                     ShellKind::PowerShell,
@@ -137,11 +167,19 @@ pub fn project_sessions_with_profiles(
                     )
                 }
             };
-            let name = if multiple {
-                format!("{} \u{00b7} {}", workspace.title, index + 1)
-            } else {
-                workspace.title.clone()
+            // Naming (spec 2.1): a user-set name always wins; otherwise
+            // "<Type> · <project>" for agent sessions, "<project>" for plain
+            // terminals, with an index when the project has several.
+            let base = match &session {
+                SessionType::Terminal => workspace.title.clone(),
+                other => format!("{} \u{00b7} {}", other.label(), workspace.title),
             };
+            let derived = if multiple {
+                format!("{base} \u{00b7} {}", index + 1)
+            } else {
+                base
+            };
+            let name = surface.name.clone().unwrap_or(derived);
             entries.push(SessionEntry {
                 is_active: active_surface_id == Some(&surface_id),
                 surface_id,
@@ -150,6 +188,7 @@ pub fn project_sessions_with_profiles(
                 meta,
                 host,
                 kind,
+                session,
                 activity: activity_for(workspace, active_surface_id),
             });
         }
@@ -160,8 +199,11 @@ pub fn project_sessions_with_profiles(
     SessionsViewState {
         open,
         grouping,
+        home_active: false,
         groups,
         total,
+        rename: None,
+        project_rename: None,
     }
 }
 
@@ -173,27 +215,43 @@ fn group_entries(
 ) -> Vec<SessionGroup> {
     let mut groups: Vec<SessionGroup> = Vec::new();
     for entry in entries {
-        let key = match grouping {
-            SessionGrouping::Project => app
-                .workspace(&entry.workspace_id)
-                .map(|workspace| workspace.title.clone())
-                .unwrap_or_else(|| "Workspace".to_string()),
-            SessionGrouping::Type => entry.kind.abbreviation().to_string(),
-            SessionGrouping::Host => entry.host.clone(),
+        // Projects grouping keys on the registry identity (spec 1.4): the same
+        // project reached from any host or transport lands in ONE group. A
+        // legacy workspace without an identity groups by itself.
+        let workspace = app.workspace(&entry.workspace_id);
+        let project_id = workspace.and_then(|workspace| workspace.project_id.clone());
+        let (key, group_workspace_id, group_project_id) = match grouping {
+            SessionGrouping::Project => {
+                let record = project_id
+                    .as_ref()
+                    .and_then(|id| app.projects.iter().find(|record| &record.id == id));
+                let key = record
+                    .map(|record| record.name.clone())
+                    .or_else(|| workspace.map(|workspace| workspace.title.clone()))
+                    .unwrap_or_else(|| "Workspace".to_string());
+                (key, Some(entry.workspace_id.clone()), project_id.clone())
+            }
+            SessionGrouping::Type => (entry.type_label(), None, None),
         };
-        let workspace_id =
-            (grouping == SessionGrouping::Project).then(|| entry.workspace_id.clone());
-        match groups
-            .iter_mut()
-            .find(|group| group.key == key && group.workspace_id == workspace_id)
-        {
+        let same_group = |group: &&mut SessionGroup| match grouping {
+            SessionGrouping::Project => {
+                if group.project_id.is_some() || group_project_id.is_some() {
+                    group.project_id == group_project_id
+                } else {
+                    group.workspace_id == group_workspace_id
+                }
+            }
+            SessionGrouping::Type => group.key == key,
+        };
+        match groups.iter_mut().find(same_group) {
             Some(group) => group.entries.push(entry),
             None => groups.push(SessionGroup {
                 key,
-                add_pending: workspace_id
+                add_pending: group_workspace_id
                     .as_ref()
                     .is_some_and(|id| pending_projects.contains(id)),
-                workspace_id,
+                workspace_id: group_workspace_id,
+                project_id: group_project_id,
                 entries: vec![entry],
             }),
         }
@@ -215,8 +273,11 @@ fn activity_for(
     workspace: &WorkspaceState,
     active_surface_id: Option<&SurfaceId>,
 ) -> SessionActivity {
-    let is_active_workspace = active_surface_id
-        .is_some_and(|surface_id| terminal_surfaces(&workspace.split_tree).contains(surface_id));
+    let is_active_workspace = active_surface_id.is_some_and(|surface_id| {
+        terminal_surfaces(&workspace.split_tree)
+            .iter()
+            .any(|surface| &surface.id == surface_id)
+    });
     if is_active_workspace {
         SessionActivity::Running
     } else {
@@ -237,18 +298,20 @@ fn host_label(shell: &str) -> String {
     }
 }
 
-fn terminal_surfaces(tree: &SplitNode) -> Vec<SurfaceId> {
+/// Every terminal surface in the tree, depth-first. Exported so keyboard
+/// cycling (spec 2.6) uses exactly the visible panel order.
+pub fn terminal_surfaces(tree: &SplitNode) -> Vec<SurfaceRef> {
     match tree {
         SplitNode::Leaf(leaf) => leaf
             .surfaces
             .iter()
             .filter(|surface| surface.surface_type == SurfaceType::Terminal)
-            .map(|surface| surface.id.clone())
+            .cloned()
             .collect(),
         SplitNode::Branch(branch) => {
-            let mut ids = terminal_surfaces(&branch.children[0]);
-            ids.extend(terminal_surfaces(&branch.children[1]));
-            ids
+            let mut surfaces = terminal_surfaces(&branch.children[0]);
+            surfaces.extend(terminal_surfaces(&branch.children[1]));
+            surfaces
         }
     }
 }
@@ -274,13 +337,13 @@ pub fn session_panel<'a>(
     ]
     .align_y(Alignment::Center);
 
-    let switcher = grouping_switcher(state.grouping, palette);
+    let switcher = grouping_switcher(state.grouping, state.home_active, palette);
 
     let mut list = column![].spacing(10).width(Length::Fill);
     for group in &state.groups {
-        list = list.push(group_header(group, palette));
+        list = list.push(group_header(group, state, palette));
         for entry in &group.entries {
-            list = list.push(session_row(entry, palette));
+            list = list.push(session_row(entry, state, palette));
         }
     }
 
@@ -306,42 +369,54 @@ pub fn session_panel<'a>(
         .into()
 }
 
-fn grouping_switcher<'a>(active: SessionGrouping, palette: Palette) -> Element<'a, ShellMessage> {
+/// The Home | Projects | Type view switcher (spec 2.4). Home switches the
+/// main area to the dashboard; Projects/Type regroup the session list (and
+/// return to the workspace view).
+fn grouping_switcher<'a>(
+    active: SessionGrouping,
+    home_active: bool,
+    palette: Palette,
+) -> Element<'a, ShellMessage> {
     let mut segments = row![].spacing(2).width(Length::Fill);
-    for grouping in SessionGrouping::ALL {
-        let is_active = grouping == active;
-        segments = segments.push(
-            button(
-                container(
-                    text(grouping.label())
-                        .size(theme::SIZE_SECONDARY)
-                        .color(if is_active { palette.t1 } else { palette.t3 }),
-                )
-                .width(Length::Fill)
-                .align_x(Alignment::Center),
-            )
-            .padding(Padding::from([4.0, 6.0]))
+    let segment = |label: &'static str, is_active: bool, message: ShellMessage| {
+        button(
+            container(text(label).size(theme::SIZE_SECONDARY).color(if is_active {
+                palette.t1
+            } else {
+                palette.t3
+            }))
             .width(Length::Fill)
-            .on_press(ShellMessage::SessionGroupingChanged(grouping))
-            .style(move |_theme, status| {
-                let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-                button::Style {
-                    background: Some(
-                        if is_active {
-                            palette.ov(0.08)
-                        } else if hovered {
-                            palette.ov(0.04)
-                        } else {
-                            Color::TRANSPARENT
-                        }
-                        .into(),
-                    ),
-                    text_color: if is_active { palette.t1 } else { palette.t3 },
-                    border: theme::border(Color::TRANSPARENT, 0.0, theme::RADIUS_CHIP),
-                    ..Default::default()
-                }
-            }),
-        );
+            .align_x(Alignment::Center),
+        )
+        .padding(Padding::from([4.0, 6.0]))
+        .width(Length::Fill)
+        .on_press(message)
+        .style(move |_theme, status| {
+            let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+            button::Style {
+                background: Some(
+                    if is_active {
+                        palette.ov(0.08)
+                    } else if hovered {
+                        palette.ov(0.04)
+                    } else {
+                        Color::TRANSPARENT
+                    }
+                    .into(),
+                ),
+                text_color: if is_active { palette.t1 } else { palette.t3 },
+                border: theme::border(Color::TRANSPARENT, 0.0, theme::RADIUS_CHIP),
+                ..Default::default()
+            }
+        })
+    };
+    segments = segments.push(segment("Home", home_active, ShellMessage::HomeRequested));
+    for grouping in SessionGrouping::ALL {
+        segments = segments.push(segment(
+            grouping.label(),
+            !home_active && grouping == active,
+            ShellMessage::SessionGroupingChanged(grouping),
+        ));
     }
 
     container(segments)
@@ -355,11 +430,36 @@ fn grouping_switcher<'a>(active: SessionGrouping, palette: Palette) -> Element<'
         .into()
 }
 
-fn group_header<'a>(group: &'a SessionGroup, palette: Palette) -> Element<'a, ShellMessage> {
-    let label = text(group.key.to_uppercase())
-        .size(theme::SIZE_GROUP_HEADER)
-        .font(theme::ui(iced::font::Weight::Semibold))
-        .color(palette.t4);
+fn group_header<'a>(
+    group: &'a SessionGroup,
+    state: &'a SessionsViewState,
+    palette: Palette,
+) -> Element<'a, ShellMessage> {
+    // Inline project rename (spec 1.4 manual path).
+    let renaming = group
+        .project_id
+        .as_ref()
+        .zip(state.project_rename.as_ref())
+        .is_some_and(|(id, (renaming_id, _))| id == renaming_id);
+    let label: Element<'a, ShellMessage> = if renaming {
+        let value = state
+            .project_rename
+            .as_ref()
+            .map(|(_, value)| value.as_str())
+            .unwrap_or("");
+        iced::widget::text_input("Project name", value)
+            .on_input(ShellMessage::ProjectRenameEdited)
+            .on_submit(ShellMessage::ProjectRenameCommitted)
+            .size(theme::SIZE_SECONDARY)
+            .width(Length::Fill)
+            .into()
+    } else {
+        text(group.key.to_uppercase())
+            .size(theme::SIZE_GROUP_HEADER)
+            .font(theme::ui(iced::font::Weight::Semibold))
+            .color(palette.t4)
+            .into()
+    };
     let mut header = row![label, Space::new().width(Length::Fill)].align_y(Alignment::Center);
     if let Some(workspace_id) = &group.workspace_id {
         let mut add = button(
@@ -380,13 +480,26 @@ fn group_header<'a>(group: &'a SessionGroup, palette: Palette) -> Element<'a, Sh
         }
         header = header.push(add);
     }
+    // Right-click opens the project actions menu (rename / merge / close all).
+    if group.project_id.is_some() {
+        let project_id = group.project_id.clone();
+        return mouse_area(header)
+            .on_right_press(ShellMessage::ProjectContextRequested(
+                project_id.expect("checked above"),
+            ))
+            .into();
+    }
     header.into()
 }
 
-fn session_row<'a>(entry: &'a SessionEntry, palette: Palette) -> Element<'a, ShellMessage> {
+fn session_row<'a>(
+    entry: &'a SessionEntry,
+    state: &'a SessionsViewState,
+    palette: Palette,
+) -> Element<'a, ShellMessage> {
     let shell_color = palette.shell_color(entry.kind);
     let badge = container(
-        text(entry.kind.abbreviation())
+        text(entry.badge())
             .size(theme::SIZE_METADATA)
             .font(theme::mono(iced::font::Weight::Semibold))
             .color(shell_color),
@@ -401,14 +514,36 @@ fn session_row<'a>(entry: &'a SessionEntry, palette: Palette) -> Element<'a, She
         ..Default::default()
     });
 
-    let name_and_meta = column![
+    // Inline rename (spec 2.1): the row being renamed swaps its name for an
+    // input; Enter commits, Esc (OverlayDismissed) cancels.
+    let renaming = state
+        .rename
+        .as_ref()
+        .is_some_and(|(surface_id, _)| surface_id == &entry.surface_id);
+    let name_element: Element<'a, ShellMessage> = if renaming {
+        let value = state
+            .rename
+            .as_ref()
+            .map(|(_, value)| value.as_str())
+            .unwrap_or("");
+        iced::widget::text_input("Session name", value)
+            .on_input(ShellMessage::SessionRenameEdited)
+            .on_submit(ShellMessage::SessionRenameCommitted)
+            .size(theme::SIZE_BODY)
+            .width(Length::Fill)
+            .into()
+    } else {
         text(entry.name.clone())
             .size(theme::SIZE_BODY)
             .color(if entry.is_active {
                 palette.t1
             } else {
                 palette.t2
-            }),
+            })
+            .into()
+    };
+    let name_and_meta = column![
+        name_element,
         text(entry.meta.clone())
             .size(theme::SIZE_METADATA)
             .font(theme::mono(iced::font::Weight::Normal))
@@ -496,11 +631,18 @@ fn session_row<'a>(entry: &'a SessionEntry, palette: Palette) -> Element<'a, She
             }
         });
 
-    row![select, close]
-        .spacing(2)
-        .align_y(Alignment::Center)
-        .width(Length::Fill)
-        .into()
+    // Right-click opens the session actions menu (rename / detach / close).
+    mouse_area(
+        row![select, close]
+            .spacing(2)
+            .align_y(Alignment::Center)
+            .width(Length::Fill),
+    )
+    .on_right_press(ShellMessage::SessionContextRequested {
+        workspace_id: entry.workspace_id.clone(),
+        surface_id: entry.surface_id.clone(),
+    })
+    .into()
 }
 
 fn new_session_footer<'a>(palette: Palette) -> Element<'a, ShellMessage> {
