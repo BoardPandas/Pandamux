@@ -7,7 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.49.0]
+## [0.50.0]
+
+### Added
+
+- **New bare terminals offer to launch a tool** (spec 2.7). A fresh, untouched terminal shows a small skippable strip: press 1 for Claude, 2 for Codex, 3 for Gemini, or 4 for a custom command (via the launcher's type chooser). Choosing respawns the session under that tool in place; any other key dismisses the strip and reaches the shell exactly as typed. It never types into the shell on its own, so scripted or busy shells are untouched.
+- The welcome strip can be turned off entirely in Settings > Terminal ("Welcome prompt"), and it never reappears on a session you have typed in or dismissed.
 
 ### Added
 

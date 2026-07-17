@@ -117,6 +117,11 @@ pub struct NativeShellRuntime {
     pending_confirm: Option<PendingConfirm>,
     /// A Home pane waiting for a relaunch to complete (spec 2.5).
     pending_home_assign: Option<PaneId>,
+    /// Surfaces the user has typed into (session-local, never persisted). The
+    /// welcome chooser only shows on untouched bare terminals (spec 2.7).
+    touched_surfaces: HashSet<SurfaceId>,
+    /// Surfaces whose welcome chooser was explicitly dismissed this session.
+    welcome_dismissed: HashSet<SurfaceId>,
     /// Persistent clipboard policy (plan F1).
     clipboard_config: ClipboardConfig,
     /// Active drag-and-drop of a tab, if any (plan Section 12.3).
@@ -177,6 +182,11 @@ enum PendingTypeLaunch {
     Pane {
         workspace_id: WorkspaceId,
         pane_id: PaneId,
+    },
+    /// Convert an existing surface in place (the welcome chooser's Custom
+    /// path, spec 2.7): set its session type and respawn under the tool.
+    Surface {
+        surface_id: SurfaceId,
     },
 }
 
@@ -292,6 +302,8 @@ impl NativeShellRuntime {
             pending_session_type: None,
             pending_confirm: None,
             pending_home_assign: None,
+            touched_surfaces: HashSet::new(),
+            welcome_dismissed: HashSet::new(),
             clipboard_config: ClipboardConfig::default(),
             drag: None,
             context_menu: None,
@@ -764,6 +776,12 @@ impl NativeShellRuntime {
                     Err(error) => self.last_error = Some(error),
                 }
             }
+            PendingTypeLaunch::Surface { surface_id } => {
+                // Welcome chooser Custom path (spec 2.7): convert in place.
+                self.pending_type_launch = None;
+                self.convert_surface_session(&surface_id, session);
+                self.chrome.active_overlay = Overlay::None;
+            }
             PendingTypeLaunch::Location { location } => match location {
                 ProjectLocation::Local { cwd, .. } => {
                     self.pending_type_launch = None;
@@ -880,6 +898,92 @@ impl NativeShellRuntime {
         };
         self.open_overlay(Overlay::QuickLaunch);
         self.pending_type_launch = Some(pending);
+        self.launcher.target_name = target_name;
+        self.populate_type_items();
+        self.launcher.step = LauncherStep::SessionType;
+    }
+
+    /// Whether the welcome chooser strip applies to this surface right now:
+    /// enabled in settings, still a bare terminal, and untouched (spec 2.7).
+    fn welcome_visible(&self, surface_id: &SurfaceId) -> bool {
+        if !self.settings.terminal.welcome_prompt_enabled
+            || self.touched_surfaces.contains(surface_id)
+            || self.welcome_dismissed.contains(surface_id)
+        {
+            return false;
+        }
+        self.app_state.workspaces.iter().any(|workspace| {
+            crate::backend::terminal_surfaces(&workspace.split_tree)
+                .into_iter()
+                .any(|surface| {
+                    &surface.id == surface_id
+                        && matches!(surface.session.unwrap_or_default(), SessionType::Terminal)
+                })
+        })
+    }
+
+    /// Convert a live surface to a tool in place (welcome chooser, spec 2.7):
+    /// record the session type, then respawn the local PTY under the tool (the
+    /// sync pass respects the type), or type the tool command into a remote
+    /// shell (same as an explicit SSH launch).
+    fn convert_surface_session(&mut self, surface_id: &SurfaceId, session: SessionType) {
+        let Some(workspace_id) = self
+            .app_state
+            .workspaces
+            .iter()
+            .find(|workspace| find_pane_id_for_surface(&workspace.split_tree, surface_id).is_some())
+            .map(|workspace| workspace.id.clone())
+        else {
+            return;
+        };
+        if let Err(error) =
+            self.app_state
+                .apply(AppIntent::Surface(SurfaceIntent::SetSessionType {
+                    workspace_id: Some(workspace_id.clone()),
+                    surface_id: surface_id.clone(),
+                    session: session.clone(),
+                }))
+        {
+            self.last_error = Some(error);
+            return;
+        }
+        let id = surface_id.as_str();
+        if self.remotes.has(id) {
+            if let Some(command) = crate::project_launcher::remote_initial_command(&session) {
+                let _ = self
+                    .remotes
+                    .write_all(id, format!("{command}\n").as_bytes());
+            }
+        } else if self.ptys.has(id) {
+            let _ = self.ptys.kill(id);
+            if let Err(error) = self.sync_terminal_sessions() {
+                self.last_error = Some(error);
+            }
+        }
+        let project_id = self
+            .app_state
+            .workspace(&workspace_id)
+            .and_then(|workspace| workspace.project_id.clone());
+        self.record_recent(project_id, &session);
+        if self.live_ptys {
+            let _ = self.store.save_session(&self.app_state);
+        }
+    }
+
+    /// The welcome chooser's Custom path: open the launcher's type step
+    /// targeting this surface for in-place conversion (spec 2.7).
+    fn open_type_step_for_surface(&mut self, surface_id: SurfaceId) {
+        let target_name = self
+            .app_state
+            .workspaces
+            .iter()
+            .find(|workspace| {
+                find_pane_id_for_surface(&workspace.split_tree, &surface_id).is_some()
+            })
+            .map(|workspace| workspace.title.clone())
+            .unwrap_or_default();
+        self.open_overlay(Overlay::QuickLaunch);
+        self.pending_type_launch = Some(PendingTypeLaunch::Surface { surface_id });
         self.launcher.target_name = target_name;
         self.populate_type_items();
         self.launcher.step = LauncherStep::SessionType;
@@ -1893,8 +1997,45 @@ impl NativeShellRuntime {
                 // Suppressed while an overlay is open; its own text inputs consume
                 // typing (the global key subscription still fires in parallel).
                 if self.chrome.active_overlay == Overlay::None {
-                    self.write_terminal_input(&bytes);
+                    // Welcome chooser (spec 2.7): on a fresh bare terminal,
+                    // 1-4 pick a tool; anything else dismisses the strip and
+                    // reaches the shell normally. Never injects shell text.
+                    let mut swallowed = false;
+                    if let Some(surface_id) = self.active_surface_id()
+                        && self.welcome_visible(&surface_id)
+                    {
+                        swallowed = true;
+                        match bytes.as_slice() {
+                            [b'1'] => {
+                                self.convert_surface_session(&surface_id, SessionType::Claude)
+                            }
+                            [b'2'] => self.convert_surface_session(&surface_id, SessionType::Codex),
+                            [b'3'] => {
+                                self.convert_surface_session(&surface_id, SessionType::Gemini)
+                            }
+                            [b'4'] => self.open_type_step_for_surface(surface_id),
+                            _ => {
+                                self.welcome_dismissed.insert(surface_id);
+                                swallowed = false;
+                            }
+                        }
+                    }
+                    if !swallowed {
+                        self.write_terminal_input(&bytes);
+                    }
                 }
+            }
+            ShellMessage::WelcomeChosen {
+                surface_id,
+                session,
+            } => {
+                self.convert_surface_session(&surface_id, session);
+            }
+            ShellMessage::WelcomeCustomRequested(surface_id) => {
+                self.open_type_step_for_surface(surface_id);
+            }
+            ShellMessage::WelcomeDismissed(surface_id) => {
+                self.welcome_dismissed.insert(surface_id);
             }
             ShellMessage::TabDragArmed {
                 surface_id,
@@ -2367,6 +2508,11 @@ impl NativeShellRuntime {
         self.app_state
             .home
             .release_dead_surfaces(&|surface_id| alive.contains(surface_id));
+        // Trim session-local welcome bookkeeping to live surfaces.
+        self.touched_surfaces
+            .retain(|surface_id| alive.contains(surface_id));
+        self.welcome_dismissed
+            .retain(|surface_id| alive.contains(surface_id));
         // Forward any OSC 52 copies (local or over SSH) to the OS clipboard.
         if self.live_ptys {
             crate::backend::drain_clipboard_stores(
@@ -2395,6 +2541,17 @@ impl NativeShellRuntime {
             self.last_error = Some(error);
             fallback_terminal_snapshots(&self.app_state)
         });
+        // Stamp the welcome chooser onto fresh, untouched bare terminals
+        // (spec 2.7). Two passes to keep the borrow checker happy.
+        let welcome: HashSet<SurfaceId> = self
+            .terminals
+            .iter()
+            .map(|snapshot| snapshot.surface_id.clone())
+            .filter(|surface_id| self.welcome_visible(surface_id))
+            .collect();
+        for snapshot in &mut self.terminals {
+            snapshot.show_welcome = welcome.contains(&snapshot.surface_id);
+        }
         self.recompute_find_matches();
         self.rebuild_chrome();
         let active_surface_id = self.active_surface_id();
@@ -2703,12 +2860,17 @@ impl NativeShellRuntime {
     /// SSH channel). No-op when the focused surface is not a live terminal, so a
     /// keystroke over a markdown/diff surface is harmlessly dropped.
     fn write_terminal_input(&mut self, bytes: &[u8]) {
-        if bytes.is_empty() || !self.live_ptys {
+        if bytes.is_empty() {
             return;
         }
         let Some(surface_id) = self.active_surface_id() else {
             return;
         };
+        // First keystroke retires the welcome chooser for good (spec 2.7).
+        self.touched_surfaces.insert(surface_id.clone());
+        if !self.live_ptys {
+            return;
+        }
         // Typing snaps the view back to the tail (spec 1.2).
         self.scroll_surface_amount(&surface_id, ScrollAmount::Bottom);
         self.write_surface_input(&surface_id, bytes);
@@ -3873,6 +4035,9 @@ fn terminal_snapshots(
                 selection,
                 cursor_visible,
                 modes,
+                // Stamped by refresh_terminal_snapshots from runtime-local
+                // touch/dismiss state (spec 2.7).
+                show_welcome: false,
             })
         })
         .collect();
@@ -5290,6 +5455,63 @@ mod tests {
             thread::sleep(Duration::from_millis(100));
         }
         panic!("typed command output never appeared in terminal snapshots");
+    }
+
+    #[test]
+    fn welcome_chooser_converts_the_bare_terminal_on_a_number_key() {
+        let mut runtime = NativeShellRuntime::default();
+        runtime.refresh_terminal_snapshots();
+        assert!(runtime.view_model().terminals[0].show_welcome);
+
+        // Key 1 converts the bare terminal to Claude instead of typing.
+        runtime.update_shell(ShellMessage::TerminalInput(vec![b'1']));
+        let workspace = runtime.app_state.active_workspace().unwrap();
+        let session = crate::backend::terminal_surfaces(&workspace.split_tree)[0]
+            .session
+            .clone();
+        assert_eq!(session, Some(SessionType::Claude));
+        assert!(!runtime.view_model().terminals[0].show_welcome);
+    }
+
+    #[test]
+    fn welcome_chooser_dismisses_on_any_other_key() {
+        let mut runtime = NativeShellRuntime::default();
+        runtime.refresh_terminal_snapshots();
+        assert!(runtime.view_model().terminals[0].show_welcome);
+
+        runtime.update_shell(ShellMessage::TerminalInput(vec![b'l']));
+        let workspace = runtime.app_state.active_workspace().unwrap();
+        let session = crate::backend::terminal_surfaces(&workspace.split_tree)[0]
+            .session
+            .clone();
+        // The keystroke reached the shell path, not a conversion.
+        assert_eq!(session, None);
+        assert!(!runtime.view_model().terminals[0].show_welcome);
+    }
+
+    #[test]
+    fn welcome_chooser_respects_the_setting() {
+        let mut runtime = NativeShellRuntime::default();
+        runtime.settings.terminal.welcome_prompt_enabled = false;
+        runtime.refresh_terminal_snapshots();
+        assert!(!runtime.view_model().terminals[0].show_welcome);
+    }
+
+    #[test]
+    fn welcome_custom_opens_the_type_chooser_and_converts_in_place() {
+        let mut runtime = NativeShellRuntime::default();
+        runtime.refresh_terminal_snapshots();
+        runtime.update_shell(ShellMessage::TerminalInput(vec![b'4']));
+        assert_eq!(runtime.chrome.active_overlay, Overlay::QuickLaunch);
+        assert_eq!(runtime.launcher.step, LauncherStep::SessionType);
+
+        runtime.update_shell(ShellMessage::LauncherTypeChosen(SessionType::Codex));
+        let workspace = runtime.app_state.active_workspace().unwrap();
+        let session = crate::backend::terminal_surfaces(&workspace.split_tree)[0]
+            .session
+            .clone();
+        assert_eq!(session, Some(SessionType::Codex));
+        assert_eq!(runtime.chrome.active_overlay, Overlay::None);
     }
 
     #[test]

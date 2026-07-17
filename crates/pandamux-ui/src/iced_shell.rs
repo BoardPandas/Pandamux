@@ -283,6 +283,17 @@ pub enum ShellMessage {
     PasteRequested,
     SelectAllRequested,
     ClearBufferRequested,
+    /// Welcome chooser (spec 2.7): convert an untouched bare terminal to the
+    /// chosen tool by respawning its PTY (never by typing into the shell).
+    WelcomeChosen {
+        surface_id: SurfaceId,
+        session: pandamux_core::SessionType,
+    },
+    /// Welcome chooser: pick Custom (opens the launcher's type step targeting
+    /// this surface for in-place conversion).
+    WelcomeCustomRequested(SurfaceId),
+    /// Welcome chooser: dismiss the strip for this surface (session-local).
+    WelcomeDismissed(SurfaceId),
     /// No-op (e.g. an unmapped key press); ignored by the runtime.
     Noop,
 }
@@ -339,6 +350,9 @@ pub struct TerminalSnapshot {
     pub cursor_visible: bool,
     /// Terminal mode flags for input routing (alt screen, mouse reporting).
     pub modes: TermModes,
+    /// Show the welcome chooser strip over this surface (spec 2.7): a bare,
+    /// untouched terminal offering to relaunch as Claude/Codex/Gemini/custom.
+    pub show_welcome: bool,
 }
 
 impl TerminalSnapshot {
@@ -359,6 +373,7 @@ impl TerminalSnapshot {
             selection: Vec::new(),
             cursor_visible: true,
             modes: TermModes::default(),
+            show_welcome: false,
         }
     }
 
@@ -1594,6 +1609,20 @@ fn pane_view<'a>(
         }
     };
 
+    // Welcome chooser (spec 2.7): a skippable strip composited over a fresh,
+    // untouched bare terminal offering to launch a tool instead. Never types
+    // into the shell; choices respawn the surface under the tool.
+    let welcome_surface = pane
+        .active_surface_id
+        .as_ref()
+        .and_then(|surface_id| terminal_snapshot(terminals, surface_id))
+        .filter(|snapshot| snapshot.show_welcome)
+        .map(|snapshot| snapshot.surface_id.clone());
+    let body: Element<'a, ShellMessage> = match welcome_surface {
+        Some(surface_id) => stack![body, welcome_strip(surface_id, palette)].into(),
+        None => body,
+    };
+
     // SSH context chip for a remote surface (plan F2): a slim accent bar naming
     // the host, between the tab bar and the terminal body.
     let remote_host = pane
@@ -1631,6 +1660,111 @@ fn pane_view<'a>(
             .on_press(ShellMessage::PaneFocused(pane.id.clone()))
             .into(),
     }
+}
+
+/// The welcome chooser strip (spec 2.7): floats near the top of a fresh bare
+/// terminal. Number keys map to the same choices in the runtime; the buttons
+/// serve the mouse. Any other keystroke dismisses it and reaches the shell.
+fn welcome_strip<'a>(surface_id: SurfaceId, palette: Palette) -> Element<'a, ShellMessage> {
+    let chip = |key: &str, label: &str, message: ShellMessage| {
+        button(
+            row![
+                text(key.to_string())
+                    .size(theme::SIZE_METADATA)
+                    .color(palette.accent),
+                text(label.to_string())
+                    .size(theme::SIZE_SECONDARY)
+                    .color(palette.t1),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
+        )
+        .padding(Padding::from([4.0, 10.0]))
+        .on_press(message)
+        .style(move |_theme, status| {
+            let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+            button::Style {
+                background: Some(if hovered {
+                    palette.ov(0.14).into()
+                } else {
+                    palette.ov(0.06).into()
+                }),
+                text_color: palette.t1,
+                border: theme::border(palette.ov(0.15), 1.0, theme::RADIUS_ROW),
+                ..button::Style::default()
+            }
+        })
+    };
+    let strip = row![
+        text("Launch a tool?")
+            .size(theme::SIZE_SECONDARY)
+            .color(palette.t3),
+        chip(
+            "1",
+            "Claude",
+            ShellMessage::WelcomeChosen {
+                surface_id: surface_id.clone(),
+                session: pandamux_core::SessionType::Claude,
+            },
+        ),
+        chip(
+            "2",
+            "Codex",
+            ShellMessage::WelcomeChosen {
+                surface_id: surface_id.clone(),
+                session: pandamux_core::SessionType::Codex,
+            },
+        ),
+        chip(
+            "3",
+            "Gemini",
+            ShellMessage::WelcomeChosen {
+                surface_id: surface_id.clone(),
+                session: pandamux_core::SessionType::Gemini,
+            },
+        ),
+        chip(
+            "4",
+            "Custom...",
+            ShellMessage::WelcomeCustomRequested(surface_id.clone()),
+        ),
+        button(
+            text("\u{2715}")
+                .size(theme::SIZE_METADATA)
+                .color(palette.t4)
+        )
+        .padding(Padding::from([4.0, 8.0]))
+        .on_press(ShellMessage::WelcomeDismissed(surface_id))
+        .style(move |_theme, status| {
+            let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+            button::Style {
+                background: hovered.then(|| palette.ov(0.08).into()),
+                text_color: palette.t4,
+                border: theme::border(iced::Color::TRANSPARENT, 0.0, theme::RADIUS_ROW),
+                ..button::Style::default()
+            }
+        }),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center);
+    let card = container(strip)
+        .padding(Padding::from([6.0, 12.0]))
+        .style(move |_theme| crate::command_palette::overlay_card_style(palette));
+    // Anchor near the top so the prompt line stays readable underneath. The
+    // shrink-sized card only covers its own footprint; the rest of the canvas
+    // still receives mouse events through the stack.
+    container(card)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(Alignment::Center)
+        .align_y(Alignment::Start)
+        .padding(Padding {
+            top: 44.0,
+            left: 8.0,
+            right: 8.0,
+            bottom: 8.0,
+        })
+        .into()
 }
 
 /// A slim SSH context chip naming the remote host for a remote surface (plan
