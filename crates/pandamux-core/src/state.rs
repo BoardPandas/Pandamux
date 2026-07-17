@@ -25,6 +25,9 @@ pub struct AppState {
     /// The project registry (spec 1.4): stable identity above ProjectKey.
     #[serde(default)]
     pub projects: Vec<ProjectRecord>,
+    /// The Home dashboard layout (spec 2.5), persisted with the session.
+    #[serde(default)]
+    pub home: crate::home::HomeLayout,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -69,6 +72,35 @@ pub enum AppIntent {
     Pane(PaneIntent),
     Surface(SurfaceIntent),
     Project(ProjectIntent),
+    Home(HomeIntent),
+}
+
+/// Home dashboard mutations (spec 2.5). Panes reference live sessions by id;
+/// none of these touch the sessions themselves.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum HomeIntent {
+    Pin {
+        surface_id: SurfaceId,
+        #[serde(default)]
+        pinned: Option<crate::project_registry::LaunchConfig>,
+    },
+    Assign {
+        home_pane_id: PaneId,
+        surface_id: SurfaceId,
+        #[serde(default)]
+        pinned: Option<crate::project_registry::LaunchConfig>,
+    },
+    Unpin {
+        home_pane_id: PaneId,
+    },
+    MoveBy {
+        home_pane_id: PaneId,
+        delta: i32,
+    },
+    Focus {
+        home_pane_id: PaneId,
+    },
 }
 
 /// Project-registry mutations (spec 1.4). Rename/Merge/Split mark records
@@ -287,6 +319,9 @@ pub enum AppDelta {
     MatcherAttached {
         project_id: ProjectId,
     },
+    HomeChanged {
+        home: crate::home::HomeLayout,
+    },
     LayoutGridApplied {
         workspace_id: WorkspaceId,
         tree: SplitNode,
@@ -373,6 +408,7 @@ impl Default for AppState {
             }],
             active_workspace_id: Some(workspace_id),
             projects: Vec::new(),
+            home: crate::home::HomeLayout::default(),
         }
     }
 }
@@ -385,7 +421,53 @@ impl AppState {
             AppIntent::Pane(intent) => self.apply_pane(intent),
             AppIntent::Surface(intent) => self.apply_surface(intent),
             AppIntent::Project(intent) => self.apply_project(intent),
+            AppIntent::Home(intent) => self.apply_home(intent),
         }
+    }
+
+    fn apply_home(&mut self, intent: HomeIntent) -> Result<AppDelta, String> {
+        let applied = match intent {
+            HomeIntent::Pin { surface_id, pinned } => {
+                if self.workspace_id_for_surface(&surface_id).is_none() {
+                    return Err(format!("surface not found: {surface_id}"));
+                }
+                self.home.pin(surface_id, pinned);
+                true
+            }
+            HomeIntent::Assign {
+                home_pane_id,
+                surface_id,
+                pinned,
+            } => {
+                if self.workspace_id_for_surface(&surface_id).is_none() {
+                    return Err(format!("surface not found: {surface_id}"));
+                }
+                self.home.assign(&home_pane_id, surface_id, pinned)
+            }
+            HomeIntent::Unpin { home_pane_id } => self.home.unpin(&home_pane_id),
+            HomeIntent::MoveBy {
+                home_pane_id,
+                delta,
+            } => {
+                self.home.move_by(&home_pane_id, delta);
+                true
+            }
+            HomeIntent::Focus { home_pane_id } => self.home.focus(&home_pane_id),
+        };
+        if !applied {
+            return Err("home pane not found".to_string());
+        }
+        // Surfaces may have closed since the layout was saved: release them so
+        // their panes render as relaunch placeholders.
+        let workspaces = self.workspaces.clone();
+        self.home.release_dead_surfaces(&|surface_id| {
+            workspaces.iter().any(|workspace| {
+                find_pane_id_for_surface(&workspace.split_tree, surface_id).is_some()
+            })
+        });
+        Ok(AppDelta::HomeChanged {
+            home: self.home.clone(),
+        })
     }
 
     pub fn active_workspace(&self) -> Option<&WorkspaceState> {

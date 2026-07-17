@@ -3,17 +3,17 @@ use crate::project_launcher::{EphemeralCredential, LaunchTarget};
 use iced::futures::SinkExt;
 use iced::{Element, Size, Subscription, Task, Theme, application, keyboard, stream, time, window};
 use pandamux_core::{
-    AgentRegistry, AppIntent, AppState, ClipboardConfig, LaunchConfig, Localizer, NewNotification,
-    NotificationSource, Notifications, PaneId, PaneIntent, ProjectError, ProjectErrorCategory,
-    ProjectId, ProjectIntent, ProjectLocation, ProjectMatcher, ProjectRecord, SessionType,
-    SidebarState, SplitDirection, SplitNode, SplitPaneParams, SshProfileId, SshProfiles,
-    SurfaceContents, SurfaceId, SurfaceIntent, SurfaceType, ThemeStore, UserSettings, WorkspaceId,
-    WorkspaceIntent, find_leaf, find_pane_id_for_surface, get_all_pane_ids, parse_ghostty_theme,
+    AgentRegistry, AppIntent, AppState, ClipboardConfig, HomeIntent, LaunchConfig, Localizer,
+    NewNotification, NotificationSource, Notifications, PaneId, PaneIntent, ProjectError,
+    ProjectErrorCategory, ProjectId, ProjectIntent, ProjectLocation, ProjectMatcher, ProjectRecord,
+    SessionType, SidebarState, SplitDirection, SplitNode, SplitPaneParams, SshProfileId,
+    SshProfiles, SurfaceContents, SurfaceId, SurfaceIntent, SurfaceType, ThemeStore, UserSettings,
+    WorkspaceId, WorkspaceIntent, find_leaf, find_pane_id_for_surface, get_all_pane_ids,
+    parse_ghostty_theme,
 };
 use pandamux_term::{
-    DEFAULT_GRID_SIZE, GridSize, PtyCommand, PtySessionManager, RemoteSessionManager, RemoteStatus,
-    ScrollAmount, SearchOptions, SelectionSpan, SshConfig, TermModes, detect_links, search_lines,
-    wrap_paste,
+    DEFAULT_GRID_SIZE, GridSize, PtySessionManager, RemoteSessionManager, RemoteStatus,
+    ScrollAmount, SearchOptions, SshConfig, TermModes, detect_links, search_lines, wrap_paste,
 };
 use pandamux_ui::{
     Accent, ChromeState, ContextMenuAction, ContextMenuViewState, DragView, FindViewState,
@@ -115,6 +115,8 @@ pub struct NativeShellRuntime {
     pending_session_type: Option<SessionType>,
     /// The destructive action parked behind the confirm modal (spec 1.5/2.6).
     pending_confirm: Option<PendingConfirm>,
+    /// A Home pane waiting for a relaunch to complete (spec 2.5).
+    pending_home_assign: Option<PaneId>,
     /// Persistent clipboard policy (plan F1).
     clipboard_config: ClipboardConfig,
     /// Active drag-and-drop of a tab, if any (plan Section 12.3).
@@ -216,6 +218,20 @@ impl NativeShellRuntime {
             // Assign project identities to any workspaces that predate the
             // registry (collapses historical per-host duplicates, spec 1.4).
             pandamux_core::ensure_project_registry(&mut app_state, now_ms());
+            // Home panes whose sessions did not survive the restart become
+            // relaunch placeholders (spec 2.5).
+            let alive: HashSet<SurfaceId> = app_state
+                .workspaces
+                .iter()
+                .flat_map(|workspace| {
+                    crate::backend::terminal_surfaces(&workspace.split_tree)
+                        .into_iter()
+                        .map(|surface| surface.id)
+                })
+                .collect();
+            app_state
+                .home
+                .release_dead_surfaces(&|surface_id| alive.contains(surface_id));
             app_state
         } else {
             AppState::default()
@@ -275,6 +291,7 @@ impl NativeShellRuntime {
             pending_type_launch: None,
             pending_session_type: None,
             pending_confirm: None,
+            pending_home_assign: None,
             clipboard_config: ClipboardConfig::default(),
             drag: None,
             context_menu: None,
@@ -727,7 +744,7 @@ impl NativeShellRuntime {
                             let _ = self.app_state.apply(AppIntent::Surface(
                                 SurfaceIntent::SetSessionType {
                                     workspace_id: Some(workspace_id.clone()),
-                                    surface_id: surface.id,
+                                    surface_id: surface.id.clone(),
                                     session: session.clone(),
                                 },
                             ));
@@ -741,6 +758,7 @@ impl NativeShellRuntime {
                             let _ = self.store.save_session(&self.app_state);
                         }
                         self.chrome.active_overlay = Overlay::None;
+                        self.complete_home_assign(&surface.id);
                     }
                     Ok(_) => {}
                     Err(error) => self.last_error = Some(error),
@@ -760,7 +778,7 @@ impl NativeShellRuntime {
                     ) {
                         Ok(success) => {
                             self.timings.insert(
-                                success.surface_id,
+                                success.surface_id.clone(),
                                 crate::latency::LaunchTimeline::start("local shell"),
                             );
                             if let Some(project_id) = success.project_id.clone() {
@@ -778,8 +796,10 @@ impl NativeShellRuntime {
                                 let _ = self.store.save_session(&self.app_state);
                             }
                             self.chrome.active_overlay = Overlay::None;
+                            self.complete_home_assign(&success.surface_id);
                         }
                         Err(error) => {
+                            self.pending_home_assign = None;
                             self.launcher.error = Some(error);
                             self.launcher.step = LauncherStep::SessionType;
                         }
@@ -803,12 +823,14 @@ impl NativeShellRuntime {
                     }
                     self.pending_type_launch = None;
                     if let Err(error) = self.start_remote_launch(profile_id, remote_cwd, session) {
+                        self.pending_home_assign = None;
                         self.launcher.error = Some(error);
                         self.launcher.step = LauncherStep::SessionType;
                     }
                 }
                 ProjectLocation::Legacy => {
                     self.pending_type_launch = None;
+                    self.pending_home_assign = None;
                 }
             },
         }
@@ -915,10 +937,12 @@ impl NativeShellRuntime {
                         }
                         self.chrome.active_overlay = Overlay::None;
                         self.launcher.launching = false;
+                        self.complete_home_assign(&pending.target.surface_id);
                         self.pending_remote_launch = None;
                     }
                     Err(error) => {
                         let _ = self.remotes.kill(id);
+                        self.pending_home_assign = None;
                         self.launcher.error = Some(error);
                         self.launcher.step = LauncherStep::Folder;
                         self.launcher.launching = false;
@@ -1397,6 +1421,53 @@ impl NativeShellRuntime {
             ShellMessage::HomeRequested => {
                 self.chrome.main_view = MainView::Home;
             }
+            ShellMessage::HomePaneFocused(home_pane_id) => {
+                let _ = self
+                    .app_state
+                    .apply(AppIntent::Home(HomeIntent::Focus { home_pane_id }));
+            }
+            ShellMessage::HomeUnpin(home_pane_id) => {
+                // Removes the pane from Home only; the session keeps running
+                // and stays reachable from its project view (spec 2.5).
+                let _ = self
+                    .app_state
+                    .apply(AppIntent::Home(HomeIntent::Unpin { home_pane_id }));
+                if self.live_ptys {
+                    let _ = self.store.save_session(&self.app_state);
+                }
+            }
+            ShellMessage::HomeMove(home_pane_id, delta) => {
+                let _ = self.app_state.apply(AppIntent::Home(HomeIntent::MoveBy {
+                    home_pane_id,
+                    delta,
+                }));
+                if self.live_ptys {
+                    let _ = self.store.save_session(&self.app_state);
+                }
+            }
+            ShellMessage::HomeRelaunch(home_pane_id) => {
+                self.relaunch_home_pane(home_pane_id);
+            }
+            ShellMessage::HomeAssignRequested(home_pane_id) => {
+                // Pick any open session for this pane (rail-menu style picker).
+                let mut items = Vec::new();
+                for workspace in &self.app_state.workspaces {
+                    for surface in crate::backend::terminal_surfaces(&workspace.split_tree) {
+                        let session = surface.session.clone().unwrap_or_default();
+                        items.push((
+                            format!("{} \u{00b7} {}", workspace.title, session.label()),
+                            RailMenuAction::AssignToHomePane {
+                                home_pane_id: home_pane_id.clone(),
+                                surface_id: surface.id,
+                            },
+                        ));
+                    }
+                }
+                self.rail_menu = Some(RailMenuViewState {
+                    title: "Assign a session".to_string(),
+                    items,
+                });
+            }
             ShellMessage::SessionContextRequested {
                 workspace_id,
                 surface_id,
@@ -1440,6 +1511,13 @@ impl NativeShellRuntime {
                         ),
                     );
                 }
+                items.push((
+                    "Pin to Home".to_string(),
+                    RailMenuAction::PinToHome {
+                        workspace_id: workspace_id.clone(),
+                        surface_id: surface_id.clone(),
+                    },
+                ));
                 // "Pin this configuration" (spec 2.3): project + session type.
                 if let Some(project_id) = project_id {
                     let session = self
@@ -2274,6 +2352,21 @@ impl NativeShellRuntime {
         if let Err(error) = self.sync_terminal_sessions() {
             self.last_error = Some(error);
         }
+        // Home panes track live sessions; when one closes (any path: tab X,
+        // close-all, workspace close) the pane degrades to a placeholder.
+        let alive: HashSet<SurfaceId> = self
+            .app_state
+            .workspaces
+            .iter()
+            .flat_map(|workspace| {
+                crate::backend::terminal_surfaces(&workspace.split_tree)
+                    .into_iter()
+                    .map(|surface| surface.id)
+            })
+            .collect();
+        self.app_state
+            .home
+            .release_dead_surfaces(&|surface_id| alive.contains(surface_id));
         // Forward any OSC 52 copies (local or over SSH) to the OS clipboard.
         if self.live_ptys {
             crate::backend::drain_clipboard_stores(
@@ -2289,6 +2382,14 @@ impl NativeShellRuntime {
             &self.remote_configs,
             self.live_ptys,
             &mut self.timings,
+            (self.chrome.main_view == MainView::Home).then(|| {
+                self.app_state
+                    .home
+                    .panes
+                    .iter()
+                    .filter_map(|pane| pane.surface_id.clone())
+                    .collect()
+            }),
         )
         .unwrap_or_else(|error| {
             self.last_error = Some(error);
@@ -2369,7 +2470,76 @@ impl NativeShellRuntime {
             context_menu: self.context_menu.clone(),
             rail_menu: self.rail_menu.clone(),
             confirm: self.confirm_view(),
+            home: self.home_view_state(),
         };
+    }
+
+    /// Project the Home layout into renderable pane entries (spec 2.5).
+    fn home_view_state(&self) -> pandamux_ui::HomeViewState {
+        let panes = self
+            .app_state
+            .home
+            .panes
+            .iter()
+            .map(|pane| {
+                let live = pane.surface_id.as_ref().filter(|surface_id| {
+                    self.app_state.workspaces.iter().any(|workspace| {
+                        find_pane_id_for_surface(&workspace.split_tree, surface_id).is_some()
+                    })
+                });
+                let title = self.home_pane_title(pane);
+                pandamux_ui::HomePaneEntry {
+                    pane_id: pane.id.clone(),
+                    title,
+                    surface_id: live.cloned(),
+                    can_relaunch: pane.pinned.is_some(),
+                    is_focused: self.app_state.home.focused_pane_id.as_ref() == Some(&pane.id),
+                }
+            })
+            .collect();
+        pandamux_ui::HomeViewState { panes }
+    }
+
+    fn home_pane_title(&self, pane: &pandamux_core::HomePane) -> String {
+        // A live session shows its rail name; otherwise the pinned config.
+        if let Some(surface_id) = &pane.surface_id {
+            for workspace in &self.app_state.workspaces {
+                if let Some(surface) = crate::backend::terminal_surfaces(&workspace.split_tree)
+                    .into_iter()
+                    .find(|surface| &surface.id == surface_id)
+                {
+                    if let Some(name) = surface.name {
+                        return name;
+                    }
+                    let project = workspace
+                        .project_id
+                        .as_ref()
+                        .and_then(|id| {
+                            self.app_state
+                                .projects
+                                .iter()
+                                .find(|record| &record.id == id)
+                        })
+                        .map(|record| record.name.clone())
+                        .unwrap_or_else(|| workspace.title.clone());
+                    let session = surface.session.unwrap_or_default();
+                    return format!("{project} \u{00b7} {}", session.label());
+                }
+            }
+        }
+        pane.pinned
+            .as_ref()
+            .map(|config| {
+                let project = self
+                    .app_state
+                    .projects
+                    .iter()
+                    .find(|record| record.id == config.project_id)
+                    .map(|record| record.name.clone())
+                    .unwrap_or_else(|| "Project".to_string());
+                format!("{project} \u{00b7} {}", config.session.label())
+            })
+            .unwrap_or_else(|| "Unassigned".to_string())
     }
 
     /// The confirm modal's content for whatever destructive action is parked.
@@ -2508,9 +2678,18 @@ impl NativeShellRuntime {
 
     /// Create a new session (workspace + terminal) with the given shell and make
     /// it active.
-    /// The focused pane's active surface in the active workspace (the "active
-    /// session"), if any.
+    /// The focused pane's active surface (the "active session"), if any. On
+    /// the Home dashboard this is the focused Home pane's session, so all
+    /// keyboard input routes there (spec 2.5): one branch point for focus.
     fn active_surface_id(&self) -> Option<SurfaceId> {
+        if self.chrome.main_view == MainView::Home {
+            let focused = self.app_state.home.focused_pane_id.as_ref()?;
+            return self
+                .app_state
+                .home
+                .pane(focused)
+                .and_then(|pane| pane.surface_id.clone());
+        }
         let workspace = self.app_state.active_workspace()?;
         let focused = workspace.focused_pane_id.clone()?;
         project_workspace_shell(workspace)
@@ -2714,6 +2893,104 @@ impl NativeShellRuntime {
                 self.save_launcher_prefs();
                 let _ = pinned;
             }
+            RailMenuAction::PinToHome {
+                workspace_id,
+                surface_id,
+            } => {
+                let pinned = self.launch_config_for(&workspace_id, &surface_id);
+                let _ = self
+                    .app_state
+                    .apply(AppIntent::Home(HomeIntent::Pin { surface_id, pinned }));
+                self.chrome.main_view = MainView::Home;
+                if self.live_ptys {
+                    let _ = self.store.save_session(&self.app_state);
+                }
+            }
+            RailMenuAction::AssignToHomePane {
+                home_pane_id,
+                surface_id,
+            } => {
+                let pinned = self
+                    .app_state
+                    .workspaces
+                    .iter()
+                    .find(|workspace| {
+                        find_pane_id_for_surface(&workspace.split_tree, &surface_id).is_some()
+                    })
+                    .map(|workspace| workspace.id.clone())
+                    .and_then(|workspace_id| self.launch_config_for(&workspace_id, &surface_id));
+                let _ = self.app_state.apply(AppIntent::Home(HomeIntent::Assign {
+                    home_pane_id,
+                    surface_id,
+                    pinned,
+                }));
+                if self.live_ptys {
+                    let _ = self.store.save_session(&self.app_state);
+                }
+            }
+        }
+    }
+
+    /// The pinned configuration (project + type) behind a live session, when
+    /// its workspace has a registry identity.
+    fn launch_config_for(
+        &self,
+        workspace_id: &WorkspaceId,
+        surface_id: &SurfaceId,
+    ) -> Option<LaunchConfig> {
+        let workspace = self.app_state.workspace(workspace_id)?;
+        let project_id = workspace.project_id.clone()?;
+        let session = crate::backend::terminal_surfaces(&workspace.split_tree)
+            .into_iter()
+            .find(|surface| &surface.id == surface_id)
+            .and_then(|surface| surface.session)
+            .unwrap_or_default();
+        Some(LaunchConfig {
+            project_id,
+            session,
+        })
+    }
+
+    /// Relaunch a dead Home pane from its pinned configuration and point the
+    /// pane at the new session once the launch completes.
+    fn relaunch_home_pane(&mut self, home_pane_id: PaneId) {
+        let Some(config) = self
+            .app_state
+            .home
+            .pane(&home_pane_id)
+            .and_then(|pane| pane.pinned.clone())
+        else {
+            return;
+        };
+        let Some(location) = self
+            .app_state
+            .projects
+            .iter()
+            .find(|record| record.id == config.project_id)
+            .and_then(|record| record.known_locations.first().cloned())
+        else {
+            self.last_error = Some("no recorded folder to relaunch from".to_string());
+            return;
+        };
+        self.pending_home_assign = Some(home_pane_id);
+        self.pending_type_launch = Some(PendingTypeLaunch::Location { location });
+        self.launch_pending(config.session);
+    }
+
+    /// After a launch completes, point the waiting Home pane (if any) at the
+    /// fresh session and return to the dashboard.
+    fn complete_home_assign(&mut self, surface_id: &SurfaceId) {
+        let Some(home_pane_id) = self.pending_home_assign.take() else {
+            return;
+        };
+        let _ = self.app_state.apply(AppIntent::Home(HomeIntent::Assign {
+            home_pane_id,
+            surface_id: surface_id.clone(),
+            pinned: None,
+        }));
+        self.chrome.main_view = MainView::Home;
+        if self.live_ptys {
+            let _ = self.store.save_session(&self.app_state);
         }
     }
 
@@ -3457,21 +3734,32 @@ fn terminal_snapshots(
     remote_configs: &HashMap<SurfaceId, SshConfig>,
     live_ptys: bool,
     timings: &mut HashMap<SurfaceId, crate::latency::LaunchTimeline>,
+    home_scope: Option<Vec<SurfaceId>>,
 ) -> Result<Vec<TerminalSnapshot>, String> {
-    let Some(workspace) = app_state.active_workspace() else {
-        return Ok(Vec::new());
+    // What is visible: the active workspace's pane surfaces, or (on the Home
+    // dashboard) the surfaces its panes reference from ANY project (spec 2.5).
+    let surface_ids: Vec<SurfaceId> = match home_scope {
+        Some(ids) => ids,
+        None => {
+            let Some(workspace) = app_state.active_workspace() else {
+                return Ok(Vec::new());
+            };
+            project_workspace_shell(workspace)
+                .visible_panes
+                .into_iter()
+                .filter_map(|pane| {
+                    let surface_id = pane.active_surface_id?;
+                    let is_terminal = pane.surfaces.iter().any(|surface| {
+                        surface.id == surface_id && surface.surface_type == SurfaceType::Terminal
+                    });
+                    is_terminal.then_some(surface_id)
+                })
+                .collect()
+        }
     };
-    let snapshots = project_workspace_shell(workspace)
-        .visible_panes
+    let snapshots = surface_ids
         .into_iter()
-        .filter_map(|pane| {
-            let surface_id = pane.active_surface_id?;
-            let is_terminal = pane.surfaces.iter().any(|surface| {
-                surface.id == surface_id && surface.surface_type == SurfaceType::Terminal
-            });
-            if !is_terminal {
-                return None;
-            }
+        .filter_map(|surface_id| {
             let is_remote = remote_configs.contains_key(&surface_id);
             // Pull the styled grid (per-cell color + cursor). A remote read error
             // yields an empty screen (pane still renders); a live-PTY read error
@@ -3616,6 +3904,7 @@ fn initial_view_model(app_state: &AppState, chrome: &ChromeState) -> ShellViewMo
         context_menu: None,
         rail_menu: None,
         confirm: None,
+        home: pandamux_ui::HomeViewState::default(),
     }
 }
 
@@ -3686,6 +3975,7 @@ fn fallback_terminal_snapshots(app_state: &AppState) -> Vec<TerminalSnapshot> {
         &HashMap::new(),
         false,
         &mut HashMap::new(),
+        None,
     )
     .unwrap_or_default()
 }
@@ -5000,6 +5290,97 @@ mod tests {
             thread::sleep(Duration::from_millis(100));
         }
         panic!("typed command output never appeared in terminal snapshots");
+    }
+
+    #[test]
+    fn home_pin_focus_and_unpin_round_trip() {
+        let mut runtime = NativeShellRuntime::default();
+        let workspace = runtime.app_state.active_workspace().unwrap();
+        let workspace_id = workspace.id.clone();
+        let surface_id = crate::backend::terminal_surfaces(&workspace.split_tree)[0]
+            .id
+            .clone();
+
+        runtime.update_shell(ShellMessage::RailMenuAction(RailMenuAction::PinToHome {
+            workspace_id,
+            surface_id: surface_id.clone(),
+        }));
+
+        assert_eq!(runtime.chrome.main_view, MainView::Home);
+        assert_eq!(runtime.app_state.home.panes.len(), 1);
+        let pane_id = runtime.app_state.home.panes[0].id.clone();
+        assert_eq!(
+            runtime.app_state.home.focused_pane_id,
+            Some(pane_id.clone())
+        );
+        // Home focus drives keyboard routing (spec 2.5): the focused Home
+        // pane's session is the active session while the dashboard is up.
+        assert_eq!(runtime.active_surface_id(), Some(surface_id));
+
+        // Unpin removes the pane from Home only; the session lives on.
+        runtime.update_shell(ShellMessage::HomeUnpin(pane_id));
+        assert!(runtime.app_state.home.panes.is_empty());
+        assert_eq!(runtime.app_state.workspaces.len(), 1);
+    }
+
+    #[test]
+    fn dead_home_pane_becomes_placeholder_then_reassigns() {
+        let mut runtime = NativeShellRuntime::default();
+        // A restored Home pane whose session did not survive (spec 2.5).
+        let pane_id = runtime
+            .app_state
+            .home
+            .pin(SurfaceId::from("surf-gone"), None);
+        runtime.refresh_terminal_snapshots();
+        assert_eq!(
+            runtime.app_state.home.pane(&pane_id).unwrap().surface_id,
+            None
+        );
+
+        // The next launch completion routes into the waiting pane. Assign
+        // validates the session exists, so mint a real one first.
+        runtime.pending_home_assign = Some(pane_id.clone());
+        let default_pane = runtime.view_model().projection.visible_panes[0].id.clone();
+        runtime.update_shell(ShellMessage::TerminalSurfaceCreated(default_pane));
+        let workspace = runtime.app_state.active_workspace().unwrap();
+        let fresh = crate::backend::terminal_surfaces(&workspace.split_tree)
+            .last()
+            .unwrap()
+            .id
+            .clone();
+        runtime.complete_home_assign(&fresh);
+        assert_eq!(
+            runtime.app_state.home.pane(&pane_id).unwrap().surface_id,
+            Some(fresh)
+        );
+        assert_eq!(runtime.chrome.main_view, MainView::Home);
+        assert_eq!(runtime.pending_home_assign, None);
+    }
+
+    #[test]
+    fn home_assign_picker_lists_and_assigns_open_sessions() {
+        let mut runtime = NativeShellRuntime::default();
+        let pane_id = runtime
+            .app_state
+            .home
+            .pin(SurfaceId::from("surf-gone"), None);
+        runtime.app_state.home.panes[0].surface_id = None;
+
+        runtime.update_shell(ShellMessage::HomeAssignRequested(pane_id.clone()));
+        let menu = runtime.rail_menu.clone().expect("assign picker opens");
+        assert_eq!(menu.items.len(), 1);
+
+        let (_, action) = menu.items[0].clone();
+        runtime.update_shell(ShellMessage::RailMenuAction(action));
+        assert!(
+            runtime
+                .app_state
+                .home
+                .pane(&pane_id)
+                .unwrap()
+                .surface_id
+                .is_some()
+        );
     }
 
     #[test]

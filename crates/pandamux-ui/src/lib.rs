@@ -34,8 +34,8 @@ pub use context_menu::{
 };
 #[cfg(feature = "iced-runtime")]
 pub use iced_shell::{
-    DragView, LinkSpan, ShellMessage, ShellViewModel, TerminalSnapshot, app_view, shell_view,
-    terminal_viewport,
+    DragView, HomePaneEntry, HomeViewState, LinkSpan, ShellMessage, ShellViewModel,
+    TerminalSnapshot, app_view, shell_view, terminal_viewport,
 };
 #[cfg(feature = "iced-runtime")]
 pub use icons::{Icon, icon};

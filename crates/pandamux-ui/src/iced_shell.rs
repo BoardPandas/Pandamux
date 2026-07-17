@@ -112,6 +112,13 @@ pub enum ShellMessage {
     CloseAllRequested(Option<pandamux_core::ProjectId>),
     /// The confirm modal's affirmative button: run the parked action.
     ConfirmAccepted,
+    /// Home dashboard interactions (spec 2.5).
+    HomePaneFocused(PaneId),
+    HomeUnpin(PaneId),
+    HomeMove(PaneId, i32),
+    HomeRelaunch(PaneId),
+    /// Empty/any Home pane: pick a live session to show there.
+    HomeAssignRequested(PaneId),
     // Overlays (command palette / quick-launch / settings)
     /// Dismiss whatever centered overlay is open (backdrop click / Esc).
     OverlayDismissed,
@@ -396,6 +403,26 @@ pub struct ShellViewModel {
     pub rail_menu: Option<crate::context_menu::RailMenuViewState>,
     /// The confirm modal's content while `Overlay::Confirm` is open.
     pub confirm: Option<crate::overlays::ConfirmViewState>,
+    /// Home dashboard panes (spec 2.5), rendered when `main_view` is Home.
+    pub home: HomeViewState,
+}
+
+/// One Home pane as the dashboard renders it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HomePaneEntry {
+    pub pane_id: PaneId,
+    /// "Project · Type" (or the session's custom name).
+    pub title: String,
+    /// The live session shown, when it exists (looked up in `terminals`).
+    pub surface_id: Option<SurfaceId>,
+    /// Whether a pinned configuration exists to relaunch a dead session.
+    pub can_relaunch: bool,
+    pub is_focused: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct HomeViewState {
+    pub panes: Vec<HomePaneEntry>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1145,7 +1172,7 @@ pub fn app_view(model: &ShellViewModel) -> Element<'_, ShellMessage> {
     }
     body = body.push(match model.chrome.main_view {
         chrome::MainView::Workspace => workspace_view(model, palette),
-        chrome::MainView::Home => home_placeholder_view(palette),
+        chrome::MainView::Home => home_view(model, palette),
     });
 
     let mut root = column![chrome::titlebar(&model.chrome, palette), body]
@@ -1269,25 +1296,144 @@ fn empty_state_view<'a>(palette: Palette) -> Element<'a, ShellMessage> {
         .into()
 }
 
-/// Placeholder for the Home dashboard main area (the pinned cross-project
-/// split view lands in the Home stage; the view switch is already real).
-fn home_placeholder_view<'a>(palette: Palette) -> Element<'a, ShellMessage> {
-    let body = column![
-        text("Home")
-            .size(theme::SIZE_TITLE)
-            .font(theme::ui(iced::font::Weight::Semibold))
-            .color(palette.t1),
-        text("Your pinned cross-project dashboard arrives here: pin sessions from any project and they all stay visible at once.")
-            .size(theme::SIZE_BODY)
-            .color(palette.t3),
-    ]
-    .spacing(8)
-    .max_width(420.0);
-    container(body)
+/// The Home dashboard (spec 2.5): the user's pinned cross-project split view.
+/// Panes render LIVE sessions (the same surfaces reachable from their project
+/// views); dead panes show a relaunch placeholder. Arranged as a balanced
+/// grid of columns with two panes per column.
+fn home_view<'a>(model: &'a ShellViewModel, palette: Palette) -> Element<'a, ShellMessage> {
+    if model.home.panes.is_empty() {
+        let body = column![
+            text("Home")
+                .size(theme::SIZE_TITLE)
+                .font(theme::ui(iced::font::Weight::Semibold))
+                .color(palette.t1),
+            text("Pin sessions from any project (right-click a session, Pin to Home) and they all stay visible here at once.")
+                .size(theme::SIZE_BODY)
+                .color(palette.t3),
+        ]
+        .spacing(8)
+        .max_width(440.0);
+        return container(body)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+            .into();
+    }
+
+    let mut columns = row![].spacing(theme::PANE_GAP);
+    for pair in model.home.panes.chunks(2) {
+        let mut stacked = column![].spacing(theme::PANE_GAP);
+        for pane in pair {
+            stacked = stacked.push(home_pane_view(pane, model, palette));
+        }
+        columns = columns.push(stacked.width(Length::Fill).height(Length::Fill));
+    }
+    container(columns.width(Length::Fill).height(Length::Fill))
+        .padding(theme::WORKSPACE_PADDING)
         .width(Length::Fill)
         .height(Length::Fill)
-        .align_x(Alignment::Center)
-        .align_y(Alignment::Center)
+        .into()
+}
+
+fn home_pane_view<'a>(
+    pane: &'a HomePaneEntry,
+    model: &'a ShellViewModel,
+    palette: Palette,
+) -> Element<'a, ShellMessage> {
+    let control = |label: &'static str, message: ShellMessage| {
+        button(text(label).size(theme::SIZE_SECONDARY).color(palette.t3))
+            .padding(Padding::from([1.0, 6.0]))
+            .on_press(message)
+            .style(move |_theme, status| button::Style {
+                background: matches!(status, button::Status::Hovered | button::Status::Pressed)
+                    .then(|| palette.ov(0.08).into()),
+                text_color: palette.t3,
+                border: theme::border(palette.ov(0.1), 1.0, theme::RADIUS_CHIP),
+                ..Default::default()
+            })
+    };
+    let header = row![
+        text(pane.title.clone())
+            .size(theme::SIZE_SECONDARY)
+            .color(if pane.is_focused {
+                palette.t1
+            } else {
+                palette.t3
+            }),
+        Space::new().width(Length::Fill),
+        control("\u{25c0}", ShellMessage::HomeMove(pane.pane_id.clone(), -1)),
+        control("\u{25b6}", ShellMessage::HomeMove(pane.pane_id.clone(), 1)),
+        control("\u{00d7}", ShellMessage::HomeUnpin(pane.pane_id.clone())),
+    ]
+    .spacing(4)
+    .align_y(Alignment::Center)
+    .padding(Padding::from([4.0, 8.0]));
+
+    let snapshot = pane
+        .surface_id
+        .as_ref()
+        .and_then(|surface_id| terminal_snapshot(&model.terminals, surface_id));
+    let body: Element<'a, ShellMessage> = match snapshot {
+        Some(snapshot) => canvas::Canvas::new(
+            TerminalViewport::new(snapshot.lines.clone(), snapshot.columns, snapshot.rows)
+                .with_surface(snapshot.surface_id.clone())
+                .with_view_state(
+                    snapshot.display_offset,
+                    snapshot.history_size,
+                    snapshot.selection.clone(),
+                    snapshot.modes,
+                )
+                .with_cells(snapshot.cells.clone(), snapshot.cursor)
+                .with_cursor(pane.is_focused && model.cursor_on && snapshot.cursor_visible)
+                .with_scheme(model.term_scheme),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into(),
+        None => {
+            // Dead or unassigned: relaunch from the pinned configuration, or
+            // assign one of the open sessions.
+            let mut actions = row![].spacing(8).align_y(Alignment::Center);
+            if pane.can_relaunch {
+                actions = actions.push(control(
+                    "Relaunch",
+                    ShellMessage::HomeRelaunch(pane.pane_id.clone()),
+                ));
+            }
+            actions = actions.push(control(
+                "Assign a session",
+                ShellMessage::HomeAssignRequested(pane.pane_id.clone()),
+            ));
+            container(
+                column![
+                    text("Session ended")
+                        .size(theme::SIZE_BODY)
+                        .color(palette.t3),
+                    actions,
+                ]
+                .spacing(10)
+                .align_x(Alignment::Center),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+            .into()
+        }
+    };
+
+    let card = container(
+        column![header, body]
+            .width(Length::Fill)
+            .height(Length::Fill),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .clip(true)
+    .style(move |_theme| pane_style(palette, pane.is_focused));
+    mouse_area(card)
+        .on_press(ShellMessage::HomePaneFocused(pane.pane_id.clone()))
         .into()
 }
 
@@ -1872,6 +2018,7 @@ mod tests {
             context_menu: None,
             rail_menu: None,
             confirm: None,
+            home: HomeViewState::default(),
         }
     }
 

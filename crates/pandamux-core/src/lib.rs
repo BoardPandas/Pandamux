@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod config;
+pub mod home;
 pub mod i18n;
 pub mod ids;
 pub mod notification;
@@ -17,6 +18,7 @@ pub use agent::{AgentInfo, AgentRegistry, AgentStatus, SpawnStrategy};
 pub use config::{
     Appearance, Theme, ThemeStore, import_windows_terminal, parse_ghostty_theme, parse_hex,
 };
+pub use home::{HomeLayout, HomePane};
 pub use i18n::{Locale, Localizer};
 pub use ids::{PaneId, ProjectId, SshProfileId, SurfaceId, WindowId, WorkspaceId};
 pub use notification::{NewNotification, NotificationInfo, NotificationSource, Notifications};
@@ -46,8 +48,8 @@ pub use split_tree::{
 };
 pub use ssh::{ClipboardConfig, SshAuthConfig, SshHostProfile, SshProfiles, parse_ssh_config};
 pub use state::{
-    APP_STATE_SCHEMA_VERSION, AppDelta, AppIntent, AppState, Capabilities, LayoutGridParams,
-    PaneIntent, ProjectIntent, SplitPaneParams, SurfaceIntent, SystemIntent, WorkspaceIntent,
-    WorkspaceState, WorkspaceSummary,
+    APP_STATE_SCHEMA_VERSION, AppDelta, AppIntent, AppState, Capabilities, HomeIntent,
+    LayoutGridParams, PaneIntent, ProjectIntent, SplitPaneParams, SurfaceIntent, SystemIntent,
+    WorkspaceIntent, WorkspaceState, WorkspaceSummary,
 };
 pub use surface_content::SurfaceContents;

@@ -187,6 +187,16 @@ pub enum RailMenuAction {
     },
     /// Pin/unpin this session's project + type combination (spec 2.3).
     PinConfiguration { config: pandamux_core::LaunchConfig },
+    /// Show this live session on the Home dashboard (spec 2.5).
+    PinToHome {
+        workspace_id: pandamux_core::WorkspaceId,
+        surface_id: SurfaceId,
+    },
+    /// Point a Home pane at a live session (the assign picker).
+    AssignToHomePane {
+        home_pane_id: PaneId,
+        surface_id: SurfaceId,
+    },
 }
 
 /// The open rail menu: a title plus its action rows (built by the runtime,

@@ -1988,6 +1988,10 @@ fn delta_to_result(delta: AppDelta) -> Value {
             "ok": true,
             "projectId": project_id,
         }),
+        AppDelta::HomeChanged { home } => json!({
+            "ok": true,
+            "home": home,
+        }),
         AppDelta::SurfaceRenamed {
             workspace_id,
             surface_id,

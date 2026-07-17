@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.49.0]
+
+### Added
+
+- **The Home dashboard is live** (spec 2.5). The sidebar's Home view is now a pinned, cross-project dashboard: right-click any session and pick "Pin to Home" to add it. Pinned panes render their live terminals side by side (a balanced grid), regardless of which project each session belongs to, and the layout persists across restarts.
+- **Home panes survive their sessions.** When a pinned session ends (or did not survive a restart), its pane stays as a placeholder with one-click Relaunch (respawning the same project + tool it was pinned with) and an "Assign a session" picker that points the pane at any open session instead.
+- **Home is keyboard-aware**: clicking a Home pane focuses it and routes typing to that session; the arrow controls in each pane header reorder the grid, and unpinning never closes the underlying session, which stays reachable from its project view.
+
 ## [0.48.0]
 
 ### Added
