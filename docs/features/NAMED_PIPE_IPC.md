@@ -1,295 +1,190 @@
-<!-- PAGE_ID: pandamux_08_named-pipe-ipc -->
+<!-- PAGE_ID: pandamux_10_named-pipe-ipc -->
 <details>
 <summary>Relevant source files</summary>
 
 The following files were used as evidence for this page:
 
-- [pipe-server.ts:1-177](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/pipe-server.ts#L1-L177)
-- [instance.ts:1-93](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/shared/instance.ts#L1-L93)
-- [v2-bridge.ts:1-125](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-bridge.ts#L1-L125)
-- [v2-browser.ts:1-167](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-browser.ts#L1-L167)
-- [pipe-bridge.ts:1-345](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/renderer/pipe-bridge.ts#L1-L345)
-- [types.ts:222-333](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/shared/types.ts#L222-L333)
-- [index.ts:27-37](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L27-L37)
-- [index.ts:390-787](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L390-L787)
-- [App.tsx:368-386](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/renderer/App.tsx#L368-L386)
+- [pipe_server.rs:1-59](crates/pandamux-app/src/pipe_server.rs#L1-L59)
+- [backend.rs:1-336](crates/pandamux-app/src/backend.rs#L1-L336)
+- [backend.rs:342-408](crates/pandamux-app/src/backend.rs#L342-L408)
+- [backend.rs:1412-1520](crates/pandamux-app/src/backend.rs#L1412-L1520)
+- [backend.rs:1573-1610](crates/pandamux-app/src/backend.rs#L1573-L1610)
+- [backend.rs:1651-1746](crates/pandamux-app/src/backend.rs#L1651-L1746)
+- [backend.rs:1942-2056](crates/pandamux-app/src/backend.rs#L1942-L2056)
+- [backend.rs:2237-2243](crates/pandamux-app/src/backend.rs#L2237-L2243)
+- [backend.rs:2696-2735](crates/pandamux-app/src/backend.rs#L2696-L2735)
+- [protocol.rs:1-49](crates/pandamux-core/src/protocol.rs#L1-L49)
+- [state.rs:59-65](crates/pandamux-core/src/state.rs#L59-L65)
+- [state.rs:522-535](crates/pandamux-core/src/state.rs#L522-L535)
+- [iced_runtime.rs:2509-2565](crates/pandamux-app/src/iced_runtime.rs#L2509-L2565)
+- [iced_runtime.rs:3843-3903](crates/pandamux-app/src/iced_runtime.rs#L3843-L3903)
+- [main.rs:1070-1113](crates/pandamux-cli/src/main.rs#L1070-L1113)
 
 </details>
 
 # Named Pipe Control Plane
 
-> **Related Pages**: [CLI Reference](../api/CLI_REFERENCE.md), [Main Process Modules](../core/MAIN_PROCESS.md)
+> **Related Pages**: [CLI Reference](../api/CLI_REFERENCE.md), [Application Runtime](../core/APP_RUNTIME.md)
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_08_named-pipe-ipc_overview -->
+<!-- BEGIN:AUTOGEN pandamux_10_named-pipe-ipc_overview -->
 ## Overview
 
-PandaMUX exposes a single Windows named pipe, `\\.\pipe\pandamux`, as the control plane every external client (the `pandamux` CLI, shell integration hooks, and Claude Code hooks) uses to drive a running instance. The pipe carries two protocols on the same socket: a legacy newline-delimited V1 text protocol for shell telemetry, and a JSON-RPC-shaped V2 protocol for structured commands (workspace/pane/surface CRUD, terminal I/O, agent spawning, browser control) (([pipe-server.ts:47-97](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/pipe-server.ts#L47-L97))).
+`\\.\pipe\pandamux` is the single transport used by the `pandamux` CLI, Claude Code agents, and the `pandamux-orchestrator` plugin to drive PandaMUX; it carries two protocols on the same connection: a legacy V1 text protocol and a V2 JSON-RPC protocol (backend.rs:1-13, backend.rs:192-210).
 
-Most V2 methods do not mutate main-process state directly. Instead the main process calls `win.webContents.executeJavaScript(...)` to invoke a `window.__pandamux_*` global that the renderer's `pipe-bridge.ts` exposes, which reads and writes the Zustand store ([v2-bridge.ts:95-111](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-bridge.ts#L95-L111), [pipe-bridge.ts:11-24](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/renderer/pipe-bridge.ts#L11-L24)). A smaller set of methods (terminal I/O, agent lifecycle, browser control, hook events) are handled directly in the main process because they touch `ptyManager`, `agentManager`, or the CDP bridge instead of renderer state ([index.ts:489-499](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L489-L499), [index.ts:666-701](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L666-L701)).
+The pipe is accepted in two places depending on how the app is running. The headless build spawns a standalone accept loop in `pipe_server::run` that owns its own `Backend` and hands each connection's line to `Backend::handle_line` (pipe_server.rs:14-33, pipe_server.rs:40-59). The GUI build instead embeds an equivalent accept loop as an Iced subscription (`pipe_subscription` / `run_embedded_pipe_server`) so the live window is the one process binding the pipe (iced_runtime.rs:3848-3859, iced_runtime.rs:3895-3903). Both paths end up calling the same free function, `backend::handle_line`, so a CLI request and a UI-originated mutation are dispatched identically.
 
 ```mermaid
 graph TD
-    CLI["pandamux CLI"] --> Pipe["Named Pipe (pandamux)"]
-    Shell["Shell Integration Hooks"] --> Pipe
-    Pipe --> PipeServer["PipeServer"]
-    PipeServer -->|"V1 text"| V1Handler["handleV1"]
-    PipeServer -->|"V2 JSON-RPC"| V2Handler["handleV2"]
-    V2Handler --> Auth{"Public method?"}
-    Auth -->|"No"| TokenCheck["tokensMatch"]
-    Auth -->|"Yes"| Dispatch["v2 dispatch switch"]
-    TokenCheck --> Dispatch
-    Dispatch --> Bridge["v2-bridge / v2-browser"]
-    Bridge --> ExecJS["executeJavaScript"]
-    ExecJS --> RendererBridge["renderer pipe-bridge"]
-    RendererBridge --> Zustand[("Zustand store")]
+    CLI["pandamux CLI"] --> Pipe["Named Pipe"]
+    Agent["Claude Code Agent"] --> Pipe
+    Orchestrator["pandamux-orchestrator"] --> Pipe
+    UI["Live Iced UI"] --> Dispatcher["handle_line dispatcher"]
+    Pipe --> Dispatcher
+    Dispatcher --> State["Canonical AppState"]
 ```
 
-The pipe path and the per-instance auth token both come from `src/shared/instance.ts`, which also supports running a second, side-by-side pandamux instance via `PANDAMUX_INSTANCE` so a dev build does not collide with an installed one on the exclusive Windows pipe namespace ([instance.ts:14-26](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/shared/instance.ts#L14-L26)).
-
-Sources: [pipe-server.ts:1-177](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/pipe-server.ts#L1-L177), [v2-bridge.ts:1-125](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-bridge.ts#L1-L125), [instance.ts:1-93](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/shared/instance.ts#L1-L93)
-<!-- END:AUTOGEN pandamux_08_named-pipe-ipc_overview -->
+Sources: [pipe_server.rs:1-59](crates/pandamux-app/src/pipe_server.rs#L1-L59), [backend.rs:1-13](crates/pandamux-app/src/backend.rs#L1-L13), [backend.rs:192-210](crates/pandamux-app/src/backend.rs#L192-L210), [iced_runtime.rs:3843-3903](crates/pandamux-app/src/iced_runtime.rs#L3843-L3903)
+<!-- END:AUTOGEN pandamux_10_named-pipe-ipc_overview -->
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_08_named-pipe-ipc_v1 -->
+<!-- BEGIN:AUTOGEN pandamux_10_named-pipe-ipc_v1 -->
 ## V1 Text Protocol
 
-The V1 protocol is the original newline-delimited text format used by shell integration scripts (bash, zsh, PowerShell, cmd) to report ambient state such as cwd, git branch, and PR status. A line that does not start with `{` is treated as V1 ([pipe-server.ts:62-73](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/pipe-server.ts#L62-L73)).
+The V1 protocol predates the JSON-RPC envelope and is kept for shell-integration hooks that write a single plain-text line rather than JSON. `handle_line` checks for it before attempting to parse JSON: a bare `ping` line replies `pong`, and a line prefixed `report_pwd <surfaceId> <path>` updates that surface's tracked working directory and returns an empty reply (backend.rs:192-206).
 
-`handleV1` splits each line into a fixed `<command> <surfaceId> <args...>` shape, but the args portion is parsed per-command rather than with a single split, so paths and titles containing spaces (for example an OneDrive path) survive intact ([pipe-server.ts:104-133](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/pipe-server.ts#L104-L133)):
+```rust
+// backend.rs:194-206
+if message == "ping" {
+    return "pong".to_string();
+}
 
-```typescript
-switch (command) {
-  case 'report_pwd':
-  case 'notify':
-    // Single free-text argument, may contain spaces (issue #53).
-    args = argsRaw ? [argsRaw] : [];
-    break;
-  case 'report_pr': {
-    // format: <number> <state> <title...>  (title may contain spaces)
-    const prParts = argsRaw.split(/\s+/);
-    args = prParts.length >= 3
-      ? [prParts[0], prParts[1], prParts.slice(2).join(' ')]
-      : prParts;
-    break;
-  }
-  default:
-    args = argsRaw ? argsRaw.split(/\s+/) : [];
-    break;
+if let Some(rest) = message.strip_prefix("report_pwd ") {
+    let mut parts = rest.splitn(2, ' ');
+    if let (Some(surface_id), Some(path)) = (parts.next(), parts.next()) {
+        ctx.ptys.set_cwd(surface_id, path.trim());
+    }
+    return String::new();
 }
 ```
 
-Every V1 line is emitted as a `v1` event with a `V1Command { command, surfaceId, args }` payload ([pipe-server.ts:5-9](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/pipe-server.ts#L5-L9), [pipe-server.ts:135-136](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/pipe-server.ts#L135-L136)). `index.ts` listens for this event, forwards every command as a `METADATA_UPDATE` IPC message to all renderer windows, and additionally kicks the port scanner when it sees `ports_kick` ([index.ts:377-388](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L377-L388)).
+`report_pwd` is the cwd-reporting half of the shell-integration scripts (bash/zsh/PowerShell report over the pipe this way; `cmd.exe` reports inline via OSC instead, parsed in the terminal layer) (backend.rs:198-200). Any line that is not `ping`, not a `report_pwd` line, and does not start with `{` is silently dropped, returning an empty string, which the regression test `non_json_line_returns_empty` pins down (backend.rs:208-210, backend.rs:2723-2727). A hermetic `Backend` with no live PTY session still accepts a `report_pwd` line as a no-op, which `report_pwd_v1_line_is_accepted` verifies (backend.rs:2729-2735).
 
-| Command | Args parsing | Socket reply | Consumer |
-|---|---|---|---|
-| `ping` | whitespace-split (none expected) | `pong\n` | Health check ([pipe-server.ts:139-140](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/pipe-server.ts#L139-L140)) |
-| `report_pwd` | single free-text arg | `ok\n` | `METADATA_UPDATE` broadcast ([index.ts:382-387](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L382-L387)) |
-| `notify` | single free-text arg | `ok\n` | `METADATA_UPDATE` broadcast ([index.ts:382-387](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L382-L387)) |
-| `report_pr` | `<number> <state> <title...>` | `ok\n` | `METADATA_UPDATE` broadcast ([index.ts:382-387](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L382-L387)) |
-| `ports_kick` | whitespace-split | `ok\n` | Triggers `portScanner.kick()` in addition to the broadcast ([index.ts:377-381](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L377-L381)) |
-| any other command | whitespace-split | `ok\n` | `METADATA_UPDATE` broadcast only |
+`hook.event`, the shell-integration hook-forwarding method referenced by the wider plugin docs, was not found as a matched string in `backend.rs`'s dispatch tables during this pass. _TBD_ — no `"hook."`-prefixed match arm exists in `backend.rs`; document this method once it lands, or correct the naming if the intended surface is `report_pwd`/`sidebar.log` instead.
 
-Sources: [pipe-server.ts:47-144](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/pipe-server.ts#L47-L144), [index.ts:377-388](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L377-L388)
-<!-- END:AUTOGEN pandamux_08_named-pipe-ipc_v1 -->
+Sources: [backend.rs:192-210](crates/pandamux-app/src/backend.rs#L192-L210), [backend.rs:2723-2735](crates/pandamux-app/src/backend.rs#L2723-L2735)
+<!-- END:AUTOGEN pandamux_10_named-pipe-ipc_v1 -->
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_08_named-pipe-ipc_v2 -->
+<!-- BEGIN:AUTOGEN pandamux_10_named-pipe-ipc_v2 -->
 ## V2 JSON-RPC Protocol
 
-A line starting with `{` is parsed as a `V2Request { method, params, id?, token? }` and, on JSON parse failure, gets an immediate `{ error: { code: -32700, message: 'Parse error' } }` reply ([pipe-server.ts:11-16](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/pipe-server.ts#L11-L16), [pipe-server.ts:62-69](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/pipe-server.ts#L62-L69)). Every V2 reply has the shape `V2Response { result?, error?: { code, message }, id? }` and is written back as one JSON line ([pipe-server.ts:30-34](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/pipe-server.ts#L30-L34)).
+Any line starting with `{` is parsed as an `RpcRequest`: `{ method: String, params: Value, id: Value, token: Option<String> }` (protocol.rs:4-13). Parse failures reply with a JSON-RPC `-32700` "parse error" envelope rather than dropping the connection (backend.rs:212-221).
 
-`handleV2` authenticates every method that is not in the `PUBLIC_V2_METHODS` allowlist (`system.identify`, `system.capabilities`, `hook.event`, `agent.activity`) before dispatch. Using an allowlist rather than a blocklist means any new privileged method is locked down by default ([pipe-server.ts:18-28](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/pipe-server.ts#L18-L28)):
-
-```typescript
-if (!PUBLIC_V2_METHODS.has(request.method)) {
-  if (!this.authToken) {
-    respondError(-32001, 'Unauthorized: pipe auth token not initialized');
-    return;
-  }
-  if (!tokensMatch(request.token || '', this.authToken)) {
-    respondError(-32001, 'Unauthorized: missing or invalid token');
-    return;
-  }
+```rust
+// protocol.rs:4-22
+pub struct RpcRequest {
+    pub method: String,
+    #[serde(default)]
+    pub params: Value,
+    #[serde(default)]
+    pub id: Value,
+    #[serde(default)]
+    pub token: Option<String>,
 }
 
-// Emit the V2 request and let handlers respond
-const handled = this.emit('v2', request, respond, respondError);
-if (!handled) {
-  respondError(-32601, `Method not found: ${request.method}`);
-}
-```
-
-The auth token itself is a 32-byte random hex string generated once per instance by `ensurePipeToken()`, persisted under the instance's APPDATA directory with `0o600` permissions, and injected into every pandamux-spawned shell as `PANDAMUX_PIPE_TOKEN` so the CLI and Claude Code hooks authenticate automatically ([instance.ts:60-77](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/shared/instance.ts#L60-L77), [index.ts:79-85](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L79-L85)). Clients outside a pandamux shell fall back to reading the token file directly via `readPipeToken()` ([instance.ts:39-53](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/shared/instance.ts#L39-L53)). Comparison uses `crypto.timingSafeEqual` to avoid leaking the token through timing side channels ([instance.ts:79-92](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/shared/instance.ts#L79-L92)).
-
-Example request/response pair for `workspace.create`, one of the methods handled through the uniform renderer bridge described in the next two sections ([v2-bridge.ts:31-34](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-bridge.ts#L31-L34)):
-
-```json
-{"method": "workspace.create", "params": {"title": "Build", "shell": "pwsh"}, "id": 1, "token": "<PANDAMUX_PIPE_TOKEN>"}
-```
-
-```json
-{"result": {"workspaceId": "ws-1234"}, "id": 1}
-```
-
-Once authenticated, `index.ts` routes the request through `routeSpecialV2` before falling into its own large `switch` on `request.method` ([index.ts:27-37](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L27-L37)):
-
-```typescript
-function routeSpecialV2(
-  request: { method: string; params?: any },
-  respond: (result: any) => void,
-  respondError: (code: number, message: string) => void,
-): boolean {
-  if (request.method.startsWith('browser.')) {
-    handleBrowserV2(request.method, request.params, respond, respondError);
-    return true;
-  }
-  return handleBridgeV2(request.method, request.params, respond, respondError);
+pub struct RpcResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<RpcError>,
+    pub id: Value,
 }
 ```
 
-Sources: [pipe-server.ts:11-34](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/pipe-server.ts#L11-L34), [pipe-server.ts:146-176](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/pipe-server.ts#L146-L176), [instance.ts:39-92](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/shared/instance.ts#L39-L92), [index.ts:27-37](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L27-L37)
-<!-- END:AUTOGEN pandamux_08_named-pipe-ipc_v2 -->
+Every successful dispatch replies `RpcResponse::result(id, result)`; every failure replies `RpcResponse::error(id, code, message)`, and both are serialized with `serialize_response`, which falls back to a hand-written `-32603` envelope if `serde_json` itself fails (backend.rs:223-227, backend.rs:2237-2243).
+
+The `token` field is the request envelope's auth slot: the CLI populates it from the `PANDAMUX_PIPE_TOKEN` environment variable on every V2 call (`read_pipe_token`), sending an empty string when unset (main.rs:1070-1076, main.rs:1109-1113). _TBD_ — no code path in `dispatch`/`handle_line` reads or validates `request.token`; the field is carried end-to-end in the envelope but not yet enforced server-side in this snapshot of `backend.rs`.
+
+This V2 surface is wire-compatible with the historical (pre-Rust-rewrite) prototype's pipe protocol, per the crate-level documentation on `handle_line`: the CLI, agents, and the orchestrator plugin all talk the same request/response shape regardless of which pandamux backend (Electron-era or native) is on the other end (backend.rs:1-13, backend.rs:188-191).
+
+Sources: [protocol.rs:1-49](crates/pandamux-core/src/protocol.rs#L1-L49), [backend.rs:212-227](crates/pandamux-app/src/backend.rs#L212-L227), [backend.rs:2237-2243](crates/pandamux-app/src/backend.rs#L2237-L2243), [main.rs:1070-1113](crates/pandamux-cli/src/main.rs#L1070-L1113)
+<!-- END:AUTOGEN pandamux_10_named-pipe-ipc_v2 -->
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_08_named-pipe-ipc_methods -->
+<!-- BEGIN:AUTOGEN pandamux_10_named-pipe-ipc_methods -->
 ## Method Catalog
 
-Every V2 method falls into one of three dispatch paths: the uniform renderer-bridge table in `v2-bridge.ts`, the per-caller browser router in `v2-browser.ts`, or a hand-written `case` in the `index.ts` switch. `routeSpecialV2` tries the first two before the switch runs ([index.ts:390-395](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L390-L395)).
+`dispatch` tries a sequence of namespace-specific sub-dispatchers before falling through to the intent-based `AppIntent`/`AppDelta` path; each sub-dispatcher returns `Ok(None)` to fall through to the next one, or `Ok(Some(value))`/`Err` to short-circuit (backend.rs:230-336).
 
-Methods routed through `v2-bridge.ts`'s `SPECS` table call `window.__pandamux_*` via `executeJavaScript` and shape the result; `emptyOnNoWindow` lets read-only "list" methods return an empty collection instead of an error when no window exists yet ([v2-bridge.ts:30-93](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-bridge.ts#L30-L93)):
+| Namespace | Sample methods | Purpose |
+|---|---|---|
+| `system.*` | `system.identify`, `system.capabilities`, `system.tree` | Identify the running binary/version, report capability flags, and dump a workspace's split tree ([backend.rs:1653-1657](crates/pandamux-app/src/backend.rs#L1653-L1657)) |
+| `workspace.*` | `workspace.create`, `workspace.close`, `workspace.select`, `workspace.rename`, `workspace.list`, `workspace.close_all` | Create/select/rename/close top-level workspaces (each with its own split tree and shell) ([backend.rs:1658-1673](crates/pandamux-app/src/backend.rs#L1658-L1673), [backend.rs:1728-1730](crates/pandamux-app/src/backend.rs#L1728-L1730)) |
+| `pane.*` / `layout.grid` | `pane.split`, `pane.close`, `pane.focus`, `pane.zoom`, `pane.list`, `layout.grid` | Mutate the immutable `SplitNode` tree: split/close/focus/zoom a pane, or lay out N panes in a grid in one call ([backend.rs:1674-1694](crates/pandamux-app/src/backend.rs#L1674-L1694)) |
+| `surface.*` | `surface.create`, `surface.focus`, `surface.close`, `surface.move`, `surface.list`, `surface.rename`, `surface.set_session_type`, `surface.send_text`, `surface.send_key`, `surface.paste`, `surface.paste_image`, `surface.read_text`, `surface.resize`/`pty.resize`, `surface.kill`/`pty.kill`, `surface.set_color_scheme`, `surface.trigger_flash` | Structural surface CRUD (`surface.create`/`focus`/`close`/`move`/`list`/`rename`) plus terminal I/O against the surface's PTY or SSH channel (send/paste/read/resize) ([backend.rs:1695-1727](crates/pandamux-app/src/backend.rs#L1695-L1727), [backend.rs:1421-1490](crates/pandamux-app/src/backend.rs#L1421-L1490)) |
+| `markdown.*` / `diff.*` | `markdown.set_content`/`diff.set_content`, `markdown.load_file`/`diff.refresh` | Push inline content into a markdown or diff surface, or load it from a client-supplied path (a small one-shot blocking read on the sync dispatch path) ([backend.rs:1579-1602](crates/pandamux-app/src/backend.rs#L1579-L1602)) |
+| `notification.*` | `notification.raise`/`notification.fire`, `notification.list`, `notification.clear` | Raise/list/clear the sidebar notification feed ([backend.rs:349-375](crates/pandamux-app/src/backend.rs#L349-L375)) |
+| `sidebar.*` | `sidebar.set_status`, `sidebar.set_progress`, `sidebar.log`, `sidebar.get_state` | Update the status-bar/progress/log fields agents use to report activity ([backend.rs:408-431](crates/pandamux-app/src/backend.rs#L408-L431)) |
+| `agent.*` | `agent.spawn`, `agent.spawn_batch`, `agent.status`, `agent.list`, `agent.kill` | Spawn/query/kill orchestrator-managed agent processes attached to panes ([backend.rs:648-725](crates/pandamux-app/src/backend.rs#L648-L725)) |
+| `clipboard.*` | `clipboard.copy`, `clipboard.get`, `clipboard.policy` | Read/write the OS clipboard and configure the OSC 52 clipboard policy (size cap, per-host load opt-in) ([backend.rs:1370-1410](crates/pandamux-app/src/backend.rs#L1370-L1410)) |
+| `ssh.*` | `ssh.connect`, `ssh.disconnect`, `ssh.list`, `ssh.profiles`/`ssh.profile.list`, `ssh.save_profile`/`ssh.profile.save`, `ssh.remove_profile`/`ssh.profile.remove`, `ssh.import_config`/`ssh.profile.import_config` | Manage remote PTY sessions and saved SSH host profiles ([backend.rs:1166-1284](crates/pandamux-app/src/backend.rs#L1166-L1284)) |
+| `window.*` | `window.list`, `window.focus` | Enumerate/focus OS-level app windows ([backend.rs:571-578](crates/pandamux-app/src/backend.rs#L571-L578)) |
+| `config.*` / `theme.*` | `config.get`, `config.set`, `config.show`, `config.path`, `config.reload`, `config.import_windows_terminal`, `config.import_ghostty`, `theme.list`, `theme.select`, `theme.get` | Read/write persisted user settings and import/select terminal color themes ([backend.rs:449-543](crates/pandamux-app/src/backend.rs#L449-L543)) |
+| `hook.event` | _TBD_ | No `"hook."`-prefixed match arm was found anywhere in `backend.rs`; not currently implemented in this snapshot |
 
-| Method | Params | Delegates to | Source |
-|---|---|---|---|
-| `workspace.create` | `title?`, `shell?`, `cwd?` | `window.__pandamux_createWorkspace` | ([v2-bridge.ts:31-34](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-bridge.ts#L31-L34)) |
-| `workspace.close` | `id` / `workspaceId` | `window.__pandamux_closeWorkspace` | ([v2-bridge.ts:35-37](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-bridge.ts#L35-L37)) |
-| `workspace.select` | `id` / `workspaceId` | `window.__pandamux_selectWorkspace` | ([v2-bridge.ts:38-40](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-bridge.ts#L38-L40)) |
-| `workspace.rename` | `id` / `workspaceId`, `title?` | `window.__pandamux_renameWorkspace` | ([v2-bridge.ts:41-43](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-bridge.ts#L41-L43)) |
-| `workspace.list` | none | `window.__pandamux_listWorkspaces` | ([v2-bridge.ts:44-48](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-bridge.ts#L44-L48)) |
-| `pane.split` | `direction?`, `type?`, `workspaceId?`, `colorScheme?` | `window.__pandamux_splitPane` | ([v2-bridge.ts:49-52](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-bridge.ts#L49-L52)) |
-| `pane.close` | `id` / `paneId`, `workspaceId?` | `window.__pandamux_closePane` | ([v2-bridge.ts:53-55](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-bridge.ts#L53-L55)) |
-| `pane.list` | `workspaceId?` | `window.__pandamux_listPanes` | ([v2-bridge.ts:56-60](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-bridge.ts#L56-L60)) |
-| `layout.grid` | `count`, `type?`, `anchorSurfaceId?`, `anchorPaneId?`, `workspaceId?` | `window.__pandamux_layoutGrid` | ([v2-bridge.ts:61-64](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-bridge.ts#L61-L64)) |
-| `system.tree` | `workspaceId?` | `window.__pandamux_getTree` | ([v2-bridge.ts:65-69](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-bridge.ts#L65-L69)) |
-| `surface.create` | `type?`, `paneId?`, `workspaceId?`, `colorScheme?` | `window.__pandamux_createSurface` | ([v2-bridge.ts:70-73](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-bridge.ts#L70-L73)) |
-| `surface.close` | `id` / `surfaceId`, `workspaceId?` | `window.__pandamux_closeSurface` | ([v2-bridge.ts:74-76](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-bridge.ts#L74-L76)) |
-| `surface.focus` | `id` / `surfaceId`, `workspaceId?` | `window.__pandamux_focusSurface` | ([v2-bridge.ts:77-79](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-bridge.ts#L77-L79)) |
-| `surface.list` | `workspaceId?` | `window.__pandamux_listSurfaces` | ([v2-bridge.ts:80-84](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-bridge.ts#L80-L84)) |
-| `markdown.set_content` | `surfaceId?`, `markdown?` | `window.__pandamux_setMarkdownContent` | ([v2-bridge.ts:85-87](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-bridge.ts#L85-L87)) |
-| `notification.list` | none | `window.__pandamux_listNotifications` | ([v2-bridge.ts:88-92](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-bridge.ts#L88-L92)) |
+Browser/CDP methods are intentionally rejected rather than routed: any `browser.*` method or the bare `cdp` method, and `layout.grid`/`surface.create` requests with `"type":"browser"`, return a `-32601`/`-32602` error whose message tells the caller to use Claude Code's own browser tooling instead (backend.rs:316-324, backend.rs:1812). `system.capabilities` reports `browser: false` in its `Capabilities` struct, so callers can detect this without triggering the rejection path (state.rs:59-65, state.rs:529-535). Both behaviors are pinned by tests: `rejects_browser_methods_with_clear_message` and `rejects_browser_grid_surface` (backend.rs:2697-2721).
 
-`browser.*` methods are routed to `v2-browser.ts`, which resolves a per-caller browser `webContents` id (so concurrent agents each get their own browser surface, issue #62) and then runs the verb through the CDP bridge ([v2-browser.ts:65-101](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-browser.ts#L65-L101), [v2-browser.ts:106-134](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-browser.ts#L106-L134)):
-
-| Method | Params | Delegates to | Source |
-|---|---|---|---|
-| `browser.navigate` | `url`, `timeout?` | `cdpBridge.navigate` | ([v2-browser.ts:108-110](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-browser.ts#L108-L110)) |
-| `browser.snapshot` | none | `cdpBridge.snapshot` | ([v2-browser.ts:111-112](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-browser.ts#L111-L112)) |
-| `browser.click` | `ref` | `cdpBridge.click` | ([v2-browser.ts:113-115](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-browser.ts#L113-L115)) |
-| `browser.type` | `ref`, `text` | `cdpBridge.type` | ([v2-browser.ts:116-118](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-browser.ts#L116-L118)) |
-| `browser.fill` | `ref`, `value` | `cdpBridge.fill` | ([v2-browser.ts:119-121](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-browser.ts#L119-L121)) |
-| `browser.screenshot` | `fullPage?` | `cdpBridge.screenshot` | ([v2-browser.ts:122-123](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-browser.ts#L122-L123)) |
-| `browser.get_text` | `ref?` | `cdpBridge.getText` | ([v2-browser.ts:124-125](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-browser.ts#L124-L125)) |
-| `browser.eval` | `js` | `cdpBridge.evaluate` | ([v2-browser.ts:126-127](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-browser.ts#L126-L127)) |
-| `browser.wait` | `ref?`, `timeout?` | `cdpBridge.wait` | ([v2-browser.ts:128-130](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-browser.ts#L128-L130)) |
-| `browser.batch` | `commands: [{method, params}]`, `caller?` | Runs each command via `runBrowserCommand`, stopping at first error | ([v2-browser.ts:136-149](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-browser.ts#L136-L149)) |
-
-The remaining methods are handled directly in the `index.ts` switch because they touch main-process singletons (`ptyManager`, `agentManager`) or broadcast Electron IPC rather than reading/writing renderer state through `executeJavaScript` alone:
-
-| Method | Params | Delegates to | Source |
-|---|---|---|---|
-| `system.identify` | none (public) | Static `{ name, version, platform }` | ([index.ts:396-397](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L396-L397)) |
-| `system.capabilities` | none (public) | Static `{ protocols, features }` | ([index.ts:399-401](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L399-L401)) |
-| `pane.focus` | `id` / `paneId`, `workspaceId?` | Looks up the pane's first surface via `__pandamux_listPanes`, then `__pandamux_focusSurface` | ([index.ts:403-423](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L403-L423)) |
-| `pane.zoom` | any | Acknowledged only; zoom is renderer-only UI state | ([index.ts:424-428](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L424-L428)) |
-| `surface.set_color_scheme` | `surfaceId` / `id`, `colorScheme` / `scheme` | `window.__pandamux_setSurfaceColorScheme` | ([index.ts:431-447](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L431-L447)) |
-| `theme.list` | none | `loadBundledThemes()` from `theme-loader.ts` | ([index.ts:448-460](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L448-L460)) |
-| `config.get` | none | `loadUserConfig()` from `user-config.ts` | ([index.ts:461-470](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L461-L470)) |
-| `config.reload` | none | Re-reads config, pushes `config:userConfigUpdated` to all windows | ([index.ts:471-486](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L471-L486)) |
-| `surface.send_text` | `surfaceId?` / `id?`, `text?` | `ptyManager.write` | ([index.ts:489-499](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L489-L499)) |
-| `surface.send_key` | `key`, `modifiers?` / `ctrl?`/`alt?`/`shift?`, `surfaceId?` | Translates key name to bytes, then `ptyManager.write` | ([index.ts:500-532](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L500-L532)) |
-| `surface.read_text` | `surfaceId?` | _TBD_ (stub only; returns `{ text: '', note: '...' }`, real screen read needs an xterm serializer addon) | ([index.ts:533-538](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L533-L538)) |
-| `surface.trigger_flash` | `surfaceId?` | Broadcasts `NOTIFICATION_FIRE` to all windows | ([index.ts:539-550](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L539-L550)) |
-| `markdown.load_file` | `filePath` / `path` / `file`, `surfaceId?` | Validates extension/size, reads file, `window.__pandamux_setMarkdownContent` | ([index.ts:554-585](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L554-L585)) |
-| `notification.clear` | `id?`, `all?` | `window.__pandamux_clearNotification` / `__pandamux_clearAllNotifications` | ([index.ts:589-607](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L589-L607)) |
-| `sidebar.set_status` | `surfaceId?`, `key?`, `value?` | Broadcasts `METADATA_UPDATE` (`status`) | ([index.ts:610-623](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L610-L623)) |
-| `sidebar.set_progress` | `surfaceId?`, `value?`, `label?` | Broadcasts `METADATA_UPDATE` (`progress`) | ([index.ts:624-636](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L624-L636)) |
-| `sidebar.log` | `surfaceId?`, `level?`, `message?` | Broadcasts `METADATA_UPDATE` (`log`) | ([index.ts:637-649](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L637-L649)) |
-| `sidebar.get_state` | none | `window.__pandamux_listWorkspaces` | ([index.ts:650-663](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L650-L663)) |
-| `agent.spawn` | `cmd` / `prompt`, `label?`, `cwd?`, `env?`, `paneId?`, `workspaceId?` | `agentManager.spawn`, then `AGENT_UPDATE` broadcast | ([index.ts:666-701](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L666-L701)) |
-| `agent.spawn_batch` | `agents[]`, `strategy?`, `workspaceId?` | `resolveAgentAssignments` + `spawnAgentBatch` | ([index.ts:703-723](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L703-L723)) |
-| `agent.status` | `agentId` | `agentManager.getStatus` | ([index.ts:725-730](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L725-L730)) |
-| `agent.list` | `workspaceId?` | `agentManager.list` | ([index.ts:731-733](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L731-L733)) |
-| `agent.kill` | `agentId` | `agentManager.kill` | ([index.ts:734-739](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L734-L739)) |
-| `hook.event` | Claude Code hook payload (public) | Broadcasts `HOOK_EVENT`; staggers `DIFF_UPDATE` for Edit/Write tools | ([index.ts:741-760](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L741-L760)) |
-| `agent.activity` | `surfaceId`, `tool?`, `skill?`, `done?` (public) | `applyExternalActivity` (claude-observer) | ([index.ts:762-773](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L762-L773)) |
-| `diff.refresh` | `file?` | Broadcasts `DIFF_UPDATE` | ([index.ts:775-782](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L775-L782)) |
-
-Any method matching none of the above falls to the `default` case and returns `-32601 Method not found` ([index.ts:784-785](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L784-L785)).
-
-Sources: [v2-bridge.ts:30-124](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-bridge.ts#L30-L124), [v2-browser.ts:106-167](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/v2-browser.ts#L106-L167), [index.ts:390-787](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L390-L787)
-<!-- END:AUTOGEN pandamux_08_named-pipe-ipc_methods -->
+Sources: [backend.rs:230-336](crates/pandamux-app/src/backend.rs#L230-L336), [backend.rs:1651-1746](crates/pandamux-app/src/backend.rs#L1651-L1746), [state.rs:59-65](crates/pandamux-core/src/state.rs#L59-L65), [state.rs:522-535](crates/pandamux-core/src/state.rs#L522-L535)
+<!-- END:AUTOGEN pandamux_10_named-pipe-ipc_methods -->
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_08_named-pipe-ipc_bridge -->
-## Renderer Bridge
+<!-- BEGIN:AUTOGEN pandamux_10_named-pipe-ipc_dispatch -->
+## Shared Dispatch and Deltas
 
-`src/renderer/pipe-bridge.ts` exposes Zustand store operations as `window.__pandamux_*` globals during `initPipeBridge()`, which is called once from `App.tsx` alongside two extra globals (`__pandamux_getActiveWorkspaceId`, `__pandamux_getPaneLoads`) that the agent-spawn methods need ([pipe-bridge.ts:11-24](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/renderer/pipe-bridge.ts#L11-L24), [App.tsx:368-386](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/renderer/App.tsx#L368-L386)). Every global reads `useStore.getState()` fresh on each call rather than closing over a stale snapshot, since `executeJavaScript` calls can arrive at any time relative to React renders.
+`handle_line` is the single synchronous dispatch code path shared by both clients of canonical state: the standalone pipe server and the live Iced runtime's `update` loop. It borrows `AppState`, `PtySessionManager`, and `Notifications` (bundled with the rest of the mutable backend fields into `DispatchCtx`) by mutable reference and never awaits, so a CLI-driven pane split and a UI-driven pane split are indistinguishable once they reach this function (backend.rs:1-12, backend.rs:36-63).
 
-| Global | Backing store call | Purpose |
-|---|---|---|
-| `__pandamux_createWorkspace` / `_closeWorkspace` / `_selectWorkspace` / `_renameWorkspace` / `_listWorkspaces` | `store.createWorkspace` / `closeWorkspace` / `selectWorkspace` / `renameWorkspace` / `workspaces` | Workspace CRUD ([pipe-bridge.ts:16-47](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/renderer/pipe-bridge.ts#L16-L47)) |
-| `__pandamux_getWorkspaceIdForSurface` / `_listBrowserSurfaces` | Walks `ws.splitTree` via `getAllPaneIds` / `findLeaf` | Resolves per-caller browser routing for `v2-browser.ts` (#62) ([pipe-bridge.ts:52-77](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/renderer/pipe-bridge.ts#L52-L77)) |
-| `__pandamux_splitPane` / `_closePane` / `_layoutGrid` / `_listPanes` | `splitNode` / `removeLeaf` / `buildGridLayout` from `split-utils.ts` | Pane tree mutation ([pipe-bridge.ts:81-193](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/renderer/pipe-bridge.ts#L81-L193)) |
-| `__pandamux_createSurface` / `_setSurfaceColorScheme` / `_closeSurface` / `_focusSurface` / `_listSurfaces` / `_getActiveSurfaceId` | `store.addSurface` / `updateSurface` / `closeSurface` / `selectSurface` | Surface (tab) CRUD ([pipe-bridge.ts:197-309](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/renderer/pipe-bridge.ts#L197-L309)) |
-| `__pandamux_setMarkdownContent` | `store.setMarkdownContent` | Fixes markdown content not reaching `MarkdownPane` (issue #54) ([pipe-bridge.ts:313-319](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/renderer/pipe-bridge.ts#L313-L319)) |
-| `__pandamux_listNotifications` / `_clearNotification` / `_clearAllNotifications` | `store.notifications` / `clearNotification` / `clearAll` | Notification list/clear ([pipe-bridge.ts:323-333](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/renderer/pipe-bridge.ts#L323-L333)) |
-| `__pandamux_getTree` | `ws.splitTree` | `system.tree` support ([pipe-bridge.ts:337-343](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/renderer/pipe-bridge.ts#L337-L343)) |
-| `__pandamux_getActiveWorkspaceId` / `_getPaneLoads` | `store.activeWorkspaceId` / pane tab counts | Read by `agent.spawn` / `agent.spawn_batch` to pick a target pane ([App.tsx:370-379](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/renderer/App.tsx#L370-L379)) |
+For methods not claimed by a namespace sub-dispatcher, `dispatch` converts the request into an `AppIntent` (`intent_for_request`), applies it against canonical `AppState` (`app.apply(intent)`), reconciles PTY/remote sessions, prunes surface content/color-scheme overrides for anything the mutation closed, and finally converts the resulting `AppDelta` into the JSON `result` via `delta_to_result` (backend.rs:326-336, backend.rs:1942-2056). This is the intent-in, delta-out shape: the request supplies intent, and the only state mutation channel back out is the typed delta.
 
-`__pandamux_splitPane` is representative of the denser globals: it resolves the target workspace, picks the first pane as the split target, builds the new leaf via `splitNode`, and, for `pandamux split --color-scheme prod`, applies a per-pane color-scheme override to the freshly created surface before returning `{ paneId, surfaceId }` ([pipe-bridge.ts:81-110](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/renderer/pipe-bridge.ts#L81-L110)):
+The Iced runtime's `ShellMessage::PipeRequest` handler builds an equivalent `DispatchCtx` from its own live fields and calls the same free `backend::handle_line`, then performs side effects the pipe server doesn't need (persisting SSH profiles, live-applying `config.set`, saving sessions after `project.create`) before returning the reply to the waiting pipe connection through a registry channel (iced_runtime.rs:2509-2565). The embedded accept loop that feeds it runs as an `iced::Subscription` only when the app has live PTYs, which is what lets a CLI/agent/orchestrator line repaint the same window the user is looking at (iced_runtime.rs:3848-3859, iced_runtime.rs:3895-3903).
 
-```typescript
-const newTree = splitNode(ws.splitTree, targetPaneId, newPaneId, surfaceType, direction);
-store.updateSplitTree(wsId, newTree);
+```mermaid
+sequenceDiagram
+    participant CLI as "CLI Client"
+    participant Pipe as "Named Pipe"
+    participant Dispatch as "handle_line"
+    participant State as "AppState"
+    participant UI as "Live Iced UI"
 
-const newLeaf = findLeaf(newTree, newPaneId);
-const surfaceId = newLeaf?.surfaces?.[0]?.id || null;
-
-if (params?.colorScheme && surfaceId && newLeaf) {
-  store.updateSurface(wsId, newPaneId, surfaceId as SurfaceId, { colorScheme: params.colorScheme });
-}
-
-return { paneId: newPaneId, surfaceId };
+    CLI->>Pipe: "JSON-RPC request line"
+    activate Pipe
+    Pipe->>Dispatch: "handle_line(line, ctx)"
+    activate Dispatch
+    Dispatch->>State: "app.apply(intent)"
+    activate State
+    State-->>Dispatch: "AppDelta"
+    deactivate State
+    Dispatch-->>Pipe: "serialized RpcResponse"
+    deactivate Dispatch
+    Pipe-->>CLI: "reply line"
+    deactivate Pipe
+    Dispatch->>UI: "delta reflected in shared AppState"
+    activate UI
+    UI-->>UI: "next repaint renders new state"
+    deactivate UI
 ```
 
-Sources: [pipe-bridge.ts:1-345](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/renderer/pipe-bridge.ts#L1-L345), [App.tsx:368-386](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/renderer/App.tsx#L368-L386)
-<!-- END:AUTOGEN pandamux_08_named-pipe-ipc_bridge -->
+1. The client (CLI, agent, or orchestrator script) writes one JSON-RPC line to the pipe and reads back exactly one reply line (pipe_server.rs:40-59, main.rs:1090-1107).
+2. The accept loop (standalone `handle_connection` or the embedded subscription) hands the trimmed line to `Backend::handle_line`, which builds a `DispatchCtx` over the canonical fields and calls the free `handle_line` (backend.rs:112-133, iced_runtime.rs:2509-2534).
+3. `dispatch` resolves the method to either a namespace sub-dispatcher's `Ok(Some(value))` or an `AppIntent` applied via `app.apply`, producing an `AppDelta` that `delta_to_result` renders back into the JSON `result` field of the reply (backend.rs:230-336, backend.rs:1942-1953).
+4. Because the embedded (GUI) path mutates the exact same `AppState`/`PtySessionManager` the live window renders from, the next repaint shows the CLI-driven change with no separate sync step (iced_runtime.rs:2509-2534).
 
----
-
-<!-- BEGIN:AUTOGEN pandamux_08_named-pipe-ipc_channels -->
-## Electron IPC Channels
-
-The named pipe is a process-external protocol; once a V2 handler needs to notify open renderer windows of a change, it does so over ordinary Electron IPC, using string constants centralized in `IPC_CHANNELS` so no handler hardcodes a channel name ([types.ts:222-333](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/shared/types.ts#L222-L333)). These channels are distinct from the pipe's V1/V2 methods: a single pipe request can fan out to a broadcast on one or more of these channels across every `BrowserWindow`.
-
-| IPC channel | Constant | Triggered by |
-|---|---|---|
-| `metadata:update` | `METADATA_UPDATE` ([types.ts:287](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/shared/types.ts#L287)) | Every V1 command ([index.ts:382-387](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L382-L387)), `sidebar.set_status` / `_set_progress` / `_log` ([index.ts:610-649](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L610-L649)) |
-| `notification:fire` | `NOTIFICATION_FIRE` ([types.ts:255](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/shared/types.ts#L255)) | `surface.trigger_flash` ([index.ts:539-550](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L539-L550)) |
-| `agent:update` | `AGENT_UPDATE` ([types.ts:294](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/shared/types.ts#L294)) | `agent.spawn` ([index.ts:694-696](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L694-L696)) |
-| `hook:event` | `HOOK_EVENT` ([types.ts:310](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/shared/types.ts#L310)) | `hook.event` ([index.ts:741-744](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L741-L744)) |
-| `diff:update` | `DIFF_UPDATE` ([types.ts:323](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/shared/types.ts#L323)) | `hook.event` for Edit/Write tools (staggered at 500ms/2s) ([index.ts:748-757](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L748-L757)), `diff.refresh` ([index.ts:775-780](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L775-L780)) |
-| `config:userConfigUpdated` | `CONFIG_USER_CONFIG_UPDATED` ([types.ts:278](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/shared/types.ts#L278)) | `config.reload` ([index.ts:476-481](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L476-L481)) |
-| `cdp:navigate`, `cdp:snapshot`, `cdp:click`, `cdp:type`, `cdp:fill`, `cdp:screenshot`, `cdp:get-text`, `cdp:eval`, `cdp:wait` | `CDP_*` ([types.ts:296-306](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/shared/types.ts#L296-L306)) | Underlying transport for the `browser.*` V2 methods handled by `v2-browser.ts` and the CDP bridge |
-
-Everything else in `IPC_CHANNELS` (PTY, window management, settings, session persistence) exists for the preload/renderer boundary and is not driven by the named pipe; it is documented on the [Main Process Modules](../core/MAIN_PROCESS.md) page.
-
-Sources: [types.ts:222-333](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/shared/types.ts#L222-L333), [index.ts:539-780](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/main/index.ts#L539-L780)
-<!-- END:AUTOGEN pandamux_08_named-pipe-ipc_channels -->
+Sources: [backend.rs:1-13](crates/pandamux-app/src/backend.rs#L1-L13), [backend.rs:112-145](crates/pandamux-app/src/backend.rs#L112-L145), [backend.rs:230-336](crates/pandamux-app/src/backend.rs#L230-L336), [iced_runtime.rs:2509-2565](crates/pandamux-app/src/iced_runtime.rs#L2509-L2565)
+<!-- END:AUTOGEN pandamux_10_named-pipe-ipc_dispatch -->
 
 ---

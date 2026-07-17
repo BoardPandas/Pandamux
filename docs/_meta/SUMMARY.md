@@ -1,56 +1,53 @@
 # Documentation Generation Summary
 
-- **Mode:** init
-- **Commit:** `0ab9e6463a9017a7b8ea98f10b3f847507658ac4` (branch `master`)
-- **Generated:** 2026-07-05
-- **Pages generated:** 14 of 14 expected
-- **Sections generated:** 81 (all `autogen: true`)
+## Incremental Update — 2026-07-17
 
-## Pages and depth
+- **Mode:** update (full regeneration)
+- **Commit range:** `0ab9e64..3accc14`
+- **Reason:** The base commit predates the Electron-to-Rust rewrite. All 69 intervening commits replaced the TypeScript/Electron codebase with the Rust workspace, so every page was regenerated against `pandamux-core`/`pandamux-term`/`pandamux-ui`/`pandamux-app`/`pandamux-cli` rather than diff-scoped.
 
-Depth targets per page: at least 6 H2 sections (glossary is exempt with a single Terms section), 2 tables, 2 code or file snippets, and 8 cited source paths. Table-row and code-block counts below are raw markdown counts.
+### Phase A — TOC drift
 
-| Page | Sections | Table rows | Code blocks | Source links | Meets depth |
-|---|---|---|---|---|---|
-| OVERVIEW.md | 6 | 39 | 2 | 68 | yes |
-| GETTING_STARTED.md | 6 | 21 | 4 | 62 | yes |
-| core/ARCHITECTURE.md | 7 | 24 | 5 | 88 | yes |
-| core/MAIN_PROCESS.md | 6 | 63 | 6 | 100 | yes |
-| core/RENDERER_AND_STATE.md | 6 | 46 | 6 | 81 | yes |
-| core/CONFIGURATION.md | 6 | 46 | 5 | 97 | yes |
-| api/CLI_REFERENCE.md | 8 | 83 | 8 | 100 | yes |
-| features/NAMED_PIPE_IPC.md | 6 | 85 | 7 | 135 | yes |
-| features/AGENT_ORCHESTRATION.md | 6 | 38 | 7 | 91 | yes |
-| features/BROWSER_CDP.md | 5 | 36 | 6 | 91 | yes (5 sections by design) |
-| features/AI_INTEGRATION.md | 5 | 25 | 3 | 75 | yes (5 sections by design) |
-| features/SHELL_INTEGRATION.md | 6 | 31 | 8 | 75 | yes |
-| operations/RELEASE.md | 7 | 50 | 4 | 115 | yes |
-| GLOSSARY.md | 1 | 15 | 0 | 35 | yes (glossary exemption) |
+- **New pages: 6**
+  - pandamux_04_core-domain → core/CORE_DOMAIN.md
+  - pandamux_05_terminal-engine → core/TERMINAL_ENGINE.md
+  - pandamux_06_ui-shell → core/UI_SHELL.md
+  - pandamux_07_app-runtime → core/APP_RUNTIME.md
+  - pandamux_11_ssh-remote → features/SSH_REMOTE.md
+  - pandamux_14_release → operations/RELEASE.md (operations/ folder created)
+- **Removed pages: 4 (moved to archive/)** — no Rust successor:
+  - core/MAIN_PROCESS.md, core/RENDERER_AND_STATE.md (Electron process model)
+  - features/BROWSER_CDP.md (browser/CDP pane intentionally dropped)
+  - features/AI_INTEGRATION.md (folded into AGENT_ORCHESTRATION + APP_RUNTIME)
+- **Rewritten in place: 9** — OVERVIEW, GETTING_STARTED, GLOSSARY, core/ARCHITECTURE, core/CONFIGURATION, api/CLI_REFERENCE, features/NAMED_PIPE_IPC, features/AGENT_ORCHESTRATION, features/SHELL_INTEGRATION.
 
-Two feature pages (`BROWSER_CDP`, `AI_INTEGRATION`) intentionally have 5 sections because the source material maps cleanly to 5 topics; the glossary has a single Terms table with 15 terms.
+### Phase B — Source diff
 
-## Validation results
+- **Files changed:** the entire application source (TypeScript `src/` deleted; Rust `crates/` added). Every page's `source_files` was re-pointed at Rust modules.
+- **Sections generated:** 79 across 15 pages.
+- **Pages touched:** 15 (all).
 
-- **Structure:** every page has exactly one `PAGE_ID` matching the TOC, placed on the first line. All 81 `BEGIN:AUTOGEN` / `END:AUTOGEN` marker pairs balance, and the 81 section IDs in the pages match the 81 section IDs in `_toc.yaml` exactly (no orphans, duplicates, or extras).
-- **Internal links:** 62 internal `.md` links across the 15 files (14 pages + README) all resolve to existing files. Related Pages use relative links; source citations use absolute GitHub blob URLs pinned to the generation commit.
-- **Mermaid:** 9 diagram blocks (2 in ARCHITECTURE, 1 each in OVERVIEW, RENDERER_AND_STATE, NAMED_PIPE_IPC, SHELL_INTEGRATION, AGENT_ORCHESTRATION, BROWSER_CDP). `mmdc` is not on PATH, so blocks were validated statically per `references/mermaid-policy.md`: all flowcharts use `graph TD`, every node label is quoted, edge labels use piped syntax, sequence diagrams use explicit `activate`/`deactivate`, and every diagram is under the 15-node limit. No invalid blocks; none commented out.
-- **Writing style:** all em dashes in page prose were replaced with commas, colons, semicolons, or parentheses. The 5 remaining em dashes live inside verbatim source-code comments quoted in fenced code blocks (`MAIN_PROCESS.md`, `RENDERER_AND_STATE.md`, `AGENT_ORCHESTRATION.md`, `AI_INTEGRATION.md`, `SHELL_INTEGRATION.md`) and are preserved as-is per the citation policy's verbatim-excerpt rule.
+### Coverage
 
-## Corrections applied during validation
+- **Crate source files:** 52 of 52 `crates/*/src/*.rs` files are cited (100%).
+- **Per-page citations range 24–140** with tables and code snippets on every page.
+- **`_TBD_` gaps (6 total):**
+  - core/CONFIGURATION.md (2) — settings/keymap fields with no default expressed in code.
+  - features/NAMED_PIPE_IPC.md (3) — method arms delegated elsewhere; flagged rather than guessed.
+  - features/AGENT_ORCHESTRATION.md (1) — a plugin detail not present in the cited source.
 
-- `core/CONFIGURATION.md` claimed `resources/themes/` holds "30 tracked `.theme` files"; git tracks 29 at this commit, so the count was corrected to 29 (the three cited example theme names, `Dracula`, `Nord`, `Gruvbox Dark`, were confirmed present).
+### Accuracy notes surfaced during generation
 
-## Coverage
+- `pandamux-app::backend::handle_line` special-cases only the V1 `report_pwd` hook; other shell-integration messages (`report_git_branch`, `report_shell_state`, `ports_kick`, `report_pr`) fall through and are instead recomputed independently by `pandamux-app::pollers`. Documented in SHELL_INTEGRATION.md rather than presented as fully wired.
+- `pandamux-app` has no dedicated `claude_context.rs` at this commit (contrary to a line in CLAUDE.md); the Claude-context startup wiring lives in `iced_runtime.rs`/`backend.rs`. Recorded in the TOC notes and AGENT_ORCHESTRATION.md.
 
-- **Directly cited:** 57 of 100 TypeScript/TSX source files under `src/` are cited by line range in at least one page.
-- **Covered at folder level (not individually cited):** the remaining 43 files are almost entirely leaf UI widgets and helpers enumerated in the `RENDERER_AND_STATE.md` component inventory rather than cited line-by-line: the per-category Settings panels (`GeneralSettings.tsx`, `KeyboardSettings.tsx`, `TerminalSettings.tsx`, etc.), individual Sidebar/Titlebar/SplitPane sub-components (`WorkspaceRow.tsx`, `NotificationPanel.tsx`, `SurfaceTabBar.tsx`, drag-preview helpers), i18n modules (`i18n/core.ts`, `i18n/index.ts`), and small renderer utilities (`notification-sound.ts`, `open-in-browser.ts`, `terminal-renderer.ts`, `force-sync-cursor.ts`, `useUiTheme.ts`).
-- **Notable gaps for a future update:**
-  - `src/main/diff-provider.ts` and `src/renderer/components/Diff/DiffPane.tsx` implement the auto-diff-on-edit feature; it is mentioned in the RENDERER component inventory but has no dedicated feature page. Consider a `features/DIFF_VIEW.md` if this feature grows.
-  - The Settings UI (`src/renderer/components/Settings/**`) is described functionally in `CONFIGURATION.md` (via the preference groups it edits) but the panel components themselves are not documented individually. This is intentional at this depth.
-  - `src/renderer/i18n/**` and the marketing site (`site/**`) internationalization are out of scope for this pass.
+### Validation
 
-## Notes
+- **Structure:** 15/15 pages have exactly one PAGE_ID, first-line PAGE_ID, and matched BEGIN/END AUTOGEN markers whose counts and ids match `_toc.yaml` exactly (0 orphans, 0 missing).
+- **Mermaid:** 13 diagram blocks; `mmdc` unavailable, so static checks applied (valid opening line, `graph TD` for flowcharts, quoted flowchart labels, balanced brackets, explicit sequence activation, `;` placeholders). All pass. classDiagram members and stateDiagram `[*]` nodes are valid unquoted syntax.
+- **Internal navigation links** (Related Pages + README index): all resolve.
+- **Source citations** use repo-root-relative paths (e.g. `crates/pandamux-core/src/state.rs#L40-L70`), consistent with the citation-policy convention and the prior doc set; they resolve from the repo root. Archived pages under `docs/archive/` retain their original (now historical) links and are intentionally left unmaintained.
 
-- Manual content under `docs/superpowers/plans/` and `docs/superpowers/specs/`, plus the pre-existing `docs/config.md`, was left untouched and is not tracked by `_toc.yaml`.
-- `resources/themes/` was verified against `git ls-files` (29 `.theme` files) rather than the working tree.
-- Re-run with `/doc-sync update` after code changes to regenerate only the affected AUTOGEN sections.
+## Prior generation — 2026-07-05 (init, Electron)
+
+The original 14-page set documented the Electron/TypeScript prototype at commit `0ab9e64`. Those pages were archived or rewritten by this run.

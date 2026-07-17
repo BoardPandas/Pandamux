@@ -2,14 +2,15 @@
 <details>
 <summary>Relevant source files</summary>
 
-The following files were used as evidence for this page (6 files; this page's TOC entry lists exactly these, all consulted in full):
+The following files were used as evidence for this page:
 
-- [package.json:1-61](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/package.json#L1-L61)
-- [pnpm-workspace.yaml:1-27](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/pnpm-workspace.yaml#L1-L27)
-- [README.md:152-160](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/README.md#L152-L160)
-- [CLAUDE.md:15-40](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/CLAUDE.md#L15-L40)
-- [tsconfig.json:1-22](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/tsconfig.json#L1-L22)
-- [tsconfig.node.json:1-18](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/tsconfig.node.json#L1-L18)
+- [CLAUDE.md:1-151](../CLAUDE.md#L1-L151)
+- [Cargo.toml:1-24](../Cargo.toml#L1-L24)
+- [README.md:38-55](../README.md#L38-L55)
+- [scripts/check-rust-boundaries.ps1:1-33](../scripts/check-rust-boundaries.ps1#L1-L33)
+- [.github/workflows/rust.yml:1-56](../.github/workflows/rust.yml#L1-L56)
+- [crates/pandamux-app/Cargo.toml:1-73](../crates/pandamux-app/Cargo.toml#L1-L73)
+- [.claude/rules/commit-changelog.md:1-45](../.claude/rules/commit-changelog.md#L1-L45)
 
 </details>
 
@@ -22,101 +23,158 @@ The following files were used as evidence for this page (6 files; this page's TO
 <!-- BEGIN:AUTOGEN pandamux_02_getting-started_prerequisites -->
 ## Prerequisites
 
-PandaMUX pins its toolchain rather than accepting a version range, so the versions below are enforced, not merely recommended.
+PandaMUX is a native Windows application built with a Rust stable toolchain; there is no Node/pnpm toolchain to install anymore ([CLAUDE.md:15-17](../CLAUDE.md#L15-L17)).
 
-| Tool | Version | Why |
-|---|---|---|
-| Node.js | `>=24.18.0` (24 LTS) | Runtime for Electron main/renderer builds and the CLI ([package.json:7-10](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/package.json#L7-L10)). |
-| pnpm | `>=11.10.0`, pinned via `packageManager` | Sole supported package manager; enable it through corepack so the pinned version is used automatically (`corepack enable pnpm`), since a globally installed pnpm is shadowed by the corepack shim ([package.json:6](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/package.json#L6), [CLAUDE.md:17](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/CLAUDE.md#L17)). |
-| Windows 10/11 x64 | n/a | Target platform: node-pty uses ConPTY, and the release flow packages a Windows portable zip ([CLAUDE.md:30](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/CLAUDE.md#L30)). |
-| Python / VS Build Tools | Only if adding a non-N-API native dependency | Not needed for a normal install: node-pty ships N-API prebuilds and is never rebuilt from source ([CLAUDE.md:30](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/CLAUDE.md#L30)). |
+| Requirement | Purpose |
+|---|---|
+| Rust stable toolchain (rustup) | Compiles the workspace; `rust-version = "1.88"` is the minimum declared in the workspace manifest ([Cargo.toml:17](../Cargo.toml#L17)). |
+| MSVC build tools | Required for the Windows target, since PandaMUX links against native Windows APIs (ConPTY via `portable-pty`, etc.) ([CLAUDE.md:15-17](../CLAUDE.md#L15-L17)). |
 
-pnpm's own settings (node linker, allowed build scripts) live in `pnpm-workspace.yaml` rather than `.npmrc`, since pnpm 11 moved workspace/build configuration there ([pnpm-workspace.yaml:1-3](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/pnpm-workspace.yaml#L1-L3)).
+The repository previously shipped an Electron/TypeScript prototype; that build has been deleted, so no `npm`/`pnpm install` step exists in this workspace ([CLAUDE.md:9](../CLAUDE.md#L9), [CLAUDE.md:17](../CLAUDE.md#L17)).
 
-Sources: [package.json:6-10](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/package.json#L6-L10), [CLAUDE.md:15-30](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/CLAUDE.md#L15-L30), [pnpm-workspace.yaml:1-27](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/pnpm-workspace.yaml#L1-L27)
+Sources: [CLAUDE.md:9-17](../CLAUDE.md#L9-L17), [Cargo.toml:12-17](../Cargo.toml#L12-L17)
 <!-- END:AUTOGEN pandamux_02_getting-started_prerequisites -->
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_02_getting-started_installation -->
-## Installation
+<!-- BEGIN:AUTOGEN pandamux_02_getting-started_build -->
+## Building and Running
 
-Clone the repository and install with pnpm. The install runs `allowBuilds` (approved native/build scripts) plus any postinstall steps ([CLAUDE.md:20](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/CLAUDE.md#L20)).
+Clone the repository, then use the exact `cargo` invocations below; they are the authoritative commands for this workspace ([CLAUDE.md:19-40](../CLAUDE.md#L19-L40)).
 
 ```bash
 git clone https://github.com/BoardPandas/Pandamux.git
 cd Pandamux
-corepack enable pnpm
-pnpm install
 ```
 
-Note: `README.md`'s "From source" section still shows an older `npm install` / `npm run build:main` / `npm run dev` sequence from before the pnpm migration ([README.md:154-160](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/README.md#L154-L160)); CLAUDE.md is the current source of truth and the commands above (pnpm, not npm) are what this repo actually builds with ([CLAUDE.md:17](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/CLAUDE.md#L17)).
-
-`pnpm-workspace.yaml` requires `nodeLinker: hoisted`, a flat symlink-free `node_modules`, because node-pty's native addon resolution and the ASAR packaging step both assume a hoisted tree ([pnpm-workspace.yaml:10-13](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/pnpm-workspace.yaml#L10-L13)). It also whitelists the packages allowed to run install/build scripts under pnpm 11's supply-chain hardening: `node-pty` (native ConPTY addon), `electron` (postinstall downloads the Electron binary), and `esbuild` (Vite's postinstall binary); `electron-winstaller` is explicitly disabled since this repo never builds the NSIS/Squirrel installer ([pnpm-workspace.yaml:19-27](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/pnpm-workspace.yaml#L19-L27)).
-
-Sources: [CLAUDE.md:17-20](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/CLAUDE.md#L17-L20), [pnpm-workspace.yaml:1-27](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/pnpm-workspace.yaml#L1-L27), [README.md:152-160](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/README.md#L152-L160)
-<!-- END:AUTOGEN pandamux_02_getting-started_installation -->
-
----
-
-<!-- BEGIN:AUTOGEN pandamux_02_getting-started_dev -->
-## Development Workflow
-
-The `dev` script runs Vite and Electron concurrently: Vite serves the renderer on port 5199, and `wait-on` holds Electron until that port answers before launching the app with hot-reload ([package.json:16](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/package.json#L16)).
+The GUI shell needs the `iced-runtime` feature. With that feature enabled, running the binary with **no arguments opens the window by default**: the installed Start Menu shortcut runs `pandamux.exe` with no args, so the argument-less path must be the GUI, and the feature build is a Windows GUI-subsystem binary (no console window appears) ([CLAUDE.md:20-23](../CLAUDE.md#L20-L23)).
 
 ```bash
-pnpm run dev           # Vite (port 5199) + Electron hot-reload
+# GUI app (interactive window, default when iced-runtime is enabled)
+cargo run -p pandamux-app --features iced-runtime
+
+# Same, via the back-compat flag
+cargo run -p pandamux-app --features iced-runtime -- --iced-shell
+
+# Noninteractive CI smoke test of the Iced shell view
+cargo run -p pandamux-app --features iced-runtime -- --iced-shell-smoke
+
+# Release GUI build (pandamux.exe)
+cargo build --release -p pandamux-app --features iced-runtime
 ```
 
-For faster iteration on main-process, preload, or CLI code without rebuilding the renderer, run only the TypeScript compile step:
+Without the `iced-runtime` feature, `pandamux-app` runs as a headless named-pipe server instead of a GUI; the CLI binary is built separately.
 
 ```bash
-pnpm run build:main    # tsc main/preload/cli only (fast iteration)
+# CLI (pandamux-cli.exe)
+cargo build --release -p pandamux-cli
+
+# Headless pipe server (no GUI)
+cargo run -p pandamux-app
+
+# Force the pipe server even in a GUI build
+cargo run -p pandamux-app --features iced-runtime -- --headless
 ```
 
-`build:main` compiles under `tsconfig.node.json`: CommonJS output, `outDir: dist`, `rootDir: src`, covering `src/main`, `src/preload`, `src/shared`, and `src/cli` ([tsconfig.node.json:1-18](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/tsconfig.node.json#L1-L18)). The renderer instead compiles under `tsconfig.json` with `moduleResolution: bundler`, JSX, DOM libs, and the `@renderer/*` / `@shared/*` path aliases, covering `src/renderer` and `src/shared` ([tsconfig.json:1-22](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/tsconfig.json#L1-L22)).
+(all commands quoted verbatim from [CLAUDE.md:19-40](../CLAUDE.md#L19-L40)).
 
-Sources: [package.json:16](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/package.json#L16), [tsconfig.json:1-22](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/tsconfig.json#L1-L22), [tsconfig.node.json:1-18](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/tsconfig.node.json#L1-L18)
-<!-- END:AUTOGEN pandamux_02_getting-started_dev -->
+| Goal | Command |
+|---|---|
+| Run GUI (default) | `cargo run -p pandamux-app --features iced-runtime` |
+| Run GUI (explicit flag) | `cargo run -p pandamux-app --features iced-runtime -- --iced-shell` |
+| CI smoke of Iced shell | `cargo run -p pandamux-app --features iced-runtime -- --iced-shell-smoke` |
+| Build release GUI | `cargo build --release -p pandamux-app --features iced-runtime` |
+| Build release CLI | `cargo build --release -p pandamux-cli` |
+| Run headless pipe server | `cargo run -p pandamux-app` |
+| Force headless in GUI build | `cargo run -p pandamux-app --features iced-runtime -- --headless` |
 
----
-
-<!-- BEGIN:AUTOGEN pandamux_02_getting-started_build -->
-## Build Scripts
-
-All scripts are declared in `package.json` and invoked with `pnpm run <script>` (root scripts also run bare, e.g. `pnpm test`, since `pnpm-workspace.yaml` marks the repo root as the sole workspace package) ([pnpm-workspace.yaml:4-8](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/pnpm-workspace.yaml#L4-L8)).
-
-| Script | Command | Purpose |
-|---|---|---|
-| `dev` | `concurrently "vite --port 5199" "wait-on http://localhost:5199 && electron ."` | Renderer dev server plus Electron hot-reload ([package.json:16](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/package.json#L16)). |
-| `build` | `tsc -p tsconfig.node.json && vite build && electron-builder` | Full production build: main/preload/cli compile, renderer bundle, then electron-builder packaging ([package.json:17](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/package.json#L17)). |
-| `build:main` | `tsc -p tsconfig.node.json` | Compiles main, preload, and CLI only, for fast iteration ([package.json:18](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/package.json#L18)). |
-| `build:renderer` | `vite build` | Production Vite build of the renderer only ([package.json:19](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/package.json#L19)). |
-| `test` | `vitest run` | Runs the Vitest suite once ([package.json:20](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/package.json#L20)). |
-| `test:watch` | `vitest` | Vitest in watch mode ([package.json:21](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/package.json#L21)). |
-| `lint` | `eslint src/` | Lints the `src/` tree ([package.json:22](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/package.json#L22)). |
-
-Note that the official release process does not use the `build` script's `electron-builder` packaging step for the final artifact; it uses manual ASAR staging plus a portable zip instead (see [Release and Packaging](operations/RELEASE.md)) ([CLAUDE.md:38](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/CLAUDE.md#L38)).
-
-Sources: [package.json:15-23](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/package.json#L15-L23), [CLAUDE.md:38](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/CLAUDE.md#L38)
+Sources: [CLAUDE.md:19-40](../CLAUDE.md#L19-L40)
 <!-- END:AUTOGEN pandamux_02_getting-started_build -->
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_02_getting-started_testing -->
-## Running Tests
+<!-- BEGIN:AUTOGEN pandamux_02_getting-started_features -->
+## Cargo Features and Binaries
 
-Unit tests run under Vitest, either as a full one-shot run, in watch mode, or scoped to a single file.
+`pandamux-app`'s `Cargo.toml` declares one opt-in feature, `iced-runtime`, which pulls in the `iced` GUI crate, the `reqwest` update-check client, and forwards to `pandamux-ui/iced-runtime` ([crates/pandamux-app/Cargo.toml:33-35](../crates/pandamux-app/Cargo.toml#L33-L35)).
 
-```bash
-pnpm test                   # Run all unit tests
-pnpm run test:watch         # Watch mode
-pnpm exec vitest run tests/unit/pty-manager.test.ts  # Single file
+```toml
+[features]
+default = []
+iced-runtime = ["dep:iced", "dep:reqwest", "pandamux-ui/iced-runtime"]
 ```
 
-Test files live under `tests/unit/` and currently cover: `agent-manager`, `cdp-bridge`, `config-loader`, `notification-slice`, `pipe-server`, `port-scanner`, `pty-manager`, `session-persistence`, `shell-detector`, and `split-tree` ([CLAUDE.md:452](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/CLAUDE.md#L452)). The underlying `vitest` and `test`/`test:watch` scripts are the same ones defined for the toolchain upgrade in `package.json` ([package.json:20-21](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/package.json#L20-L21), [package.json:58](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/package.json#L58)).
+([crates/pandamux-app/Cargo.toml:33-35](../crates/pandamux-app/Cargo.toml#L33-L35))
 
-Sources: [CLAUDE.md:444-452](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/CLAUDE.md#L444-L452), [package.json:20-21](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/package.json#L20-L21)
+The default feature set is empty, which is why `cargo run -p pandamux-app` with no `--features` flag builds the headless pipe server: `iced` and `reqwest` are both `optional = true` and only compiled in behind `iced-runtime` ([crates/pandamux-app/Cargo.toml:17-18](../crates/pandamux-app/Cargo.toml#L17-L18), [crates/pandamux-app/Cargo.toml:26-28](../crates/pandamux-app/Cargo.toml#L26-L28), [crates/pandamux-app/Cargo.toml:34](../crates/pandamux-app/Cargo.toml#L34)).
+
+The GUI binary is declared with an explicit `[[bin]]` table so the produced executable is named `pandamux` (`pandamux.exe` on Windows) even though the Cargo package remains `pandamux-app`; this keeps `-p pandamux-app` invocations and the CI smoke commands unchanged while matching the historical Electron exe name and the winresource metadata embedded in `build.rs` ([crates/pandamux-app/Cargo.toml:9-14](../crates/pandamux-app/Cargo.toml#L9-L14), [CLAUDE.md:42](../CLAUDE.md#L42)).
+
+```toml
+[[bin]]
+name = "pandamux"
+path = "src/main.rs"
+```
+
+([crates/pandamux-app/Cargo.toml:12-14](../crates/pandamux-app/Cargo.toml#L12-L14))
+
+| Package | Binary name | Notes |
+|---|---|---|
+| `pandamux-app` | `pandamux` (`pandamux.exe`) | GUI/headless composition root; `[[bin]] name = "pandamux"` overrides the default package-name binary ([crates/pandamux-app/Cargo.toml:12-14](../crates/pandamux-app/Cargo.toml#L12-L14)). |
+| `pandamux-cli` | `pandamux-cli` (`pandamux-cli.exe`) | The `pandamux` CLI, wire-compatible pipe client ([CLAUDE.md:68-69](../CLAUDE.md#L68-L69)). |
+
+`[package.metadata.packager]` also configures the release packaging: it targets the `pandamux` binary as `main = true`, bundles `resources/` alongside the exe, and separately copies the already-built `pandamux-cli.exe` in as a sibling binary of the installed app ([crates/pandamux-app/Cargo.toml:50-68](../crates/pandamux-app/Cargo.toml#L50-L68)).
+
+Sources: [crates/pandamux-app/Cargo.toml:1-73](../crates/pandamux-app/Cargo.toml#L1-L73), [CLAUDE.md:42](../CLAUDE.md#L42)
+<!-- END:AUTOGEN pandamux_02_getting-started_features -->
+
+---
+
+<!-- BEGIN:AUTOGEN pandamux_02_getting-started_testing -->
+## Checks and Tests
+
+Run these locally before committing; they mirror what CI enforces on every PR and push to `master`/`main` ([.github/workflows/rust.yml:1-19](../.github/workflows/rust.yml#L1-L19)).
+
+```bash
+cargo fmt --all --check
+.\scripts\check-rust-boundaries.ps1     # enforces the crate-isolation invariant (Section 6.1 of the plan)
+cargo test --workspace
+cargo test -p pandamux-ui  --features iced-runtime --lib
+cargo test -p pandamux-app --features iced-runtime --bin pandamux
+```
+
+([CLAUDE.md:34-39](../CLAUDE.md#L34-L39))
+
+`check-rust-boundaries.ps1` enforces the crate-isolation invariant by reading each guarded crate's `Cargo.toml` and failing the build if a forbidden dependency line is present: `pandamux-core` must not depend on `iced` or `alacritty_terminal`, and `pandamux-term` must not depend on `iced` ([scripts/check-rust-boundaries.ps1:7-16](../scripts/check-rust-boundaries.ps1#L7-L16)).
+
+```powershell
+$rules = @(
+  @{
+    Name = 'pandamux-core'
+    Forbidden = @('iced', 'alacritty_terminal')
+  },
+  @{
+    Name = 'pandamux-term'
+    Forbidden = @('iced')
+  }
+)
+```
+
+([scripts/check-rust-boundaries.ps1:7-16](../scripts/check-rust-boundaries.ps1#L7-L16))
+
+The CI workflow (`.github/workflows/rust.yml`, `windows-latest`) runs on pull requests and pushes touching `Cargo.toml`, `Cargo.lock`, `crates/**`, the boundary script, or the workflow file itself, plus manual `workflow_dispatch` ([.github/workflows/rust.yml:3-19](../.github/workflows/rust.yml#L3-L19)).
+
+| CI step | Command |
+|---|---|
+| Check formatting | `cargo fmt --all --check` ([.github/workflows/rust.yml:36](../.github/workflows/rust.yml#L36)) |
+| Check crate boundaries | `.\scripts\check-rust-boundaries.ps1` ([.github/workflows/rust.yml:38-40](../.github/workflows/rust.yml#L38-L40)) |
+| Test workspace | `cargo test --workspace` ([.github/workflows/rust.yml:42-43](../.github/workflows/rust.yml#L42-L43)) |
+| Test Iced UI feature | `cargo test -p pandamux-ui --features iced-runtime --lib` ([.github/workflows/rust.yml:45-46](../.github/workflows/rust.yml#L45-L46)) |
+| Test Iced app runtime feature | `cargo test -p pandamux-app --features iced-runtime --bin pandamux` ([.github/workflows/rust.yml:48-49](../.github/workflows/rust.yml#L48-L49)) |
+| Smoke Iced app shell view | `cargo run -p pandamux-app --features iced-runtime -- --iced-shell-smoke` ([.github/workflows/rust.yml:51-52](../.github/workflows/rust.yml#L51-L52)) |
+| Build native binaries | `cargo build -p pandamux-app -p pandamux-cli -p pandamux-term` ([.github/workflows/rust.yml:54-55](../.github/workflows/rust.yml#L54-L55)) |
+
+Sources: [.github/workflows/rust.yml:1-56](../.github/workflows/rust.yml#L1-L56), [scripts/check-rust-boundaries.ps1:1-33](../scripts/check-rust-boundaries.ps1#L1-L33), [CLAUDE.md:34-39](../CLAUDE.md#L34-L39)
 <!-- END:AUTOGEN pandamux_02_getting-started_testing -->
 
 ---
@@ -124,27 +182,47 @@ Sources: [CLAUDE.md:444-452](https://github.com/BoardPandas/Pandamux/blob/0ab9e6
 <!-- BEGIN:AUTOGEN pandamux_02_getting-started_native -->
 ## Native Dependencies and Gotchas
 
-node-pty is the only native dependency in this repo, and it ships N-API prebuilds that are ABI-stable across both Node and Electron; the project has verified them loading under Node 24 and under Electron 33 / ABI 130 / N-API 9 ([CLAUDE.md:30](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/CLAUDE.md#L30)).
+Native deps of note (`alacritty_terminal`, `portable-pty`, `russh` + `russh-sftp`, `iced` and its wgpu/glyphon/cosmic-text stack, `arboard`) are all pinned to exact versions rather than ranges, e.g. `iced = { version = "=0.14.0", optional = true }` and `arboard = "=3.6.1"` in `pandamux-app`'s manifest, and `serde`/`tokio`/`uuid` pinned at the workspace level ([CLAUDE.md:46](../CLAUDE.md#L46), [crates/pandamux-app/Cargo.toml:17-31](../crates/pandamux-app/Cargo.toml#L17-L31), [Cargo.toml:19-23](../Cargo.toml#L19-L23)). See the crate manifests and the Phase 2 spike report (`spikes/phase2-native-terminal/PHASE2_REPORT.md`) for the rationale ([CLAUDE.md:46](../CLAUDE.md#L46)).
 
-Deliberate choices that follow from trusting the prebuilds:
+`winresource` is a Windows-only build-dependency of `pandamux-app` that embeds the app icon and version metadata into `pandamux.exe` via `build.rs` ([crates/pandamux-app/Cargo.toml:41-42](../crates/pandamux-app/Cargo.toml#L41-L42)).
 
-- There is no `install-app-deps` postinstall step, and `electron-builder.json` sets `"npmRebuild": false`, so node-pty is never rebuilt from source ([CLAUDE.md:30](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/CLAUDE.md#L30)).
-- This avoids node-pty's flaky legacy winpty gyp build and means a normal `pnpm install` needs no Python or Visual Studio Build Tools toolchain ([CLAUDE.md:30](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/CLAUDE.md#L30)).
-- If a future dependency needs a non-N-API native build, a rebuild step must be reintroduced; on Python 3.12+, `pip install setuptools` is required first, since node-gyp expects the `distutils` module that Python removed ([CLAUDE.md:30](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/CLAUDE.md#L30)).
-- `pnpm-workspace.yaml`'s `allowBuilds` explicitly permits `node-pty` (compiles/fetches its native addon) and `electron` (postinstall downloads the Electron binary), while `esbuild` is allowed for Vite, and `electron-winstaller` is explicitly set to `false` since this repo never builds the Windows installer ([pnpm-workspace.yaml:19-27](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/pnpm-workspace.yaml#L19-L27)).
+```toml
+[target.'cfg(windows)'.build-dependencies]
+winresource = "=0.1.31"
+```
 
-### Known build gotcha: paths with spaces
+([crates/pandamux-app/Cargo.toml:41-42](../crates/pandamux-app/Cargo.toml#L41-L42))
 
-The original checkout for this project lived under a OneDrive path containing spaces, which broke `npm link` / `node-gyp` (unable to build node-pty) and `electron-builder`'s winCodeSign step (symlink errors) ([CLAUDE.md:34-36](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/CLAUDE.md#L34-L36)). A checkout path with no spaces (e.g. `D:\Dev\Repos\Pandamux`) avoids both problems; either way, the actual release flow uses ASAR-based manual packaging rather than `electron-builder` for the final artifact, sidestepping winCodeSign entirely ([CLAUDE.md:38](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/CLAUDE.md#L38)).
+A missing resource compiler is treated as a non-fatal warning, so a dev box without the Windows SDK still builds; CI (`windows-latest`) has `rc.exe` available and embeds the resources for real ([CLAUDE.md:47](../CLAUDE.md#L47)).
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `node-gyp` / `npm link` fails building node-pty | Checkout path contains spaces (e.g. under OneDrive) ([CLAUDE.md:34-35](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/CLAUDE.md#L34-L35)) | Use a checkout path without spaces; a normal `pnpm install` does not rebuild node-pty at all since it ships N-API prebuilds ([CLAUDE.md:30](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/CLAUDE.md#L30)). |
-| `electron-builder` winCodeSign symlink errors | Checkout path contains spaces ([CLAUDE.md:36](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/CLAUDE.md#L36)) | Move the checkout to a path without spaces, or skip `electron-builder` and follow the ASAR-based release flow instead ([CLAUDE.md:38](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/CLAUDE.md#L38)). |
-| `node-gyp` cannot find `distutils` when building a native dependency | Python 3.12+ removed the `distutils` module that node-gyp expects ([CLAUDE.md:30](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/CLAUDE.md#L30)) | Run `pip install setuptools` before installing, only relevant if you add a non-N-API native dependency ([CLAUDE.md:30](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/CLAUDE.md#L30)). |
-| `pnpm install` fails or skips a native build script | Package not listed in `pnpm-workspace.yaml`'s `allowBuilds` (pnpm 11 blocks dependency build scripts by default) ([pnpm-workspace.yaml:15-19](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/pnpm-workspace.yaml#L15-L19)) | Add the package to `allowBuilds: true` in `pnpm-workspace.yaml` if its build script is genuinely required. |
+| Freshly built Cargo test/build-script executable fails to launch, `os error 4551` | Windows Application Control intermittently blocking newly built binaries; host-policy noise, not a code bug ([CLAUDE.md:48](../CLAUDE.md#L48)) | Rerun the command, or `cargo clean -p <pkg>` then rerun ([CLAUDE.md:48](../CLAUDE.md#L48)). |
+| Dev box build lacks embedded icon/version metadata | No Windows SDK / `rc.exe` present locally, so `winresource` treats the resource compiler as missing ([CLAUDE.md:47](../CLAUDE.md#L47)) | Non-fatal locally; CI has `rc.exe` and embeds resources correctly for release builds ([CLAUDE.md:47](../CLAUDE.md#L47)). |
 
-Sources: [CLAUDE.md:30-38](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/CLAUDE.md#L30-L38), [pnpm-workspace.yaml:10-27](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/pnpm-workspace.yaml#L10-L27)
+Sources: [CLAUDE.md:44-48](../CLAUDE.md#L44-L48), [crates/pandamux-app/Cargo.toml:16-42](../crates/pandamux-app/Cargo.toml#L16-L42), [Cargo.toml:19-23](../Cargo.toml#L19-L23)
 <!-- END:AUTOGEN pandamux_02_getting-started_native -->
+
+---
+
+<!-- BEGIN:AUTOGEN pandamux_02_getting-started_conventions -->
+## Development Conventions
+
+Before every `git commit`, update `CHANGELOG.md` and bump `[workspace.package] version` in the root `Cargo.toml`, then write the commit message to a file and commit with `git commit -F` rather than an inline `-m` ([CLAUDE.md:149](../CLAUDE.md#L149), [.claude/rules/commit-changelog.md:1-4](../.claude/rules/commit-changelog.md#L1-L4)). The version is single-sourced from `[workspace.package] version`, currently `0.53.0`; every crate inherits it via `version.workspace = true`, and it drives `CARGO_PKG_VERSION`, which the in-app updater compares against GitHub releases ([Cargo.toml:12-13](../Cargo.toml#L12-L13), [CLAUDE.md:148](../CLAUDE.md#L148)).
+
+Every commit bumps at least the Patch segment of SemVer (`Major.Minor.Patch`); Major is never bumped autonomously, and Minor vs. Patch ambiguity should be raised with the user rather than guessed ([.claude/rules/commit-changelog.md:22-30](../.claude/rules/commit-changelog.md#L22-L30)).
+
+| Segment | When to increment |
+|---|---|
+| Major | Breaking changes: API contract changes, breaking schema migrations, auth flow changes, removed public endpoints ([.claude/rules/commit-changelog.md:15](../.claude/rules/commit-changelog.md#L15)) |
+| Minor | New features or enhancements ([.claude/rules/commit-changelog.md:16](../.claude/rules/commit-changelog.md#L16)) |
+| Patch | Bug fixes, security patches, performance, dependency bumps, docs, refactors, config, chores, and anything else ([.claude/rules/commit-changelog.md:17](../.claude/rules/commit-changelog.md#L17)) |
+
+`.claude/` is the source of truth for how the repo runs: it holds the commit/changelog rule, the LL-G and BP knowledge-base checks that must be consulted before code/config work, and the custom agents to use instead of built-in subagent types ([CLAUDE.md:149](../CLAUDE.md#L149)). The crate-isolation invariant is a hard rule enforced by CI, not just a convention: never import Iced outside `pandamux-ui`, never leak `alacritty_terminal` types outside `pandamux-term` ([CLAUDE.md:146](../CLAUDE.md#L146)).
+
+Writing style across files, code, and comments avoids em dashes and double dashes; use commas, colons, parentheses, or semicolons instead ([CLAUDE.md:150](../CLAUDE.md#L150)).
+
+Sources: [CLAUDE.md:143-150](../CLAUDE.md#L143-L150), [.claude/rules/commit-changelog.md:1-45](../.claude/rules/commit-changelog.md#L1-L45), [Cargo.toml:12-13](../Cargo.toml#L12-L13)
+<!-- END:AUTOGEN pandamux_02_getting-started_conventions -->
 
 ---

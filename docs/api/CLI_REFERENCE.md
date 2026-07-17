@@ -1,18 +1,19 @@
-<!-- PAGE_ID: pandamux_07_cli-reference -->
+<!-- PAGE_ID: pandamux_09_cli-reference -->
 <details>
 <summary>Relevant source files</summary>
 
 The following files were used as evidence for this page:
 
-- [pandamux.ts:1-26](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L1-L26)
-- [pandamux.ts:28-68](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L28-L68)
-- [pandamux.ts:70-107](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L70-L107)
-- [pandamux.ts:109-143](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L109-L143)
-- [pandamux.ts:145-224](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L145-L224)
-- [pandamux.ts:226-300](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L226-L300)
-- [pandamux.ts:305-397](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L305-L397)
-- [pandamux.ts:399-453](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L399-L453)
-- [pandamux-hook.ts:1-83](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux-hook.ts#L1-L83)
+- [main.rs:1-19](crates/pandamux-cli/src/main.rs#L1-L19)
+- [main.rs:20-292](crates/pandamux-cli/src/main.rs#L20-L292)
+- [main.rs:298-353](crates/pandamux-cli/src/main.rs#L298-L353)
+- [main.rs:402-488](crates/pandamux-cli/src/main.rs#L402-L488)
+- [main.rs:545-659](crates/pandamux-cli/src/main.rs#L545-L659)
+- [main.rs:722-824](crates/pandamux-cli/src/main.rs#L722-L824)
+- [main.rs:866-916](crates/pandamux-cli/src/main.rs#L866-L916)
+- [main.rs:923-1005](crates/pandamux-cli/src/main.rs#L923-L1005)
+- [main.rs:1065-1126](crates/pandamux-cli/src/main.rs#L1065-L1126)
+- [protocol.rs:1-49](crates/pandamux-core/src/protocol.rs#L1-L49)
 
 </details>
 
@@ -22,227 +23,257 @@ The following files were used as evidence for this page:
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_07_cli-reference_overview -->
-## Overview and Invocation
+<!-- BEGIN:AUTOGEN pandamux_09_cli-reference_overview -->
+## Invocation and Transport
 
-The `pandamux` CLI is a thin Node script that never talks to the Electron app directly; every command opens a client connection to the Windows named pipe `\\.\pipe\pandamux` and either writes plain text (V1) or a JSON-RPC request (V2) ([pandamux.ts:10](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L10)). There are two separate entry-point scripts in `src/cli/`, both compiled to `dist/cli/` and shipped in `resources/cli/`.
+The `pandamux-cli` binary is invoked as `pandamux <command> [args...]`; every command opens a fresh client connection to a Windows named pipe, sends either a raw V1 text line or a V2 JSON-RPC request, and reads exactly one reply line before the process exits (main.rs:13-18, main.rs:1065-1107).
 
-| Entry point | Invoked as | Purpose | Source |
-|---|---|---|---|
-| `pandamux.ts` | `pandamux <command> [options]` | Full CLI: workspace/pane/surface/agent/browser control | ([pandamux.ts:399-425](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L399-L425)) |
-| `pandamux-hook.ts` | `node pandamux-hook.js <tool-name>` or `--event <Event>` | Lightweight forwarder wired into Claude Code's `PostToolUse` / `Notification` / `Stop` hooks; reads the hook JSON payload from stdin and fires a single `hook.event` V2 request | ([pandamux-hook.ts:1-14](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux-hook.ts#L1-L14)) |
+The pipe path defaults to `\\.\pipe\pandamux` but is overridable through the `PANDAMUX_PIPE` environment variable, which lets a CLI invocation spawned inside one pandamux instance's pane talk back to that same instance (main.rs:1094-1095). On non-Windows targets `send_line` is stubbed to return an error immediately, since named pipes are Windows-only (main.rs:1104-1107).
 
-The pipe path respects `PANDAMUX_PIPE` when set, so a CLI launched inside a pane spawned by one pandamux instance (`PANDAMUX_INSTANCE`) always talks back to that same instance ([pandamux.ts:8-10](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L8-L10)). V2 requests carry an auth token resolved from `PANDAMUX_PIPE_TOKEN`, falling back to a per-instance token file under `%APPDATA%\pandamux[-instance]\pipe-token` ([pandamux.ts:12-26](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L12-L26)).
-
-| Transport | Wire format | Timeout | Used by | Source |
+| Transport | Function | Wire format | Used by | Source |
 |---|---|---|---|---|
-| V1 (`sendV1`) | Raw newline-terminated text, response read until socket end or timeout | 5s | `ping`, `notify` | ([pandamux.ts:28-39](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L28-L39)) |
-| V2 (`sendV2`) | JSON `{method, params, id, token}` request, JSON response parsed on the first newline; `response.error` rejects the promise | 5s | Everything else | ([pandamux.ts:41-68](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L41-L68)) |
+| V1 | `send_v1` | Raw text line, response trimmed on read | `ping` only | (main.rs:21-23, main.rs:1065-1068) |
+| V2 | `send_v2` | JSON `{method, params, id, token}` request; one JSON reply line, `error` field rejects with the pipe's message | every other command | (main.rs:1070-1088) |
 
-`sendV2` also auto-attaches the caller's own `PANDAMUX_SURFACE_ID` as `caller` on any `browser.*` method so concurrent agents each get routed to their own browser pane instead of clobbering a single shared one (issue #62) ([pandamux.ts:42-47](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L42-L47)).
+Every V2 request line is authenticated with a token read from `PANDAMUX_PIPE_TOKEN` (trimmed, empty string if unset), attached to the request under the `token` field (main.rs:1109-1113).
 
-Dispatch is a flat lookup table (`COMMANDS`), not a switch statement: `argv[0]` is the key, and an unknown command prints usage and exits 1 ([pandamux.ts:305-413](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L305-L413)). Handler errors are caught centrally in `main()`: `ENOENT`/`ECONNREFUSED` is reported as "pandamux is not running", anything else prints the raw error message and exits 1 ([pandamux.ts:415-424](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L415-L424)).
-
-```bash
-pandamux ping
-pandamux identify
-PANDAMUX_PIPE='\\.\pipe\pandamux-myinstance' pandamux capabilities
+```rust
+async fn send_v2(method: &str, params: Value) -> Result<Value, Box<dyn Error>> {
+    let request = json!({
+        "method": method,
+        "params": params,
+        "id": 1,
+        "token": read_pipe_token(),
+    });
+    let reply = send_line(&(serde_json::to_string(&request)? + "\n")).await?;
+    let response: Value = serde_json::from_str(reply.trim())?;
+    if let Some(error) = response.get("error") {
+        return Err(error
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("pipe request failed")
+            .to_string()
+            .into());
+    }
+    Ok(response.get("result").cloned().unwrap_or(Value::Null))
+}
 ```
 
-Sources: [pandamux.ts:1-68](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L1-L68), [pandamux.ts:399-453](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L399-L453)
-<!-- END:AUTOGEN pandamux_07_cli-reference_overview -->
+(main.rs:1070-1088)
+
+The request/response envelope is defined once in `pandamux-core` and shared by both the CLI client and the pipe server: `RpcRequest { method, params, id, token }` (protocol.rs:4-13), `RpcResponse { result, error, id }` (protocol.rs:15-22), and `RpcError { code, message }` (protocol.rs:24-28). `RpcResponse::result` and `RpcResponse::error` are the two constructors the server side uses to build a reply (protocol.rs:30-48).
+
+```mermaid
+sequenceDiagram
+    participant CLI
+    participant Pipe
+    participant Server
+
+    CLI->>Pipe: open named pipe connection
+    activate Pipe
+    CLI->>Pipe: write JSON RpcRequest plus newline
+    Pipe->>Server: forward request line
+    activate Server
+    Server-->>Pipe: RpcResponse JSON
+    deactivate Server
+    Pipe-->>CLI: read one reply line
+    deactivate Pipe
+    CLI->>CLI: parse result or raise error
+```
+
+Any failure surfaced from `run()` is caught centrally in `main()`, printed as `Error: {error}` to stderr, and the process exits with status 1 (main.rs:5-11). An unrecognized top-level command prints the usage banner and returns an "unknown command" error (main.rs:289-292); `print_usage` (main.rs:1122-1126) is the single source of truth for the full command summary printed with no arguments.
+
+Sources: [main.rs:1-18](crates/pandamux-cli/src/main.rs#L1-L18), [main.rs:289-292](crates/pandamux-cli/src/main.rs#L289-L292), [main.rs:1065-1126](crates/pandamux-cli/src/main.rs#L1065-L1126), [protocol.rs:1-49](crates/pandamux-core/src/protocol.rs#L1-L49)
+<!-- END:AUTOGEN pandamux_09_cli-reference_overview -->
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_07_cli-reference_system -->
-## System Commands
+<!-- BEGIN:AUTOGEN pandamux_09_cli-reference_system-workspace -->
+## System and Workspace Commands
 
-System commands query pandamux's identity, capabilities, window list, the full pane/surface tree, and the user's `config.toml`; none require a workspace, pane, or surface argument.
+System commands query identity, capabilities, and the full pane/surface tree with no arguments; workspace and project commands create and manage the top-level session containers.
 
-| Command | Arguments | Description | Source |
+| Command | Args | Description | Pipe Method |
 |---|---|---|---|
-| `ping` | none | Sends the raw V1 text `ping` and prints the reply verbatim (does not go through `sendV2`) ([pandamux.ts:307](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L307)) |
-| `identify` | none | `system.identify` V2 request ([pandamux.ts:308](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L308)) |
-| `capabilities` | none | `system.capabilities` V2 request ([pandamux.ts:309](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L309)) |
-| `list-windows` | none | `window.list` ([pandamux.ts:310](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L310)) |
-| `focus-window` | `<id>` | `window.focus` with the given window id ([pandamux.ts:311](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L311)) |
-| `tree` | none | `system.tree` -- the full workspace/pane/surface tree ([pandamux.ts:354](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L354)) |
-| `config show` \| `config get` | none | `config.get`, the merged `~/.pandamux/config.toml` state ([pandamux.ts:166-167](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L166-L167)) |
-| `config reload` | none | `config.reload`, re-reads `config.toml` from disk ([pandamux.ts:168-169](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L168-L169)) |
-| `config path` | none | Prints `%USERPROFILE%\.pandamux\config.toml` locally, with no pipe round trip ([pandamux.ts:170-172](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L170-L172)) |
-| `reload-config` | none | Shorthand for `config reload` ([pandamux.ts:339](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L339)) |
-| `list-themes` \| `themes` | none | `theme.list` (both names alias the same handler) ([pandamux.ts:335-336](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L335-L336)) |
+| `ping` | none | Sends the raw V1 text `ping` and prints the trimmed reply verbatim ([main.rs:21-23](crates/pandamux-cli/src/main.rs#L21-L23)) | V1 raw text |
+| `identify` | none | ([main.rs:24](crates/pandamux-cli/src/main.rs#L24)) | `system.identify` |
+| `capabilities` | none | ([main.rs:25](crates/pandamux-cli/src/main.rs#L25)) | `system.capabilities` |
+| `tree` | none | Returns the full workspace/pane/surface tree ([main.rs:26](crates/pandamux-cli/src/main.rs#L26)) | `system.tree` |
 
-```bash
-pandamux identify
-pandamux config path
-pandamux tree
-```
+| Command | Args | Description | Pipe Method |
+|---|---|---|---|
+| `new-workspace` | `[--title T] [--shell S]` | Parsed by `workspace_create_params`; both flags optional ([main.rs:298-322](crates/pandamux-cli/src/main.rs#L298-L322)) | `workspace.create` ([main.rs:27-29](crates/pandamux-cli/src/main.rs#L27-L29)) |
+| `list-workspaces` | none | ([main.rs:30](crates/pandamux-cli/src/main.rs#L30)) | `workspace.list` |
+| `select-workspace` | `<id>` | `id_param` ([main.rs:324-327](crates/pandamux-cli/src/main.rs#L324-L327)) | `workspace.select` ([main.rs:31](crates/pandamux-cli/src/main.rs#L31)) |
+| `rename-workspace` | `<id> <title>` | `rename_workspace_params` ([main.rs:329-333](crates/pandamux-cli/src/main.rs#L329-L333)) | `workspace.rename` ([main.rs:32-34](crates/pandamux-cli/src/main.rs#L32-L34)) |
+| `close-workspace` | `<id>` | `id_param` | `workspace.close` ([main.rs:35](crates/pandamux-cli/src/main.rs#L35)) |
 
-Sources: [pandamux.ts:164-176](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L164-L176), [pandamux.ts:305-397](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L305-L397)
-<!-- END:AUTOGEN pandamux_07_cli-reference_system -->
+The `project` subcommand group manages per-workspace project/session state rather than the workspace container itself:
+
+| Command | Args | Description | Pipe Method |
+|---|---|---|---|
+| `project list` | none | ([main.rs:37](crates/pandamux-cli/src/main.rs#L37)) | `project.list` |
+| `project create-local` | `<folder>` | Builds a local session location, shell hardcoded to `pwsh.exe` ([main.rs:38-49](crates/pandamux-cli/src/main.rs#L38-L49)) | `project.create` |
+| `project add-session` | `<workspaceId>` | ([main.rs:50-61](crates/pandamux-cli/src/main.rs#L50-L61)) | `project.add_session` |
+
+An unrecognized `project` subcommand returns a usage error listing the three valid forms rather than falling through to the top-level unknown-command handler (main.rs:62-65).
+
+Sources: [main.rs:20-66](crates/pandamux-cli/src/main.rs#L20-L66), [main.rs:298-333](crates/pandamux-cli/src/main.rs#L298-L333)
+<!-- END:AUTOGEN pandamux_09_cli-reference_system-workspace -->
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_07_cli-reference_workspace -->
-## Workspace Commands
+<!-- BEGIN:AUTOGEN pandamux_09_cli-reference_pane-surface -->
+## Pane and Surface Commands
 
-A workspace is a top-level window/session container. All workspace commands map 1:1 onto `workspace.*` V2 methods.
+Panes are the split-tree leaves; surfaces are the terminal/markdown/diff content hosted inside a pane. Split and create commands default `direction` to `right` and `type` to `terminal` when the caller omits them (main.rs:443-448, main.rs:483-486).
 
-| Command | Arguments | Description | Source |
+| Command | Args | Description | Pipe Method |
 |---|---|---|---|
-| `new-workspace` | `--title T` `--shell S` `--cwd D` | `workspace.create`; any of title/shell/cwd may be omitted ([pandamux.ts:226-234](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L226-L234)) |
-| `close-workspace` | `<id>` | `workspace.close` ([pandamux.ts:315](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L315)) |
-| `select-workspace` | `<id>` | `workspace.select` ([pandamux.ts:316](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L316)) |
-| `rename-workspace` | `<id> <title>` | `workspace.rename` ([pandamux.ts:317](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L317)) |
-| `list-workspaces` | none | `workspace.list` ([pandamux.ts:318](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L318)) |
-
-```bash
-pandamux new-workspace --title "Build" --shell pwsh --cwd D:\Dev\Repos\Pandamux
-pandamux rename-workspace ws-1234 "Renamed"
-```
-
-Sources: [pandamux.ts:226-234](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L226-L234), [pandamux.ts:313-318](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L313-L318)
-<!-- END:AUTOGEN pandamux_07_cli-reference_workspace -->
-
----
-
-<!-- BEGIN:AUTOGEN pandamux_07_cli-reference_surface-pane -->
-## Surface and Pane Commands
-
-Surfaces are the tabs inside a pane (terminal, browser, or markdown); panes are the split-tree leaves that host them. `split` and `pane new`/`pane split` are two spellings of the same operation, kept for backwards compatibility with issue #4's example usage ([pandamux.ts:437](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L437)).
-
-| Command | Arguments | Description | Source |
-|---|---|---|---|
-| `new-surface` | `--type T` `--color-scheme NAME` | `surface.create`; type defaults to `terminal` ([pandamux.ts:321-325](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L321-L325)) |
-| `close-surface` | `<id>` | `surface.close` ([pandamux.ts:326](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L326)) |
-| `focus-surface` | `<id>` | `surface.focus` ([pandamux.ts:327](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L327)) |
-| `list-surfaces` | `--pane P` | `surface.list` scoped to a pane id ([pandamux.ts:328](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L328)) |
-| `set-color-scheme` | `[surfaceId] <scheme>` | `surface.set_color_scheme`; if only one positional arg is given it is treated as the scheme name and applied to `PANDAMUX_SURFACE_ID` ([pandamux.ts:236-249](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L236-L249)) |
-| `clear-color-scheme` | `[surfaceId]` | `surface.set_color_scheme` with `colorScheme: null` ([pandamux.ts:330-334](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L330-L334)) |
-| `split` | `--down` `--type T` `--color-scheme NAME` | `pane.split`; `--down` selects direction `down`, otherwise `right` ([pandamux.ts:343-348](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L343-L348)) |
-| `pane new` \| `pane split` | `--down` `--type T` `--color-scheme NAME` | Verb form of `split`, same `pane.split` request ([pandamux.ts:147-152](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L147-L152)) |
-| `pane close` \| `pane focus` \| `pane list` | `<id>` / `--workspace W` | `pane.close` / `pane.focus` / `pane.list` verb forms ([pandamux.ts:153-158](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L153-L158)) |
-| `close-pane` | `<id>` | `pane.close` ([pandamux.ts:350](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L350)) |
-| `focus-pane` | `<id>` | `pane.focus` ([pandamux.ts:351](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L351)) |
-| `zoom-pane` | `<id>` | `pane.zoom` ([pandamux.ts:352](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L352)) |
-| `list-panes` | `--workspace W` | `pane.list` ([pandamux.ts:353](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L353)) |
-| `layout grid` | `--count N` `--type T` `--anchor-surface ID` `--anchor-pane ID` `--workspace W` | `layout.grid`; `--count` is required and must be >= 1; if no anchor is given it falls back to `PANDAMUX_SURFACE_ID` so the command works from inside a pane ([pandamux.ts:178-194](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L178-L194)) |
-| `markdown <file>` | file path | Creates a new markdown surface (`surface.create`) then calls `markdown.load_file` with the path resolved against the caller's cwd ([pandamux.ts:212-219](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L212-L219)) |
-| `markdown set` | `<id> --content TEXT` \| `<id> --file PATH` | `markdown.set_content` (inline text) or `markdown.load_file` (resolved file path) on an existing surface id ([pandamux.ts:198-211](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L198-L211)) |
+| `split` | `[--down] [--type T] [--pane P] [--surface S] [--workspace W]` | `split_params`; `--down` selects `direction: down`, otherwise `right`; `type` defaults `terminal` ([main.rs:402-451](crates/pandamux-cli/src/main.rs#L402-L451)) | `pane.split` ([main.rs:67](crates/pandamux-cli/src/main.rs#L67)) |
+| `close-pane` | `<id> [--workspace W]` | `id_with_optional_workspace_param` ([main.rs:335-353](crates/pandamux-cli/src/main.rs#L335-L353)) | `pane.close` ([main.rs:68-70](crates/pandamux-cli/src/main.rs#L68-L70)) |
+| `focus-pane` | `<id> [--workspace W]` | Same helper | `pane.focus` ([main.rs:71-73](crates/pandamux-cli/src/main.rs#L71-L73)) |
+| `zoom-pane` | `[id] [--pane P] [--workspace W]` | `optional_pane_param`; a bare positional arg is treated as `id` ([main.rs:373-400](crates/pandamux-cli/src/main.rs#L373-L400)) | `pane.zoom` ([main.rs:74](crates/pandamux-cli/src/main.rs#L74)) |
+| `list-panes` | `[--workspace W]` | `optional_workspace_param` ([main.rs:355-371](crates/pandamux-cli/src/main.rs#L355-L371)) | `pane.list` ([main.rs:92-94](crates/pandamux-cli/src/main.rs#L92-L94)) |
+| `new-surface` | `[--type T] [--pane P] [--workspace W]` | `surface_create_params`; `type` defaults `terminal` ([main.rs:453-488](crates/pandamux-cli/src/main.rs#L453-L488)) | `surface.create` ([main.rs:75-77](crates/pandamux-cli/src/main.rs#L75-L77)) |
+| `focus-surface` | `<id> [--workspace W]` | `id_with_optional_workspace_param` | `surface.focus` ([main.rs:78-84](crates/pandamux-cli/src/main.rs#L78-L84)) |
+| `close-surface` | `<id> [--workspace W]` | Same helper | `surface.close` ([main.rs:85-91](crates/pandamux-cli/src/main.rs#L85-L91)) |
+| `list-surfaces` | `[--workspace W] [--pane P]` | `list_surfaces_params` ([main.rs:490-514](crates/pandamux-cli/src/main.rs#L490-L514)) | `surface.list` ([main.rs:95-97](crates/pandamux-cli/src/main.rs#L95-L97)) |
+| `layout grid` | `--count N [--type T] [--anchor-pane P] [--anchor-surface S] [--workspace W]` | `layout_grid_params`; `--count` is required (error otherwise), `type` defaults `terminal` ([main.rs:661-720](crates/pandamux-cli/src/main.rs#L661-L720)) | `layout.grid` ([main.rs:115-117](crates/pandamux-cli/src/main.rs#L115-L117)) |
 
 ```bash
 pandamux split --down --type markdown
 pandamux layout grid --count 4 --type terminal
-pandamux markdown ./tasks/plan-repo.md
 ```
 
-Sources: [pandamux.ts:145-224](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L145-L224), [pandamux.ts:236-249](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L236-L249), [pandamux.ts:321-353](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L321-L353)
-<!-- END:AUTOGEN pandamux_07_cli-reference_surface-pane -->
+Sources: [main.rs:67-117](crates/pandamux-cli/src/main.rs#L67-L117), [main.rs:335-514](crates/pandamux-cli/src/main.rs#L335-L514), [main.rs:661-720](crates/pandamux-cli/src/main.rs#L661-L720)
+<!-- END:AUTOGEN pandamux_09_cli-reference_pane-surface -->
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_07_cli-reference_terminal-io -->
-## Terminal I/O Commands
+<!-- BEGIN:AUTOGEN pandamux_09_cli-reference_io -->
+## Terminal I/O and Content Commands
 
-These commands write into, or read from, a terminal surface's PTY. All accept `--surface <id>` and fall back to `PANDAMUX_SURFACE_ID` (the env var pandamux injects into every shell it spawns) when omitted.
+These commands write into or read from a terminal surface's PTY, or push content into a markdown/diff surface. Most accept an optional `--surface`/positional surface id and an optional `--workspace` scope.
 
-| Command | Arguments | Description | Source |
+| Command | Args | Description | Pipe Method |
 |---|---|---|---|
-| `send` | `[--surface ID] <text...>` | `surface.send_text`; `--surface` is stripped from the free-form text args before the remainder is joined and sent ([pandamux.ts:251-258](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L251-L258)) |
-| `send-key` | `<key> [--ctrl] [--shift] [--alt] [--surface ID]` | `surface.send_key` with a `modifiers` array built from the flags present ([pandamux.ts:260-270](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L260-L270)) |
-| `read-screen` | `--lines N` | `surface.read_text`; defaults to 50 lines if `--lines` is omitted ([pandamux.ts:362-365](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L362-L365)) |
-| `trigger-flash` | `<id>` | `surface.trigger_flash`, flashes a pane's border to draw attention ([pandamux.ts:366](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L366)) |
+| `send` | `<text...> [--surface S] [--workspace W]` | `send_text_params`; non-flag args are rejoined with spaces into `text` ([main.rs:545-578](crates/pandamux-cli/src/main.rs#L545-L578)) | `surface.send_text` ([main.rs:98](crates/pandamux-cli/src/main.rs#L98)) |
+| `send-key` | `<key> [--ctrl] [--shift] [--alt] [--surface S] [--workspace W]` | `send_key_params` ([main.rs:580-625](crates/pandamux-cli/src/main.rs#L580-L625)) | `surface.send_key` ([main.rs:99](crates/pandamux-cli/src/main.rs#L99)) |
+| `read-screen` | `[--lines N] [--surface S] [--workspace W]` | `read_screen_params`; `lines` defaults to 50 ([main.rs:627-659](crates/pandamux-cli/src/main.rs#L627-L659)) | `surface.read_text` ([main.rs:100-102](crates/pandamux-cli/src/main.rs#L100-L102)) |
+| `trigger-flash` | `[surfaceId] [--surface S] [--workspace W]` | `optional_surface_param` ([main.rs:516-543](crates/pandamux-cli/src/main.rs#L516-L543)) | `surface.trigger_flash` ([main.rs:103-105](crates/pandamux-cli/src/main.rs#L103-L105)) |
+| `set-color-scheme` | `<surfaceId> <scheme>` | `color_scheme_params` ([main.rs:900-906](crates/pandamux-cli/src/main.rs#L900-L906)) | `surface.set_color_scheme` ([main.rs:171-173](crates/pandamux-cli/src/main.rs#L171-L173)) |
+| `clear-color-scheme` | `<surfaceId>` | `surface_only_param` ([main.rs:908-911](crates/pandamux-cli/src/main.rs#L908-L911)) | `surface.clear_color_scheme` ([main.rs:174-180](crates/pandamux-cli/src/main.rs#L174-L180)) |
+| `paste` | `<text...> [--surface S]` | `paste_params` ([main.rs:1007-1028](crates/pandamux-cli/src/main.rs#L1007-L1028)) | `surface.paste` ([main.rs:279](crates/pandamux-cli/src/main.rs#L279)) |
+| `paste-image` | `<path> [--surface S]` | `paste_image_params` ([main.rs:1030-1055](crates/pandamux-cli/src/main.rs#L1030-L1055)) | `surface.paste_image` ([main.rs:280-282](crates/pandamux-cli/src/main.rs#L280-L282)) |
+| `markdown set` | `<surfaceId> [--file P] [--content T]` | `content_set_params` ([main.rs:866-893](crates/pandamux-cli/src/main.rs#L866-L893)) | `markdown.set_content` ([main.rs:141-152](crates/pandamux-cli/src/main.rs#L141-L152)) |
+| `diff set` \| `diff refresh` | `<surfaceId> [--file P] [--content T]` | `content_set_params`; both spellings map to the same request | `diff.refresh` ([main.rs:153-164](crates/pandamux-cli/src/main.rs#L153-L164)) |
 
-```bash
-pandamux send "pnpm test"
-pandamux send-key Enter
-pandamux read-screen --lines 100
+`content_set_params` is shared by `markdown set` and `diff set`: it requires a surface id, then reads `--content` inline or reads `--file <path>` from disk client-side, so the pipe server itself never touches the filesystem (main.rs:866-868).
+
+```rust
+fn content_set_params(args: &[String]) -> Result<Value, Box<dyn Error>> {
+    let id = args.first().ok_or("set requires <surfaceId>")?.clone();
+    let mut content: Option<String> = None;
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--content" => {
+                content = Some(
+                    args.get(index + 1)
+                        .ok_or("--content requires a value")?
+                        .clone(),
+                );
+                index += 2;
+            }
+            "--file" => {
+                let path = args.get(index + 1).ok_or("--file requires a value")?;
+                content = Some(std::fs::read_to_string(path)?);
+                index += 2;
+            }
+            unknown => return Err(format!("unknown set option: {unknown}").into()),
+        }
+    }
+    let content = content.ok_or("set requires --file <path> or --content <text>")?;
+    Ok(json!({ "id": id, "content": content }))
+}
 ```
 
-Sources: [pandamux.ts:251-270](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L251-L270), [pandamux.ts:360-366](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L360-L366)
-<!-- END:AUTOGEN pandamux_07_cli-reference_terminal-io -->
+(main.rs:869-893)
+
+`pandamux browser` is not a real command: the top-level match returns a hard error directing the caller to Claude Code's own browser tooling instead of forwarding anything over the pipe, so no `browser.*` pipe method exists (main.rs:283-288).
+
+Sources: [main.rs:98-105](crates/pandamux-cli/src/main.rs#L98-L105), [main.rs:141-180](crates/pandamux-cli/src/main.rs#L141-L180), [main.rs:279-288](crates/pandamux-cli/src/main.rs#L279-L288), [main.rs:866-916](crates/pandamux-cli/src/main.rs#L866-L916), [main.rs:1007-1055](crates/pandamux-cli/src/main.rs#L1007-L1055)
+<!-- END:AUTOGEN pandamux_09_cli-reference_io -->
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_07_cli-reference_browser -->
-## Browser Commands
+<!-- BEGIN:AUTOGEN pandamux_09_cli-reference_agent-ssh -->
+## Agent, SSH, and Peripheral Commands
 
-`pandamux browser <sub>` drives the CDP-controlled browser pane. Every subcommand is a small lookup in `BROWSER_CMDS`, and unknown subcommands exit 1 with an error ([pandamux.ts:103-107](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L103-L107)).
+This group covers spawning and managing agent PTYs, remote SSH surfaces, desktop notifications, sidebar status widgets, clipboard policy, window listing, config, and themes.
 
-| Command | Arguments | Description | Source |
+**Agent** ([main.rs:118-132](crates/pandamux-cli/src/main.rs#L118-L132)):
+
+| Command | Args | Description | Pipe Method |
 |---|---|---|---|
-| `browser open` | `<url>` | `browser.navigate` ([pandamux.ts:89](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L89)) |
-| `browser snapshot` | none | `browser.snapshot`, returns the accessibility tree with `@eN` refs ([pandamux.ts:90](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L90)) |
-| `browser click` | `<ref>` | `browser.click` ([pandamux.ts:91](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L91)) |
-| `browser type` | `<ref> <text...>` | `browser.type` ([pandamux.ts:92](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L92)) |
-| `browser fill` | `<ref> <value...>` | `browser.fill` ([pandamux.ts:93](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L93)) |
-| `browser screenshot` | `[--full]` | `browser.screenshot`; `--full` sets `fullPage: true` ([pandamux.ts:94](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L94)) |
-| `browser get-text` | `<ref>` | `browser.get_text` ([pandamux.ts:95](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L95)) |
-| `browser eval` | `<js...>` | `browser.eval` ([pandamux.ts:96](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L96)) |
-| `browser wait` | `<ref> [timeoutMs]` | `browser.wait`; timeout parses to `undefined` if not a number ([pandamux.ts:97](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L97)) |
-| `browser back` \| `browser forward` \| `browser reload` | none | `browser.back` / `browser.forward` / `browser.reload` ([pandamux.ts:98-100](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L98-L100)) |
+| `agent spawn` | `--cmd C [--label L] [--cwd D] [--pane P]` | `agent_spawn_params`; `--cmd` is required ([main.rs:756-796](crates/pandamux-cli/src/main.rs#L756-L796)) | `agent.spawn` ([main.rs:119-121](crates/pandamux-cli/src/main.rs#L119-L121)) |
+| `agent spawn-batch` | `--json '[...]' [--strategy S]` | `agent_batch_params`; `--json` is required ([main.rs:798-824](crates/pandamux-cli/src/main.rs#L798-L824)) | `agent.spawn_batch` ([main.rs:122-124](crates/pandamux-cli/src/main.rs#L122-L124)) |
+| `agent status` | `<id>` | `id_param` | `agent.status` ([main.rs:125](crates/pandamux-cli/src/main.rs#L125)) |
+| `agent list` | none | | `agent.list` ([main.rs:126](crates/pandamux-cli/src/main.rs#L126)) |
+| `agent kill` | `<id>` | `id_param` | `agent.kill` ([main.rs:127](crates/pandamux-cli/src/main.rs#L127)) |
+
+**Notification and sidebar** ([main.rs:106-140](crates/pandamux-cli/src/main.rs#L106-L140)):
+
+| Command | Args | Description | Pipe Method |
+|---|---|---|---|
+| `notify` | `<message...> [--body B] [--source S]` | `notify_params` ([main.rs:722-754](crates/pandamux-cli/src/main.rs#L722-L754)) | `notification.raise` ([main.rs:106](crates/pandamux-cli/src/main.rs#L106)) |
+| `list-notifications` | none | | `notification.list` ([main.rs:107](crates/pandamux-cli/src/main.rs#L107)) |
+| `clear-notifications` | `[id]` | `clear_notifications_params` ([main.rs:1057-1063](crates/pandamux-cli/src/main.rs#L1057-L1063)) | `notification.clear` ([main.rs:108-114](crates/pandamux-cli/src/main.rs#L108-L114)) |
+| `set-status` | `<key> <value>` | `set_status_params` ([main.rs:826-830](crates/pandamux-cli/src/main.rs#L826-L830)) | `sidebar.set_status` ([main.rs:133-135](crates/pandamux-cli/src/main.rs#L133-L135)) |
+| `set-progress` | `<value> [--label L]` | `set_progress_params` ([main.rs:832-855](crates/pandamux-cli/src/main.rs#L832-L855)) | `sidebar.set_progress` ([main.rs:136-138](crates/pandamux-cli/src/main.rs#L136-L138)) |
+| `log` | `<level> <message...>` | `log_params` ([main.rs:857-864](crates/pandamux-cli/src/main.rs#L857-L864)) | `sidebar.log` ([main.rs:139](crates/pandamux-cli/src/main.rs#L139)) |
+| `sidebar-state` | none | | `sidebar.get_state` ([main.rs:140](crates/pandamux-cli/src/main.rs#L140)) |
+
+**SSH** ([main.rs:219-264](crates/pandamux-cli/src/main.rs#L219-L264)):
+
+| Command | Args | Description | Pipe Method |
+|---|---|---|---|
+| `ssh connect` | `--host H --user U [--port P] [--auth A] [--key-path P] [--password P] [--passphrase P] [--name N] [--jump J] [--pane P] [--pipe-path P]` | `ssh_connect_params`; `host` and `user` are required ([main.rs:923-959](crates/pandamux-cli/src/main.rs#L923-L959)) | `ssh.connect` ([main.rs:220-222](crates/pandamux-cli/src/main.rs#L220-L222)) |
+| `ssh disconnect` | `<surfaceId>` | `ssh_surface_param` ([main.rs:961-964](crates/pandamux-cli/src/main.rs#L961-L964)) | `ssh.disconnect` ([main.rs:223-225](crates/pandamux-cli/src/main.rs#L223-L225)) |
+| `ssh list` | none | | `ssh.list` ([main.rs:226](crates/pandamux-cli/src/main.rs#L226)) |
+| `ssh profiles` | none | | `ssh.profiles` ([main.rs:227](crates/pandamux-cli/src/main.rs#L227)) |
+| `ssh profile-list` | none | | `ssh.profile.list` ([main.rs:228](crates/pandamux-cli/src/main.rs#L228)) |
+| `ssh save-profile` | Same flags as `ssh connect` | `ssh_connect_params` | `ssh.save_profile` ([main.rs:229-231](crates/pandamux-cli/src/main.rs#L229-L231)) |
+| `ssh import` | `[file]` | Defaults to `~/.ssh/config` via `default_ssh_config_path`, read client-side ([main.rs:966-971](crates/pandamux-cli/src/main.rs#L966-L971)) | `ssh.import_config` ([main.rs:232-237](crates/pandamux-cli/src/main.rs#L232-L237)) |
+| `ssh profile-remove` | `<profileId>` | ([main.rs:238-243](crates/pandamux-cli/src/main.rs#L238-L243)) | `ssh.profile.remove` |
+| `ssh folder-list` | `<profileId> [path]` | `path` defaults to `/` ([main.rs:244-256](crates/pandamux-cli/src/main.rs#L244-L256)) | `ssh.folder.list` |
+
+**Clipboard, window, config, theme, locale** ([main.rs:165-278](crates/pandamux-cli/src/main.rs#L165-L278)):
+
+| Command | Args | Description | Pipe Method |
+|---|---|---|---|
+| `clipboard copy` | `<text...>` | Joins remaining args with spaces ([main.rs:266-269](crates/pandamux-cli/src/main.rs#L266-L269)) | `clipboard.copy` |
+| `clipboard get` | none | ([main.rs:270](crates/pandamux-cli/src/main.rs#L270)) | `clipboard.get` |
+| `clipboard policy` | `[--max-store-bytes N] [--host H] [--allow-load\|--deny-load]` | `clipboard_policy_params` ([main.rs:973-1005](crates/pandamux-cli/src/main.rs#L973-L1005)) | `clipboard.policy` ([main.rs:271-273](crates/pandamux-cli/src/main.rs#L271-L273)) |
+| `list-windows` \| `windows` | none | ([main.rs:169](crates/pandamux-cli/src/main.rs#L169)) | `window.list` |
+| `focus-window` | `<id>` | `id_param` | `window.focus` ([main.rs:170](crates/pandamux-cli/src/main.rs#L170)) |
+| `config show` | none | ([main.rs:182](crates/pandamux-cli/src/main.rs#L182)) | `config.show` |
+| `config path` | none | ([main.rs:183](crates/pandamux-cli/src/main.rs#L183)) | `config.path` |
+| `config reload` \| `reload-config` | none | ([main.rs:167](crates/pandamux-cli/src/main.rs#L167), [main.rs:184](crates/pandamux-cli/src/main.rs#L184)) | `config.reload` |
+| `config import-windows-terminal` | `<file>` | File read client-side via `read_file_arg` ([main.rs:918-921](crates/pandamux-cli/src/main.rs#L918-L921)) | `config.import_windows_terminal` ([main.rs:185-194](crates/pandamux-cli/src/main.rs#L185-L194)) |
+| `config import-ghostty` | `<name> <file>` | File read client-side ([main.rs:195-210](crates/pandamux-cli/src/main.rs#L195-L210)) | `config.import_ghostty` |
+| `list-themes` \| `themes` | none | ([main.rs:165](crates/pandamux-cli/src/main.rs#L165)) | `theme.list` |
+| `select-theme` | `<name>` | `name_param` ([main.rs:895-898](crates/pandamux-cli/src/main.rs#L895-L898)) | `theme.select` ([main.rs:166](crates/pandamux-cli/src/main.rs#L166)) |
+| `set-locale` | `<en\|fr\|ar\|ja>` | `locale_param` ([main.rs:913-916](crates/pandamux-cli/src/main.rs#L913-L916)) | `i18n.set_locale` ([main.rs:168](crates/pandamux-cli/src/main.rs#L168)) |
 
 ```bash
-pandamux browser open https://example.com
-pandamux browser snapshot
-pandamux browser click @e3
+pandamux agent spawn --cmd "cargo test --workspace" --label build
+pandamux ssh connect --host 10.55.88.48 --user chaz --auth agent
+pandamux clipboard policy --host galahad --allow-load
 ```
 
-Sources: [pandamux.ts:86-107](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L86-L107)
-<!-- END:AUTOGEN pandamux_07_cli-reference_browser -->
-
----
-
-<!-- BEGIN:AUTOGEN pandamux_07_cli-reference_agent -->
-## Agent Commands
-
-`pandamux agent <sub>` spawns and manages agent PTYs across panes. `hook` and `agent-activity` are grouped here too since both feed the same agent-activity/sidebar tracking pipeline that agent orchestration depends on.
-
-| Command | Arguments | Description | Source |
-|---|---|---|---|
-| `agent spawn` | `--cmd C` `--label L` `--cwd D` `--pane P` `--workspace W` | `agent.spawn`; `--cmd` is required (exits 1 if missing), `--label` defaults to the first whitespace-delimited token of `--cmd` ([pandamux.ts:109-121](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L109-L121)) |
-| `agent spawn-batch` | `--json '[...]'` `--strategy distribute\|stack\|split` | `agent.spawn_batch`; JSON array is parsed with `JSON.parse`, strategy defaults to `distribute` ([pandamux.ts:123-129](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L123-L129)) |
-| `agent status` | `<id>` | `agent.status` ([pandamux.ts:134](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L134)) |
-| `agent list` | `--workspace W` | `agent.list` ([pandamux.ts:135](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L135)) |
-| `agent kill` | `<id>` | `agent.kill` ([pandamux.ts:136](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L136)) |
-| `hook` | `--event E` `--tool T` `--agent A` | `hook.event`; every present flag is copied straight into the params object ([pandamux.ts:281-289](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L281-L289)) |
-| `agent-activity` | `--surface ID` `--tool T` `--skill S` `--done` \| `--active` | `agent.activity`; surface id required (falls back to `PANDAMUX_SURFACE_ID`, else exits 1), `--done`/`--active` set the boolean `done` flag ([pandamux.ts:291-300](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L291-L300)) |
-
-The standalone `pandamux-hook.js` script is a separate code path used directly in Claude Code hook configuration (not through the `pandamux hook` argv dispatch above): it reads the hook JSON payload from stdin, extracts `tool_input.file_path` and `message`, and fires the same `hook.event` V2 method, silently exiting if pandamux is not running ([pandamux-hook.ts:34-70](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux-hook.ts#L34-L70)).
-
-```bash
-pandamux agent spawn --cmd "npm run build" --label build
-pandamux agent spawn-batch --json '[{"cmd":"npm test"},{"cmd":"npm run lint"}]' --strategy distribute
-```
-
-Sources: [pandamux.ts:109-143](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L109-L143), [pandamux.ts:281-300](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L281-L300), [pandamux-hook.ts:1-83](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux-hook.ts#L1-L83)
-<!-- END:AUTOGEN pandamux_07_cli-reference_agent -->
-
----
-
-<!-- BEGIN:AUTOGEN pandamux_07_cli-reference_notify -->
-## Notification and Sidebar Commands
-
-These commands post desktop notifications, drive the sidebar status/progress widgets, and trigger the diff panel refresh.
-
-| Command | Arguments | Description | Source |
-|---|---|---|---|
-| `notify` | `<text...>` `[--title T]` `[--body B]` | Sends a raw **V1** text command `notify <surfaceId> <text>` (not V2); text is assembled by filtering the `--title`/`--body` flag pairs out of argv, falling back to `--body`'s value ([pandamux.ts:272-279](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L272-L279)) |
-| `list-notifications` | none | `notification.list` ([pandamux.ts:379](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L379)) |
-| `clear-notifications` | `<id>` | `notification.clear` ([pandamux.ts:380](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L380)) |
-| `set-status` | `<key> <value>` | `sidebar.set_status` ([pandamux.ts:383](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L383)) |
-| `set-progress` | `<value> [--label L]` | `sidebar.set_progress`; value parsed with `parseFloat` ([pandamux.ts:384-387](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L384-L387)) |
-| `log` | `<level> <message...>` | `sidebar.log` ([pandamux.ts:388](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L388)) |
-| `sidebar-state` | none | `sidebar.get_state` ([pandamux.ts:389](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L389)) |
-| `diff` | `[--file PATH]` | `diff.refresh`; file defaults to an empty string when omitted ([pandamux.ts:391-394](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L391-L394)) |
-
-```bash
-pandamux set-progress 0.5 --label "Building"
-pandamux notify "Build complete" --title "pandamux"
-```
-
-Sources: [pandamux.ts:272-300](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L272-L300), [pandamux.ts:378-394](https://github.com/BoardPandas/Pandamux/blob/0ab9e6463a9017a7b8ea98f10b3f847507658ac4/src/cli/pandamux.ts#L378-L394)
-<!-- END:AUTOGEN pandamux_07_cli-reference_notify -->
+Sources: [main.rs:106-140](crates/pandamux-cli/src/main.rs#L106-L140), [main.rs:165-278](crates/pandamux-cli/src/main.rs#L165-L278), [main.rs:756-1005](crates/pandamux-cli/src/main.rs#L756-L1005)
+<!-- END:AUTOGEN pandamux_09_cli-reference_agent-ssh -->
 
 ---

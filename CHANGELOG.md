@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Restored the launcher double-submit regression test to the current two-step launch flow (spec 2.7): it now drives a folder submit followed by two session-type choices and confirms only one project is created.
 
+### Changed
+
+- Regenerated the developer documentation under `docs/` for the native Rust workspace. The prior wiki still described the deleted Electron/TypeScript prototype; it now covers the five crates (core/term/ui/app/cli), the named-pipe control plane, SSH remote surfaces, agent orchestration, shell integration, configuration, and the release pipeline, with the obsolete Electron pages moved to `docs/archive/`. (Internal docs only; no runtime change.)
+
 ## [0.52.0]
 
 ### Added

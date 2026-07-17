@@ -1,24 +1,24 @@
 project:
   name: "PandaMUX"
-  description: "Electron-based Windows terminal multiplexer for AI agents, with keep-alive split panes, a named-pipe control plane, a CLI, and a CDP-driven browser panel."
+  description: "Native Windows terminal multiplexer for AI agents. A Rust workspace pairing a GPU-accelerated Iced UI, an alacritty_terminal grid, local (portable-pty) and remote (russh) PTYs, a named-pipe control plane, and a pandamux CLI."
   repo_base_url: "https://github.com/BoardPandas/Pandamux/blob"
-  ref_commit_hash: "0ab9e6463a9017a7b8ea98f10b3f847507658ac4"
+  ref_commit_hash: "3accc145c64c10d86785466dbe59b344f6100665"
   branch: "master"
-  updated_at: "2026-07-05"
+  updated_at: "2026-07-17"
 
 pages:
   - id: pandamux_01_overview
     title: "Overview"
     folder: ""
     filename: "OVERVIEW.md"
-    description: "What PandaMUX is, its stack, repo layout, and where to start reading."
+    description: "What PandaMUX is, its Rust workspace stack, crate layout, binaries, and where to start reading."
     category: overview
     source_files:
       - "README.md"
-      - "package.json"
       - "CLAUDE.md"
-      - "src/main/index.ts"
-      - "src/renderer/App.tsx"
+      - "Cargo.toml"
+      - "CHANGELOG.md"
+      - "crates/pandamux-app/src/main.rs"
     sections:
       - id: pandamux_01_overview_introduction
         title: "Introduction"
@@ -26,7 +26,7 @@ pages:
         diagrams_needed: false
         diagram_types: []
       - id: pandamux_01_overview_purpose
-        title: "Purpose and Direction"
+        title: "Purpose and History"
         autogen: true
         diagrams_needed: false
         diagram_types: []
@@ -36,13 +36,16 @@ pages:
         diagrams_needed: false
         diagram_types: []
       - id: pandamux_01_overview_layout
-        title: "Repository Layout"
+        title: "Workspace Layout"
         autogen: true
         diagrams_needed: true
         diagram_types: ["flowchart"]
-      - id: pandamux_01_overview_entry-points
-        title: "Entry Points"
+      - id: pandamux_01_overview_binaries
+        title: "Binaries and Entry Points"
         autogen: true
+        source_files:
+          - "crates/pandamux-app/src/main.rs"
+          - "crates/pandamux-cli/src/main.rs"
         diagrams_needed: false
         diagram_types: []
       - id: pandamux_01_overview_navigate
@@ -58,39 +61,39 @@ pages:
     title: "Getting Started"
     folder: ""
     filename: "GETTING_STARTED.md"
-    description: "Prerequisites, pnpm install, dev workflow, build scripts, and tests."
+    description: "Toolchain prerequisites, build and run commands for the GUI and CLI, tests, and the crate-boundary check."
     category: guide
     source_files:
-      - "package.json"
-      - "pnpm-workspace.yaml"
-      - "README.md"
       - "CLAUDE.md"
-      - "tsconfig.json"
-      - "tsconfig.node.json"
+      - "Cargo.toml"
+      - "README.md"
+      - "scripts/check-rust-boundaries.ps1"
+      - ".github/workflows/rust.yml"
+      - "crates/pandamux-app/Cargo.toml"
     sections:
       - id: pandamux_02_getting-started_prerequisites
         title: "Prerequisites"
         autogen: true
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_02_getting-started_installation
-        title: "Installation"
-        autogen: true
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_02_getting-started_dev
-        title: "Development Workflow"
-        autogen: true
-        diagrams_needed: false
-        diagram_types: []
       - id: pandamux_02_getting-started_build
-        title: "Build Scripts"
+        title: "Building and Running"
         autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_02_getting-started_features
+        title: "Cargo Features and Binaries"
+        autogen: true
+        source_files:
+          - "crates/pandamux-app/Cargo.toml"
         diagrams_needed: false
         diagram_types: []
       - id: pandamux_02_getting-started_testing
-        title: "Running Tests"
+        title: "Checks and Tests"
         autogen: true
+        source_files:
+          - ".github/workflows/rust.yml"
+          - "scripts/check-rust-boundaries.ps1"
         diagrams_needed: false
         diagram_types: []
       - id: pandamux_02_getting-started_native
@@ -98,655 +101,736 @@ pages:
         autogen: true
         diagrams_needed: false
         diagram_types: []
+      - id: pandamux_02_getting-started_conventions
+        title: "Development Conventions"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
     related_pages:
       - pandamux_01_overview
-      - pandamux_13_release
+      - pandamux_14_release
 
   - id: pandamux_03_architecture
     title: "Architecture"
     folder: "core"
     filename: "ARCHITECTURE.md"
-    description: "Electron process model, IPC, preload bridge, split tree, and keep-alive surfaces."
+    description: "The crate-isolation invariant, backend-owned state (intent-in, delta-out), the immutable split tree, and PTY=Surface keep-alive."
     category: architecture
     source_files:
-      - "src/main/index.ts"
-      - "src/preload/index.ts"
-      - "src/renderer/index.tsx"
-      - "src/renderer/App.tsx"
-      - "src/shared/types.ts"
-      - "src/shared/id.ts"
-      - "src/shared/instance.ts"
+      - "CLAUDE.md"
+      - "crates/pandamux-core/src/lib.rs"
+      - "crates/pandamux-core/src/state.rs"
+      - "crates/pandamux-core/src/split_tree.rs"
+      - "crates/pandamux-app/src/backend.rs"
+      - "crates/pandamux-app/src/iced_runtime.rs"
+      - "crates/pandamux-ui/src/lib.rs"
+      - "scripts/check-rust-boundaries.ps1"
     sections:
-      - id: pandamux_03_architecture_process-model
-        title: "Process Model"
+      - id: pandamux_03_architecture_crates
+        title: "Workspace and Crate Boundaries"
         autogen: true
+        source_files:
+          - "scripts/check-rust-boundaries.ps1"
+          - "crates/pandamux-core/src/lib.rs"
         diagrams_needed: true
         diagram_types: ["flowchart"]
-      - id: pandamux_03_architecture_main
-        title: "Main Process"
-        autogen: true
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_03_architecture_renderer
-        title: "Renderer Process"
-        autogen: true
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_03_architecture_preload
-        title: "Preload Bridge"
+      - id: pandamux_03_architecture_state
+        title: "Backend-Owned State"
         autogen: true
         source_files:
-          - "src/preload/index.ts"
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_03_architecture_ipc
-        title: "IPC Channels"
-        autogen: true
-        source_files:
-          - "src/shared/types.ts"
+          - "crates/pandamux-core/src/state.rs"
+          - "crates/pandamux-app/src/backend.rs"
         diagrams_needed: true
         diagram_types: ["sequence"]
-      - id: pandamux_03_architecture_split-tree
-        title: "Split Tree and Surfaces"
+      - id: pandamux_03_architecture_intents
+        title: "Intent Dispatch and Deltas"
         autogen: true
+        source_files:
+          - "crates/pandamux-app/src/backend.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_03_architecture_keep-alive
-        title: "Keep-Alive Tabs"
+      - id: pandamux_03_architecture_split-tree
+        title: "Immutable Split Tree"
         autogen: true
+        source_files:
+          - "crates/pandamux-core/src/split_tree.rs"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_03_architecture_surfaces
+        title: "Surfaces and Keep-Alive"
+        autogen: true
+        source_files:
+          - "crates/pandamux-core/src/surface_content.rs"
+          - "crates/pandamux-app/src/iced_runtime.rs"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_03_architecture_runtime
+        title: "Runtime Composition"
+        autogen: true
+        source_files:
+          - "crates/pandamux-app/src/iced_runtime.rs"
         diagrams_needed: false
         diagram_types: []
     related_pages:
-      - pandamux_04_main-process
-      - pandamux_05_renderer-and-state
-      - pandamux_08_named-pipe-ipc
+      - pandamux_04_core-domain
+      - pandamux_07_app-runtime
+      - pandamux_10_named-pipe-ipc
 
-  - id: pandamux_04_main-process
-    title: "Main Process Modules"
+  - id: pandamux_04_core-domain
+    title: "Core Domain and State"
     folder: "core"
-    filename: "MAIN_PROCESS.md"
-    description: "The Electron main-process modules: entry point, PTY lifecycle, windows, IPC handlers, and helpers."
-    category: module
+    filename: "CORE_DOMAIN.md"
+    description: "pandamux-core: the canonical state model, split tree, projects, sessions, agents, sidebar, notifications, and branded IDs. Zero Iced."
+    category: data-model
     source_files:
-      - "src/main/index.ts"
-      - "src/main/pty-manager.ts"
-      - "src/main/window-manager.ts"
-      - "src/main/ipc-handlers.ts"
-      - "src/main/agent-manager.ts"
-      - "src/main/notification-manager.ts"
-      - "src/main/session-persistence.ts"
-      - "src/main/settings-store.ts"
+      - "crates/pandamux-core/src/state.rs"
+      - "crates/pandamux-core/src/split_tree.rs"
+      - "crates/pandamux-core/src/project.rs"
+      - "crates/pandamux-core/src/project_registry.rs"
+      - "crates/pandamux-core/src/agent.rs"
+      - "crates/pandamux-core/src/sidebar.rs"
+      - "crates/pandamux-core/src/notification.rs"
+      - "crates/pandamux-core/src/ids.rs"
+      - "crates/pandamux-core/src/surface_content.rs"
     sections:
-      - id: pandamux_04_main-process_entry
-        title: "Entry Point and Bootstrap"
+      - id: pandamux_04_core-domain_overview
+        title: "Overview and Module Map"
         autogen: true
         source_files:
-          - "src/main/index.ts"
+          - "crates/pandamux-core/src/lib.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_04_main-process_pty
-        title: "PTY Manager"
+      - id: pandamux_04_core-domain_ids
+        title: "Branded IDs"
         autogen: true
         source_files:
-          - "src/main/pty-manager.ts"
+          - "crates/pandamux-core/src/ids.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_04_main-process_window
-        title: "Window Manager"
+      - id: pandamux_04_core-domain_state
+        title: "Workspace State Model"
         autogen: true
         source_files:
-          - "src/main/window-manager.ts"
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_04_main-process_ipc
-        title: "IPC Handlers"
+          - "crates/pandamux-core/src/state.rs"
+          - "crates/pandamux-core/src/surface_content.rs"
+        diagrams_needed: true
+        diagram_types: ["class"]
+      - id: pandamux_04_core-domain_split
+        title: "Split Tree"
         autogen: true
         source_files:
-          - "src/main/ipc-handlers.ts"
+          - "crates/pandamux-core/src/split_tree.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_04_main-process_persistence
-        title: "Session Persistence and Settings"
+      - id: pandamux_04_core-domain_projects
+        title: "Projects and Registry"
         autogen: true
         source_files:
-          - "src/main/session-persistence.ts"
-          - "src/main/settings-store.ts"
+          - "crates/pandamux-core/src/project.rs"
+          - "crates/pandamux-core/src/project_registry.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_04_main-process_supporting
-        title: "Supporting Modules"
+      - id: pandamux_04_core-domain_peripherals
+        title: "Agents, Sidebar, and Notifications"
         autogen: true
+        source_files:
+          - "crates/pandamux-core/src/agent.rs"
+          - "crates/pandamux-core/src/sidebar.rs"
+          - "crates/pandamux-core/src/notification.rs"
         diagrams_needed: false
         diagram_types: []
     related_pages:
       - pandamux_03_architecture
-      - pandamux_08_named-pipe-ipc
+      - pandamux_08_configuration
 
-  - id: pandamux_05_renderer-and-state
-    title: "Renderer and State"
+  - id: pandamux_05_terminal-engine
+    title: "Terminal Engine"
     folder: "core"
-    filename: "RENDERER_AND_STATE.md"
-    description: "React UI structure, terminal rendering, keyboard shortcuts, and the Zustand store."
+    filename: "TERMINAL_ENGINE.md"
+    description: "pandamux-term: the alacritty_terminal grid, local PTY, shell lifecycle, search/serialize/link detection, clipboard policy, and cwd tracking."
     category: module
     source_files:
-      - "src/renderer/App.tsx"
-      - "src/renderer/components/**/*.tsx"
-      - "src/renderer/hooks/*.ts"
-      - "src/renderer/store/*.ts"
+      - "crates/pandamux-term/src/lib.rs"
+      - "crates/pandamux-term/src/grid.rs"
+      - "crates/pandamux-term/src/pty.rs"
+      - "crates/pandamux-term/src/session.rs"
+      - "crates/pandamux-term/src/shell.rs"
+      - "crates/pandamux-term/src/search.rs"
+      - "crates/pandamux-term/src/links.rs"
+      - "crates/pandamux-term/src/clipboard.rs"
+      - "crates/pandamux-term/src/cwd.rs"
     sections:
-      - id: pandamux_05_renderer-and-state_app
-        title: "React Application Shell"
+      - id: pandamux_05_terminal-engine_overview
+        title: "Overview and Isolation"
         autogen: true
         source_files:
-          - "src/renderer/App.tsx"
-          - "src/renderer/index.tsx"
+          - "crates/pandamux-term/src/lib.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_05_renderer-and-state_components
-        title: "Component Inventory"
+      - id: pandamux_05_terminal-engine_grid
+        title: "Terminal Grid"
         autogen: true
         source_files:
-          - "src/renderer/components/**/*.tsx"
+          - "crates/pandamux-term/src/grid.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_05_renderer-and-state_terminal
-        title: "Terminal Rendering"
+      - id: pandamux_05_terminal-engine_pty
+        title: "Local PTY"
         autogen: true
         source_files:
-          - "src/renderer/hooks/useTerminal.ts"
-          - "src/renderer/components/Terminal/TerminalPane.tsx"
+          - "crates/pandamux-term/src/pty.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_05_renderer-and-state_shortcuts
-        title: "Keyboard Shortcuts"
+      - id: pandamux_05_terminal-engine_session
+        title: "Session and Shell Lifecycle"
         autogen: true
         source_files:
-          - "src/renderer/hooks/useKeyboardShortcuts.ts"
+          - "crates/pandamux-term/src/session.rs"
+          - "crates/pandamux-term/src/shell.rs"
+        diagrams_needed: true
+        diagram_types: ["state"]
+      - id: pandamux_05_terminal-engine_search
+        title: "Search, Links, and Serialization"
+        autogen: true
+        source_files:
+          - "crates/pandamux-term/src/search.rs"
+          - "crates/pandamux-term/src/links.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_05_renderer-and-state_store
-        title: "Zustand Store"
+      - id: pandamux_05_terminal-engine_clipboard
+        title: "Clipboard and CWD Tracking"
         autogen: true
         source_files:
-          - "src/renderer/store/*.ts"
+          - "crates/pandamux-term/src/clipboard.rs"
+          - "crates/pandamux-term/src/cwd.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_05_renderer-and-state_split-utils
-        title: "Split Tree Utilities"
+    related_pages:
+      - pandamux_11_ssh-remote
+      - pandamux_13_shell-integration
+
+  - id: pandamux_06_ui-shell
+    title: "UI Shell"
+    folder: "core"
+    filename: "UI_SHELL.md"
+    description: "pandamux-ui: the Iced shell, canvas terminal viewport, chrome, session panel/launcher, command palette, overlays, settings, theming, and the read-projection."
+    category: module
+    source_files:
+      - "crates/pandamux-ui/src/lib.rs"
+      - "crates/pandamux-ui/src/iced_shell.rs"
+      - "crates/pandamux-ui/src/chrome.rs"
+      - "crates/pandamux-ui/src/session_panel.rs"
+      - "crates/pandamux-ui/src/session_launcher.rs"
+      - "crates/pandamux-ui/src/command_palette.rs"
+      - "crates/pandamux-ui/src/overlays.rs"
+      - "crates/pandamux-ui/src/settings.rs"
+      - "crates/pandamux-ui/src/theme.rs"
+      - "crates/pandamux-ui/src/shell_projection.rs"
+    sections:
+      - id: pandamux_06_ui-shell_overview
+        title: "Overview and Iced Isolation"
         autogen: true
         source_files:
-          - "src/renderer/store/split-utils.ts"
-          - "src/renderer/store/split-preview-utils.ts"
+          - "crates/pandamux-ui/src/lib.rs"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_06_ui-shell_shell
+        title: "The Iced Shell"
+        autogen: true
+        source_files:
+          - "crates/pandamux-ui/src/iced_shell.rs"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_06_ui-shell_projection
+        title: "Read-Projection"
+        autogen: true
+        source_files:
+          - "crates/pandamux-ui/src/shell_projection.rs"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_06_ui-shell_chrome
+        title: "Chrome and Content Views"
+        autogen: true
+        source_files:
+          - "crates/pandamux-ui/src/chrome.rs"
+          - "crates/pandamux-ui/src/content_views.rs"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_06_ui-shell_panels
+        title: "Session Panel, Launcher, and Palette"
+        autogen: true
+        source_files:
+          - "crates/pandamux-ui/src/session_panel.rs"
+          - "crates/pandamux-ui/src/session_launcher.rs"
+          - "crates/pandamux-ui/src/command_palette.rs"
+          - "crates/pandamux-ui/src/context_menu.rs"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_06_ui-shell_theme
+        title: "Overlays, Settings, and Theming"
+        autogen: true
+        source_files:
+          - "crates/pandamux-ui/src/overlays.rs"
+          - "crates/pandamux-ui/src/settings.rs"
+          - "crates/pandamux-ui/src/theme.rs"
+          - "crates/pandamux-ui/src/icons.rs"
+        diagrams_needed: false
+        diagram_types: []
+    related_pages:
+      - pandamux_03_architecture
+      - pandamux_07_app-runtime
+
+  - id: pandamux_07_app-runtime
+    title: "Application Runtime"
+    folder: "core"
+    filename: "APP_RUNTIME.md"
+    description: "pandamux-app: the composition root and tokio runtime, intent dispatcher, pipe server, pollers, session persistence, project launcher, and updater."
+    category: module
+    source_files:
+      - "crates/pandamux-app/src/main.rs"
+      - "crates/pandamux-app/src/iced_runtime.rs"
+      - "crates/pandamux-app/src/backend.rs"
+      - "crates/pandamux-app/src/persistence.rs"
+      - "crates/pandamux-app/src/pollers.rs"
+      - "crates/pandamux-app/src/project_launcher.rs"
+      - "crates/pandamux-app/src/updater.rs"
+      - "crates/pandamux-app/src/pipe_server.rs"
+    sections:
+      - id: pandamux_07_app-runtime_entry
+        title: "Entry Point and Modes"
+        autogen: true
+        source_files:
+          - "crates/pandamux-app/src/main.rs"
         diagrams_needed: true
         diagram_types: ["flowchart"]
+      - id: pandamux_07_app-runtime_iced
+        title: "Iced Runtime and Subscriptions"
+        autogen: true
+        source_files:
+          - "crates/pandamux-app/src/iced_runtime.rs"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_07_app-runtime_backend
+        title: "Intent Dispatcher"
+        autogen: true
+        source_files:
+          - "crates/pandamux-app/src/backend.rs"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_07_app-runtime_persistence
+        title: "Session Persistence"
+        autogen: true
+        source_files:
+          - "crates/pandamux-app/src/persistence.rs"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_07_app-runtime_pollers
+        title: "Pollers and Project Launcher"
+        autogen: true
+        source_files:
+          - "crates/pandamux-app/src/pollers.rs"
+          - "crates/pandamux-app/src/project_launcher.rs"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_07_app-runtime_updater
+        title: "In-App Updater"
+        autogen: true
+        source_files:
+          - "crates/pandamux-app/src/updater.rs"
+        diagrams_needed: false
+        diagram_types: []
     related_pages:
       - pandamux_03_architecture
-      - pandamux_06_configuration
+      - pandamux_10_named-pipe-ipc
+      - pandamux_14_release
 
-  - id: pandamux_06_configuration
+  - id: pandamux_08_configuration
     title: "Configuration"
     folder: "core"
     filename: "CONFIGURATION.md"
-    description: "Settings store, user config, theme loading, terminal-config import, and environment variables."
+    description: "The config.toml schema, settings model, keymap, home/path resolution, bundled themes, and environment variables set in spawned shells."
     category: configuration
     source_files:
-      - "src/main/config-loader.ts"
-      - "src/main/settings-store.ts"
-      - "src/main/user-config.ts"
-      - "src/main/theme-loader.ts"
-      - "src/main/toml-parser.ts"
-      - "src/renderer/store/settings-slice.ts"
+      - "crates/pandamux-core/src/config.rs"
+      - "crates/pandamux-core/src/settings.rs"
+      - "crates/pandamux-core/src/keymap.rs"
+      - "crates/pandamux-core/src/home.rs"
+      - "crates/pandamux-core/src/i18n.rs"
+      - "docs/config.md"
     sections:
-      - id: pandamux_06_configuration_layers
-        title: "Configuration Layers"
-        autogen: true
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_06_configuration_settings-store
-        title: "Settings Store"
+      - id: pandamux_08_configuration_layers
+        title: "Configuration Sources"
         autogen: true
         source_files:
-          - "src/main/settings-store.ts"
-          - "src/renderer/store/settings-slice.ts"
+          - "crates/pandamux-core/src/config.rs"
+          - "crates/pandamux-core/src/home.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_06_configuration_user-config
-        title: "User Config"
+      - id: pandamux_08_configuration_config-toml
+        title: "config.toml Schema"
         autogen: true
         source_files:
-          - "src/main/user-config.ts"
+          - "crates/pandamux-core/src/config.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_06_configuration_themes
-        title: "Theme Loading"
+      - id: pandamux_08_configuration_settings
+        title: "Settings Model"
         autogen: true
         source_files:
-          - "src/main/theme-loader.ts"
+          - "crates/pandamux-core/src/settings.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_06_configuration_import
-        title: "Terminal Config Import"
+      - id: pandamux_08_configuration_keymap
+        title: "Keymap"
         autogen: true
         source_files:
-          - "src/main/config-loader.ts"
-          - "src/main/toml-parser.ts"
+          - "crates/pandamux-core/src/keymap.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_06_configuration_env
+      - id: pandamux_08_configuration_themes
+        title: "Themes and Localization"
+        autogen: true
+        source_files:
+          - "crates/pandamux-core/src/i18n.rs"
+          - "crates/pandamux-ui/src/theme.rs"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_08_configuration_env
         title: "Environment Variables"
         autogen: true
+        source_files:
+          - "resources/shell-integration/pandamux-bash-integration.sh"
         diagrams_needed: false
         diagram_types: []
     related_pages:
-      - pandamux_05_renderer-and-state
-      - pandamux_12_shell-integration
+      - pandamux_04_core-domain
+      - pandamux_13_shell-integration
 
-  - id: pandamux_07_cli-reference
+  - id: pandamux_09_cli-reference
     title: "CLI Reference"
     folder: "api"
     filename: "CLI_REFERENCE.md"
-    description: "The pandamux CLI: every command group, arguments, and how it maps to pipe methods."
+    description: "The pandamux CLI: every command group, its arguments, and how it maps onto V2 JSON-RPC pipe methods."
     category: api
     source_files:
-      - "src/cli/pandamux.ts"
-      - "src/cli/pandamux-hook.ts"
+      - "crates/pandamux-cli/src/main.rs"
+      - "crates/pandamux-core/src/protocol.rs"
     sections:
-      - id: pandamux_07_cli-reference_overview
-        title: "Overview and Invocation"
+      - id: pandamux_09_cli-reference_overview
+        title: "Invocation and Transport"
         autogen: true
+        source_files:
+          - "crates/pandamux-cli/src/main.rs"
+          - "crates/pandamux-core/src/protocol.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_07_cli-reference_system
-        title: "System Commands"
+      - id: pandamux_09_cli-reference_system-workspace
+        title: "System and Workspace Commands"
         autogen: true
+        source_files:
+          - "crates/pandamux-cli/src/main.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_07_cli-reference_workspace
-        title: "Workspace Commands"
+      - id: pandamux_09_cli-reference_pane-surface
+        title: "Pane and Surface Commands"
         autogen: true
+        source_files:
+          - "crates/pandamux-cli/src/main.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_07_cli-reference_surface-pane
-        title: "Surface and Pane Commands"
+      - id: pandamux_09_cli-reference_io
+        title: "Terminal I/O and Content Commands"
         autogen: true
+        source_files:
+          - "crates/pandamux-cli/src/main.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_07_cli-reference_terminal-io
-        title: "Terminal I/O Commands"
+      - id: pandamux_09_cli-reference_agent-ssh
+        title: "Agent, SSH, and Peripheral Commands"
         autogen: true
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_07_cli-reference_browser
-        title: "Browser Commands"
-        autogen: true
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_07_cli-reference_agent
-        title: "Agent Commands"
-        autogen: true
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_07_cli-reference_notify
-        title: "Notification and Sidebar Commands"
-        autogen: true
+        source_files:
+          - "crates/pandamux-cli/src/main.rs"
         diagrams_needed: false
         diagram_types: []
     related_pages:
-      - pandamux_08_named-pipe-ipc
-      - pandamux_09_agent-orchestration
+      - pandamux_10_named-pipe-ipc
+      - pandamux_12_agent-orchestration
 
-  - id: pandamux_08_named-pipe-ipc
+  - id: pandamux_10_named-pipe-ipc
     title: "Named Pipe Control Plane"
     folder: "features"
     filename: "NAMED_PIPE_IPC.md"
-    description: "The \\\\.\\pipe\\pandamux server: V1 text hooks, V2 JSON-RPC, the renderer bridge, and Electron IPC channels."
+    description: "The \\\\.\\pipe\\pandamux server: V1 text hooks, token-authenticated V2 JSON-RPC, the shared intent dispatcher, and the method catalog."
     category: feature
     source_files:
-      - "src/main/pipe-server.ts"
-      - "src/main/v2-bridge.ts"
-      - "src/main/v2-browser.ts"
-      - "src/renderer/pipe-bridge.ts"
-      - "src/shared/types.ts"
-      - "src/shared/instance.ts"
+      - "crates/pandamux-app/src/pipe_server.rs"
+      - "crates/pandamux-app/src/backend.rs"
+      - "crates/pandamux-core/src/protocol.rs"
     sections:
-      - id: pandamux_08_named-pipe-ipc_overview
+      - id: pandamux_10_named-pipe-ipc_overview
         title: "Overview"
         autogen: true
+        source_files:
+          - "crates/pandamux-app/src/pipe_server.rs"
         diagrams_needed: true
         diagram_types: ["flowchart"]
-      - id: pandamux_08_named-pipe-ipc_v1
+      - id: pandamux_10_named-pipe-ipc_v1
         title: "V1 Text Protocol"
         autogen: true
         source_files:
-          - "src/main/pipe-server.ts"
+          - "crates/pandamux-app/src/backend.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_08_named-pipe-ipc_v2
+      - id: pandamux_10_named-pipe-ipc_v2
         title: "V2 JSON-RPC Protocol"
         autogen: true
         source_files:
-          - "src/main/pipe-server.ts"
-          - "src/main/v2-bridge.ts"
+          - "crates/pandamux-core/src/protocol.rs"
+          - "crates/pandamux-app/src/backend.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_08_named-pipe-ipc_methods
+      - id: pandamux_10_named-pipe-ipc_methods
         title: "Method Catalog"
         autogen: true
         source_files:
-          - "src/main/v2-bridge.ts"
-          - "src/main/v2-browser.ts"
+          - "crates/pandamux-app/src/backend.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_08_named-pipe-ipc_bridge
-        title: "Renderer Bridge"
+      - id: pandamux_10_named-pipe-ipc_dispatch
+        title: "Shared Dispatch and Deltas"
         autogen: true
         source_files:
-          - "src/renderer/pipe-bridge.ts"
+          - "crates/pandamux-app/src/backend.rs"
+        diagrams_needed: true
+        diagram_types: ["sequence"]
+    related_pages:
+      - pandamux_09_cli-reference
+      - pandamux_07_app-runtime
+
+  - id: pandamux_11_ssh-remote
+    title: "SSH Remote Surfaces"
+    folder: "features"
+    filename: "SSH_REMOTE.md"
+    description: "russh-backed remote PTYs and SFTP: the connection model, per-host pool, OSC 52 clipboard, SFTP image paste, and the launcher UI."
+    category: feature
+    source_files:
+      - "crates/pandamux-term/src/ssh.rs"
+      - "crates/pandamux-core/src/ssh.rs"
+      - "crates/pandamux-ui/src/session_launcher.rs"
+      - "crates/pandamux-app/src/backend.rs"
+    sections:
+      - id: pandamux_11_ssh-remote_overview
+        title: "Overview"
+        autogen: true
+        source_files:
+          - "crates/pandamux-core/src/ssh.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_08_named-pipe-ipc_channels
-        title: "Electron IPC Channels"
+      - id: pandamux_11_ssh-remote_model
+        title: "SSH Connection Model"
         autogen: true
         source_files:
-          - "src/shared/types.ts"
+          - "crates/pandamux-core/src/ssh.rs"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_11_ssh-remote_transport
+        title: "Remote PTY and Connection Pool"
+        autogen: true
+        source_files:
+          - "crates/pandamux-term/src/ssh.rs"
+        diagrams_needed: true
+        diagram_types: ["sequence"]
+      - id: pandamux_11_ssh-remote_sftp
+        title: "SFTP, OSC 52, and Image Paste"
+        autogen: true
+        source_files:
+          - "crates/pandamux-term/src/ssh.rs"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_11_ssh-remote_ui
+        title: "Launcher UI and Pipe Methods"
+        autogen: true
+        source_files:
+          - "crates/pandamux-ui/src/session_launcher.rs"
+          - "crates/pandamux-app/src/backend.rs"
         diagrams_needed: false
         diagram_types: []
     related_pages:
-      - pandamux_07_cli-reference
-      - pandamux_04_main-process
+      - pandamux_05_terminal-engine
+      - pandamux_10_named-pipe-ipc
 
-  - id: pandamux_09_agent-orchestration
+  - id: pandamux_12_agent-orchestration
     title: "Agent Orchestration"
     folder: "features"
     filename: "AGENT_ORCHESTRATION.md"
-    description: "Spawning agent PTYs across panes, the orchestration watcher, store slices, and the orchestrator plugin."
+    description: "Agent surfaces in visible panes, the agent state model and pipe methods, the bundled orchestrator plugin, and Claude context startup integration."
     category: feature
     source_files:
-      - "src/main/agent-manager.ts"
-      - "src/main/orchestration-watcher.ts"
-      - "src/renderer/store/agent-slice.ts"
-      - "src/renderer/store/orchestration-slice.ts"
-      - "src/renderer/components/Sidebar/OrchestrationPanel.tsx"
+      - "crates/pandamux-core/src/agent.rs"
+      - "crates/pandamux-app/src/backend.rs"
+      - "crates/pandamux-app/src/iced_runtime.rs"
       - "resources/pandamux-orchestrator/README.md"
+      - "resources/claude-instructions/claude-instructions.md"
     sections:
-      - id: pandamux_09_agent-orchestration_overview
+      - id: pandamux_12_agent-orchestration_overview
         title: "Overview"
         autogen: true
+        source_files:
+          - "crates/pandamux-core/src/agent.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_09_agent-orchestration_manager
-        title: "Agent Manager"
+      - id: pandamux_12_agent-orchestration_model
+        title: "Agent State Model"
         autogen: true
         source_files:
-          - "src/main/agent-manager.ts"
+          - "crates/pandamux-core/src/agent.rs"
         diagrams_needed: true
         diagram_types: ["state"]
-      - id: pandamux_09_agent-orchestration_watcher
-        title: "Orchestration Watcher"
+      - id: pandamux_12_agent-orchestration_methods
+        title: "Agent Pipe Methods"
         autogen: true
         source_files:
-          - "src/main/orchestration-watcher.ts"
+          - "crates/pandamux-app/src/backend.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_09_agent-orchestration_state
-        title: "Store Slices"
+      - id: pandamux_12_agent-orchestration_context
+        title: "Claude Context Startup Integration"
         autogen: true
         source_files:
-          - "src/renderer/store/agent-slice.ts"
-          - "src/renderer/store/orchestration-slice.ts"
+          - "crates/pandamux-app/src/iced_runtime.rs"
+          - "resources/claude-instructions/claude-instructions.md"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_09_agent-orchestration_plugin
+      - id: pandamux_12_agent-orchestration_plugin
         title: "Orchestrator Plugin"
         autogen: true
         source_files:
           - "resources/pandamux-orchestrator/README.md"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_09_agent-orchestration_panel
-        title: "Orchestration Panel UI"
-        autogen: true
-        source_files:
-          - "src/renderer/components/Sidebar/OrchestrationPanel.tsx"
-        diagrams_needed: false
-        diagram_types: []
     related_pages:
-      - pandamux_07_cli-reference
-      - pandamux_11_ai-integration
+      - pandamux_09_cli-reference
+      - pandamux_10_named-pipe-ipc
 
-  - id: pandamux_10_browser-cdp
-    title: "Browser Panel and CDP"
-    folder: "features"
-    filename: "BROWSER_CDP.md"
-    description: "The browser pane driven through the Chrome DevTools Protocol: bridge, proxy, and CLI surface."
-    category: feature
-    source_files:
-      - "src/main/cdp-bridge.ts"
-      - "src/main/cdp-proxy.ts"
-      - "src/main/v2-browser.ts"
-      - "src/renderer/components/Browser/BrowserPane.tsx"
-      - "src/renderer/components/Browser/AddressBar.tsx"
-    sections:
-      - id: pandamux_10_browser-cdp_overview
-        title: "Overview"
-        autogen: true
-        diagrams_needed: true
-        diagram_types: ["sequence"]
-      - id: pandamux_10_browser-cdp_bridge
-        title: "CDP Bridge"
-        autogen: true
-        source_files:
-          - "src/main/cdp-bridge.ts"
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_10_browser-cdp_proxy
-        title: "CDP Proxy"
-        autogen: true
-        source_files:
-          - "src/main/cdp-proxy.ts"
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_10_browser-cdp_pane
-        title: "Browser Pane UI"
-        autogen: true
-        source_files:
-          - "src/renderer/components/Browser/BrowserPane.tsx"
-          - "src/renderer/components/Browser/AddressBar.tsx"
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_10_browser-cdp_cli
-        title: "Browser CLI Surface"
-        autogen: true
-        source_files:
-          - "src/main/v2-browser.ts"
-        diagrams_needed: false
-        diagram_types: []
-    related_pages:
-      - pandamux_07_cli-reference
-      - pandamux_08_named-pipe-ipc
-
-  - id: pandamux_11_ai-integration
-    title: "AI Agent Integration"
-    folder: "features"
-    filename: "AI_INTEGRATION.md"
-    description: "Claude Code context injection, hook configuration, plugin install, activity observation, and OpenCode support."
-    category: feature
-    source_files:
-      - "src/main/claude-context.ts"
-      - "src/main/claude-observer.ts"
-      - "src/main/opencode-context.ts"
-    sections:
-      - id: pandamux_11_ai-integration_overview
-        title: "Overview"
-        autogen: true
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_11_ai-integration_context
-        title: "Claude Context Injection"
-        autogen: true
-        source_files:
-          - "src/main/claude-context.ts"
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_11_ai-integration_hooks
-        title: "Hook and Plugin Configuration"
-        autogen: true
-        source_files:
-          - "src/main/claude-context.ts"
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_11_ai-integration_observer
-        title: "Claude Activity Observer"
-        autogen: true
-        source_files:
-          - "src/main/claude-observer.ts"
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_11_ai-integration_opencode
-        title: "OpenCode Support"
-        autogen: true
-        source_files:
-          - "src/main/opencode-context.ts"
-        diagrams_needed: false
-        diagram_types: []
-    related_pages:
-      - pandamux_09_agent-orchestration
-      - pandamux_12_shell-integration
-
-  - id: pandamux_12_shell-integration
+  - id: pandamux_13_shell-integration
     title: "Shell Integration and Status"
     folder: "features"
     filename: "SHELL_INTEGRATION.md"
-    description: "Shell hook scripts, OSC sequences, and the git, PR, port, and shell-detection pollers."
+    description: "Shell hook scripts (bash/zsh/PowerShell/cmd), OSC 7 / OSC 9;9 cwd tracking, the V1 report_pwd hook, and git/port status pollers."
     category: feature
     source_files:
-      - "src/shell-integration/pandamux-bash-integration.sh"
-      - "src/shell-integration/pandamux-powershell-integration.ps1"
-      - "src/shell-integration/pandamux-cmd-integration.cmd"
-      - "src/main/git-poller.ts"
-      - "src/main/pr-poller.ts"
-      - "src/main/port-scanner.ts"
-      - "src/main/shell-detector.ts"
+      - "resources/shell-integration/pandamux-bash-integration.sh"
+      - "resources/shell-integration/pandamux-powershell-integration.ps1"
+      - "resources/shell-integration/pandamux-cmd-integration.cmd"
+      - "crates/pandamux-term/src/cwd.rs"
+      - "crates/pandamux-app/src/pollers.rs"
+      - "crates/pandamux-app/src/backend.rs"
     sections:
-      - id: pandamux_12_shell-integration_overview
+      - id: pandamux_13_shell-integration_overview
         title: "Overview"
         autogen: true
         diagrams_needed: true
         diagram_types: ["flowchart"]
-      - id: pandamux_12_shell-integration_scripts
+      - id: pandamux_13_shell-integration_scripts
         title: "Shell Hook Scripts"
         autogen: true
         source_files:
-          - "src/shell-integration/pandamux-bash-integration.sh"
-          - "src/shell-integration/pandamux-powershell-integration.ps1"
-          - "src/shell-integration/pandamux-cmd-integration.cmd"
+          - "resources/shell-integration/pandamux-bash-integration.sh"
+          - "resources/shell-integration/pandamux-powershell-integration.ps1"
+          - "resources/shell-integration/pandamux-cmd-integration.cmd"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_12_shell-integration_git
-        title: "Git Poller"
+      - id: pandamux_13_shell-integration_cwd
+        title: "CWD Tracking and report_pwd"
         autogen: true
         source_files:
-          - "src/main/git-poller.ts"
+          - "crates/pandamux-term/src/cwd.rs"
+          - "crates/pandamux-app/src/backend.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_12_shell-integration_pr
-        title: "PR Poller"
+      - id: pandamux_13_shell-integration_pollers
+        title: "Git and Port Pollers"
         autogen: true
         source_files:
-          - "src/main/pr-poller.ts"
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_12_shell-integration_ports
-        title: "Port Scanner"
-        autogen: true
-        source_files:
-          - "src/main/port-scanner.ts"
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_12_shell-integration_detector
-        title: "Shell Detector"
-        autogen: true
-        source_files:
-          - "src/main/shell-detector.ts"
+          - "crates/pandamux-app/src/pollers.rs"
         diagrams_needed: false
         diagram_types: []
     related_pages:
-      - pandamux_06_configuration
-      - pandamux_11_ai-integration
+      - pandamux_08_configuration
+      - pandamux_05_terminal-engine
 
-  - id: pandamux_13_release
+  - id: pandamux_14_release
     title: "Release and Packaging"
     folder: "operations"
     filename: "RELEASE.md"
-    description: "The ASAR-based portable-zip release flow, native-module unpacking, rcedit, auto-update, and CI."
+    description: "The tag-driven GitHub Actions release: build, Azure Trusted Signing, cargo-packager NSIS installer, in-app updater discovery, and winget publish."
     category: runbook
     source_files:
       - "CLAUDE.md"
-      - "electron-builder.json"
       - ".github/workflows/release.yml"
       - ".github/workflows/winget.yml"
-      - "src/main/updater.ts"
-      - "src/main/update-checker.ts"
+      - "crates/pandamux-app/Cargo.toml"
+      - "crates/pandamux-app/src/updater.rs"
+      - "crates/pandamux-app/build.rs"
     sections:
-      - id: pandamux_13_release_overview
+      - id: pandamux_14_release_overview
         title: "Overview"
         autogen: true
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_13_release_build
-        title: "Build and Staging"
-        autogen: true
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_13_release_asar
-        title: "ASAR Packaging and Native Modules"
+        diagrams_needed: true
+        diagram_types: ["flowchart"]
+      - id: pandamux_14_release_build
+        title: "Build and Metadata Embedding"
         autogen: true
         source_files:
-          - "electron-builder.json"
+          - "crates/pandamux-app/build.rs"
+          - ".github/workflows/release.yml"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_13_release_metadata
-        title: "Icon and Metadata (rcedit)"
-        autogen: true
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_13_release_updater
-        title: "Auto-Update and latest.yml"
-        autogen: true
-        source_files:
-          - "src/main/updater.ts"
-          - "src/main/update-checker.ts"
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_13_release_ci
-        title: "CI Workflows"
+      - id: pandamux_14_release_signing
+        title: "Signing and Packaging"
         autogen: true
         source_files:
           - ".github/workflows/release.yml"
+          - "crates/pandamux-app/Cargo.toml"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_14_release_updater
+        title: "In-App Update Discovery"
+        autogen: true
+        source_files:
+          - "crates/pandamux-app/src/updater.rs"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_14_release_distribution
+        title: "Distribution and winget"
+        autogen: true
+        source_files:
           - ".github/workflows/winget.yml"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_13_release_checklist
+      - id: pandamux_14_release_checklist
         title: "Release Checklist"
         autogen: true
+        source_files:
+          - "CLAUDE.md"
         diagrams_needed: false
         diagram_types: []
     related_pages:
       - pandamux_02_getting-started
-      - pandamux_01_overview
+      - pandamux_07_app-runtime
 
-  - id: pandamux_14_glossary
+  - id: pandamux_15_glossary
     title: "Glossary"
     folder: ""
     filename: "GLOSSARY.md"
-    description: "Domain terms and branded ID types used across PandaMUX."
+    description: "Domain terms, branded ID types, and architecture vocabulary used across the PandaMUX workspace."
     category: glossary
     source_files:
-      - "src/shared/types.ts"
-      - "src/shared/id.ts"
+      - "crates/pandamux-core/src/ids.rs"
+      - "crates/pandamux-core/src/state.rs"
       - "CLAUDE.md"
     sections:
-      - id: pandamux_14_glossary_terms
+      - id: pandamux_15_glossary_terms
         title: "Terms"
         autogen: true
         diagrams_needed: false
@@ -756,7 +840,7 @@ pages:
       - pandamux_03_architecture
 
 notes:
-  - "Existing docs/superpowers/plans and docs/superpowers/specs are manually maintained and left untouched by doc-sync."
-  - "docs/config.md is a pre-existing manual note, not tracked by this TOC."
-  - "resources/themes/ is empty at this commit; theme-loader is documented from code, not from bundled theme files."
-  - "The project is frozen to bug fixes pending a native Rust rewrite (see CLAUDE.md); these docs describe the current Electron build."
+  - "This TOC was rebuilt at commit 3accc14 after the full Electron-to-Rust rewrite (commits between 0ab9e64 and 3accc14). The prior Electron-oriented pages (MAIN_PROCESS, RENDERER_AND_STATE, BROWSER_CDP, AI_INTEGRATION) were moved to docs/archive/ because they have no successor in the Rust workspace (the browser/CDP pane was intentionally dropped)."
+  - "docs/superpowers/plans and docs/superpowers/specs are manually maintained historical plans/specs and are left untouched by doc-sync."
+  - "docs/config.md is a pre-existing manual note; it is cited by the Configuration page but not owned by an AUTOGEN block."
+  - "pandamux-app has no dedicated claude_context.rs module at this commit; Claude-context startup wiring lives in iced_runtime.rs and backend.rs."
