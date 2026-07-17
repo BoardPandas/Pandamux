@@ -14,13 +14,34 @@ use pandamux_core::{FolderListing, ProjectError, SshAuthConfig, SshHostProfile, 
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LauncherStep {
+    /// Step 1 (spec 2.2): pinned favorites, recents, existing projects, and
+    /// the new-project entry points.
     #[default]
+    Project,
+    /// Step 2 (spec 2.2/2.7): what to open in the chosen project.
+    SessionType,
+    /// SSH connection management (was the old first step).
     Connection,
     ProfileForm,
     Credential,
     HostConfirmation,
     Folder,
     Launching,
+}
+
+/// One activatable row on the Project step, in display order. The runtime
+/// builds this list (it owns the registry and prefs); Up/Down/Enter walk it,
+/// so keyboard and mouse hit exactly the same actions.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LauncherItem {
+    /// "PIN" | "NEW" | recency text | project detail.
+    pub tag: String,
+    pub label: String,
+    pub detail: String,
+    pub message: ShellMessage,
+    /// A pinned configuration renders a lit star (toggles off); a plain
+    /// project renders none.
+    pub pin: Option<ShellMessage>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,7 +99,7 @@ impl SshProfileForm {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct SessionLauncherViewState {
     pub step: LauncherStep,
     pub profiles: Vec<SshHostProfile>,
@@ -92,6 +113,18 @@ pub struct SessionLauncherViewState {
     pub loading: bool,
     pub launching: bool,
     pub error: Option<ProjectError>,
+    /// Type-to-filter text on the Project step (keyboard-first, spec 2.2).
+    pub filter: String,
+    /// Project-step rows in display order (favorites, recents, projects, new).
+    pub items: Vec<LauncherItem>,
+    /// SessionType-step rows in display order.
+    pub type_items: Vec<LauncherItem>,
+    /// Keyboard selection index into the active step's items.
+    pub selected: usize,
+    /// The project name shown on the SessionType step header.
+    pub target_name: String,
+    /// Custom-command input on the SessionType step.
+    pub custom_command: String,
 }
 
 pub fn session_launcher(
@@ -99,6 +132,8 @@ pub fn session_launcher(
     palette: Palette,
 ) -> Element<'_, ShellMessage> {
     let content = match state.step {
+        LauncherStep::Project => project_step(state, palette),
+        LauncherStep::SessionType => type_step(state, palette),
         LauncherStep::Connection => connection_step(state, palette),
         LauncherStep::ProfileForm => profile_form_step(state, palette),
         LauncherStep::Credential => credential_step(state, palette),
@@ -111,6 +146,179 @@ pub fn session_launcher(
         .max_height(640.0)
         .style(move |_theme| overlay_card_style(palette));
     modal(card, palette, Alignment::Center)
+}
+
+/// One activatable launcher row: tag chip, label + detail, optional pin star,
+/// highlighted when keyboard-selected.
+fn launcher_item_row<'a>(
+    item: &'a LauncherItem,
+    selected: bool,
+    palette: Palette,
+) -> Element<'a, ShellMessage> {
+    let tag = container(
+        text(item.tag.clone())
+            .size(theme::SIZE_METADATA)
+            .font(theme::mono(iced::font::Weight::Semibold))
+            .color(palette.t3),
+    )
+    .width(Length::Fixed(44.0))
+    .align_x(Alignment::Center)
+    .padding(Padding::from([2.0, 4.0]))
+    .style(move |_theme| container::Style {
+        background: Some(palette.ov(0.05).into()),
+        border: theme::border(palette.ov(0.08), 1.0, theme::RADIUS_CHIP),
+        ..Default::default()
+    });
+    let body = column![
+        text(item.label.clone())
+            .size(theme::SIZE_BODY)
+            .color(palette.t1),
+        text(item.detail.clone())
+            .size(theme::SIZE_METADATA)
+            .font(theme::mono(iced::font::Weight::Normal))
+            .color(palette.t4),
+    ]
+    .spacing(2)
+    .width(Length::Fill);
+    let content = row![tag, body].spacing(10).align_y(Alignment::Center);
+    let main = button(content.width(Length::Fill))
+        .padding(Padding::from([7.0, 8.0]))
+        .width(Length::Fill)
+        .on_press(item.message.clone())
+        .style(move |_theme, status| {
+            let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+            button::Style {
+                background: Some(
+                    if selected {
+                        palette.accent_alpha(0.1)
+                    } else if hovered {
+                        palette.ov(0.05)
+                    } else {
+                        Color::TRANSPARENT
+                    }
+                    .into(),
+                ),
+                text_color: palette.t1,
+                border: theme::border(
+                    if selected {
+                        palette.accent_alpha(0.25)
+                    } else {
+                        Color::TRANSPARENT
+                    },
+                    1.0,
+                    theme::RADIUS_ROW,
+                ),
+                ..Default::default()
+            }
+        });
+    match &item.pin {
+        Some(toggle) => {
+            let star = button(
+                text("\u{2605}")
+                    .size(theme::SIZE_BODY)
+                    .color(palette.accent),
+            )
+            .padding(Padding::from([3.0, 6.0]))
+            .on_press(toggle.clone())
+            .style(move |_theme, status| button::Style {
+                background: matches!(status, button::Status::Hovered | button::Status::Pressed)
+                    .then(|| palette.ov(0.08).into()),
+                text_color: palette.accent,
+                border: theme::border(Color::TRANSPARENT, 0.0, theme::RADIUS_ROW),
+                ..Default::default()
+            });
+            row![main, star]
+                .spacing(2)
+                .align_y(Alignment::Center)
+                .into()
+        }
+        None => main.into(),
+    }
+}
+
+/// Step 1: favorites + recents + projects + new-project entry points, filtered
+/// by the type-to-filter input and fully keyboard-navigable (spec 2.2/2.3).
+fn project_step<'a>(
+    state: &'a SessionLauncherViewState,
+    palette: Palette,
+) -> Element<'a, ShellMessage> {
+    let filter = text_input("Type to filter, arrows + Enter to launch", &state.filter)
+        .on_input(ShellMessage::LauncherFilterChanged)
+        .size(theme::SIZE_BODY)
+        .width(Length::Fill);
+
+    let mut list = column![].spacing(2).width(Length::Fill);
+    if state.items.is_empty() {
+        list = list.push(
+            text("No matches. Clear the filter or create a new project below.")
+                .size(theme::SIZE_SECONDARY)
+                .color(palette.t3),
+        );
+    }
+    for (index, item) in state.items.iter().enumerate() {
+        list = list.push(launcher_item_row(item, index == state.selected, palette));
+    }
+
+    column![
+        header("New Session", "Which project?", palette),
+        filter,
+        scrollable(list)
+            .height(Length::Fixed(360.0))
+            .width(Length::Fill),
+        row![
+            Space::new().width(Length::Fill),
+            ghost_button("Cancel", Some(ShellMessage::OverlayDismissed), palette),
+        ]
+        .spacing(8),
+    ]
+    .spacing(12)
+    .into()
+}
+
+/// Step 2: what to open in the chosen project (spec 2.2/2.7).
+fn type_step<'a>(
+    state: &'a SessionLauncherViewState,
+    palette: Palette,
+) -> Element<'a, ShellMessage> {
+    let mut list = column![].spacing(2).width(Length::Fill);
+    for (index, item) in state.type_items.iter().enumerate() {
+        list = list.push(launcher_item_row(item, index == state.selected, palette));
+    }
+    let custom = row![
+        text_input("Custom command (e.g. npm run dev)", &state.custom_command)
+            .on_input(ShellMessage::LauncherCustomCommandChanged)
+            .on_submit(ShellMessage::LauncherCustomSubmitted)
+            .size(theme::SIZE_BODY)
+            .width(Length::Fill),
+        ghost_button(
+            "Run",
+            (!state.custom_command.trim().is_empty())
+                .then_some(ShellMessage::LauncherCustomSubmitted),
+            palette
+        ),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center);
+
+    column![
+        header("New Session", "What are you opening?", palette),
+        container(
+            text(state.target_name.clone())
+                .size(theme::SIZE_SECONDARY)
+                .color(palette.accent)
+        )
+        .padding(Padding::from([0.0, 2.0])),
+        list,
+        custom,
+        row![
+            ghost_button("Back", Some(ShellMessage::LauncherBack), palette),
+            Space::new().width(Length::Fill),
+            ghost_button("Cancel", Some(ShellMessage::OverlayDismissed), palette),
+        ]
+        .spacing(8),
+    ]
+    .spacing(12)
+    .into()
 }
 
 fn connection_step<'a>(
@@ -991,9 +1199,9 @@ mod tests {
     }
 
     #[test]
-    fn launcher_stages_connection_before_folder() {
+    fn launcher_opens_on_the_project_step() {
         let mut state = SessionLauncherViewState::default();
-        assert_eq!(state.step, LauncherStep::Connection);
+        assert_eq!(state.step, LauncherStep::Project);
         state.step = LauncherStep::Folder;
         state.remote = true;
         assert_eq!(state.step, LauncherStep::Folder);

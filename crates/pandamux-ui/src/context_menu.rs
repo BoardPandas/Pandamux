@@ -185,6 +185,8 @@ pub enum RailMenuAction {
     CloseAllInProject {
         project_id: pandamux_core::ProjectId,
     },
+    /// Pin/unpin this session's project + type combination (spec 2.3).
+    PinConfiguration { config: pandamux_core::LaunchConfig },
 }
 
 /// The open rail menu: a title plus its action rows (built by the runtime,

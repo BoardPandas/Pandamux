@@ -27,9 +27,7 @@ pub mod theme;
 #[cfg(feature = "iced-runtime")]
 pub use chrome::{ChromeState, MainView, Overlay, RailItem, SessionActivity};
 #[cfg(feature = "iced-runtime")]
-pub use command_palette::{
-    PaletteItem, PaletteViewState, QuickLaunchProfile, QuickLaunchViewState, filter_items,
-};
+pub use command_palette::{PaletteItem, PaletteViewState, filter_items};
 #[cfg(feature = "iced-runtime")]
 pub use context_menu::{
     ContextMenuAction, ContextMenuViewState, RailMenuAction, RailMenuViewState,
@@ -47,7 +45,7 @@ pub use metrics::CellMetrics;
 pub use overlays::{FindViewState, NotificationCard, NotificationsViewState};
 #[cfg(feature = "iced-runtime")]
 pub use session_launcher::{
-    LauncherStep, SessionLauncherViewState, SshProfileForm, session_launcher,
+    LauncherItem, LauncherStep, SessionLauncherViewState, SshProfileForm, session_launcher,
 };
 #[cfg(feature = "iced-runtime")]
 pub use session_panel::{

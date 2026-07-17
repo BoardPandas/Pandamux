@@ -9,7 +9,7 @@
 //! actions. It never owns canonical state.
 
 use crate::chrome::{self, ChromeState, Overlay, RailItem};
-use crate::command_palette::{self, PaletteViewState, QuickLaunchViewState};
+use crate::command_palette::{self, PaletteViewState};
 use crate::icons::{Icon, icon};
 use crate::overlays;
 use crate::session_launcher::{self, SessionLauncherViewState};
@@ -44,6 +44,9 @@ pub enum ShellMessage {
     CloseFocusedPane,
     ZoomFocusedPane,
     TerminalSurfaceCreated(PaneId),
+    /// The tab-bar plus button: opens the launcher's type chooser targeting
+    /// that pane (never silently clones the current shell, spec 2.1).
+    TabAddRequested(PaneId),
     SurfaceFocused(SurfaceId),
     SurfaceClosed(SurfaceId),
     // Drag-and-drop pane splitting (Section 12.3)
@@ -115,11 +118,6 @@ pub enum ShellMessage {
     PaletteMoveSelection(i32),
     /// Activate the highlighted palette item (Enter).
     PaletteActivate,
-    /// Launch a new session from a quick-launch profile.
-    LaunchProfile {
-        shell: String,
-        title: String,
-    },
     LauncherLocalSelected,
     LauncherProfileSelected(pandamux_core::SshProfileId),
     LauncherProfileAdd,
@@ -136,6 +134,20 @@ pub enum ShellMessage {
     LauncherCredentialChanged(String),
     LauncherCredentialSubmit,
     LauncherHostTrustConfirmed,
+    /// Launcher Project step (spec 2.2/2.3). Arrow/Enter navigation reuses
+    /// the palette messages, routed by the runtime while the launcher is open.
+    LauncherFilterChanged(String),
+    /// An existing project chosen: advance to the SessionType step.
+    LauncherProjectChosen(pandamux_core::ProjectId),
+    /// A pinned favorite or recent chosen: launch it in one click.
+    LauncherShortcutChosen(pandamux_core::LaunchConfig),
+    LauncherFavoriteToggled(pandamux_core::LaunchConfig),
+    /// Open the SSH connection manager (the old Connection step).
+    LauncherNewSsh,
+    /// Launcher SessionType step.
+    LauncherTypeChosen(pandamux_core::SessionType),
+    LauncherCustomCommandChanged(String),
+    LauncherCustomSubmitted,
     LauncherPathChanged(String),
     LauncherFolderGo,
     LauncherFolderHome,
@@ -365,8 +377,6 @@ pub struct ShellViewModel {
     pub sessions: SessionsViewState,
     /// Command-palette state (filtered items live here).
     pub palette: PaletteViewState,
-    /// Quick-launch profile list.
-    pub quick_launch: QuickLaunchViewState,
     pub launcher: SessionLauncherViewState,
     /// Settings modal projection.
     pub settings: SettingsViewState,
@@ -1454,7 +1464,8 @@ fn tab_bar_view<'a>(
     let add_tab = icon_button(
         Icon::Plus,
         palette,
-        ShellMessage::TerminalSurfaceCreated(pane.id.clone()),
+        // Opens the launcher's type chooser targeting this pane (spec 2.1).
+        ShellMessage::TabAddRequested(pane.id.clone()),
     );
     let split_right = icon_button(
         Icon::SplitRight,
@@ -1798,7 +1809,6 @@ mod tests {
             copy_mode: false,
             sessions: SessionsViewState::default(),
             palette: PaletteViewState::default(),
-            quick_launch: QuickLaunchViewState::default(),
             launcher: SessionLauncherViewState::default(),
             settings: SettingsViewState::default(),
             surface_contents: HashMap::new(),

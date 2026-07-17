@@ -56,6 +56,16 @@ pub enum ProjectResolution {
     New(ProjectRecord),
 }
 
+/// A pinnable/relaunchable configuration: a project plus what to run in it
+/// (spec 2.3 favorites/recents, spec 2.5 Home pane rehydration).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchConfig {
+    pub project_id: ProjectId,
+    #[serde(default)]
+    pub session: crate::split_tree::SessionType,
+}
+
 /// Normalize a git remote URL so the same repository matches across schemes
 /// and hosts spellings: lowercase, credentials stripped, scp-like syntax
 /// (`git@host:org/repo.git`) and URL syntax (`https://host/org/repo`) both

@@ -3,12 +3,12 @@ use crate::project_launcher::{EphemeralCredential, LaunchTarget};
 use iced::futures::SinkExt;
 use iced::{Element, Size, Subscription, Task, Theme, application, keyboard, stream, time, window};
 use pandamux_core::{
-    AgentRegistry, AppIntent, AppState, ClipboardConfig, Localizer, NewNotification,
+    AgentRegistry, AppIntent, AppState, ClipboardConfig, LaunchConfig, Localizer, NewNotification,
     NotificationSource, Notifications, PaneId, PaneIntent, ProjectError, ProjectErrorCategory,
-    ProjectId, ProjectIntent, ProjectLocation, ProjectMatcher, SessionType, SidebarState,
-    SplitDirection, SplitNode, SplitPaneParams, SshProfileId, SshProfiles, SurfaceContents,
-    SurfaceId, SurfaceIntent, SurfaceType, ThemeStore, UserSettings, WorkspaceId, WorkspaceIntent,
-    find_leaf, find_pane_id_for_surface, get_all_pane_ids, parse_ghostty_theme,
+    ProjectId, ProjectIntent, ProjectLocation, ProjectMatcher, ProjectRecord, SessionType,
+    SidebarState, SplitDirection, SplitNode, SplitPaneParams, SshProfileId, SshProfiles,
+    SurfaceContents, SurfaceId, SurfaceIntent, SurfaceType, ThemeStore, UserSettings, WorkspaceId,
+    WorkspaceIntent, find_leaf, find_pane_id_for_surface, get_all_pane_ids, parse_ghostty_theme,
 };
 use pandamux_term::{
     DEFAULT_GRID_SIZE, GridSize, PtyCommand, PtySessionManager, RemoteSessionManager, RemoteStatus,
@@ -17,11 +17,11 @@ use pandamux_term::{
 };
 use pandamux_ui::{
     Accent, ChromeState, ContextMenuAction, ContextMenuViewState, DragView, FindViewState,
-    LauncherStep, LinkSpan, MainView, NotificationCard, NotificationsViewState, Overlay,
-    PaletteItem, PaletteViewState, QuickLaunchViewState, RailItem, RailMenuAction,
-    RailMenuViewState, SessionActivity, SessionLauncherViewState, SessionsViewState,
-    SettingsSection, SettingsViewState, ShellKind, ShellMessage, ShellViewModel, SshProfileForm,
-    TermScheme, TerminalSnapshot, TerminalToggle, UiTheme, app_view, filter_items,
+    LauncherItem, LauncherStep, LinkSpan, MainView, NotificationCard, NotificationsViewState,
+    Overlay, PaletteItem, PaletteViewState, RailItem, RailMenuAction, RailMenuViewState,
+    SessionActivity, SessionLauncherViewState, SessionsViewState, SettingsSection,
+    SettingsViewState, ShellKind, ShellMessage, ShellViewModel, SshProfileForm, TermScheme,
+    TerminalSnapshot, TerminalToggle, UiTheme, app_view, filter_items,
     project_sessions_with_profiles, project_workspace_shell, shell_view,
 };
 use std::collections::{HashMap, HashSet};
@@ -107,7 +107,12 @@ pub struct NativeShellRuntime {
     launcher: SessionLauncherViewState,
     launcher_trust_unknown: bool,
     pending_remote_launch: Option<PendingRemoteLaunch>,
-    pending_plus_workspace: Option<WorkspaceId>,
+    /// Pinned favorites + recents (config/launcher.json, per-machine v1).
+    launcher_prefs: crate::persistence::LauncherPrefsConfig,
+    /// Where the SessionType step launches once a type is chosen.
+    pending_type_launch: Option<PendingTypeLaunch>,
+    /// The chosen type parked while an SSH credential is collected.
+    pending_session_type: Option<SessionType>,
     /// Persistent clipboard policy (plan F1).
     clipboard_config: ClipboardConfig,
     /// Active drag-and-drop of a tab, if any (plan Section 12.3).
@@ -148,6 +153,20 @@ struct PendingRemoteLaunch {
     config: SshConfig,
     /// What to run once the remote PTY is ready (Terminal = nothing extra).
     session: SessionType,
+}
+
+/// Where the launcher's SessionType step will launch once a type is chosen
+/// (spec 2.2): a project location (new or reused workspace) or a specific
+/// pane (the tab-bar plus button).
+#[derive(Clone, Debug)]
+enum PendingTypeLaunch {
+    Location {
+        location: ProjectLocation,
+    },
+    Pane {
+        workspace_id: WorkspaceId,
+        pane_id: PaneId,
+    },
 }
 
 impl Default for NativeShellRuntime {
@@ -192,6 +211,17 @@ impl NativeShellRuntime {
         } else {
             AppState::default()
         };
+        // Pinned favorites and recents (spec 2.3): per-machine, and validated
+        // against the registry so dangling project ids drop out lazily.
+        let mut launcher_prefs = if live_ptys {
+            crate::persistence::LauncherPrefsStore::new(
+                crate::persistence::LauncherPrefsStore::default_dir(),
+            )
+            .load()
+        } else {
+            crate::persistence::LauncherPrefsConfig::default()
+        };
+        launcher_prefs.retain_known_projects(&app_state.projects);
         let chrome = ChromeState::default();
         let view_model = initial_view_model(&app_state, &chrome);
         let mut runtime = Self {
@@ -232,7 +262,9 @@ impl NativeShellRuntime {
             launcher: SessionLauncherViewState::default(),
             launcher_trust_unknown: false,
             pending_remote_launch: None,
-            pending_plus_workspace: None,
+            launcher_prefs,
+            pending_type_launch: None,
+            pending_session_type: None,
             clipboard_config: ClipboardConfig::default(),
             drag: None,
             context_menu: None,
@@ -327,9 +359,160 @@ impl NativeShellRuntime {
                 ..SessionLauncherViewState::default()
             };
             self.launcher_trust_unknown = false;
-            self.pending_plus_workspace = None;
+            self.pending_type_launch = None;
+            self.pending_session_type = None;
+            self.populate_launcher_lists();
         }
         self.chrome.active_overlay = overlay;
+    }
+
+    /// Rebuild the launcher's Project-step rows: pinned favorites, recents,
+    /// existing projects, and the new-project entry points, filtered by the
+    /// type-to-filter text (spec 2.2/2.3).
+    fn populate_launcher_lists(&mut self) {
+        let filter = self.launcher.filter.to_lowercase();
+        let matches = |label: &str| filter.is_empty() || label.to_lowercase().contains(&filter);
+        let record_for = |id: &ProjectId| {
+            self.app_state
+                .projects
+                .iter()
+                .find(|record: &&ProjectRecord| &record.id == id)
+        };
+        let mut items: Vec<LauncherItem> = Vec::new();
+        for pin in &self.launcher_prefs.favorites {
+            let Some(record) = record_for(&pin.project_id) else {
+                continue;
+            };
+            let label = format!("{}: {}", record.name, pin.session.label());
+            if !matches(&label) {
+                continue;
+            }
+            items.push(LauncherItem {
+                tag: "PIN".to_string(),
+                label,
+                detail: location_detail(record.known_locations.first()),
+                message: ShellMessage::LauncherShortcutChosen(pin.clone()),
+                pin: Some(ShellMessage::LauncherFavoriteToggled(pin.clone())),
+            });
+        }
+        for recent in self.launcher_prefs.recents.iter().take(10) {
+            if self.launcher_prefs.is_favorite(&recent.config) {
+                continue;
+            }
+            let Some(record) = record_for(&recent.config.project_id) else {
+                continue;
+            };
+            let label = format!("{}: {}", record.name, recent.config.session.label());
+            if !matches(&label) {
+                continue;
+            }
+            items.push(LauncherItem {
+                tag: "RCT".to_string(),
+                label,
+                detail: format!(
+                    "{} \u{00b7} {}",
+                    location_detail(record.known_locations.first()),
+                    relative_age(now_ms(), recent.last_used_ms)
+                ),
+                message: ShellMessage::LauncherShortcutChosen(recent.config.clone()),
+                pin: None,
+            });
+        }
+        for record in &self.app_state.projects {
+            if !matches(&record.name) {
+                continue;
+            }
+            items.push(LauncherItem {
+                tag: "PROJ".to_string(),
+                label: record.name.clone(),
+                detail: location_detail(record.known_locations.first()),
+                message: ShellMessage::LauncherProjectChosen(record.id.clone()),
+                pin: None,
+            });
+        }
+        items.push(LauncherItem {
+            tag: "NEW".to_string(),
+            label: "New local folder".to_string(),
+            detail: "Browse this computer".to_string(),
+            message: ShellMessage::LauncherLocalSelected,
+            pin: None,
+        });
+        items.push(LauncherItem {
+            tag: "NEW".to_string(),
+            label: "New SSH connection".to_string(),
+            detail: "Saved connections and imports".to_string(),
+            message: ShellMessage::LauncherNewSsh,
+            pin: None,
+        });
+        self.launcher.selected = self.launcher.selected.min(items.len().saturating_sub(1));
+        self.launcher.items = items;
+    }
+
+    /// The SessionType step rows (spec 2.2/2.7): Terminal, PowerShell
+    /// flavors, Claude, Codex, Gemini (Custom has its own input row).
+    fn populate_type_items(&mut self) {
+        let types: [(&str, &str, &str, SessionType); 6] = [
+            (
+                "TERM",
+                "Terminal",
+                "The project's default shell",
+                SessionType::Terminal,
+            ),
+            (
+                "PS",
+                "PowerShell 7",
+                "pwsh",
+                SessionType::PowerShell {
+                    program: "pwsh.exe".to_string(),
+                },
+            ),
+            (
+                "PS",
+                "Windows PowerShell",
+                "powershell",
+                SessionType::PowerShell {
+                    program: "powershell.exe".to_string(),
+                },
+            ),
+            ("CL", "Claude", "Claude Code", SessionType::Claude),
+            ("CX", "Codex", "Codex CLI", SessionType::Codex),
+            ("GM", "Gemini", "Gemini CLI", SessionType::Gemini),
+        ];
+        self.launcher.type_items = types
+            .into_iter()
+            .map(|(tag, label, detail, session)| LauncherItem {
+                tag: tag.to_string(),
+                label: label.to_string(),
+                detail: detail.to_string(),
+                message: ShellMessage::LauncherTypeChosen(session),
+                pin: None,
+            })
+            .collect();
+        self.launcher.selected = 0;
+    }
+
+    fn save_launcher_prefs(&mut self) {
+        if self.live_ptys {
+            let _ = crate::persistence::LauncherPrefsStore::new(
+                crate::persistence::LauncherPrefsStore::default_dir(),
+            )
+            .save(&self.launcher_prefs);
+        }
+    }
+
+    /// Record a successful launch for the recents list (spec 2.3).
+    fn record_recent(&mut self, project_id: Option<ProjectId>, session: &SessionType) {
+        let Some(project_id) = project_id else {
+            return;
+        };
+        self.launcher_prefs.record_recent(
+            LaunchConfig {
+                project_id,
+                session: session.clone(),
+            },
+            now_ms(),
+        );
+        self.save_launcher_prefs();
     }
 
     fn save_profiles(&mut self) {
@@ -423,6 +606,7 @@ impl NativeShellRuntime {
         &mut self,
         profile_id: SshProfileId,
         remote_cwd: String,
+        session: SessionType,
     ) -> Result<(), ProjectError> {
         if self.pending_remote_launch.is_some() {
             return Ok(());
@@ -466,11 +650,13 @@ impl NativeShellRuntime {
         self.pending_remote_launch = Some(PendingRemoteLaunch {
             target,
             config,
-            session: SessionType::Terminal,
+            session,
         });
         Ok(())
     }
 
+    /// A folder was picked (local browse or SSH): remember it and advance to
+    /// the SessionType step (spec 2.2); the launch happens on type choice.
     fn start_selected_folder(&mut self) {
         if self.launcher.launching {
             return;
@@ -478,52 +664,193 @@ impl NativeShellRuntime {
         let Some(listing) = self.launcher.listing.as_ref() else {
             return;
         };
-        self.launcher.launching = true;
         let path = listing.canonical_path.clone();
-        let result = if self.launcher.remote {
+        let location = if self.launcher.remote {
             let Some(profile_id) = self.launcher.selected_profile_id.clone() else {
                 return;
             };
-            self.start_remote_launch(profile_id, path)
+            self.profile_config
+                .last_selected_folder_by_profile
+                .insert(profile_id.clone(), path.clone());
+            self.save_profiles();
+            ProjectLocation::Ssh {
+                profile_id,
+                remote_cwd: path,
+            }
         } else {
-            let size = self.focused_viewport_size();
-            crate::project_launcher::launch_local(
-                &mut self.app_state,
-                &mut self.ptys,
-                path.clone(),
-                self.live_ptys,
-                size,
-                &SessionType::Terminal,
-            )
-            .map(|success| {
-                self.timings.insert(
-                    success.surface_id,
-                    crate::latency::LaunchTimeline::start("local shell"),
-                );
-                if let Some(project_id) = success.project_id {
-                    self.pending_git_hints.push((
-                        project_id,
-                        ProjectLocation::Local {
-                            cwd: path.clone(),
-                            shell: String::new(),
-                        },
-                        None,
-                    ));
-                }
-                self.profile_config.last_selected_local_folder = Some(path);
-                self.save_profiles();
-                if self.live_ptys {
-                    let _ = self.store.save_session(&self.app_state);
-                }
-                self.chrome.active_overlay = Overlay::None;
-            })
+            self.profile_config.last_selected_local_folder = Some(path.clone());
+            self.save_profiles();
+            ProjectLocation::Local {
+                cwd: path,
+                shell: String::new(),
+            }
         };
-        if let Err(error) = result {
-            self.launcher.error = Some(error);
-            self.launcher.step = LauncherStep::Folder;
-            self.launcher.launching = false;
+        self.launcher.target_name = pandamux_core::project_title(&location);
+        self.pending_type_launch = Some(PendingTypeLaunch::Location { location });
+        self.populate_type_items();
+        self.launcher.step = LauncherStep::SessionType;
+        self.view_model.launcher = self.launcher.clone();
+    }
+
+    /// A type was chosen on the SessionType step: launch whatever is pending
+    /// (a project location or a specific pane). SSH locations that still need
+    /// a password detour through the Credential step and retry from there.
+    fn launch_pending(&mut self, session: SessionType) {
+        let Some(pending) = self.pending_type_launch.clone() else {
+            return;
+        };
+        match pending {
+            PendingTypeLaunch::Pane {
+                workspace_id,
+                pane_id,
+            } => {
+                self.pending_type_launch = None;
+                match self
+                    .app_state
+                    .apply(AppIntent::Surface(SurfaceIntent::Create {
+                        workspace_id: Some(workspace_id.clone()),
+                        pane_id: Some(pane_id),
+                        surface_type: SurfaceType::Terminal,
+                    })) {
+                    Ok(pandamux_core::AppDelta::SurfaceCreated { surface, .. }) => {
+                        if session != SessionType::Terminal {
+                            let _ = self.app_state.apply(AppIntent::Surface(
+                                SurfaceIntent::SetSessionType {
+                                    workspace_id: Some(workspace_id.clone()),
+                                    surface_id: surface.id,
+                                    session: session.clone(),
+                                },
+                            ));
+                        }
+                        let project_id = self
+                            .app_state
+                            .workspace(&workspace_id)
+                            .and_then(|workspace| workspace.project_id.clone());
+                        self.record_recent(project_id, &session);
+                        if self.live_ptys {
+                            let _ = self.store.save_session(&self.app_state);
+                        }
+                        self.chrome.active_overlay = Overlay::None;
+                    }
+                    Ok(_) => {}
+                    Err(error) => self.last_error = Some(error),
+                }
+            }
+            PendingTypeLaunch::Location { location } => match location {
+                ProjectLocation::Local { cwd, .. } => {
+                    self.pending_type_launch = None;
+                    let size = self.focused_viewport_size();
+                    match crate::project_launcher::launch_local(
+                        &mut self.app_state,
+                        &mut self.ptys,
+                        cwd.clone(),
+                        self.live_ptys,
+                        size,
+                        &session,
+                    ) {
+                        Ok(success) => {
+                            self.timings.insert(
+                                success.surface_id,
+                                crate::latency::LaunchTimeline::start("local shell"),
+                            );
+                            if let Some(project_id) = success.project_id.clone() {
+                                self.pending_git_hints.push((
+                                    project_id,
+                                    ProjectLocation::Local {
+                                        cwd,
+                                        shell: String::new(),
+                                    },
+                                    None,
+                                ));
+                            }
+                            self.record_recent(success.project_id, &session);
+                            if self.live_ptys {
+                                let _ = self.store.save_session(&self.app_state);
+                            }
+                            self.chrome.active_overlay = Overlay::None;
+                        }
+                        Err(error) => {
+                            self.launcher.error = Some(error);
+                            self.launcher.step = LauncherStep::SessionType;
+                        }
+                    }
+                }
+                ProjectLocation::Ssh {
+                    profile_id,
+                    remote_cwd,
+                } => {
+                    let needs_password =
+                        self.ssh_profiles.get(&profile_id).is_some_and(|profile| {
+                            matches!(profile.auth, pandamux_core::SshAuthConfig::Password)
+                        }) && !self.credential_cache.contains_key(&profile_id);
+                    if needs_password {
+                        // Park the choice; the credential submit retries.
+                        self.pending_session_type = Some(session);
+                        self.launcher.selected_profile_id = Some(profile_id);
+                        self.launcher.remote = true;
+                        self.launcher.step = LauncherStep::Credential;
+                        return;
+                    }
+                    self.pending_type_launch = None;
+                    if let Err(error) = self.start_remote_launch(profile_id, remote_cwd, session) {
+                        self.launcher.error = Some(error);
+                        self.launcher.step = LauncherStep::SessionType;
+                    }
+                }
+                ProjectLocation::Legacy => {
+                    self.pending_type_launch = None;
+                }
+            },
         }
         self.view_model.launcher = self.launcher.clone();
+    }
+
+    /// Open the launcher directly on the SessionType step targeting a known
+    /// workspace (sidebar per-project plus, tab-bar plus for legacy panes).
+    fn open_type_step_for_workspace(&mut self, workspace_id: WorkspaceId, pane_id: Option<PaneId>) {
+        let Some(workspace) = self.app_state.workspace(&workspace_id) else {
+            return;
+        };
+        let target_name = workspace
+            .project_id
+            .as_ref()
+            .and_then(|id| {
+                self.app_state
+                    .projects
+                    .iter()
+                    .find(|record| &record.id == id)
+            })
+            .map(|record| record.name.clone())
+            .unwrap_or_else(|| workspace.title.clone());
+        let pending = match (&workspace.project.location, pane_id) {
+            // A tab-bar plus targets its pane directly; legacy workspaces have
+            // no launchable location so they always use the pane path.
+            (_, Some(pane_id)) => PendingTypeLaunch::Pane {
+                workspace_id: workspace_id.clone(),
+                pane_id,
+            },
+            (ProjectLocation::Legacy, None) => {
+                let Some(pane_id) = workspace
+                    .focused_pane_id
+                    .clone()
+                    .or_else(|| get_all_pane_ids(&workspace.split_tree).into_iter().next())
+                else {
+                    return;
+                };
+                PendingTypeLaunch::Pane {
+                    workspace_id: workspace_id.clone(),
+                    pane_id,
+                }
+            }
+            (location, None) => PendingTypeLaunch::Location {
+                location: location.clone(),
+            },
+        };
+        self.open_overlay(Overlay::QuickLaunch);
+        self.pending_type_launch = Some(pending);
+        self.launcher.target_name = target_name;
+        self.populate_type_items();
+        self.launcher.step = LauncherStep::SessionType;
     }
 
     fn poll_pending_remote_launch(&mut self) {
@@ -553,7 +880,7 @@ impl NativeShellRuntime {
                                 .remotes
                                 .write_all(id, format!("{command}\n").as_bytes());
                         }
-                        if let Some(project_id) = success.project_id {
+                        if let Some(project_id) = success.project_id.clone() {
                             self.pending_git_hints.push((
                                 project_id,
                                 pending.target.location.clone(),
@@ -572,13 +899,13 @@ impl NativeShellRuntime {
                                 .insert(profile_id.clone(), remote_cwd.clone());
                             self.save_profiles();
                         }
+                        self.record_recent(success.project_id, &pending.session);
                         if self.live_ptys {
                             let _ = self.store.save_session(&self.app_state);
                         }
                         self.chrome.active_overlay = Overlay::None;
                         self.launcher.launching = false;
                         self.pending_remote_launch = None;
-                        self.pending_plus_workspace = None;
                     }
                     Err(error) => {
                         let _ = self.remotes.kill(id);
@@ -607,73 +934,6 @@ impl NativeShellRuntime {
                 self.pending_remote_launch = None;
             }
             _ => {}
-        }
-    }
-
-    fn add_project_session(&mut self, workspace_id: WorkspaceId) {
-        if self.pending_remote_launch.is_some() {
-            return;
-        }
-        let Some(location) = self
-            .app_state
-            .workspace(&workspace_id)
-            .map(|workspace| workspace.project.location.clone())
-        else {
-            return;
-        };
-        match location {
-            ProjectLocation::Local { cwd, .. } => {
-                let size = self.focused_viewport_size();
-                match crate::project_launcher::launch_local(
-                    &mut self.app_state,
-                    &mut self.ptys,
-                    cwd.clone(),
-                    self.live_ptys,
-                    size,
-                    &SessionType::Terminal,
-                ) {
-                    Err(error) => self.last_error = Some(error.message),
-                    Ok(success) => {
-                        self.timings.insert(
-                            success.surface_id,
-                            crate::latency::LaunchTimeline::start("local shell"),
-                        );
-                        if let Some(project_id) = success.project_id {
-                            self.pending_git_hints.push((
-                                project_id,
-                                ProjectLocation::Local {
-                                    cwd,
-                                    shell: String::new(),
-                                },
-                                None,
-                            ));
-                        }
-                        if self.live_ptys {
-                            let _ = self.store.save_session(&self.app_state);
-                        }
-                    }
-                }
-            }
-            ProjectLocation::Ssh {
-                profile_id,
-                remote_cwd,
-            } => {
-                let needs_password = self.ssh_profiles.get(&profile_id).is_some_and(|profile| {
-                    matches!(profile.auth, pandamux_core::SshAuthConfig::Password)
-                }) && !self.credential_cache.contains_key(&profile_id);
-                if needs_password {
-                    self.open_overlay(Overlay::QuickLaunch);
-                    self.pending_plus_workspace = Some(workspace_id);
-                    self.launcher.selected_profile_id = Some(profile_id);
-                    self.launcher.remote = true;
-                    self.launcher.step = LauncherStep::Credential;
-                } else if let Err(error) = self.start_remote_launch(profile_id, remote_cwd) {
-                    self.last_error = Some(error.message);
-                }
-            }
-            ProjectLocation::Legacy => {
-                self.open_overlay(Overlay::QuickLaunch);
-            }
         }
     }
 
@@ -828,16 +1088,11 @@ impl NativeShellRuntime {
                     ))
                 };
                 self.credential_cache.insert(profile_id.clone(), credential);
-                if let Some(workspace_id) = self.pending_plus_workspace.clone()
-                    && let Some(ProjectLocation::Ssh { remote_cwd, .. }) = self
-                        .app_state
-                        .workspace(&workspace_id)
-                        .map(|workspace| workspace.project.location.clone())
-                {
-                    if let Err(error) = self.start_remote_launch(profile_id, remote_cwd) {
-                        self.launcher.error = Some(error);
-                    }
-                    self.view_model.launcher = self.launcher.clone();
+                if self.pending_type_launch.is_some() {
+                    // A type was already chosen; the credential was the only
+                    // missing piece. Retry the launch.
+                    let session = self.pending_session_type.take().unwrap_or_default();
+                    self.launch_pending(session);
                     Task::none()
                 } else {
                     self.launcher.step = LauncherStep::Folder;
@@ -1152,7 +1407,7 @@ impl NativeShellRuntime {
                         "Close session".to_string(),
                         RailMenuAction::CloseSession {
                             workspace_id: workspace_id.clone(),
-                            surface_id,
+                            surface_id: surface_id.clone(),
                         },
                     ),
                 ];
@@ -1169,9 +1424,37 @@ impl NativeShellRuntime {
                         1,
                         (
                             "Detach into its own project".to_string(),
-                            RailMenuAction::DetachSession { workspace_id },
+                            RailMenuAction::DetachSession {
+                                workspace_id: workspace_id.clone(),
+                            },
                         ),
                     );
+                }
+                // "Pin this configuration" (spec 2.3): project + session type.
+                if let Some(project_id) = project_id {
+                    let session = self
+                        .app_state
+                        .workspace(&workspace_id)
+                        .and_then(|workspace| {
+                            crate::backend::terminal_surfaces(&workspace.split_tree)
+                                .into_iter()
+                                .find(|surface| surface.id == surface_id)
+                        })
+                        .and_then(|surface| surface.session)
+                        .unwrap_or_default();
+                    let config = LaunchConfig {
+                        project_id,
+                        session,
+                    };
+                    let label = if self.launcher_prefs.is_favorite(&config) {
+                        "Unpin this configuration"
+                    } else {
+                        "Pin this configuration"
+                    };
+                    items.push((
+                        label.to_string(),
+                        RailMenuAction::PinConfiguration { config },
+                    ));
                 }
                 self.rail_menu = Some(RailMenuViewState {
                     title: "Session".to_string(),
@@ -1287,7 +1570,9 @@ impl NativeShellRuntime {
             }
             ShellMessage::NewSessionRequested => self.open_overlay(Overlay::QuickLaunch),
             ShellMessage::ProjectSessionRequested(workspace_id) => {
-                self.add_project_session(workspace_id);
+                // The per-project plus opens the type chooser with the project
+                // prefilled (spec 2.1/2.2): never a silent PowerShell clone.
+                self.open_type_step_for_workspace(workspace_id, None);
             }
             ShellMessage::LauncherProfileAdd => {
                 self.launcher.form = SshProfileForm::default();
@@ -1404,9 +1689,81 @@ impl NativeShellRuntime {
                         LauncherStep::Connection
                     }
                     LauncherStep::HostConfirmation => LauncherStep::Folder,
-                    LauncherStep::Folder => LauncherStep::Connection,
+                    LauncherStep::Folder | LauncherStep::Connection => {
+                        self.populate_launcher_lists();
+                        LauncherStep::Project
+                    }
+                    LauncherStep::SessionType => {
+                        self.pending_type_launch = None;
+                        self.pending_session_type = None;
+                        self.populate_launcher_lists();
+                        LauncherStep::Project
+                    }
                     step => step,
                 };
+            }
+            ShellMessage::LauncherFilterChanged(value) => {
+                self.launcher.filter = value;
+                self.launcher.selected = 0;
+                self.populate_launcher_lists();
+            }
+            ShellMessage::LauncherProjectChosen(project_id) => {
+                let Some(record) = self
+                    .app_state
+                    .projects
+                    .iter()
+                    .find(|record| record.id == project_id)
+                else {
+                    return;
+                };
+                let Some(location) = record.known_locations.first().cloned() else {
+                    return;
+                };
+                self.launcher.target_name = record.name.clone();
+                self.pending_type_launch = Some(PendingTypeLaunch::Location { location });
+                self.populate_type_items();
+                self.launcher.step = LauncherStep::SessionType;
+            }
+            ShellMessage::LauncherShortcutChosen(config) => {
+                // One-click favorite/recent launch (spec 2.3).
+                let location = self
+                    .app_state
+                    .projects
+                    .iter()
+                    .find(|record| record.id == config.project_id)
+                    .and_then(|record| record.known_locations.first().cloned());
+                let Some(location) = location else {
+                    return;
+                };
+                self.pending_type_launch = Some(PendingTypeLaunch::Location { location });
+                self.launch_pending(config.session);
+            }
+            ShellMessage::LauncherFavoriteToggled(config) => {
+                self.launcher_prefs.toggle_favorite(config);
+                self.save_launcher_prefs();
+                self.populate_launcher_lists();
+            }
+            ShellMessage::LauncherNewSsh => {
+                self.launcher.step = LauncherStep::Connection;
+            }
+            ShellMessage::LauncherTypeChosen(session) => {
+                self.launch_pending(session);
+            }
+            ShellMessage::LauncherCustomCommandChanged(value) => {
+                self.launcher.custom_command = value;
+            }
+            ShellMessage::LauncherCustomSubmitted => {
+                let command = self.launcher.custom_command.trim().to_string();
+                if !command.is_empty() {
+                    self.launch_pending(SessionType::Custom { command });
+                }
+            }
+            ShellMessage::TabAddRequested(pane_id) => {
+                // The plus button never silently clones the current shell
+                // (spec 2.1): it opens the type chooser targeting that pane.
+                if let Some(workspace_id) = self.app_state.active_workspace_id.clone() {
+                    self.open_type_step_for_workspace(workspace_id, Some(pane_id));
+                }
             }
             ShellMessage::LauncherLocalSelected
             | ShellMessage::LauncherProfileSelected(_)
@@ -1502,6 +1859,21 @@ impl NativeShellRuntime {
                     self.write_terminal_input(seq);
                     return;
                 }
+                // Launcher Project/SessionType steps navigate with arrows too
+                // (keyboard-first, spec 2.2).
+                if self.chrome.active_overlay == Overlay::QuickLaunch {
+                    let count = match self.launcher.step {
+                        LauncherStep::Project => self.launcher.items.len(),
+                        LauncherStep::SessionType => self.launcher.type_items.len(),
+                        _ => 0,
+                    };
+                    if count > 0 {
+                        self.launcher.selected = (self.launcher.selected as i64 + delta as i64)
+                            .rem_euclid(count as i64)
+                            as usize;
+                    }
+                    return;
+                }
                 // Otherwise arrows only navigate while the palette is open.
                 if self.chrome.active_overlay != Overlay::CommandPalette {
                     return;
@@ -1519,6 +1891,25 @@ impl NativeShellRuntime {
                     self.write_terminal_input(b"\r");
                     return;
                 }
+                // Enter activates the highlighted launcher row on the
+                // Project/SessionType steps (keyboard-first, spec 2.2).
+                if self.chrome.active_overlay == Overlay::QuickLaunch {
+                    let item = match self.launcher.step {
+                        LauncherStep::Project => {
+                            self.launcher.items.get(self.launcher.selected).cloned()
+                        }
+                        LauncherStep::SessionType => self
+                            .launcher
+                            .type_items
+                            .get(self.launcher.selected)
+                            .cloned(),
+                        _ => None,
+                    };
+                    if let Some(item) = item {
+                        self.update_shell(item.message);
+                    }
+                    return;
+                }
                 // Enter only activates a palette item while the palette is open.
                 if self.chrome.active_overlay != Overlay::CommandPalette {
                     return;
@@ -1528,10 +1919,6 @@ impl NativeShellRuntime {
                     self.update_shell(item.action);
                     return;
                 }
-            }
-            ShellMessage::LaunchProfile { shell, title } => {
-                self.chrome.active_overlay = Overlay::None;
-                self.launch_session(Some(shell), Some(title));
             }
             ShellMessage::SettingsSectionSelected(section) => {
                 self.settings_section = section;
@@ -1943,7 +2330,6 @@ impl NativeShellRuntime {
             copy_mode: self.copy_mode,
             sessions,
             palette: self.palette.clone(),
-            quick_launch: QuickLaunchViewState::default(),
             launcher: self.launcher.clone(),
             settings,
             surface_contents: self.contents.snapshot(),
@@ -2074,16 +2460,6 @@ impl NativeShellRuntime {
 
     /// Create a new session (workspace + terminal) with the given shell and make
     /// it active.
-    fn launch_session(&mut self, shell: Option<String>, title: Option<String>) {
-        let result = self
-            .app_state
-            .apply(AppIntent::Workspace(WorkspaceIntent::Create {
-                title,
-                shell,
-            }));
-        self.last_error = result.err();
-    }
-
     /// The focused pane's active surface in the active workspace (the "active
     /// session"), if any.
     fn active_surface_id(&self) -> Option<SurfaceId> {
@@ -2284,6 +2660,11 @@ impl NativeShellRuntime {
             }
             RailMenuAction::CloseAllInProject { project_id } => {
                 self.update_shell(ShellMessage::CloseAllRequested(Some(project_id)));
+            }
+            RailMenuAction::PinConfiguration { config } => {
+                let pinned = self.launcher_prefs.toggle_favorite(config);
+                self.save_launcher_prefs();
+                let _ = pinned;
             }
         }
     }
@@ -3178,7 +3559,6 @@ fn initial_view_model(app_state: &AppState, chrome: &ChromeState) -> ShellViewMo
         copy_mode: false,
         sessions: SessionsViewState::default(),
         palette: PaletteViewState::default(),
-        quick_launch: QuickLaunchViewState::default(),
         launcher: SessionLauncherViewState::default(),
         settings: SettingsViewState::default(),
         surface_contents: HashMap::new(),
@@ -3221,6 +3601,15 @@ fn themes_dir() -> Option<std::path::PathBuf> {
         if !dir.pop() {
             return None;
         }
+    }
+}
+
+/// Short display detail for a project location (launcher rows).
+fn location_detail(location: Option<&ProjectLocation>) -> String {
+    match location {
+        Some(ProjectLocation::Local { cwd, .. }) => cwd.clone(),
+        Some(ProjectLocation::Ssh { remote_cwd, .. }) => format!("SSH \u{00b7} {remote_cwd}"),
+        Some(ProjectLocation::Legacy) | None => "No folder recorded".to_string(),
     }
 }
 
@@ -3698,11 +4087,15 @@ mod tests {
             .expect("default workspace");
         assert_eq!(runtime.view_model().sessions.total, 1);
 
-        // Launching a quick-launch profile creates a workspace and switches to it.
-        runtime.update_shell(ShellMessage::LaunchProfile {
-            shell: "pwsh".to_string(),
-            title: "PowerShell 7".to_string(),
-        });
+        // A second workspace switches the active session context.
+        runtime
+            .app_state
+            .apply(AppIntent::Workspace(WorkspaceIntent::Create {
+                title: Some("PowerShell 7".to_string()),
+                shell: Some("pwsh".to_string()),
+            }))
+            .expect("create workspace");
+        runtime.update_shell(ShellMessage::Tick);
         assert_ne!(
             runtime.app_state.active_workspace_id,
             Some(original_ws.clone())
@@ -3777,18 +4170,24 @@ mod tests {
     fn quick_launch_and_settings_overlays_flow() {
         let mut runtime = NativeShellRuntime::default();
 
-        // New-session opens quick-launch; picking a profile creates a session.
+        // New-session opens the launcher on the Project step with rows for
+        // the new-project entry points; Escape dismisses it.
         runtime.update_shell(ShellMessage::NewSessionRequested);
         assert_eq!(
             runtime.view_model().chrome.active_overlay,
             Overlay::QuickLaunch
         );
-        runtime.update_shell(ShellMessage::LaunchProfile {
-            shell: "wsl.exe".to_string(),
-            title: "WSL".to_string(),
-        });
+        assert_eq!(runtime.view_model().launcher.step, LauncherStep::Project);
+        assert!(
+            runtime
+                .view_model()
+                .launcher
+                .items
+                .iter()
+                .any(|item| item.label == "New local folder")
+        );
+        runtime.update_shell(ShellMessage::OverlayDismissed);
         assert_eq!(runtime.view_model().chrome.active_overlay, Overlay::None);
-        assert_eq!(runtime.view_model().sessions.total, 2);
 
         // Settings overlay: accent selection and Escape dismiss.
         runtime.update_shell(ShellMessage::OverlayRequested(RailItem::Settings));
@@ -4084,6 +4483,103 @@ mod tests {
         assert!(!runtime.app_state.workspaces.is_empty());
         assert!(runtime.app_state.active_workspace_id.is_some());
         assert_eq!(runtime.last_error(), None);
+    }
+
+    #[test]
+    fn launcher_keyboard_navigation_and_type_step_flow() {
+        let mut runtime = NativeShellRuntime::default();
+        // Give the default workspace a project identity so it lists.
+        runtime.app_state.workspaces[0].project.location = ProjectLocation::Local {
+            cwd: "C:\\Dev\\Repo".to_string(),
+            shell: "pwsh".to_string(),
+        };
+        pandamux_core::ensure_project_registry(&mut runtime.app_state, 1);
+
+        runtime.update_shell(ShellMessage::NewSessionRequested);
+        assert_eq!(runtime.launcher.step, LauncherStep::Project);
+        assert!(
+            runtime
+                .launcher
+                .items
+                .iter()
+                .any(|item| item.tag == "PROJ" && item.label == "Repo")
+        );
+
+        // Arrow keys walk the rows; typing filters them.
+        runtime.update_shell(ShellMessage::PaletteMoveSelection(1));
+        assert_eq!(runtime.launcher.selected, 1);
+        runtime.update_shell(ShellMessage::LauncherFilterChanged("repo".to_string()));
+        assert!(
+            runtime
+                .launcher
+                .items
+                .iter()
+                .any(|item| item.label == "Repo")
+        );
+
+        // Choosing the project advances to the type step with its name shown.
+        let project_id = runtime.app_state.projects[0].id.clone();
+        runtime.update_shell(ShellMessage::LauncherProjectChosen(project_id));
+        assert_eq!(runtime.launcher.step, LauncherStep::SessionType);
+        assert_eq!(runtime.launcher.target_name, "Repo");
+        assert!(
+            runtime
+                .launcher
+                .type_items
+                .iter()
+                .any(|item| item.label == "Claude")
+        );
+        // Back returns to the Project step.
+        runtime.update_shell(ShellMessage::LauncherBack);
+        assert_eq!(runtime.launcher.step, LauncherStep::Project);
+    }
+
+    #[test]
+    fn favorites_pin_and_surface_in_the_launcher() {
+        let mut runtime = NativeShellRuntime::default();
+        runtime.app_state.workspaces[0].project.location = ProjectLocation::Local {
+            cwd: "C:\\Dev\\Repo".to_string(),
+            shell: "pwsh".to_string(),
+        };
+        pandamux_core::ensure_project_registry(&mut runtime.app_state, 1);
+        let project_id = runtime.app_state.projects[0].id.clone();
+
+        let config = LaunchConfig {
+            project_id,
+            session: SessionType::Claude,
+        };
+        assert!(runtime.launcher_prefs.toggle_favorite(config.clone()));
+        runtime.update_shell(ShellMessage::NewSessionRequested);
+        let pin = runtime
+            .launcher
+            .items
+            .iter()
+            .find(|item| item.tag == "PIN")
+            .expect("pinned row");
+        assert_eq!(pin.label, "Repo: Claude");
+        // Unpinning through the launcher star removes the row.
+        runtime.update_shell(ShellMessage::LauncherFavoriteToggled(config));
+        assert!(!runtime.launcher.items.iter().any(|item| item.tag == "PIN"));
+    }
+
+    #[test]
+    fn tab_plus_routes_through_the_type_chooser() {
+        let mut runtime = NativeShellRuntime::default();
+        let pane_id = runtime.view_model().projection.visible_panes[0].id.clone();
+        runtime.update_shell(ShellMessage::TabAddRequested(pane_id));
+        assert_eq!(
+            runtime.view_model().chrome.active_overlay,
+            Overlay::QuickLaunch
+        );
+        assert_eq!(runtime.launcher.step, LauncherStep::SessionType);
+
+        // Choosing Claude creates the tab in that pane with the type set.
+        runtime.update_shell(ShellMessage::LauncherTypeChosen(SessionType::Claude));
+        assert_eq!(runtime.view_model().chrome.active_overlay, Overlay::None);
+        let workspace = runtime.app_state.active_workspace().unwrap();
+        let surfaces = crate::backend::terminal_surfaces(&workspace.split_tree);
+        assert_eq!(surfaces.len(), 2);
+        assert_eq!(surfaces[1].session, Some(SessionType::Claude));
     }
 
     #[test]

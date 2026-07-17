@@ -173,6 +173,124 @@ impl SshProfileStore {
     }
 }
 
+const LAUNCHER_PREFS_SCHEMA_VERSION: u32 = 1;
+
+/// Pinned favorites and recent launches (spec 2.3). Deliberately NOT part of
+/// `UserSettings` (recents churn on every launch) and NOT part of `AppState`
+/// (loading a named session must not revert pins). Per-machine for v1: pins
+/// and recents describe what this machine launches, and the registry ids they
+/// reference live in this machine's session state.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LauncherPrefsConfig {
+    #[serde(default)]
+    pub version: u32,
+    #[serde(default)]
+    pub favorites: Vec<pandamux_core::LaunchConfig>,
+    #[serde(default)]
+    pub recents: Vec<RecentLaunch>,
+}
+
+impl Default for LauncherPrefsConfig {
+    fn default() -> Self {
+        Self {
+            version: LAUNCHER_PREFS_SCHEMA_VERSION,
+            favorites: Vec::new(),
+            recents: Vec::new(),
+        }
+    }
+}
+
+pub const RECENTS_CAP: usize = 15;
+
+impl LauncherPrefsConfig {
+    /// Record a launch: most recent first, deduplicated by configuration,
+    /// capped at [`RECENTS_CAP`].
+    pub fn record_recent(&mut self, config: pandamux_core::LaunchConfig, now_ms: u64) {
+        self.recents.retain(|recent| recent.config != config);
+        self.recents.insert(
+            0,
+            RecentLaunch {
+                config,
+                last_used_ms: now_ms,
+            },
+        );
+        self.recents.truncate(RECENTS_CAP);
+    }
+
+    pub fn is_favorite(&self, config: &pandamux_core::LaunchConfig) -> bool {
+        self.favorites.contains(config)
+    }
+
+    /// Toggle a pin. Returns true when the configuration is now pinned.
+    pub fn toggle_favorite(&mut self, config: pandamux_core::LaunchConfig) -> bool {
+        if let Some(index) = self.favorites.iter().position(|pin| pin == &config) {
+            self.favorites.remove(index);
+            false
+        } else {
+            self.favorites.push(config);
+            true
+        }
+    }
+
+    /// Drop entries whose project no longer exists in the registry.
+    pub fn retain_known_projects(&mut self, known: &[pandamux_core::ProjectRecord]) {
+        let known_id = |id: &pandamux_core::ProjectId| known.iter().any(|record| &record.id == id);
+        self.favorites.retain(|pin| known_id(&pin.project_id));
+        self.recents
+            .retain(|recent| known_id(&recent.config.project_id));
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentLaunch {
+    pub config: pandamux_core::LaunchConfig,
+    #[serde(default)]
+    pub last_used_ms: u64,
+}
+
+/// `config/launcher.json`, mirroring [`SettingsStore`]'s policy: versioned,
+/// migration backs up, corrupt files preserved.
+pub struct LauncherPrefsStore {
+    base: PathBuf,
+}
+
+impl LauncherPrefsStore {
+    pub fn new(base: impl Into<PathBuf>) -> Self {
+        Self { base: base.into() }
+    }
+
+    pub fn default_dir() -> PathBuf {
+        SessionStore::default_dir().join("config")
+    }
+
+    pub fn path(&self) -> PathBuf {
+        self.base.join("launcher.json")
+    }
+
+    pub fn save(&self, config: &LauncherPrefsConfig) -> io::Result<()> {
+        fs::create_dir_all(&self.base)?;
+        let mut config = config.clone();
+        config.version = LAUNCHER_PREFS_SCHEMA_VERSION;
+        let json = serde_json::to_string_pretty(&config).map_err(io::Error::other)?;
+        atomic_write(&self.path(), &json)
+    }
+
+    /// Missing file loads defaults; corrupt or newer files also fall back to
+    /// defaults but never overwrite the original until the next explicit save
+    /// (favorites are convenience data, not user documents).
+    pub fn load(&self) -> LauncherPrefsConfig {
+        let Ok(raw) = fs::read_to_string(self.path()) else {
+            return LauncherPrefsConfig::default();
+        };
+        match serde_json::from_str::<LauncherPrefsConfig>(&raw) {
+            Ok(config) if config.version <= LAUNCHER_PREFS_SCHEMA_VERSION => config,
+            _ => LauncherPrefsConfig::default(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum SettingsStoreError {
     Io(io::Error),

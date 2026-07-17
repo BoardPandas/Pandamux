@@ -7,7 +7,7 @@
 //! backdrop click dismisses it (see [`crate::chrome::Overlay`]).
 
 use crate::iced_shell::ShellMessage;
-use crate::theme::{self, Palette, ShellKind};
+use crate::theme::{self, Palette};
 use iced::widget::{Space, button, column, container, row, scrollable, text, text_input};
 use iced::{Alignment, Color, Element, Length, Padding};
 
@@ -44,59 +44,6 @@ pub struct PaletteViewState {
     pub items: Vec<PaletteItem>,
     /// Index of the highlighted item (Enter activates it).
     pub selected: usize,
-}
-
-/// A shell profile the quick-launch popover can start.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct QuickLaunchProfile {
-    pub label: String,
-    pub detail: String,
-    pub kind: ShellKind,
-    pub shell: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct QuickLaunchViewState {
-    pub profiles: Vec<QuickLaunchProfile>,
-}
-
-impl Default for QuickLaunchViewState {
-    fn default() -> Self {
-        Self {
-            profiles: default_profiles(),
-        }
-    }
-}
-
-/// The standard local shell profiles. SSH hosts (imported from `~/.ssh/config`)
-/// join this list when the SSH connection manager lands in Phase 6.
-pub fn default_profiles() -> Vec<QuickLaunchProfile> {
-    vec![
-        QuickLaunchProfile {
-            label: "PowerShell 7".to_string(),
-            detail: "pwsh".to_string(),
-            kind: ShellKind::PowerShell,
-            shell: "pwsh".to_string(),
-        },
-        QuickLaunchProfile {
-            label: "Windows PowerShell".to_string(),
-            detail: "powershell 5.1".to_string(),
-            kind: ShellKind::PowerShell,
-            shell: "powershell".to_string(),
-        },
-        QuickLaunchProfile {
-            label: "Command Prompt".to_string(),
-            detail: "cmd.exe".to_string(),
-            kind: ShellKind::Cmd,
-            shell: "cmd".to_string(),
-        },
-        QuickLaunchProfile {
-            label: "WSL".to_string(),
-            detail: "default distro".to_string(),
-            kind: ShellKind::Wsl,
-            shell: "wsl.exe".to_string(),
-        },
-    ]
 }
 
 /// Filter `all` items by a case-insensitive substring of the label.
@@ -225,88 +172,6 @@ fn palette_row<'a>(
         .into()
 }
 
-pub fn quick_launch<'a>(
-    state: &'a QuickLaunchViewState,
-    palette: Palette,
-) -> Element<'a, ShellMessage> {
-    let mut list = column![
-        text("New session")
-            .size(theme::SIZE_GROUP_HEADER)
-            .font(theme::ui(iced::font::Weight::Semibold))
-            .color(palette.t4),
-    ]
-    .spacing(4)
-    .width(Length::Fill);
-
-    for profile in &state.profiles {
-        list = list.push(quick_launch_row(profile, palette));
-    }
-
-    let card = container(column![list].padding(10).width(Length::Fixed(300.0)))
-        .width(Length::Fixed(300.0))
-        .style(move |_theme| overlay_card_style(palette));
-
-    modal(card, palette, Alignment::Start)
-}
-
-fn quick_launch_row<'a>(
-    profile: &'a QuickLaunchProfile,
-    palette: Palette,
-) -> Element<'a, ShellMessage> {
-    let shell_color = palette.shell_color(profile.kind);
-    let content = row![
-        container(
-            text(profile.kind.abbreviation())
-                .size(theme::SIZE_METADATA)
-                .font(theme::mono(iced::font::Weight::Semibold))
-                .color(shell_color),
-        )
-        .width(Length::Fixed(30.0))
-        .height(Length::Fixed(24.0))
-        .align_x(Alignment::Center)
-        .align_y(Alignment::Center)
-        .style(move |_theme| container::Style {
-            background: Some(theme::with_alpha(shell_color, 0.1).into()),
-            border: theme::border(theme::with_alpha(shell_color, 0.3), 1.0, 7.0),
-            ..Default::default()
-        }),
-        column![
-            text(profile.label.clone())
-                .size(theme::SIZE_BODY)
-                .color(palette.t1),
-            text(profile.detail.clone())
-                .size(theme::SIZE_METADATA)
-                .font(theme::mono(iced::font::Weight::Normal))
-                .color(palette.t4),
-        ]
-        .spacing(2),
-    ]
-    .spacing(10)
-    .align_y(Alignment::Center);
-
-    button(content)
-        .padding(Padding::from([7.0, 8.0]))
-        .width(Length::Fill)
-        .on_press(ShellMessage::LaunchProfile {
-            shell: profile.shell.clone(),
-            title: profile.label.clone(),
-        })
-        .style(move |_theme, status| {
-            let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-            button::Style {
-                background: if hovered {
-                    Some(palette.ov(0.05).into())
-                } else {
-                    None
-                },
-                text_color: palette.t1,
-                border: theme::border(Color::TRANSPARENT, 0.0, theme::RADIUS_ROW),
-                ..Default::default()
-            }
-        })
-        .into()
-}
-
 // ---------------------------------------------------------------------------
 // Shared overlay chrome
 // ---------------------------------------------------------------------------
@@ -418,27 +283,12 @@ mod tests {
     }
 
     #[test]
-    fn builds_palette_and_quick_launch() {
+    fn builds_palette_view() {
         let state = PaletteViewState {
             query: "tog".to_string(),
             items: filter_items(&sample_items(), "tog"),
             selected: 0,
         };
         let _palette_view = command_palette(&state, palette());
-        let quick_state = QuickLaunchViewState::default();
-        let _quick = quick_launch(&quick_state, palette());
-    }
-
-    #[test]
-    fn quick_launch_has_local_profiles() {
-        let state = QuickLaunchViewState::default();
-        assert!(
-            state
-                .profiles
-                .iter()
-                .any(|p| p.kind == ShellKind::PowerShell)
-        );
-        assert!(state.profiles.iter().any(|p| p.kind == ShellKind::Wsl));
-        assert!(state.profiles.iter().any(|p| p.kind == ShellKind::Cmd));
     }
 }

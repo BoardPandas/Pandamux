@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.46.0]
+## [0.47.0]
+
+### Added
+
+- **The new-session launcher is now a two-step chooser** (spec 2.2): pick the project (pinned favorites and recents at the top for one-click launches, existing projects below, plus "New local folder" and "New SSH connection"), then pick what to open: Terminal, PowerShell 7, Windows PowerShell, Claude, Codex, Gemini, or a custom command. The whole flow is keyboard-first: type to filter, arrows to move, Enter to launch.
+- **Favorites and recents** (spec 2.3): pin any project + tool combination from the launcher star or a session's right-click "Pin this configuration"; the last 15 launches appear automatically, deduplicated. Both persist across restarts in `config/launcher.json` (per machine for v1).
+- **Every plus button routes through the chooser** (spec 2.1): the sidebar's global and per-project plus and the tab bar's plus all open the launcher (with the project or pane prefilled) instead of silently cloning a PowerShell.
+
+### Removed
+
+- The old quick-launch profile popover (PowerShell/cmd/WSL list) is gone; the launcher's type step replaces it.
 
 ### Added
 
