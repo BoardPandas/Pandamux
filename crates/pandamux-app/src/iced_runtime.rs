@@ -4495,8 +4495,13 @@ mod tests {
             directories: Vec::new(),
             drives: Vec::new(),
         });
+        // Folder submit stages a pending launch and advances to the session-type
+        // step (spec 2.7); the project is created when a type is chosen. Choosing
+        // a type twice must still create at most one project: the first
+        // launch_pending clears pending_type_launch, so the second returns early.
         runtime.start_selected_folder();
-        runtime.start_selected_folder();
+        runtime.launch_pending(SessionType::Terminal);
+        runtime.launch_pending(SessionType::Terminal);
         assert_eq!(runtime.app_state.workspaces.len(), 2);
     }
 

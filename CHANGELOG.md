@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Restored the launcher double-submit regression test to the current two-step launch flow (spec 2.7): it now drives a folder submit followed by two session-type choices and confirms only one project is created.
+
 ## [0.52.0]
 
 ### Added
