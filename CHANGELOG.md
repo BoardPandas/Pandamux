@@ -7,7 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.42.0]
+## [0.42.1]
+
+### Added
+
+- **New sessions show immediate connecting feedback.** A freshly opened pane says "Starting pwsh..." until the shell prints its prompt, and SSH panes show "Connecting to {host}...", "Reconnecting...", or "Connection failed" instead of sitting black while the connection is established.
+- **Launch timing instrumentation.** Set `PANDAMUX_TIMING=1` to print one line per session launch (spawn, SSH ready, first output) for measuring time-to-interactive before and after latency work.
 
 ### Added
 

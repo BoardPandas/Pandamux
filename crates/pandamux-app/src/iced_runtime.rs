@@ -80,6 +80,9 @@ pub struct NativeShellRuntime {
     viewport_sizes: HashMap<SurfaceId, GridSize>,
     /// Debounced pending engine/PTY resizes: surface -> (target, tick recorded).
     pending_resizes: HashMap<SurfaceId, (GridSize, u64)>,
+    /// In-flight launch timings, reported on first output (spec 1.6). Also
+    /// drives the "Starting..." feedback for young blank local sessions.
+    timings: HashMap<SurfaceId, crate::latency::LaunchTimeline>,
     /// Saved SSH host profiles.
     ssh_profiles: SshProfiles,
     credential_cache: HashMap<SshProfileId, EphemeralCredential>,
@@ -180,6 +183,7 @@ impl NativeShellRuntime {
             remote_configs: HashMap::new(),
             viewport_sizes: HashMap::new(),
             pending_resizes: HashMap::new(),
+            timings: HashMap::new(),
             ssh_profiles,
             credential_cache: HashMap::new(),
             launcher: SessionLauncherViewState::default(),
@@ -396,6 +400,10 @@ impl NativeShellRuntime {
             self.launcher_trust_unknown,
         )?;
         let size = self.spawn_size(&target.surface_id);
+        self.timings.insert(
+            target.surface_id.clone(),
+            crate::latency::LaunchTimeline::start(format!("ssh {}", config.host)),
+        );
         self.remotes
             .connect(target.surface_id.to_string(), config.clone(), size)
             .map_err(|message| {
@@ -435,7 +443,11 @@ impl NativeShellRuntime {
                 self.live_ptys,
                 size,
             )
-            .map(|_| {
+            .map(|success| {
+                self.timings.insert(
+                    success.surface_id,
+                    crate::latency::LaunchTimeline::start("local shell"),
+                );
                 self.profile_config.last_selected_local_folder = Some(path);
                 self.save_profiles();
                 if self.live_ptys {
@@ -460,6 +472,9 @@ impl NativeShellRuntime {
         let _ = self.remotes.poll(id);
         match self.remotes.status(id) {
             Some(RemoteStatus::Ready) => {
+                if let Some(timeline) = self.timings.get_mut(&pending.target.surface_id) {
+                    timeline.mark("ready");
+                }
                 match crate::project_launcher::commit_prestarted(
                     &mut self.app_state,
                     &pending.target,
@@ -530,16 +545,23 @@ impl NativeShellRuntime {
         match location {
             ProjectLocation::Local { cwd, .. } => {
                 let size = self.focused_viewport_size();
-                if let Err(error) = crate::project_launcher::launch_local(
+                match crate::project_launcher::launch_local(
                     &mut self.app_state,
                     &mut self.ptys,
                     cwd,
                     self.live_ptys,
                     size,
                 ) {
-                    self.last_error = Some(error.message);
-                } else if self.live_ptys {
-                    let _ = self.store.save_session(&self.app_state);
+                    Err(error) => self.last_error = Some(error.message),
+                    Ok(success) => {
+                        self.timings.insert(
+                            success.surface_id,
+                            crate::latency::LaunchTimeline::start("local shell"),
+                        );
+                        if self.live_ptys {
+                            let _ = self.store.save_session(&self.app_state);
+                        }
+                    }
                 }
             }
             ProjectLocation::Ssh {
@@ -1543,6 +1565,7 @@ impl NativeShellRuntime {
             &mut self.remotes,
             &self.remote_configs,
             self.live_ptys,
+            &mut self.timings,
         )
         .unwrap_or_else(|error| {
             self.last_error = Some(error);
@@ -2070,6 +2093,13 @@ impl NativeShellRuntime {
                         ) {
                             Ok(config) => {
                                 let size = self.spawn_size(&surface_id);
+                                self.timings.insert(
+                                    surface_id.clone(),
+                                    crate::latency::LaunchTimeline::start(format!(
+                                        "ssh {}",
+                                        config.host
+                                    )),
+                                );
                                 self.remotes
                                     .connect(session_id.clone(), config.clone(), size)?;
                                 self.remote_configs.insert(surface_id.clone(), config);
@@ -2092,6 +2122,10 @@ impl NativeShellRuntime {
                     ProjectLocation::Ssh { .. } => unreachable!(),
                 };
                 let size = self.spawn_size(&surface_id);
+                self.timings.insert(
+                    surface_id.clone(),
+                    crate::latency::LaunchTimeline::start(shell_label(&command.program)),
+                );
                 self.ptys
                     .spawn(session_id, &command, size)
                     .map_err(|error| error.to_string())?;
@@ -2470,6 +2504,7 @@ fn terminal_snapshots(
     remotes: &mut RemoteSessionManager,
     remote_configs: &HashMap<SurfaceId, SshConfig>,
     live_ptys: bool,
+    timings: &mut HashMap<SurfaceId, crate::latency::LaunchTimeline>,
 ) -> Result<Vec<TerminalSnapshot>, String> {
     let Some(workspace) = app_state.active_workspace() else {
         return Ok(Vec::new());
@@ -2535,6 +2570,44 @@ fn terminal_snapshots(
                 ),
             };
             let (display_offset, history_size, selection, cursor_visible, modes) = view;
+
+            // Launch timing: the first real engine output completes and reports
+            // the surface's timeline (checked before any synthesized text).
+            let has_output = lines.iter().any(|line| !line.trim().is_empty());
+            if has_output && let Some(mut timeline) = timings.remove(&surface_id) {
+                timeline.mark("first_output");
+                timeline.report();
+            }
+            // Connecting feedback (spec 1.6): a blank pane shows an honest
+            // status line within the first frame instead of dead black.
+            let (lines, cells) = if !has_output && live_ptys {
+                let status = if is_remote {
+                    let host = remote_configs
+                        .get(&surface_id)
+                        .map(|config| config.host.as_str())
+                        .unwrap_or("host");
+                    match remotes.status(surface_id.as_str()) {
+                        Some(RemoteStatus::Connecting) => Some(format!("Connecting to {host}...")),
+                        Some(RemoteStatus::Retrying) | Some(RemoteStatus::Disconnected) => {
+                            Some(format!("Reconnecting to {host}..."))
+                        }
+                        Some(RemoteStatus::Failed) => Some(format!("Connection to {host} failed")),
+                        _ => None,
+                    }
+                } else {
+                    timings
+                        .get(&surface_id)
+                        .filter(|timeline| timeline.age() < Duration::from_secs(5))
+                        .map(|timeline| format!("Starting {}...", timeline.label()))
+                };
+                match status {
+                    Some(line) => (vec![line], Vec::new()),
+                    None => (lines, cells),
+                }
+            } else {
+                (lines, cells)
+            };
+
             let links = detect_links(&lines)
                 .into_iter()
                 .map(|link| LinkSpan {
@@ -2650,8 +2723,19 @@ fn fallback_terminal_snapshots(app_state: &AppState) -> Vec<TerminalSnapshot> {
         &mut RemoteSessionManager::default(),
         &HashMap::new(),
         false,
+        &mut HashMap::new(),
     )
     .unwrap_or_default()
+}
+
+/// Short display name for a shell program path ("C:\\...\\pwsh.exe" -> "pwsh").
+fn shell_label(program: &str) -> String {
+    program
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or(program)
+        .trim_end_matches(".exe")
+        .to_string()
 }
 
 fn fallback_lines() -> Vec<String> {

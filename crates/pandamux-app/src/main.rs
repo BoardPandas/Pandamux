@@ -10,6 +10,8 @@ mod clipboard_os;
 // the network fetch is gated behind `iced-runtime`.
 #[cfg(feature = "iced-runtime")]
 mod iced_runtime;
+#[cfg_attr(not(feature = "iced-runtime"), allow(dead_code))]
+mod latency;
 #[cfg(feature = "iced-runtime")]
 mod pollers;
 #[allow(dead_code)]
