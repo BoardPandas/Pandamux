@@ -148,6 +148,93 @@ pub fn confirm_modal<'a>(
     crate::command_palette::modal(card, palette, Alignment::Center)
 }
 
+/// The keyboard-shortcut cheat sheet (spec 2.6): categorized sections from
+/// the live keymap in a two-column card, so user overrides show exactly what
+/// the decoder will do. Ctrl+/ or F1 toggles it; Esc dismisses.
+pub fn cheat_sheet_modal<'a>(
+    sections: &'a [pandamux_core::KeymapSection],
+    palette: Palette,
+) -> Element<'a, ShellMessage> {
+    let mut left = column![].spacing(14);
+    let mut right = column![].spacing(14);
+    for (index, section) in sections.iter().enumerate() {
+        let mut rows = column![
+            text(section.title.clone())
+                .size(theme::SIZE_SECONDARY)
+                .font(theme::ui(iced::font::Weight::Semibold))
+                .color(palette.accent)
+        ]
+        .spacing(4);
+        for (label, chords) in &section.entries {
+            rows = rows.push(
+                row![
+                    text(label.clone()).size(theme::SIZE_BODY).color(palette.t2),
+                    Space::new().width(Length::Fill),
+                    kbd_chip(chords, palette),
+                ]
+                .spacing(10)
+                .align_y(Alignment::Center),
+            );
+        }
+        if index % 2 == 0 {
+            left = left.push(rows);
+        } else {
+            right = right.push(rows);
+        }
+    }
+
+    let header = row![
+        text("Keyboard shortcuts")
+            .size(theme::SIZE_TITLE)
+            .font(theme::ui(iced::font::Weight::Semibold))
+            .color(palette.t1),
+        Space::new().width(Length::Fill),
+        button(text("\u{00d7}").size(theme::SIZE_TITLE).color(palette.t3))
+            .padding(Padding::from([2.0, 8.0]))
+            .on_press(ShellMessage::OverlayDismissed)
+            .style(move |_theme, status| {
+                let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+                button::Style {
+                    background: hovered.then(|| palette.ov(0.08).into()),
+                    text_color: palette.t2,
+                    border: theme::border(Color::TRANSPARENT, 0.0, theme::RADIUS_CHIP),
+                    ..Default::default()
+                }
+            }),
+    ]
+    .align_y(Alignment::Center);
+
+    let card = container(
+        column![
+            header,
+            row![left.width(Length::Fill), right.width(Length::Fill)].spacing(24),
+        ]
+        .spacing(14)
+        .padding(16)
+        .width(Length::Fixed(620.0)),
+    )
+    .width(Length::Fixed(620.0))
+    .style(move |_theme| crate::command_palette::overlay_card_style(palette));
+
+    crate::command_palette::modal(card, palette, Alignment::Center)
+}
+
+/// A small keyboard-chord chip ("Ctrl+K"), shared by the cheat sheet.
+fn kbd_chip<'a>(label: &str, palette: Palette) -> Element<'a, ShellMessage> {
+    container(
+        text(label.to_string())
+            .size(theme::SIZE_METADATA)
+            .color(palette.t3),
+    )
+    .padding(Padding::from([2.0, 6.0]))
+    .style(move |_theme| container::Style {
+        background: Some(palette.ov(0.06).into()),
+        border: theme::border(palette.ov(0.12), 1.0, theme::RADIUS_CHIP),
+        ..Default::default()
+    })
+    .into()
+}
+
 pub fn copy_mode_indicator<'a>(palette: Palette) -> Element<'a, ShellMessage> {
     container(
         text("COPY MODE  \u{2022}  hjkl / arrows to move  \u{2022}  Esc to exit")

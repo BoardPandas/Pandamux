@@ -56,7 +56,9 @@ pub struct SettingsViewState {
     pub ui_theme: UiTheme,
     pub accent: Accent,
     pub show_status_bar: bool,
-    /// The bound keyboard shortcuts (label, chord), shown on the Keyboard tab.
+    /// The bound keyboard shortcuts (label, chord), shown on the Keyboard
+    /// tab. Filled by the runtime FROM the live keymap (spec 2.6): the render
+    /// source is the decode source, so this list can never drift again.
     pub shortcuts: Vec<(String, String)>,
     /// Persistent terminal settings (spec 1.2 / 1.3 / 2.6 / 2.7 toggles).
     pub terminal: pandamux_core::TerminalSettings,
@@ -72,32 +74,11 @@ impl Default for SettingsViewState {
             ui_theme: UiTheme::default(),
             accent: Accent::default(),
             show_status_bar: true,
-            shortcuts: default_shortcuts(),
+            shortcuts: Vec::new(),
             scrollback_input: terminal.scrollback_lines.to_string(),
             terminal,
         }
     }
-}
-
-/// The designed keyboard set (label, chord). Kept here as the single source the
-/// Keyboard settings tab and any future rebinding UI read.
-pub fn default_shortcuts() -> Vec<(String, String)> {
-    [
-        ("Command palette", "Ctrl K"),
-        ("Find in terminal", "Ctrl F"),
-        ("Notifications", "Ctrl N"),
-        ("Toggle status bar", "Ctrl B"),
-        ("Toggle theme", "Ctrl Shift T"),
-        ("Cycle accent", "Ctrl Shift A"),
-        ("New session", "Ctrl T"),
-        ("Split right", "Ctrl D"),
-        ("Split down", "Ctrl Shift D"),
-        ("Close pane", "Ctrl W"),
-        ("Zoom pane", "Ctrl Enter"),
-    ]
-    .into_iter()
-    .map(|(label, chord)| (label.to_string(), chord.to_string()))
-    .collect()
 }
 
 pub fn settings_modal<'a>(
@@ -430,13 +411,24 @@ mod tests {
     }
 
     #[test]
-    fn default_shortcuts_cover_core_commands() {
-        let shortcuts = default_shortcuts();
+    fn keyboard_tab_renders_runtime_supplied_shortcuts() {
+        // The list comes from the live keymap (spec 2.6); the tab just
+        // renders whatever the runtime projected.
+        let state = SettingsViewState {
+            section: SettingsSection::Keyboard,
+            shortcuts: pandamux_core::Keymap::defaults()
+                .sections()
+                .into_iter()
+                .flat_map(|section| section.entries)
+                .collect(),
+            ..SettingsViewState::default()
+        };
         assert!(
-            shortcuts
+            state
+                .shortcuts
                 .iter()
                 .any(|(label, _)| label == "Command palette")
         );
-        assert!(shortcuts.iter().any(|(_, chord)| chord == "Ctrl K"));
+        let _modal = settings_modal(&state, palette());
     }
 }

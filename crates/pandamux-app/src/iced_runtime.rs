@@ -3,13 +3,13 @@ use crate::project_launcher::{EphemeralCredential, LaunchTarget};
 use iced::futures::SinkExt;
 use iced::{Element, Size, Subscription, Task, Theme, application, keyboard, stream, time, window};
 use pandamux_core::{
-    AgentRegistry, AppIntent, AppState, ClipboardConfig, HomeIntent, LaunchConfig, Localizer,
-    NewNotification, NotificationSource, Notifications, PaneId, PaneIntent, ProjectError,
-    ProjectErrorCategory, ProjectId, ProjectIntent, ProjectLocation, ProjectMatcher, ProjectRecord,
-    SessionType, SidebarState, SplitDirection, SplitNode, SplitPaneParams, SshProfileId,
-    SshProfiles, SurfaceContents, SurfaceId, SurfaceIntent, SurfaceType, ThemeStore, UserSettings,
-    WorkspaceId, WorkspaceIntent, find_leaf, find_pane_id_for_surface, get_all_pane_ids,
-    parse_ghostty_theme,
+    AgentRegistry, AppIntent, AppState, ClipboardConfig, HomeIntent, KeyAction, KeyInput, Keymap,
+    LaunchConfig, Localizer, Mods, NamedKey, NewNotification, NotificationSource, Notifications,
+    PaneId, PaneIntent, ProjectError, ProjectErrorCategory, ProjectId, ProjectIntent,
+    ProjectLocation, ProjectMatcher, ProjectRecord, SessionType, SidebarState, SplitDirection,
+    SplitNode, SplitPaneParams, SshProfileId, SshProfiles, SurfaceContents, SurfaceId,
+    SurfaceIntent, SurfaceType, ThemeStore, UserSettings, WorkspaceId, WorkspaceIntent, find_leaf,
+    find_pane_id_for_surface, get_all_pane_ids, parse_ghostty_theme,
 };
 use pandamux_term::{
     DEFAULT_GRID_SIZE, GridSize, PtySessionManager, RemoteSessionManager, RemoteStatus,
@@ -122,6 +122,9 @@ pub struct NativeShellRuntime {
     touched_surfaces: HashSet<SurfaceId>,
     /// Surfaces whose welcome chooser was explicitly dismissed this session.
     welcome_dismissed: HashSet<SurfaceId>,
+    /// The resolved shortcut table (defaults + keyboard.* settings). One
+    /// source for decoding, hints, the settings tab, and the cheat sheet.
+    keymap: Keymap,
     /// Persistent clipboard policy (plan F1).
     clipboard_config: ClipboardConfig,
     /// Active drag-and-drop of a tab, if any (plan Section 12.3).
@@ -164,11 +167,17 @@ struct PendingRemoteLaunch {
     session: SessionType,
 }
 
-/// A destructive action waiting on the confirm modal (spec 1.5; the
-/// close-running-tab variant joins with the keymap stage).
+/// A destructive action waiting on the confirm modal (spec 1.5 close-all,
+/// spec 2.6 close-running-tab).
 #[derive(Clone, Debug)]
 enum PendingConfirm {
-    CloseAll { project_id: Option<ProjectId> },
+    CloseAll {
+        project_id: Option<ProjectId>,
+    },
+    CloseTab {
+        workspace_id: Option<WorkspaceId>,
+        surface_id: SurfaceId,
+    },
 }
 
 /// Where the launcher's SessionType step will launch once a type is chosen
@@ -257,6 +266,9 @@ impl NativeShellRuntime {
             crate::persistence::LauncherPrefsConfig::default()
         };
         launcher_prefs.retain_known_projects(&app_state.projects);
+        // The shortcut table: defaults + keyboard.* overrides. Bad entries
+        // warn (surfaced via last_error below) and keep the defaults.
+        let (keymap, keymap_warnings) = Keymap::with_settings(&settings.keyboard);
         let chrome = ChromeState::default();
         let view_model = initial_view_model(&app_state, &chrome);
         let mut runtime = Self {
@@ -304,6 +316,7 @@ impl NativeShellRuntime {
             pending_home_assign: None,
             touched_surfaces: HashSet::new(),
             welcome_dismissed: HashSet::new(),
+            keymap,
             clipboard_config: ClipboardConfig::default(),
             drag: None,
             context_menu: None,
@@ -315,7 +328,9 @@ impl NativeShellRuntime {
             settings_section: SettingsSection::default(),
             view_model,
             terminals: Vec::new(),
-            last_error: profile_load_error.or(settings_load_error),
+            last_error: profile_load_error
+                .or(settings_load_error)
+                .or_else(|| (!keymap_warnings.is_empty()).then(|| keymap_warnings.join("; "))),
             pipe_name: std::env::var("PANDAMUX_PIPE")
                 .unwrap_or_else(|_| r"\\.\pipe\pandamux".to_string()),
             pipe_registry: Arc::new(StdMutex::new(HashMap::new())),
@@ -1755,7 +1770,62 @@ impl NativeShellRuntime {
                             let _ = self.store.save_session(&self.app_state);
                         }
                     }
+                    Some(PendingConfirm::CloseTab {
+                        workspace_id,
+                        surface_id,
+                    }) => {
+                        self.close_session(workspace_id, surface_id);
+                        if self.live_ptys {
+                            let _ = self.store.save_session(&self.app_state);
+                        }
+                    }
                     None => {}
+                }
+            }
+            ShellMessage::KeyPressed(input) => {
+                // The pure decision pipeline (spec 2.6): keymap first, then
+                // named keys, then Ctrl passthrough, then plain typing.
+                let overlay_open = self.chrome.active_overlay != Overlay::None;
+                let decided = decide_key(&self.keymap, &input, overlay_open);
+                if !matches!(decided, ShellMessage::Noop) {
+                    self.update_shell(decided);
+                }
+                return;
+            }
+            ShellMessage::FocusProject(n) => {
+                // Ctrl+N: first press focuses the Nth project (stable sidebar
+                // order); repeated presses cycle its tabs (spec 2.6).
+                let index = (n as usize).saturating_sub(1);
+                if let Some(workspace) = self.app_state.workspaces.get(index) {
+                    let workspace_id = workspace.id.clone();
+                    let already_active = self.chrome.main_view == MainView::Workspace
+                        && self.app_state.active_workspace_id.as_ref() == Some(&workspace_id);
+                    if already_active {
+                        self.cycle_workspace_tab(1);
+                    } else {
+                        self.chrome.main_view = MainView::Workspace;
+                        let result =
+                            self.app_state
+                                .apply(AppIntent::Workspace(WorkspaceIntent::Select {
+                                    workspace_id,
+                                }));
+                        self.last_error = result.err();
+                    }
+                }
+            }
+            ShellMessage::CycleTab(delta) => {
+                self.cycle_workspace_tab(delta as i32);
+            }
+            ShellMessage::CloseTabRequested => {
+                if let Some(surface_id) = self.active_surface_id() {
+                    self.request_close_session(None, surface_id);
+                }
+            }
+            ShellMessage::CheatSheetToggled => {
+                if self.chrome.active_overlay == Overlay::CheatSheet {
+                    self.chrome.active_overlay = Overlay::None;
+                } else {
+                    self.open_overlay(Overlay::CheatSheet);
                 }
             }
             ShellMessage::SessionGroupingChanged(grouping) => {
@@ -2381,14 +2451,15 @@ impl NativeShellRuntime {
                 }
             }
             ShellMessage::SurfaceClosed(surface_id) => {
-                // The tab X lives on the active workspace's active pane.
-                self.close_session(None, surface_id);
+                // The tab X lives on the active workspace's active pane. Same
+                // confirm-if-running gate as Ctrl+W (spec 2.6).
+                self.request_close_session(None, surface_id);
             }
             ShellMessage::SessionClosed {
                 workspace_id,
                 surface_id,
             } => {
-                self.close_session(Some(workspace_id), surface_id);
+                self.request_close_session(Some(workspace_id), surface_id);
             }
             core_message => {
                 let result = self.apply_core_message(core_message);
@@ -2406,6 +2477,56 @@ impl NativeShellRuntime {
     /// nothing to fall back to, and an empty window is worse than a no-op). This
     /// keeps the core `surface.close` / `pane.close` intents (and their CLI
     /// contract) unchanged: the cascade is UI-layer close policy.
+    /// Cycle the active workspace's tabs (depth-first split-tree order, the
+    /// same order the sidebar and tab bar show) with wraparound (spec 2.6).
+    fn cycle_workspace_tab(&mut self, delta: i32) {
+        self.chrome.main_view = MainView::Workspace;
+        let Some(workspace) = self.app_state.active_workspace() else {
+            return;
+        };
+        let workspace_id = workspace.id.clone();
+        let surfaces = crate::backend::terminal_surfaces(&workspace.split_tree);
+        if surfaces.is_empty() {
+            return;
+        }
+        let current = self
+            .active_surface_id()
+            .and_then(|active| surfaces.iter().position(|surface| surface.id == active))
+            .unwrap_or(0);
+        let next = (current as i64 + delta as i64).rem_euclid(surfaces.len() as i64) as usize;
+        let surface_id = surfaces[next].id.clone();
+        let result = self
+            .app_state
+            .apply(AppIntent::Surface(SurfaceIntent::Focus {
+                workspace_id: Some(workspace_id),
+                surface_id,
+            }));
+        self.last_error = result.err();
+    }
+
+    /// Close a session, confirming first when its shell is still running and
+    /// `terminal.confirmCloseOnRunning` is on (spec 2.6). Dead surfaces close
+    /// immediately. Ctrl+W, the tab X, and the session-panel X all route here.
+    fn request_close_session(&mut self, workspace_id: Option<WorkspaceId>, surface_id: SurfaceId) {
+        let id = surface_id.as_str();
+        let running = if self.remotes.has(id) {
+            self.remotes.is_running(id)
+        } else if self.ptys.has(id) {
+            self.ptys.is_running(id)
+        } else {
+            false
+        };
+        if running && self.settings.terminal.confirm_close_on_running {
+            self.pending_confirm = Some(PendingConfirm::CloseTab {
+                workspace_id,
+                surface_id,
+            });
+            self.chrome.active_overlay = Overlay::Confirm;
+        } else {
+            self.close_session(workspace_id, surface_id);
+        }
+    }
+
     fn close_session(&mut self, workspace_id: Option<WorkspaceId>, surface_id: SurfaceId) {
         let Some(workspace_id) =
             workspace_id.or_else(|| self.app_state.active_workspace_id.clone())
@@ -2583,14 +2704,21 @@ impl NativeShellRuntime {
         } else if self.palette.selected >= self.palette.items.len() {
             self.palette.selected = self.palette.items.len() - 1;
         }
+        // Both display surfaces render FROM the keymap (spec 2.6): the
+        // settings Keyboard tab gets the flattened list, the cheat sheet the
+        // categorized sections. Same source as the decoder, drift impossible.
+        let keymap_sections = self.keymap.sections();
         let settings = SettingsViewState {
             section: self.settings_section,
             ui_theme: self.chrome.ui_theme,
             accent: self.chrome.accent,
             show_status_bar: self.chrome.show_status_bar,
+            shortcuts: keymap_sections
+                .iter()
+                .flat_map(|section| section.entries.iter().cloned())
+                .collect(),
             terminal: self.settings.terminal.clone(),
             scrollback_input: self.scrollback_input.clone(),
-            ..SettingsViewState::default()
         };
         self.view_model = ShellViewModel {
             projection: self
@@ -2628,6 +2756,7 @@ impl NativeShellRuntime {
             rail_menu: self.rail_menu.clone(),
             confirm: self.confirm_view(),
             home: self.home_view_state(),
+            cheat_sheet: keymap_sections,
         };
     }
 
@@ -2719,17 +2848,43 @@ impl NativeShellRuntime {
                     action_label: "Close all".to_string(),
                 })
             }
+            PendingConfirm::CloseTab { .. } => Some(pandamux_ui::ConfirmViewState {
+                title: "Close this tab?".to_string(),
+                body: "Its shell is still running; closing ends whatever it is doing.".to_string(),
+                action_label: "Close tab".to_string(),
+            }),
         }
     }
 
     /// Build the full command-palette item list (commands + pane actions +
     /// session switches). The runtime then filters it against the live query.
     fn build_palette_items(&self, sessions: &SessionsViewState) -> Vec<PaletteItem> {
+        // Shortcut hints come from the live keymap, so a rebound chord shows
+        // its real binding everywhere (spec 2.6).
+        let hints: HashMap<String, String> = [
+            KeyAction::NewSession,
+            KeyAction::Find,
+            KeyAction::OpenSettings,
+            KeyAction::CheatSheet,
+            KeyAction::GoHome,
+            KeyAction::Notifications,
+            KeyAction::ToggleStatusBar,
+            KeyAction::ToggleTheme,
+            KeyAction::CycleAccent,
+            KeyAction::SplitRight,
+            KeyAction::SplitDown,
+            KeyAction::ZoomPane,
+            KeyAction::CloseTab,
+        ]
+        .into_iter()
+        .filter_map(|action| Some((action.id(), self.keymap.display_for(action)?)))
+        .collect();
+        let hint = |action: KeyAction| hints.get(&action.id()).map(String::as_str);
         let mut items = vec![
             PaletteItem::new(
                 "+",
                 "New session",
-                Some("Ctrl T"),
+                hint(KeyAction::NewSession),
                 ShellMessage::NewSessionRequested,
             ),
             PaletteItem::new(
@@ -2741,37 +2896,49 @@ impl NativeShellRuntime {
             PaletteItem::new(
                 "\u{1f50d}",
                 "Find in terminal",
-                Some("Ctrl F"),
+                hint(KeyAction::Find),
                 ShellMessage::FindOpened,
             ),
             PaletteItem::new(
                 "\u{2699}",
                 "Open settings",
-                Some("Ctrl ,"),
+                hint(KeyAction::OpenSettings),
                 ShellMessage::OverlayRequested(RailItem::Settings),
+            ),
+            PaletteItem::new(
+                "\u{2328}",
+                "Keyboard shortcuts",
+                hint(KeyAction::CheatSheet),
+                ShellMessage::CheatSheetToggled,
+            ),
+            PaletteItem::new(
+                "\u{2302}",
+                "Go to Home",
+                hint(KeyAction::GoHome),
+                ShellMessage::HomeRequested,
             ),
             PaletteItem::new(
                 "\u{1f514}",
                 "Toggle notifications",
-                Some("Ctrl N"),
+                hint(KeyAction::Notifications),
                 ShellMessage::NotificationsToggled,
             ),
             PaletteItem::new(
                 "\u{2637}",
                 "Toggle status bar",
-                Some("Ctrl B"),
+                hint(KeyAction::ToggleStatusBar),
                 ShellMessage::ToggleStatusBar,
             ),
             PaletteItem::new(
                 "\u{25d1}",
                 "Toggle theme",
-                Some("Ctrl Shift T"),
+                hint(KeyAction::ToggleTheme),
                 ShellMessage::ToggleTheme,
             ),
             PaletteItem::new(
                 "\u{25c9}",
                 "Cycle accent",
-                Some("Ctrl Shift A"),
+                hint(KeyAction::CycleAccent),
                 ShellMessage::CycleAccent,
             ),
         ];
@@ -2784,7 +2951,7 @@ impl NativeShellRuntime {
             items.push(PaletteItem::new(
                 "\u{25eb}",
                 "Split pane right",
-                Some("Ctrl D"),
+                hint(KeyAction::SplitRight),
                 ShellMessage::PaneSplit {
                     pane_id: pane_id.clone(),
                     direction: SplitDirection::Horizontal,
@@ -2793,7 +2960,7 @@ impl NativeShellRuntime {
             items.push(PaletteItem::new(
                 "\u{2b12}",
                 "Split pane down",
-                Some("Ctrl Shift D"),
+                hint(KeyAction::SplitDown),
                 ShellMessage::PaneSplit {
                     pane_id: pane_id.clone(),
                     direction: SplitDirection::Vertical,
@@ -2802,14 +2969,14 @@ impl NativeShellRuntime {
             items.push(PaletteItem::new(
                 "\u{2922}",
                 "Zoom pane",
-                Some("Ctrl Enter"),
-                ShellMessage::PaneZoomToggled(pane_id.clone()),
+                hint(KeyAction::ZoomPane),
+                ShellMessage::PaneZoomToggled(pane_id),
             ));
             items.push(PaletteItem::new(
                 "\u{00d7}",
-                "Close pane",
-                Some("Ctrl W"),
-                ShellMessage::PaneClosed(pane_id),
+                "Close tab",
+                hint(KeyAction::CloseTab),
+                ShellMessage::CloseTabRequested,
             ));
         }
 
@@ -3275,6 +3442,12 @@ impl NativeShellRuntime {
         self.chrome.show_status_bar = self.settings.ui.show_status_bar;
         self.scrollback_input = self.settings.terminal.scrollback_lines.to_string();
         self.apply_scrollback_setting();
+        // Rebuild the shortcut table from keyboard.* (spec 2.6).
+        let (keymap, warnings) = Keymap::with_settings(&self.settings.keyboard);
+        self.keymap = keymap;
+        if !warnings.is_empty() {
+            self.last_error = Some(warnings.join("; "));
+        }
     }
 
     fn apply_scrollback_setting(&mut self) {
@@ -3692,10 +3865,14 @@ where
     stream.shutdown().await
 }
 
+/// Convert an Iced key event into a framework-agnostic [`KeyInput`] for the
+/// keymap. All decoding policy lives in [`decide_key`], which runs in `update`
+/// where the live keymap is available (spec 2.6).
 fn map_key_event(event: keyboard::Event) -> ShellMessage {
     use keyboard::{Event, Key};
     let Event::KeyPressed {
         key,
+        physical_key,
         modifiers,
         text,
         ..
@@ -3703,90 +3880,173 @@ fn map_key_event(event: keyboard::Event) -> ShellMessage {
     else {
         return ShellMessage::Noop;
     };
-    let ctrl = modifiers.control();
-    let shift = modifiers.shift();
-    match key.as_ref() {
-        Key::Character(character) => decode_character(character, text.as_deref(), ctrl, shift),
-        Key::Named(named) => map_named_key(named, ctrl, shift),
-        _ => ShellMessage::Noop,
+    let mods = Mods {
+        ctrl: modifiers.control(),
+        shift: modifiers.shift(),
+        alt: modifiers.alt(),
+    };
+    let physical_digit = match physical_key {
+        keyboard::key::Physical::Code(code) => physical_digit_code(code),
+        _ => None,
+    };
+    let (character, named) = match key.as_ref() {
+        Key::Character(character) => (Some(character.to_string()), None),
+        Key::Named(named) => (None, core_named_key(named)),
+        _ => (None, None),
+    };
+    let text = text.map(|text| text.to_string());
+    if character.is_none() && named.is_none() && text.is_none() {
+        return ShellMessage::Noop;
     }
+    ShellMessage::KeyPressed(KeyInput {
+        mods,
+        character,
+        named,
+        physical_digit,
+        text,
+    })
 }
 
-/// Decode a character key into either a chrome shortcut or terminal bytes. Split
-/// out from `map_key_event` so it is testable without constructing a full
-/// keyboard event. `text` is the composed text the OS produced (honours shift +
-/// keyboard layout); it is preferred over the base `character` for plain typing.
-fn decode_character(character: &str, text: Option<&str>, ctrl: bool, shift: bool) -> ShellMessage {
-    if ctrl {
-        // A mapped Ctrl chrome shortcut wins; an unmapped Ctrl+key still reaches
-        // the terminal as its control code (Ctrl+C, Ctrl+L, ...).
-        let shortcut = shortcut_for(true, shift, &character.to_ascii_lowercase());
-        if shortcut != ShellMessage::Noop {
-            return shortcut;
-        }
-        return match control_byte(character) {
-            Some(byte) => ShellMessage::TerminalInput(vec![byte]),
-            None => ShellMessage::Noop,
-        };
-    }
-    let content = text
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| character.to_string());
-    ShellMessage::TerminalInput(content.into_bytes())
+/// The PHYSICAL digit-row key (0-9) for a scan code, layout-independent so
+/// Ctrl+1..9 works on AZERTY (spec 2.6).
+fn physical_digit_code(code: keyboard::key::Code) -> Option<u8> {
+    use keyboard::key::Code;
+    Some(match code {
+        Code::Digit0 => 0,
+        Code::Digit1 => 1,
+        Code::Digit2 => 2,
+        Code::Digit3 => 3,
+        Code::Digit4 => 4,
+        Code::Digit5 => 5,
+        Code::Digit6 => 6,
+        Code::Digit7 => 7,
+        Code::Digit8 => 8,
+        Code::Digit9 => 9,
+        _ => return None,
+    })
 }
 
-/// Decode a named key into either a chrome message or terminal bytes. The three
-/// context-sensitive keys (Escape / Up / Down / Enter) keep their chrome message;
-/// their handlers forward the key to the terminal when no overlay is open. The
-/// rest are pure terminal navigation/editing keys with no chrome conflict.
-fn map_named_key(named: keyboard::key::Named, ctrl: bool, shift: bool) -> ShellMessage {
+fn core_named_key(named: keyboard::key::Named) -> Option<NamedKey> {
     use keyboard::key::Named;
+    Some(match named {
+        Named::Tab => NamedKey::Tab,
+        Named::Enter => NamedKey::Enter,
+        Named::Escape => NamedKey::Escape,
+        Named::Space => NamedKey::Space,
+        Named::Backspace => NamedKey::Backspace,
+        Named::Delete => NamedKey::Delete,
+        Named::Insert => NamedKey::Insert,
+        Named::Home => NamedKey::Home,
+        Named::End => NamedKey::End,
+        Named::PageUp => NamedKey::PageUp,
+        Named::PageDown => NamedKey::PageDown,
+        Named::ArrowUp => NamedKey::ArrowUp,
+        Named::ArrowDown => NamedKey::ArrowDown,
+        Named::ArrowLeft => NamedKey::ArrowLeft,
+        Named::ArrowRight => NamedKey::ArrowRight,
+        Named::F1 => NamedKey::F1,
+        _ => return None,
+    })
+}
+
+/// Pure key-decision pipeline (spec 2.6), in strict order:
+/// 1. A keymap hit acts, EXCEPT while a centered overlay is open and the
+///    action is not overlay-safe: then the press is swallowed (fixes the old
+///    quirk where Ctrl+W typed into the palette closed a pane).
+/// 2. Named keys map to their chrome message or terminal bytes.
+/// 3. An unmapped Ctrl+key still reaches the terminal as its control code
+///    (Ctrl+L clears, ...), preserving the historical passthrough.
+/// 4. Everything else is plain typing: the composed text goes to the PTY.
+fn decide_key(keymap: &Keymap, input: &KeyInput, overlay_open: bool) -> ShellMessage {
+    if let Some(action) = keymap.resolve(input) {
+        if overlay_open && !action.allowed_with_overlay() {
+            return ShellMessage::Noop;
+        }
+        return action_message(action);
+    }
+    if let Some(named) = input.named {
+        return named_key_message(named, input.mods);
+    }
+    if input.mods.ctrl {
+        if let Some(character) = input.character.as_deref() {
+            return match control_byte(character) {
+                Some(byte) => ShellMessage::TerminalInput(vec![byte]),
+                None => ShellMessage::Noop,
+            };
+        }
+        return ShellMessage::Noop;
+    }
+    let content = input
+        .text
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .or(input.character.as_deref());
+    match content {
+        Some(content) => ShellMessage::TerminalInput(content.as_bytes().to_vec()),
+        None => ShellMessage::Noop,
+    }
+}
+
+/// The message each keymap action dispatches. Every action reuses an existing
+/// handler; the keymap only decides WHICH one fires.
+fn action_message(action: KeyAction) -> ShellMessage {
+    match action {
+        KeyAction::CommandPalette => ShellMessage::OverlayRequested(RailItem::CommandPalette),
+        KeyAction::NewSession => ShellMessage::NewSessionRequested,
+        KeyAction::OpenSettings => ShellMessage::OverlayRequested(RailItem::Settings),
+        KeyAction::Find => ShellMessage::FindOpened,
+        KeyAction::Notifications => ShellMessage::NotificationsToggled,
+        KeyAction::ToggleStatusBar => ShellMessage::ToggleStatusBar,
+        KeyAction::ToggleTheme => ShellMessage::ToggleTheme,
+        KeyAction::CycleAccent => ShellMessage::CycleAccent,
+        KeyAction::CheatSheet => ShellMessage::CheatSheetToggled,
+        KeyAction::SplitRight => ShellMessage::SplitFocused(SplitDirection::Horizontal),
+        KeyAction::SplitDown => ShellMessage::SplitFocused(SplitDirection::Vertical),
+        KeyAction::CloseTab => ShellMessage::CloseTabRequested,
+        KeyAction::ZoomPane => ShellMessage::ZoomFocusedPane,
+        KeyAction::NextTab => ShellMessage::CycleTab(1),
+        KeyAction::PrevTab => ShellMessage::CycleTab(-1),
+        KeyAction::FocusProject(n) => ShellMessage::FocusProject(n),
+        KeyAction::GoHome => ShellMessage::HomeRequested,
+        KeyAction::CopyOrInterrupt => ShellMessage::CopyOrInterrupt,
+        KeyAction::Copy => ShellMessage::CopySelectionRequested,
+        KeyAction::Paste => ShellMessage::PasteRequested,
+        KeyAction::ScrollPageUp => ShellMessage::ScrollPageFocused(-1),
+        KeyAction::ScrollPageDown => ShellMessage::ScrollPageFocused(1),
+    }
+}
+
+/// Decode a named key into either a chrome message or terminal bytes. The
+/// context-sensitive keys (Escape / Up / Down / Enter) keep their chrome
+/// message; their handlers forward the key to the terminal when no overlay is
+/// open. The rest are terminal navigation/editing keys with no chrome
+/// conflict. Chords the keymap owns (Ctrl+Enter, Shift+PageUp/Down, Ctrl+Tab)
+/// resolve before this table; the entries here are the unbound fallbacks.
+fn named_key_message(named: NamedKey, mods: Mods) -> ShellMessage {
     match named {
         // Escape dismisses an open overlay, else sends ESC to the terminal.
-        Named::Escape => ShellMessage::OverlayDismissed,
+        NamedKey::Escape => ShellMessage::OverlayDismissed,
         // Arrows drive palette selection when it is open, else terminal history.
-        Named::ArrowUp => ShellMessage::PaletteMoveSelection(-1),
-        Named::ArrowDown => ShellMessage::PaletteMoveSelection(1),
-        // Ctrl+Enter zooms the focused pane; plain Enter activates a palette item
-        // when open, else sends a carriage return to the terminal.
-        Named::Enter => {
-            if ctrl {
-                ShellMessage::ZoomFocusedPane
-            } else {
-                ShellMessage::PaletteActivate
-            }
-        }
-        Named::Space => ShellMessage::TerminalInput(vec![b' ']),
-        Named::Backspace => ShellMessage::TerminalInput(vec![0x7f]),
-        Named::Tab => ShellMessage::TerminalInput(if shift {
+        NamedKey::ArrowUp => ShellMessage::PaletteMoveSelection(-1),
+        NamedKey::ArrowDown => ShellMessage::PaletteMoveSelection(1),
+        // Plain Enter activates a palette item when open, else a carriage return.
+        NamedKey::Enter => ShellMessage::PaletteActivate,
+        NamedKey::Space => ShellMessage::TerminalInput(vec![b' ']),
+        NamedKey::Backspace => ShellMessage::TerminalInput(vec![0x7f]),
+        NamedKey::Tab => ShellMessage::TerminalInput(if mods.shift {
             b"\x1b[Z".to_vec()
         } else {
             vec![b'\t']
         }),
-        Named::ArrowLeft => ShellMessage::TerminalInput(b"\x1b[D".to_vec()),
-        Named::ArrowRight => ShellMessage::TerminalInput(b"\x1b[C".to_vec()),
-        Named::Home => ShellMessage::TerminalInput(b"\x1b[H".to_vec()),
-        Named::End => ShellMessage::TerminalInput(b"\x1b[F".to_vec()),
-        Named::Delete => ShellMessage::TerminalInput(b"\x1b[3~".to_vec()),
-        Named::Insert => ShellMessage::TerminalInput(b"\x1b[2~".to_vec()),
-        // Shift+PageUp/PageDown scroll the viewport (Windows Terminal
-        // convention); unshifted stays terminal input.
-        Named::PageUp => {
-            if shift {
-                ShellMessage::ScrollPageFocused(-1)
-            } else {
-                ShellMessage::TerminalInput(b"\x1b[5~".to_vec())
-            }
-        }
-        Named::PageDown => {
-            if shift {
-                ShellMessage::ScrollPageFocused(1)
-            } else {
-                ShellMessage::TerminalInput(b"\x1b[6~".to_vec())
-            }
-        }
-        _ => ShellMessage::Noop,
+        NamedKey::ArrowLeft => ShellMessage::TerminalInput(b"\x1b[D".to_vec()),
+        NamedKey::ArrowRight => ShellMessage::TerminalInput(b"\x1b[C".to_vec()),
+        NamedKey::Home => ShellMessage::TerminalInput(b"\x1b[H".to_vec()),
+        NamedKey::End => ShellMessage::TerminalInput(b"\x1b[F".to_vec()),
+        NamedKey::Delete => ShellMessage::TerminalInput(b"\x1b[3~".to_vec()),
+        NamedKey::Insert => ShellMessage::TerminalInput(b"\x1b[2~".to_vec()),
+        NamedKey::PageUp => ShellMessage::TerminalInput(b"\x1b[5~".to_vec()),
+        NamedKey::PageDown => ShellMessage::TerminalInput(b"\x1b[6~".to_vec()),
+        NamedKey::F1 => ShellMessage::Noop,
     }
 }
 
@@ -3807,34 +4067,6 @@ fn control_byte(character: &str) -> Option<u8> {
         '^' => Some(0x1e),
         '_' | '?' => Some(0x1f),
         _ => None,
-    }
-}
-
-/// Pure shortcut table (Ctrl-based). Kept separate from event decoding so it is
-/// unit-testable without constructing a full keyboard event.
-fn shortcut_for(ctrl: bool, shift: bool, character: &str) -> ShellMessage {
-    if !ctrl {
-        return ShellMessage::Noop;
-    }
-    match (shift, character) {
-        (false, "b") => ShellMessage::ToggleStatusBar,
-        (true, "t") => ShellMessage::ToggleTheme,
-        (true, "a") => ShellMessage::CycleAccent,
-        (false, "k") => ShellMessage::OverlayRequested(RailItem::CommandPalette),
-        (true, "p") => ShellMessage::OverlayRequested(RailItem::CommandPalette),
-        (false, "t") => ShellMessage::NewSessionRequested,
-        (false, ",") => ShellMessage::OverlayRequested(RailItem::Settings),
-        (false, "f") => ShellMessage::FindOpened,
-        (false, "n") => ShellMessage::NotificationsToggled,
-        (false, "d") => ShellMessage::SplitFocused(SplitDirection::Horizontal),
-        (true, "d") => ShellMessage::SplitFocused(SplitDirection::Vertical),
-        (false, "w") => ShellMessage::CloseFocusedPane,
-        // Clipboard (spec 1.3). Ctrl+C stays SIGINT when nothing is selected;
-        // Ctrl+V pastes instead of sending a literal 0x16.
-        (false, "c") => ShellMessage::CopyOrInterrupt,
-        (true, "c") => ShellMessage::CopySelectionRequested,
-        (false, "v") | (true, "v") => ShellMessage::PasteRequested,
-        _ => ShellMessage::Noop,
     }
 }
 
@@ -4070,6 +4302,7 @@ fn initial_view_model(app_state: &AppState, chrome: &ChromeState) -> ShellViewMo
         rail_menu: None,
         confirm: None,
         home: pandamux_ui::HomeViewState::default(),
+        cheat_sheet: Vec::new(),
     }
 }
 
@@ -4733,71 +4966,180 @@ mod tests {
         assert!(reply.contains("paneId"));
     }
 
+    /// Build a [`KeyInput`] the way `map_key_event` would for a character key.
+    fn key_input(ctrl: bool, shift: bool, character: &str, text: Option<&str>) -> KeyInput {
+        KeyInput {
+            mods: Mods {
+                ctrl,
+                shift,
+                alt: false,
+            },
+            character: Some(character.to_string()),
+            named: None,
+            physical_digit: character.parse::<u8>().ok().filter(|d| *d <= 9),
+            text: text.map(str::to_string),
+        }
+    }
+
+    fn named_input(named: NamedKey, ctrl: bool, shift: bool) -> KeyInput {
+        KeyInput {
+            mods: Mods {
+                ctrl,
+                shift,
+                alt: false,
+            },
+            named: Some(named),
+            ..KeyInput::default()
+        }
+    }
+
     #[test]
-    fn maps_known_keyboard_shortcuts() {
+    fn decide_key_maps_known_keyboard_shortcuts() {
+        let keymap = Keymap::defaults();
+        let decide = |ctrl, shift, character| {
+            decide_key(&keymap, &key_input(ctrl, shift, character, None), false)
+        };
+        assert_eq!(decide(true, false, "b"), ShellMessage::ToggleStatusBar);
+        assert_eq!(decide(true, true, "t"), ShellMessage::ToggleTheme);
+        assert_eq!(decide(true, true, "a"), ShellMessage::CycleAccent);
         assert_eq!(
-            shortcut_for(true, false, "b"),
-            ShellMessage::ToggleStatusBar
-        );
-        assert_eq!(shortcut_for(true, true, "t"), ShellMessage::ToggleTheme);
-        assert_eq!(shortcut_for(true, true, "a"), ShellMessage::CycleAccent);
-        assert_eq!(
-            shortcut_for(true, false, "k"),
+            decide(true, false, "k"),
             ShellMessage::OverlayRequested(RailItem::CommandPalette)
         );
         assert_eq!(
-            shortcut_for(true, false, "d"),
+            decide(true, false, "d"),
             ShellMessage::SplitFocused(SplitDirection::Horizontal)
         );
         assert_eq!(
-            shortcut_for(true, true, "d"),
+            decide(true, true, "d"),
             ShellMessage::SplitFocused(SplitDirection::Vertical)
         );
+        // Ctrl+W now routes through the close-confirm gate (spec 2.6).
+        assert_eq!(decide(true, false, "w"), ShellMessage::CloseTabRequested);
         assert_eq!(
-            shortcut_for(true, false, "w"),
-            ShellMessage::CloseFocusedPane
-        );
-        assert_eq!(
-            shortcut_for(true, true, "p"),
+            decide(true, true, "p"),
             ShellMessage::OverlayRequested(RailItem::CommandPalette)
         );
-        assert_eq!(shortcut_for(false, false, "b"), ShellMessage::Noop);
-        assert_eq!(shortcut_for(true, false, "z"), ShellMessage::Noop);
+        assert_eq!(decide(true, false, "/"), ShellMessage::CheatSheetToggled);
+        // Plain typing is not a shortcut.
+        assert_eq!(
+            decide(false, false, "b"),
+            ShellMessage::TerminalInput(b"b".to_vec())
+        );
+    }
+
+    #[test]
+    fn decide_key_handles_projects_tabs_and_home() {
+        let keymap = Keymap::defaults();
+        // Ctrl+1..9 select by the PHYSICAL digit key (AZERTY-safe).
+        assert_eq!(
+            decide_key(&keymap, &key_input(true, false, "3", None), false),
+            ShellMessage::FocusProject(3)
+        );
+        assert_eq!(
+            decide_key(&keymap, &key_input(true, false, "0", None), false),
+            ShellMessage::HomeRequested
+        );
+        assert_eq!(
+            decide_key(&keymap, &named_input(NamedKey::Home, true, false), false),
+            ShellMessage::HomeRequested
+        );
+        assert_eq!(
+            decide_key(&keymap, &named_input(NamedKey::Tab, true, false), false),
+            ShellMessage::CycleTab(1)
+        );
+        assert_eq!(
+            decide_key(&keymap, &named_input(NamedKey::Tab, true, true), false),
+            ShellMessage::CycleTab(-1)
+        );
+        assert_eq!(
+            decide_key(&keymap, &named_input(NamedKey::F1, false, false), false),
+            ShellMessage::CheatSheetToggled
+        );
+    }
+
+    #[test]
+    fn decide_key_swallows_shortcuts_behind_overlays() {
+        let keymap = Keymap::defaults();
+        // The old quirk: Ctrl+W typed into the palette closed a pane. Now
+        // only overlay-safe actions fire while an overlay is open.
+        assert_eq!(
+            decide_key(&keymap, &key_input(true, false, "w", None), true),
+            ShellMessage::Noop
+        );
+        assert_eq!(
+            decide_key(&keymap, &key_input(true, false, "k", None), true),
+            ShellMessage::OverlayRequested(RailItem::CommandPalette)
+        );
     }
 
     #[test]
     fn shift_page_keys_scroll_while_plain_page_keys_stay_terminal_input() {
-        use keyboard::key::Named;
+        let keymap = Keymap::defaults();
         assert_eq!(
-            map_named_key(Named::PageUp, false, true),
+            decide_key(&keymap, &named_input(NamedKey::PageUp, false, true), false),
             ShellMessage::ScrollPageFocused(-1)
         );
         assert_eq!(
-            map_named_key(Named::PageDown, false, true),
+            decide_key(
+                &keymap,
+                &named_input(NamedKey::PageDown, false, true),
+                false
+            ),
             ShellMessage::ScrollPageFocused(1)
         );
         assert_eq!(
-            map_named_key(Named::PageUp, false, false),
+            decide_key(&keymap, &named_input(NamedKey::PageUp, false, false), false),
             ShellMessage::TerminalInput(b"\x1b[5~".to_vec())
         );
         assert_eq!(
-            map_named_key(Named::PageDown, false, false),
+            decide_key(
+                &keymap,
+                &named_input(NamedKey::PageDown, false, false),
+                false
+            ),
             ShellMessage::TerminalInput(b"\x1b[6~".to_vec())
         );
     }
 
     #[test]
     fn clipboard_shortcuts_map_copy_and_paste() {
+        let keymap = Keymap::defaults();
+        let decide = |ctrl, shift, character| {
+            decide_key(&keymap, &key_input(ctrl, shift, character, None), false)
+        };
+        assert_eq!(decide(true, false, "c"), ShellMessage::CopyOrInterrupt);
         assert_eq!(
-            shortcut_for(true, false, "c"),
-            ShellMessage::CopyOrInterrupt
-        );
-        assert_eq!(
-            shortcut_for(true, true, "c"),
+            decide(true, true, "c"),
             ShellMessage::CopySelectionRequested
         );
-        assert_eq!(shortcut_for(true, false, "v"), ShellMessage::PasteRequested);
-        assert_eq!(shortcut_for(true, true, "v"), ShellMessage::PasteRequested);
+        assert_eq!(decide(true, false, "v"), ShellMessage::PasteRequested);
+        assert_eq!(decide(true, true, "v"), ShellMessage::PasteRequested);
+    }
+
+    #[test]
+    fn pass_through_and_overrides_reach_the_decoder() {
+        let mut settings = pandamux_core::KeyboardSettings::default();
+        settings.pass_through.push("ctrl+v".to_string());
+        settings
+            .overrides
+            .insert("find".to_string(), Some("ctrl+shift+f".to_string()));
+        let (keymap, warnings) = Keymap::with_settings(&settings);
+        assert!(warnings.is_empty());
+        // Passed-through Ctrl+V reaches the terminal as its control code.
+        assert_eq!(
+            decide_key(&keymap, &key_input(true, false, "v", None), false),
+            ShellMessage::TerminalInput(vec![0x16])
+        );
+        // The rebound Find fires on its new chord, not the old one.
+        assert_eq!(
+            decide_key(&keymap, &key_input(true, true, "f", None), false),
+            ShellMessage::FindOpened
+        );
+        assert_eq!(
+            decide_key(&keymap, &key_input(true, false, "f", None), false),
+            ShellMessage::TerminalInput(vec![0x06])
+        );
     }
 
     #[test]
@@ -5329,76 +5671,180 @@ mod tests {
     }
 
     #[test]
-    fn decode_character_routes_typing_and_control_codes() {
+    fn decide_key_routes_typing_and_control_codes() {
+        let keymap = Keymap::defaults();
+        let decide = |ctrl, shift, character, text: Option<&str>| {
+            decide_key(&keymap, &key_input(ctrl, shift, character, text), false)
+        };
         // Plain characters become terminal bytes, preferring the OS-composed text
         // (so shift + layout land the right glyph).
         assert_eq!(
-            decode_character("a", Some("a"), false, false),
+            decide(false, false, "a", Some("a")),
             ShellMessage::TerminalInput(b"a".to_vec())
         );
         assert_eq!(
-            decode_character("a", Some("A"), false, true),
+            decide(false, true, "a", Some("A")),
             ShellMessage::TerminalInput(b"A".to_vec())
         );
         assert_eq!(
-            decode_character("1", Some("!"), false, true),
+            decide(false, true, "1", Some("!")),
             ShellMessage::TerminalInput(b"!".to_vec())
         );
         // No composed text: fall back to the base character.
         assert_eq!(
-            decode_character("z", None, false, false),
+            decide(false, false, "z", None),
             ShellMessage::TerminalInput(b"z".to_vec())
         );
         // Ctrl+C maps to the conditional copy shortcut; its handler falls back
         // to sending SIGINT (0x03) when no selection exists (spec 1.3).
         assert_eq!(
-            decode_character("c", None, true, false),
+            decide(true, false, "c", None),
             ShellMessage::CopyOrInterrupt
         );
         // Unmapped Ctrl+letters still reach the terminal as control codes.
         assert_eq!(
-            decode_character("l", None, true, false),
+            decide(true, false, "l", None),
             ShellMessage::TerminalInput(vec![0x0c])
         );
         // Ctrl+D IS a chrome shortcut (split), so it wins over the control code.
         assert_eq!(
-            decode_character("d", None, true, false),
+            decide(true, false, "d", None),
             ShellMessage::SplitFocused(SplitDirection::Horizontal)
         );
     }
 
     #[test]
     fn named_keys_map_to_terminal_sequences() {
-        use keyboard::key::Named;
+        let keymap = Keymap::defaults();
+        let decide =
+            |named, ctrl, shift| decide_key(&keymap, &named_input(named, ctrl, shift), false);
         assert_eq!(
-            map_named_key(Named::Backspace, false, false),
+            decide(NamedKey::Backspace, false, false),
             ShellMessage::TerminalInput(vec![0x7f])
         );
         assert_eq!(
-            map_named_key(Named::Tab, false, false),
+            decide(NamedKey::Tab, false, false),
             ShellMessage::TerminalInput(vec![b'\t'])
         );
         assert_eq!(
-            map_named_key(Named::Tab, false, true),
+            decide(NamedKey::Tab, false, true),
             ShellMessage::TerminalInput(b"\x1b[Z".to_vec())
         );
         assert_eq!(
-            map_named_key(Named::ArrowLeft, false, false),
+            decide(NamedKey::ArrowLeft, false, false),
             ShellMessage::TerminalInput(b"\x1b[D".to_vec())
         );
         // Context keys keep their chrome message; handlers add the terminal path.
         assert_eq!(
-            map_named_key(Named::Enter, false, false),
+            decide(NamedKey::Enter, false, false),
             ShellMessage::PaletteActivate
         );
         assert_eq!(
-            map_named_key(Named::Enter, true, false),
+            decide(NamedKey::Enter, true, false),
             ShellMessage::ZoomFocusedPane
         );
         assert_eq!(
-            map_named_key(Named::Escape, false, false),
+            decide(NamedKey::Escape, false, false),
             ShellMessage::OverlayDismissed
         );
+    }
+
+    #[test]
+    fn focus_project_selects_then_cycles_tabs() {
+        let mut runtime = NativeShellRuntime::default();
+        // A second project, and a second tab on the first one.
+        runtime
+            .app_state
+            .apply(AppIntent::Workspace(WorkspaceIntent::Create {
+                title: Some("Second".to_string()),
+                shell: Some("pwsh".to_string()),
+            }))
+            .expect("create second workspace");
+        let first_id = runtime.app_state.workspaces[0].id.clone();
+        let pane_id = get_all_pane_ids(&runtime.app_state.workspaces[0].split_tree)[0].clone();
+        runtime
+            .app_state
+            .apply(AppIntent::Surface(SurfaceIntent::Create {
+                workspace_id: Some(first_id.clone()),
+                pane_id: Some(pane_id),
+                surface_type: SurfaceType::Terminal,
+            }))
+            .expect("second tab");
+
+        // Ctrl+1 focuses the first project.
+        runtime.update_shell(ShellMessage::FocusProject(1));
+        assert_eq!(
+            runtime.app_state.active_workspace_id,
+            Some(first_id.clone())
+        );
+        let before = runtime.active_surface_id().expect("active tab");
+        // A repeated press cycles its tabs (wraparound comes free).
+        runtime.update_shell(ShellMessage::FocusProject(1));
+        let after = runtime.active_surface_id().expect("active tab");
+        assert_ne!(before, after);
+        runtime.update_shell(ShellMessage::FocusProject(1));
+        assert_eq!(runtime.active_surface_id(), Some(before.clone()));
+
+        // Ctrl+Tab cycles too; Ctrl+Shift+Tab goes back.
+        runtime.update_shell(ShellMessage::CycleTab(1));
+        assert_eq!(runtime.active_surface_id(), Some(after));
+        runtime.update_shell(ShellMessage::CycleTab(-1));
+        assert_eq!(runtime.active_surface_id(), Some(before));
+
+        // Ctrl+2 switches projects; a missing project is a no-op.
+        runtime.update_shell(ShellMessage::FocusProject(2));
+        assert_ne!(runtime.app_state.active_workspace_id, Some(first_id));
+        runtime.update_shell(ShellMessage::FocusProject(7));
+        assert_eq!(runtime.last_error(), None);
+    }
+
+    #[test]
+    fn confirmed_close_tab_closes_the_parked_surface() {
+        let mut runtime = NativeShellRuntime::default();
+        let surface_id = runtime.active_surface_id().expect("default tab");
+        // The gate parked a running tab behind the confirm modal (spec 2.6);
+        // accepting runs the close.
+        runtime.pending_confirm = Some(PendingConfirm::CloseTab {
+            workspace_id: None,
+            surface_id,
+        });
+        runtime.chrome.active_overlay = Overlay::Confirm;
+        runtime.update_shell(ShellMessage::ConfirmAccepted);
+        assert_eq!(runtime.chrome.active_overlay, Overlay::None);
+        // The only tab of the only workspace: closing lands on the empty state.
+        assert!(runtime.app_state.workspaces.is_empty());
+    }
+
+    #[test]
+    fn dead_tabs_close_without_a_confirm_prompt() {
+        let mut runtime = NativeShellRuntime::default();
+        let surface_id = runtime.active_surface_id().expect("default tab");
+        // No live PTY behind the surface: the X closes immediately.
+        runtime.update_shell(ShellMessage::SurfaceClosed(surface_id));
+        assert_eq!(runtime.chrome.active_overlay, Overlay::None);
+        assert!(runtime.app_state.workspaces.is_empty());
+    }
+
+    #[test]
+    fn cheat_sheet_toggles_and_renders_from_the_keymap() {
+        let mut runtime = NativeShellRuntime::default();
+        runtime.update_shell(ShellMessage::CheatSheetToggled);
+        assert_eq!(runtime.chrome.active_overlay, Overlay::CheatSheet);
+        {
+            let model = runtime.view_model();
+            assert!(!model.cheat_sheet.is_empty());
+            // The settings Keyboard tab reads the same source (spec 2.6).
+            assert!(
+                model
+                    .settings
+                    .shortcuts
+                    .iter()
+                    .any(|(label, chords)| label == "Command palette" && chords.contains("Ctrl+K"))
+            );
+            let _view = app_view(model);
+        }
+        runtime.update_shell(ShellMessage::CheatSheetToggled);
+        assert_eq!(runtime.chrome.active_overlay, Overlay::None);
     }
 
     #[test]

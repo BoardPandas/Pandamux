@@ -3,6 +3,7 @@ pub mod config;
 pub mod home;
 pub mod i18n;
 pub mod ids;
+pub mod keymap;
 pub mod notification;
 pub mod project;
 pub mod project_registry;
@@ -21,6 +22,9 @@ pub use config::{
 pub use home::{HomeLayout, HomePane};
 pub use i18n::{Locale, Localizer};
 pub use ids::{PaneId, ProjectId, SshProfileId, SurfaceId, WindowId, WorkspaceId};
+pub use keymap::{
+    Action as KeyAction, KeyChord, KeyInput, KeySpec, Keymap, KeymapSection, Mods, NamedKey,
+};
 pub use notification::{NewNotification, NotificationInfo, NotificationSource, Notifications};
 pub use project::{
     FolderBreadcrumb, FolderEntry, FolderListing, ProjectError, ProjectErrorCategory, ProjectKey,

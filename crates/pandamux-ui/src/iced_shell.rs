@@ -294,6 +294,18 @@ pub enum ShellMessage {
     WelcomeCustomRequested(SurfaceId),
     /// Welcome chooser: dismiss the strip for this surface (session-local).
     WelcomeDismissed(SurfaceId),
+    /// A raw key press for the data-driven keymap (spec 2.6). The runtime's
+    /// pure `decide_key` turns it into an action, terminal bytes, or nothing.
+    KeyPressed(pandamux_core::KeyInput),
+    /// Ctrl+1..9: focus the Nth project; repeated presses cycle its tabs.
+    FocusProject(u8),
+    /// Ctrl+Tab / Ctrl+Shift+Tab: cycle tabs in the active project (+1/-1).
+    CycleTab(i8),
+    /// Ctrl+W: close the focused tab, confirming first if its shell is still
+    /// running (spec 2.6).
+    CloseTabRequested,
+    /// Ctrl+/ or F1: toggle the keyboard-shortcut cheat sheet.
+    CheatSheetToggled,
     /// No-op (e.g. an unmapped key press); ignored by the runtime.
     Noop,
 }
@@ -420,6 +432,8 @@ pub struct ShellViewModel {
     pub confirm: Option<crate::overlays::ConfirmViewState>,
     /// Home dashboard panes (spec 2.5), rendered when `main_view` is Home.
     pub home: HomeViewState,
+    /// Keymap sections for the cheat sheet overlay (spec 2.6).
+    pub cheat_sheet: Vec<pandamux_core::KeymapSection>,
 }
 
 /// One Home pane as the dashboard renders it.
@@ -1241,6 +1255,9 @@ pub fn app_view(model: &ShellViewModel) -> Element<'_, ShellMessage> {
             if let Some(confirm) = &model.confirm {
                 layers = layers.push(overlays::confirm_modal(confirm, palette));
             }
+        }
+        Overlay::CheatSheet => {
+            layers = layers.push(overlays::cheat_sheet_modal(&model.cheat_sheet, palette));
         }
     }
 
@@ -2153,6 +2170,7 @@ mod tests {
             rail_menu: None,
             confirm: None,
             home: HomeViewState::default(),
+            cheat_sheet: Vec::new(),
         }
     }
 

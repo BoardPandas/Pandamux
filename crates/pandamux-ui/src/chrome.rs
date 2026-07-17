@@ -49,6 +49,8 @@ pub enum Overlay {
     /// A destructive-action confirmation (close all, close running tab). The
     /// pending action lives in the runtime; the modal is generic.
     Confirm,
+    /// The keyboard-shortcut cheat sheet (spec 2.6), rendered from the keymap.
+    CheatSheet,
 }
 
 /// What the main area shows: the active workspace's split view, or the Home

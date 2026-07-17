@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.50.0]
+## [0.51.0]
+
+### Added
+
+- **Project and tab shortcuts** (spec 2.6): Ctrl+1..9 focuses the Nth project in sidebar order and, pressed again, cycles through that project's tabs; Ctrl+Tab / Ctrl+Shift+Tab cycle tabs in the active project; Ctrl+0 or Ctrl+Home jumps to the Home dashboard. Ctrl+1..9 matches the physical digit-row keys, so it works on AZERTY and other shifted-digit layouts.
+- **A keyboard-shortcut cheat sheet**: Ctrl+/ or F1 (also in the command palette) opens a categorized overview of every binding. It renders from the live shortcut table, so rebound keys always show their real chord, everywhere hints appear (palette, settings, cheat sheet).
+- **Custom keybindings**: `keyboard.overrides` in `config/settings.json` rebinds any action by id ("find": "ctrl+shift+f") or unbinds it (null); `keyboard.passThrough` lists chords that always reach the terminal even when bound (e.g. "ctrl+v" for literal 0x16). Bad entries warn and keep the defaults.
+
+### Changed
+
+- **Ctrl+W now closes the focused tab with a confirmation when its shell is still running** (default on, `terminal.confirmCloseOnRunning` turns it off). The tab X and the sidebar X go through the same check; already-exited tabs close immediately.
+- Shortcuts pressed while a modal is open no longer act behind it (previously Ctrl+W typed into the command palette closed a pane).
+- The Settings Keyboard tab now lists the real, live bindings instead of a hand-maintained copy that had drifted.
 
 ### Added
 
