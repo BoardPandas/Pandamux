@@ -152,11 +152,17 @@ pub struct NativeShellRuntime {
     pipe_registry: PipeRegistry,
     /// Correlation-id source for embedded pipe requests.
     pipe_seq: Arc<AtomicU64>,
-    /// The last release version we raised an update toast for (dedupes the
-    /// periodic check so the same version is not toasted repeatedly).
+    /// The last release version we surfaced (dedupes the periodic check so the
+    /// same version does not re-open a banner the user already dismissed).
     last_update_offer: Option<String>,
     /// Whether the launch-time update check has been kicked yet.
     update_checked_once: bool,
+    /// Canonical in-app update state, projected into the banner + Settings panel.
+    update_state: pandamux_ui::UpdateState,
+    /// Installer download URL for the pending available release, if it ships one.
+    update_installer_url: Option<String>,
+    /// Whether the user dismissed the banner for the current available version.
+    update_banner_dismissed: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -337,6 +343,9 @@ impl NativeShellRuntime {
             pipe_seq: Arc::new(AtomicU64::new(1)),
             last_update_offer: None,
             update_checked_once: false,
+            update_state: pandamux_ui::UpdateState::default(),
+            update_installer_url: None,
+            update_banner_dismissed: false,
         };
         runtime.apply_settings();
         if live_ptys {
@@ -1326,11 +1335,129 @@ impl NativeShellRuntime {
                 }
             }
             ShellMessage::UpdateCheckRequested => self.update_check_task(),
+            ShellMessage::UpdateCheckClicked => self.manual_update_check_task(),
+            ShellMessage::UpdateManualChecked(result) => {
+                self.apply_manual_check(result);
+                self.refresh_terminal_snapshots();
+                Task::none()
+            }
+            ShellMessage::UpdateInstallClicked => self.start_update_install(),
+            ShellMessage::UpdateInstallFinished(result) => match result {
+                Ok(()) => {
+                    // The installer is running; close the app so it can replace
+                    // the files it needs to (the NSIS installer takes over here).
+                    self.update_state = pandamux_ui::UpdateState::Launched;
+                    self.refresh_terminal_snapshots();
+                    self.save_settings_now();
+                    window::latest().and_then(window::close)
+                }
+                Err(reason) => {
+                    self.update_state = pandamux_ui::UpdateState::Failed(reason);
+                    self.refresh_terminal_snapshots();
+                    Task::none()
+                }
+            },
+            ShellMessage::UpdateBannerDismissed => {
+                self.update_banner_dismissed = true;
+                self.refresh_terminal_snapshots();
+                Task::none()
+            }
             other => {
                 self.update_shell(other);
                 Task::none()
             }
         }
+    }
+
+    /// The Settings "Check for updates" task: mark the panel as checking, then run
+    /// an on-demand (quarantine-free) check whose outcome flows back as
+    /// `UpdateManualChecked`. No-op off the live GUI build.
+    fn manual_update_check_task(&mut self) -> Task<ShellMessage> {
+        if !self.live_ptys {
+            return Task::none();
+        }
+        self.update_state = pandamux_ui::UpdateState::Checking;
+        self.refresh_terminal_snapshots();
+        let current = env!("CARGO_PKG_VERSION").to_string();
+        Task::perform(crate::updater::check_latest(current), |outcome| {
+            let result = match outcome {
+                crate::updater::ManualOutcome::UpToDate => pandamux_ui::UpdateCheckResult::UpToDate,
+                crate::updater::ManualOutcome::Newer(release) => {
+                    pandamux_ui::UpdateCheckResult::Available {
+                        version: release.version,
+                        tag: release.tag,
+                        url: release.installer_url,
+                        notes: release.notes,
+                    }
+                }
+                crate::updater::ManualOutcome::Failed(reason) => {
+                    pandamux_ui::UpdateCheckResult::Failed(reason)
+                }
+            };
+            ShellMessage::UpdateManualChecked(result)
+        })
+    }
+
+    /// Kick off the download-and-launch of the pending installer. No-op when no
+    /// installer URL is known (a release without a runnable asset).
+    fn start_update_install(&mut self) -> Task<ShellMessage> {
+        let Some(url) = self.update_installer_url.clone() else {
+            return Task::none();
+        };
+        self.update_state = pandamux_ui::UpdateState::Downloading;
+        self.refresh_terminal_snapshots();
+        Task::perform(
+            crate::updater::download_and_launch_installer(url),
+            ShellMessage::UpdateInstallFinished,
+        )
+    }
+
+    /// Record a newly-found available release: raise the banner (un-dismissing it
+    /// when the version changed) and remember the installer for the Install
+    /// button. Shared by the periodic check and the Settings check.
+    fn offer_update(&mut self, version: String, url: Option<String>) {
+        if self.last_update_offer.as_deref() != Some(version.as_str()) {
+            self.last_update_offer = Some(version.clone());
+            self.update_banner_dismissed = false;
+        }
+        self.update_installer_url = url.clone();
+        self.update_state = pandamux_ui::UpdateState::Available {
+            installable: url.is_some(),
+            version,
+        };
+    }
+
+    /// Apply the outcome of the Settings "Check for updates" action to the panel.
+    fn apply_manual_check(&mut self, result: pandamux_ui::UpdateCheckResult) {
+        match result {
+            pandamux_ui::UpdateCheckResult::UpToDate => {
+                self.update_state = pandamux_ui::UpdateState::UpToDate;
+            }
+            pandamux_ui::UpdateCheckResult::Available {
+                version,
+                tag,
+                url,
+                notes,
+            } => {
+                let _ = (tag, notes);
+                self.offer_update(version, url);
+            }
+            pandamux_ui::UpdateCheckResult::Failed(reason) => {
+                self.update_state = pandamux_ui::UpdateState::Failed(reason);
+            }
+        }
+    }
+
+    /// Whether the update banner should show: an available/installing update the
+    /// user has not dismissed for the current version.
+    fn update_banner_visible(&self) -> bool {
+        !self.update_banner_dismissed
+            && matches!(
+                self.update_state,
+                pandamux_ui::UpdateState::Available { .. }
+                    | pandamux_ui::UpdateState::Downloading
+                    | pandamux_ui::UpdateState::Launched
+            )
     }
 
     /// Build the async task that checks GitHub for a newer release and maps the
@@ -2254,25 +2381,11 @@ impl NativeShellRuntime {
                 url,
                 notes,
             } => {
-                // Toast once per version; the periodic check re-emits otherwise.
-                if self.last_update_offer.as_deref() != Some(version.as_str()) {
-                    self.last_update_offer = Some(version.clone());
-                    let first_line = notes.lines().find(|line| !line.trim().is_empty());
-                    let body = match first_line {
-                        Some(line) => format!("{} - {}", version, line.trim()),
-                        None => format!("Version {version} is available."),
-                    };
-                    self.raise_notification(NewNotification {
-                        workspace_id: None,
-                        surface_id: None,
-                        title: "Update available".to_string(),
-                        body,
-                        source: NotificationSource::Deploy,
-                    });
-                    // tag + url are consumed by the download-and-run step, which is
-                    // wired when packaging lands; the checker already found them.
-                    let _ = (tag, url);
-                }
+                // The launch/periodic check found a newer release: raise the
+                // banner and record the installer for the Install button. `tag`
+                // and `notes` are not needed once we have the direct asset URL.
+                let _ = (tag, notes);
+                self.offer_update(version, url);
             }
             ShellMessage::OverlayRequested(item) => {
                 self.chrome.active_rail = item;
@@ -2719,6 +2832,8 @@ impl NativeShellRuntime {
                 .collect(),
             terminal: self.settings.terminal.clone(),
             scrollback_input: self.scrollback_input.clone(),
+            current_version: env!("CARGO_PKG_VERSION").to_string(),
+            update: self.update_state.clone(),
         };
         self.view_model = ShellViewModel {
             projection: self
@@ -2757,6 +2872,8 @@ impl NativeShellRuntime {
             confirm: self.confirm_view(),
             home: self.home_view_state(),
             cheat_sheet: keymap_sections,
+            update: self.update_state.clone(),
+            update_banner: self.update_banner_visible(),
         };
     }
 
@@ -4304,6 +4421,8 @@ fn initial_view_model(app_state: &AppState, chrome: &ChromeState) -> ShellViewMo
         confirm: None,
         home: pandamux_ui::HomeViewState::default(),
         cheat_sheet: Vec::new(),
+        update: pandamux_ui::UpdateState::default(),
+        update_banner: false,
     }
 }
 
@@ -4748,7 +4867,7 @@ mod tests {
     }
 
     #[test]
-    fn update_available_toast_dedupes_per_version() {
+    fn update_available_raises_banner_and_survives_dismiss_until_new_version() {
         let mut runtime = NativeShellRuntime::default();
         let offer = |version: &str| ShellMessage::UpdateAvailable {
             version: version.to_string(),
@@ -4757,23 +4876,61 @@ mod tests {
             notes: "Highlights of the release".to_string(),
         };
 
+        // A found release raises the banner and records an installable update.
         runtime.update_shell(offer("0.34.0"));
         runtime.update_shell(ShellMessage::Tick);
-        assert_eq!(runtime.view_model().notifications.cards.len(), 1);
+        assert!(runtime.view_model().update_banner);
         assert_eq!(
-            runtime.view_model().notifications.cards[0].title,
-            "Update available"
+            runtime.view_model().update,
+            pandamux_ui::UpdateState::Available {
+                version: "0.34.0".to_string(),
+                installable: true,
+            }
         );
 
-        // The same version re-offered by the periodic check does not re-toast.
+        // Dismissing hides the banner; re-offering the SAME version keeps it hidden.
+        runtime.update(ShellMessage::UpdateBannerDismissed);
+        assert!(!runtime.view_model().update_banner);
         runtime.update_shell(offer("0.34.0"));
         runtime.update_shell(ShellMessage::Tick);
-        assert_eq!(runtime.view_model().notifications.cards.len(), 1);
+        assert!(!runtime.view_model().update_banner);
 
-        // A newer version does toast again.
+        // A newer version un-dismisses the banner.
         runtime.update_shell(offer("0.35.0"));
         runtime.update_shell(ShellMessage::Tick);
-        assert_eq!(runtime.view_model().notifications.cards.len(), 2);
+        assert!(runtime.view_model().update_banner);
+        assert_eq!(runtime.last_error(), None);
+    }
+
+    #[test]
+    fn manual_check_result_populates_settings_panel() {
+        let mut runtime = NativeShellRuntime::default();
+
+        // An up-to-date result shows the settled state, no banner.
+        runtime.update(ShellMessage::UpdateManualChecked(
+            pandamux_ui::UpdateCheckResult::UpToDate,
+        ));
+        assert_eq!(
+            runtime.view_model().settings.update,
+            pandamux_ui::UpdateState::UpToDate
+        );
+        assert!(!runtime.view_model().update_banner);
+
+        // A newer result raises the banner and records the installer URL so
+        // Install has something to download.
+        runtime.update(ShellMessage::UpdateManualChecked(
+            pandamux_ui::UpdateCheckResult::Available {
+                version: "9.9.9".to_string(),
+                tag: "v9.9.9".to_string(),
+                url: Some("https://example/Setup.exe".to_string()),
+                notes: String::new(),
+            },
+        ));
+        assert!(runtime.view_model().update_banner);
+        assert_eq!(
+            runtime.update_installer_url.as_deref(),
+            Some("https://example/Setup.exe")
+        );
         assert_eq!(runtime.last_error(), None);
     }
 

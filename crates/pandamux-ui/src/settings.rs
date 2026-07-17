@@ -64,6 +64,10 @@ pub struct SettingsViewState {
     pub terminal: pandamux_core::TerminalSettings,
     /// In-progress text of the scrollback-lines input.
     pub scrollback_input: String,
+    /// The running app version, shown in the General > Software update row.
+    pub current_version: String,
+    /// In-app update state (drives the "Check for updates" / Install controls).
+    pub update: crate::iced_shell::UpdateState,
 }
 
 impl Default for SettingsViewState {
@@ -77,6 +81,8 @@ impl Default for SettingsViewState {
             shortcuts: Vec::new(),
             scrollback_input: terminal.scrollback_lines.to_string(),
             terminal,
+            current_version: env!("CARGO_PKG_VERSION").to_string(),
+            update: crate::iced_shell::UpdateState::default(),
         }
     }
 }
@@ -232,10 +238,138 @@ fn general_section<'a>(
         palette,
     );
 
-    column![theme_row, accent_row, status_row]
-        .spacing(4)
-        .width(Length::Fill)
-        .into()
+    column![
+        theme_row,
+        accent_row,
+        status_row,
+        update_section(state, palette)
+    ]
+    .spacing(4)
+    .width(Length::Fill)
+    .into()
+}
+
+/// The General > "Software update" block: the running version with a "Check for
+/// updates" button, and a status line that becomes an Install action once a newer
+/// release is found.
+fn update_section<'a>(state: &'a SettingsViewState, palette: Palette) -> Element<'a, ShellMessage> {
+    use crate::iced_shell::UpdateState;
+
+    // The action on the right of the version row: a spinner-free "Checking..."
+    // label while a check runs, otherwise the "Check for updates" button.
+    let action: Element<'a, ShellMessage> = match &state.update {
+        UpdateState::Checking => text("Checking\u{2026}")
+            .size(theme::SIZE_SECONDARY)
+            .color(palette.t3)
+            .into(),
+        _ => toggle_button(
+            "Check for updates",
+            palette,
+            ShellMessage::UpdateCheckClicked,
+        ),
+    };
+    let version_row = control_row(
+        "Version",
+        row![
+            text(state.current_version.clone())
+                .size(theme::SIZE_SECONDARY)
+                .color(palette.t3),
+            action,
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center)
+        .into(),
+        palette,
+    );
+
+    // A second row surfaces the outcome: up-to-date / error text, or an Install
+    // button when a runnable installer was found.
+    let outcome: Option<Element<'a, ShellMessage>> = match &state.update {
+        UpdateState::UpToDate => Some(
+            text("You're on the latest version.")
+                .size(theme::SIZE_SECONDARY)
+                .color(palette.t3)
+                .into(),
+        ),
+        UpdateState::Available {
+            version,
+            installable,
+        } => {
+            let label = format!("Version {version} is available.");
+            let text_el = text(label).size(theme::SIZE_SECONDARY).color(palette.t2);
+            if *installable {
+                Some(control_row(
+                    "",
+                    row![
+                        text_el,
+                        Space::new().width(Length::Fill),
+                        install_button("Install", palette),
+                    ]
+                    .spacing(10)
+                    .align_y(Alignment::Center)
+                    .into(),
+                    palette,
+                ))
+            } else {
+                Some(
+                    text(format!(
+                        "Version {version} is available. Download it from the releases page."
+                    ))
+                    .size(theme::SIZE_SECONDARY)
+                    .color(palette.t2)
+                    .into(),
+                )
+            }
+        }
+        UpdateState::Downloading => Some(
+            text("Downloading the update\u{2026}")
+                .size(theme::SIZE_SECONDARY)
+                .color(palette.t3)
+                .into(),
+        ),
+        UpdateState::Launched => Some(
+            text("Installer started. PandaMUX will close to finish.")
+                .size(theme::SIZE_SECONDARY)
+                .color(palette.t3)
+                .into(),
+        ),
+        UpdateState::Failed(reason) => Some(
+            text(format!("Update check failed: {reason}"))
+                .size(theme::SIZE_SECONDARY)
+                .color(palette.t2)
+                .into(),
+        ),
+        UpdateState::Idle | UpdateState::Checking => None,
+    };
+
+    let mut section = column![version_row].spacing(4).width(Length::Fill);
+    if let Some(outcome) = outcome {
+        section = section.push(container(outcome).padding(Padding::from([2.0, 0.0])));
+    }
+    section.into()
+}
+
+/// A filled accent Install button (used in the Settings update block).
+fn install_button<'a>(label: &'a str, palette: Palette) -> Element<'a, ShellMessage> {
+    button(
+        text(label.to_string())
+            .size(theme::SIZE_SECONDARY)
+            .color(palette.bgc),
+    )
+    .padding(Padding::from([4.0, 14.0]))
+    .on_press(ShellMessage::UpdateInstallClicked)
+    .style(move |_theme, status| {
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        button::Style {
+            background: Some(
+                theme::with_alpha(palette.accent, if hovered { 1.0 } else { 0.92 }).into(),
+            ),
+            text_color: palette.bgc,
+            border: theme::border(Color::TRANSPARENT, 0.0, theme::RADIUS_CHIP),
+            ..Default::default()
+        }
+    })
+    .into()
 }
 
 fn terminal_section<'a>(

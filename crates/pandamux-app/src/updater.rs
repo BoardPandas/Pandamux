@@ -1,14 +1,16 @@
 //! In-app update check (plan Phase 7). On launch and on an interval the GUI asks
 //! GitHub for the latest release, semver-compares it to the running version, and
-//! (past a quarantine window) raises a toast offering to update. Because the app
-//! discovers updates itself, the GitHub Release only needs the single signed
-//! `Setup.exe` asset (no Velopack feed / `.nupkg`).
+//! (past a quarantine window) raises the update banner. The Settings "Check for
+//! updates" button runs the same check on demand, ignoring the quarantine. When
+//! the user hits Install we download the signed `Setup.exe` asset and launch it.
+//! Because the app discovers updates itself, the GitHub Release only needs the
+//! single signed `Setup.exe` asset (no Velopack feed / `.nupkg`).
 //!
 //! This module keeps the decision logic (API parse, version compare, quarantine
-//! gate) pure and hermetically unit-tested; the network fetch and the eventual
-//! download-and-run-installer step are the only side effects, and the fetch is
-//! gated behind the `iced-runtime` feature so the headless build and the unit
-//! tests never touch the network.
+//! gate) pure and hermetically unit-tested; the network fetch, the installer
+//! download, and launching it are the only side effects, all gated behind the
+//! `iced-runtime` feature so the headless build and the unit tests never touch
+//! the network.
 
 use serde::Deserialize;
 
@@ -170,6 +172,76 @@ pub async fn check_for_update(
     let json = fetch_latest_release_json().await.ok()?;
     let release = parse_latest_release(&json)?;
     should_offer(&current_version, &release, now_unix, quarantine_secs).then_some(release)
+}
+
+/// Outcome of an on-demand ("Check for updates") check. Unlike the periodic
+/// check ([`check_for_update`]) this ignores the quarantine window: a user who
+/// explicitly asks should see any newer release right away.
+#[cfg(feature = "iced-runtime")]
+pub enum ManualOutcome {
+    /// The running version is current (or the only release is a draft/prerelease).
+    UpToDate,
+    /// A strictly newer release was found.
+    Newer(ReleaseInfo),
+    /// The check could not complete (offline, rate limited, transport error).
+    Failed(String),
+}
+
+/// Fetch the latest release and compare it to `current_version`, ignoring the
+/// quarantine window. Network side effect; GUI build only. A transport failure
+/// is surfaced as [`ManualOutcome::Failed`]; a payload we cannot read as a
+/// release (no releases yet, a draft, or a rate-limit body) is treated as
+/// "up to date" rather than a scary error.
+#[cfg(feature = "iced-runtime")]
+pub async fn check_latest(current_version: String) -> ManualOutcome {
+    let json = match fetch_latest_release_json().await {
+        Ok(json) => json,
+        Err(error) => return ManualOutcome::Failed(error),
+    };
+    match parse_latest_release(&json) {
+        Some(release) if is_newer(&current_version, &release.version) => {
+            ManualOutcome::Newer(release)
+        }
+        _ => ManualOutcome::UpToDate,
+    }
+}
+
+/// Download the installer at `url` to a temp file and launch it. Returns once the
+/// installer process has started; the caller then closes the app so the NSIS
+/// installer can replace the running files. GUI build only.
+#[cfg(feature = "iced-runtime")]
+pub async fn download_and_launch_installer(url: String) -> Result<(), String> {
+    let user_agent = concat!("pandamux/", env!("CARGO_PKG_VERSION"));
+    let client = reqwest::Client::builder()
+        .user_agent(user_agent)
+        .build()
+        .map_err(|error| error.to_string())?;
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "download failed: HTTP {}",
+            response.status().as_u16()
+        ));
+    }
+    let bytes = response.bytes().await.map_err(|error| error.to_string())?;
+
+    // Land the installer in the OS temp dir under a stable name.
+    let mut path = std::env::temp_dir();
+    path.push("PandaMUX-Setup.exe");
+    tokio::fs::write(&path, &bytes)
+        .await
+        .map_err(|error| format!("write installer: {error}"))?;
+
+    // Spawn it detached; on Windows this is the signed NSIS Setup.exe, a GUI
+    // process, so no console window appears. Dropping the handle does not kill it.
+    std::process::Command::new(&path)
+        .spawn()
+        .map(|_child| ())
+        .map_err(|error| format!("launch installer: {error}"))
 }
 
 #[cfg(feature = "iced-runtime")]

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Check for updates from Settings, and a one-click install.** Settings > General now has a Software update row showing the running version with a **Check for updates** button; when a newer release is found it offers an **Install** button that downloads the signed installer and runs it. The manual check reports "you're on the latest version" or a failure reason, and ignores the usual quarantine delay so an explicit check surfaces a new release right away.
+- **An update banner on launch.** When the automatic check (on launch and every few hours) finds a newer release, PandaMUX shows a banner across the top with **Install** and **Dismiss**. Installing downloads and launches the installer, then closes PandaMUX so the update can finish (your sessions are restored on next launch). Dismissing hides the banner until a newer version appears. This replaces the previous update toast.
+
 ### Fixed
 
 - Restored the launcher double-submit regression test to the current two-step launch flow (spec 2.7): it now drives a folder submit followed by two session-type choices and confirms only one project is created.

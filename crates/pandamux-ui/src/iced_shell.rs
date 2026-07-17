@@ -189,15 +189,29 @@ pub enum ShellMessage {
     // In-app update check (Phase 7)
     /// Timer tick / launch asking the runtime to check GitHub for a newer release.
     UpdateCheckRequested,
-    /// A newer release was found (past the quarantine window); the runtime raises
-    /// an update toast. The download-and-run-installer step is wired with
-    /// packaging.
+    /// A newer release was found (past the quarantine window); the runtime shows
+    /// the update banner and records the installer so the Install button can run
+    /// it.
     UpdateAvailable {
         version: String,
         tag: String,
         url: Option<String>,
         notes: String,
     },
+    /// The Settings "Check for updates" button: run an on-demand check that
+    /// surfaces its result (up to date / newer / error) in the Settings panel,
+    /// bypassing the quarantine window a manual check should ignore.
+    UpdateCheckClicked,
+    /// Result of the on-demand Settings check.
+    UpdateManualChecked(UpdateCheckResult),
+    /// The Install button (banner or Settings): download the installer and launch
+    /// it. No-op when no installer URL is known for the pending release.
+    UpdateInstallClicked,
+    /// The installer download-and-launch finished (`Ok` = launched; `Err` carries
+    /// a user-facing reason).
+    UpdateInstallFinished(Result<(), String>),
+    /// The update banner's dismiss button: hide it for the current version.
+    UpdateBannerDismissed,
     ToggleStatusBar,
     ToggleTheme,
     CycleAccent,
@@ -434,6 +448,52 @@ pub struct ShellViewModel {
     pub home: HomeViewState,
     /// Keymap sections for the cheat sheet overlay (spec 2.6).
     pub cheat_sheet: Vec<pandamux_core::KeymapSection>,
+    /// In-app update state, driving the update banner (and the Settings panel).
+    pub update: UpdateState,
+    /// Whether the update banner is currently shown (an available update the user
+    /// has not dismissed for this version).
+    pub update_banner: bool,
+}
+
+/// In-app software-update state. The canonical copy lives in the runtime; this
+/// projection drives the launch/periodic update banner and the Settings > General
+/// "Software update" panel. Progress states (`Downloading`/`Launched`) are shown
+/// on whichever surface the Install was triggered from.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub enum UpdateState {
+    /// No update known; no check in flight. The banner is hidden.
+    #[default]
+    Idle,
+    /// An on-demand Settings check is running.
+    Checking,
+    /// The last on-demand check found the running version is current.
+    UpToDate,
+    /// A newer release is available.
+    Available {
+        version: String,
+        /// True when the release ships an installer this build can download+run.
+        installable: bool,
+    },
+    /// The installer is downloading.
+    Downloading,
+    /// The installer launched; the app is about to close to finish the update.
+    Launched,
+    /// The last check or install failed (offline / rate limited / parse error).
+    Failed(String),
+}
+
+/// Outcome of an on-demand ("Check for updates") check, carried back to the
+/// runtime so it can update state and remember the installer to run.
+#[derive(Clone, Debug, PartialEq)]
+pub enum UpdateCheckResult {
+    UpToDate,
+    Available {
+        version: String,
+        tag: String,
+        url: Option<String>,
+        notes: String,
+    },
+    Failed(String),
 }
 
 /// One Home pane as the dashboard renders it.
@@ -1204,9 +1264,15 @@ pub fn app_view(model: &ShellViewModel) -> Element<'_, ShellMessage> {
         chrome::MainView::Home => home_view(model, palette),
     });
 
-    let mut root = column![chrome::titlebar(&model.chrome, palette), body]
+    let mut root = column![chrome::titlebar(&model.chrome, palette)]
         .width(Length::Fill)
         .height(Length::Fill);
+    if model.update_banner {
+        if let Some(banner) = update_banner(&model.update, palette) {
+            root = root.push(banner);
+        }
+    }
+    root = root.push(body);
 
     if model.chrome.show_status_bar {
         root = root.push(chrome::status_bar(&model.chrome, palette));
@@ -1285,6 +1351,88 @@ pub fn app_view(model: &ShellViewModel) -> Element<'_, ShellMessage> {
 /// The pane workspace only (used by tests and the headless smoke path).
 pub fn shell_view(model: &ShellViewModel) -> Element<'_, ShellMessage> {
     workspace_view(model, model.chrome.palette())
+}
+
+/// The launch/periodic update banner: a full-width accent strip with an Install
+/// (and Dismiss) affordance. Returns `None` for states that carry no banner
+/// (idle / checking / up to date / failed), so the caller shows nothing.
+fn update_banner<'a>(update: &UpdateState, palette: Palette) -> Option<Element<'a, ShellMessage>> {
+    let (message, install_label): (String, Option<&'static str>) = match update {
+        UpdateState::Available {
+            version,
+            installable,
+        } => (
+            format!("PandaMUX {version} is available."),
+            installable.then_some("Install"),
+        ),
+        UpdateState::Downloading => ("Downloading the update\u{2026}".to_string(), None),
+        UpdateState::Launched => (
+            "Update ready. PandaMUX will close to finish installing.".to_string(),
+            None,
+        ),
+        _ => return None,
+    };
+
+    let mut controls = row![].spacing(8).align_y(Alignment::Center);
+    if let Some(label) = install_label {
+        controls = controls.push(
+            button(text(label).size(theme::SIZE_SECONDARY).color(palette.bgc))
+                .padding(Padding::from([5.0, 14.0]))
+                .on_press(ShellMessage::UpdateInstallClicked)
+                .style(move |_theme, status| {
+                    let hovered =
+                        matches!(status, button::Status::Hovered | button::Status::Pressed);
+                    button::Style {
+                        background: Some(
+                            theme::with_alpha(palette.accent, if hovered { 1.0 } else { 0.92 })
+                                .into(),
+                        ),
+                        text_color: palette.bgc,
+                        border: theme::border(Color::TRANSPARENT, 0.0, theme::RADIUS_CHIP),
+                        ..Default::default()
+                    }
+                }),
+        );
+    }
+    controls = controls.push(
+        button(
+            text("Dismiss")
+                .size(theme::SIZE_SECONDARY)
+                .color(palette.t2),
+        )
+        .padding(Padding::from([5.0, 12.0]))
+        .on_press(ShellMessage::UpdateBannerDismissed)
+        .style(move |_theme, status| {
+            let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+            button::Style {
+                background: hovered.then(|| palette.ov(0.08).into()),
+                text_color: palette.t2,
+                border: theme::border(palette.ov(0.14), 1.0, theme::RADIUS_CHIP),
+                ..Default::default()
+            }
+        }),
+    );
+
+    let bar = row![
+        text(message).size(theme::SIZE_BODY).color(palette.t1),
+        Space::new().width(Length::Fill),
+        controls,
+    ]
+    .spacing(12)
+    .align_y(Alignment::Center)
+    .padding(Padding::from([7.0, 14.0]))
+    .width(Length::Fill);
+
+    Some(
+        container(bar)
+            .width(Length::Fill)
+            .style(move |_theme| container::Style {
+                background: Some(palette.accent_alpha(0.12).into()),
+                border: theme::border(palette.accent_alpha(0.28), 1.0, 0.0),
+                ..Default::default()
+            })
+            .into(),
+    )
 }
 
 /// The "All sessions ended" landing screen (spec 1.5): shown when every
@@ -2171,6 +2319,8 @@ mod tests {
             confirm: None,
             home: HomeViewState::default(),
             cheat_sheet: Vec::new(),
+            update: UpdateState::default(),
+            update_banner: false,
         }
     }
 
