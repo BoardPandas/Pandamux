@@ -7,7 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.42.1]
+## [0.43.0]
+
+### Added
+
+- **Settings now persist across restarts** in `config/settings.json`: UI theme, accent, and status-bar visibility survive an app restart (they were previously lost on exit), with saves debounced and the file schema versioned with automatic backup on migration.
+- **The Settings Terminal tab has real controls**: scrollback lines (1,000 to 200,000, applied live to every open session), the new-terminal tool chooser toggle, an opt-in for classic right-click paste (off by default; the context menu stays the default), and confirm-on-close for running tabs.
+- **`config.get` and `config.set` pipe methods** let the CLI and agents read and change any setting by its dotted key (e.g. `terminal.scrollbackLines`), with changes applied live in the running app.
 
 ### Added
 

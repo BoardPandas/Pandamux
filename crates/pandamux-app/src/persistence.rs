@@ -173,6 +173,103 @@ impl SshProfileStore {
     }
 }
 
+#[derive(Debug)]
+pub enum SettingsStoreError {
+    Io(io::Error),
+    Corrupt { path: PathBuf, message: String },
+    UnsupportedVersion(u32),
+}
+
+impl fmt::Display for SettingsStoreError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(error) => write!(formatter, "{error}"),
+            Self::Corrupt { path, message } => {
+                write!(
+                    formatter,
+                    "settings file {} is corrupt: {message}",
+                    path.display()
+                )
+            }
+            Self::UnsupportedVersion(version) => {
+                write!(formatter, "unsupported settings schema version {version}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SettingsStoreError {}
+
+impl From<io::Error> for SettingsStoreError {
+    fn from(value: io::Error) -> Self {
+        Self::Io(value)
+    }
+}
+
+/// `config/settings.json`: the persistent [`UserSettings`] behind the Settings
+/// UI and the `config.get` / `config.set` pipe methods. Mirrors
+/// [`SshProfileStore`]: versioned schema, migration writes a version-stamped
+/// backup, corrupt files are preserved untouched (the caller refuses saves so
+/// a broken file is never clobbered).
+pub struct SettingsStore {
+    base: PathBuf,
+}
+
+impl SettingsStore {
+    pub fn new(base: impl Into<PathBuf>) -> Self {
+        Self { base: base.into() }
+    }
+
+    pub fn default_dir() -> PathBuf {
+        SessionStore::default_dir().join("config")
+    }
+
+    pub fn path(&self) -> PathBuf {
+        self.base.join("settings.json")
+    }
+
+    pub fn save(&self, settings: &pandamux_core::UserSettings) -> Result<(), SettingsStoreError> {
+        fs::create_dir_all(&self.base)?;
+        let mut settings = settings.clone();
+        settings.version = pandamux_core::SETTINGS_SCHEMA_VERSION;
+        let json = serde_json::to_string_pretty(&settings).map_err(io::Error::other)?;
+        atomic_write(&self.path(), &json)?;
+        Ok(())
+    }
+
+    /// Load and, when needed, migrate with a version-stamped backup written
+    /// before the original file is replaced. Invalid JSON is left untouched.
+    pub fn load(&self) -> Result<pandamux_core::UserSettings, SettingsStoreError> {
+        let path = self.path();
+        let raw = match fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(pandamux_core::UserSettings::default());
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let mut settings: pandamux_core::UserSettings =
+            serde_json::from_str(&raw).map_err(|error| SettingsStoreError::Corrupt {
+                path: path.clone(),
+                message: error.to_string(),
+            })?;
+        if settings.version > pandamux_core::SETTINGS_SCHEMA_VERSION {
+            return Err(SettingsStoreError::UnsupportedVersion(settings.version));
+        }
+        if settings.version < pandamux_core::SETTINGS_SCHEMA_VERSION {
+            let backup = self
+                .base
+                .join(format!("settings.v{}.bak.json", settings.version));
+            fs::create_dir_all(&self.base)?;
+            fs::copy(&path, backup)?;
+            settings.version = pandamux_core::SETTINGS_SCHEMA_VERSION;
+            self.save(&settings)?;
+        }
+        settings.normalize();
+        Ok(settings)
+    }
+}
+
 impl SessionStore {
     pub fn new(base: impl Into<PathBuf>) -> Self {
         Self { base: base.into() }
@@ -340,6 +437,73 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("pandamux-profile-test-{tag}"));
         let _ = fs::remove_dir_all(&dir);
         SshProfileStore::new(dir)
+    }
+
+    fn temp_settings_store(tag: &str) -> SettingsStore {
+        let dir = std::env::temp_dir().join(format!("pandamux-settings-test-{tag}"));
+        let _ = fs::remove_dir_all(&dir);
+        SettingsStore::new(dir)
+    }
+
+    #[test]
+    fn settings_roundtrip_and_missing_file_defaults() {
+        let store = temp_settings_store("roundtrip");
+        assert_eq!(
+            store.load().expect("missing file loads defaults"),
+            pandamux_core::UserSettings::default()
+        );
+        let mut settings = pandamux_core::UserSettings::default();
+        settings.terminal.scrollback_lines = 50_000;
+        settings.ui.theme = "light".to_string();
+        store.save(&settings).expect("save");
+        assert_eq!(store.load().expect("load"), settings);
+    }
+
+    #[test]
+    fn settings_migration_writes_versioned_backup() {
+        let store = temp_settings_store("migrate");
+        fs::create_dir_all(store.path().parent().unwrap()).unwrap();
+        fs::write(
+            store.path(),
+            r#"{"version":0,"terminal":{"scrollbackLines":20000}}"#,
+        )
+        .unwrap();
+        let settings = store.load().expect("migrated load");
+        assert_eq!(settings.version, pandamux_core::SETTINGS_SCHEMA_VERSION);
+        assert_eq!(settings.terminal.scrollback_lines, 20_000);
+        assert!(
+            store
+                .path()
+                .parent()
+                .unwrap()
+                .join("settings.v0.bak.json")
+                .exists(),
+            "migration must back up the original file"
+        );
+    }
+
+    #[test]
+    fn corrupt_settings_are_preserved_and_error() {
+        let store = temp_settings_store("corrupt");
+        fs::create_dir_all(store.path().parent().unwrap()).unwrap();
+        fs::write(store.path(), "not json {").unwrap();
+        assert!(matches!(
+            store.load(),
+            Err(SettingsStoreError::Corrupt { .. })
+        ));
+        // The broken file was not clobbered.
+        assert_eq!(fs::read_to_string(store.path()).unwrap(), "not json {");
+    }
+
+    #[test]
+    fn newer_settings_schema_is_refused() {
+        let store = temp_settings_store("newer");
+        fs::create_dir_all(store.path().parent().unwrap()).unwrap();
+        fs::write(store.path(), r#"{"version":99}"#).unwrap();
+        assert!(matches!(
+            store.load(),
+            Err(SettingsStoreError::UnsupportedVersion(99))
+        ));
     }
 
     fn split_state() -> AppState {

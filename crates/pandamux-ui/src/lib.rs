@@ -53,7 +53,7 @@ pub use session_panel::{
     project_sessions_with_profiles, session_panel,
 };
 #[cfg(feature = "iced-runtime")]
-pub use settings::{SettingsSection, SettingsViewState};
+pub use settings::{SettingsSection, SettingsViewState, TerminalToggle};
 pub use shell_projection::{
     ColumnProjection, PaneProjection, ShellNodeProjection, ShellProjection, SurfaceProjection,
     project_workspace_shell,

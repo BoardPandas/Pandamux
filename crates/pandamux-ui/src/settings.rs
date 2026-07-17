@@ -40,8 +40,17 @@ impl SettingsSection {
     }
 }
 
-/// View state for the settings modal, projected from live chrome state.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Which Terminal-tab toggle was pressed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminalToggle {
+    WelcomePrompt,
+    RightClickPaste,
+    ConfirmClose,
+}
+
+/// View state for the settings modal, projected from live chrome state and
+/// the persistent user settings.
+#[derive(Clone, Debug, PartialEq)]
 pub struct SettingsViewState {
     pub section: SettingsSection,
     pub ui_theme: UiTheme,
@@ -49,16 +58,23 @@ pub struct SettingsViewState {
     pub show_status_bar: bool,
     /// The bound keyboard shortcuts (label, chord), shown on the Keyboard tab.
     pub shortcuts: Vec<(String, String)>,
+    /// Persistent terminal settings (spec 1.2 / 1.3 / 2.6 / 2.7 toggles).
+    pub terminal: pandamux_core::TerminalSettings,
+    /// In-progress text of the scrollback-lines input.
+    pub scrollback_input: String,
 }
 
 impl Default for SettingsViewState {
     fn default() -> Self {
+        let terminal = pandamux_core::TerminalSettings::default();
         Self {
             section: SettingsSection::default(),
             ui_theme: UiTheme::default(),
             accent: Accent::default(),
             show_status_bar: true,
             shortcuts: default_shortcuts(),
+            scrollback_input: terminal.scrollback_lines.to_string(),
+            terminal,
         }
     }
 }
@@ -188,10 +204,7 @@ fn section_content<'a>(
 ) -> Element<'a, ShellMessage> {
     match state.section {
         SettingsSection::General => general_section(state, palette),
-        SettingsSection::Terminal => note_section(
-            "Terminal font, cursor blink, and scrollback settings arrive with the font-bundling pass.",
-            palette,
-        ),
+        SettingsSection::Terminal => terminal_section(state, palette),
         SettingsSection::Keyboard => keyboard_section(state, palette),
         SettingsSection::Notifications => note_section(
             "Notification sound, OS toast, and per-source filters arrive with the toast bridge.",
@@ -239,6 +252,53 @@ fn general_section<'a>(
     );
 
     column![theme_row, accent_row, status_row]
+        .spacing(4)
+        .width(Length::Fill)
+        .into()
+}
+
+fn terminal_section<'a>(
+    state: &'a SettingsViewState,
+    palette: Palette,
+) -> Element<'a, ShellMessage> {
+    let scrollback = control_row(
+        "Scrollback lines",
+        iced::widget::text_input("10000", &state.scrollback_input)
+            .on_input(ShellMessage::ScrollbackLinesChanged)
+            .size(theme::SIZE_SECONDARY)
+            .width(Length::Fixed(90.0))
+            .into(),
+        palette,
+    );
+    let on_off = |value: bool| if value { "On" } else { "Off" };
+    let welcome = control_row(
+        "Tool chooser in new terminals",
+        toggle_button(
+            on_off(state.terminal.welcome_prompt_enabled),
+            palette,
+            ShellMessage::TerminalSettingToggled(TerminalToggle::WelcomePrompt),
+        ),
+        palette,
+    );
+    let right_click = control_row(
+        "Right-click pastes (classic conhost)",
+        toggle_button(
+            on_off(state.terminal.right_click_paste_optin),
+            palette,
+            ShellMessage::TerminalSettingToggled(TerminalToggle::RightClickPaste),
+        ),
+        palette,
+    );
+    let confirm_close = control_row(
+        "Confirm closing a running tab",
+        toggle_button(
+            on_off(state.terminal.confirm_close_on_running),
+            palette,
+            ShellMessage::TerminalSettingToggled(TerminalToggle::ConfirmClose),
+        ),
+        palette,
+    );
+    column![scrollback, welcome, right_click, confirm_close]
         .spacing(4)
         .width(Length::Fill)
         .into()

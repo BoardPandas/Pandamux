@@ -126,6 +126,11 @@ pub enum ShellMessage {
     LauncherBack,
     SettingsSectionSelected(SettingsSection),
     AccentSelected(Accent),
+    /// Terminal-tab settings controls (persisted via the settings store).
+    ScrollbackLinesChanged(String),
+    TerminalSettingToggled(crate::settings::TerminalToggle),
+    /// A debounced async settings save completed (Err surfaces in the status).
+    SettingsSaved(Result<(), String>),
     // Status-bar pollers (git / ports)
     /// Timer tick asking the runtime to kick off a background poll.
     PollRequested,

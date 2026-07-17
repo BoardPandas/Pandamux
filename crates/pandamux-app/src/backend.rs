@@ -55,6 +55,9 @@ pub struct DispatchCtx<'a> {
     pub ssh_profiles: &'a mut SshProfiles,
     /// Persistent clipboard policy (OSC 52 size cap + per-host load opt-in).
     pub clipboard_config: &'a mut ClipboardConfig,
+    /// Persistent user settings (`config.get` / `config.set`). The live
+    /// runtime persists and live-applies changes after dispatch.
+    pub settings: &'a mut pandamux_core::UserSettings,
     pub now_ms: u64,
     pub spawn_ptys: bool,
 }
@@ -77,6 +80,9 @@ pub struct Backend {
     pub remote_configs: HashMap<SurfaceId, SshConfig>,
     pub ssh_profiles: SshProfiles,
     pub clipboard_config: ClipboardConfig,
+    /// In-memory settings for the headless pipe server (the live runtime
+    /// persists its own copy to `config/settings.json`).
+    pub settings: pandamux_core::UserSettings,
     pub spawn_ptys: bool,
 }
 
@@ -97,6 +103,7 @@ impl Backend {
             remote_configs: HashMap::new(),
             ssh_profiles: SshProfiles::new(),
             clipboard_config: ClipboardConfig::default(),
+            settings: pandamux_core::UserSettings::default(),
             spawn_ptys,
         }
     }
@@ -118,6 +125,7 @@ impl Backend {
             remote_configs: &mut self.remote_configs,
             ssh_profiles: &mut self.ssh_profiles,
             clipboard_config: &mut self.clipboard_config,
+            settings: &mut self.settings,
             now_ms: now_ms(),
             spawn_ptys: self.spawn_ptys,
         };
@@ -235,6 +243,7 @@ fn dispatch(request: &RpcRequest, ctx: DispatchCtx<'_>) -> Result<Value, (i32, S
         remote_configs,
         ssh_profiles,
         clipboard_config,
+        settings,
         now_ms,
         spawn_ptys,
     } = ctx;
@@ -244,6 +253,10 @@ fn dispatch(request: &RpcRequest, ctx: DispatchCtx<'_>) -> Result<Value, (i32, S
     }
 
     if let Some(result) = dispatch_sidebar(request, sidebar)? {
+        return Ok(result);
+    }
+
+    if let Some(result) = dispatch_settings(request, settings)? {
         return Ok(result);
     }
 
@@ -416,6 +429,54 @@ fn dispatch_sidebar(
             Ok(Some(json!({ "ok": true })))
         }
         "sidebar.get_state" => Ok(Some(serde_json::to_value(&*sidebar).unwrap_or(json!({})))),
+        _ => Ok(None),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// User settings (config.get / config.set)
+// ---------------------------------------------------------------------------
+
+/// Read/write persistent user settings by dotted camelCase key, matching
+/// `config/settings.json` one to one. The live runtime persists and
+/// live-applies mutations after dispatch; the headless server keeps them in
+/// memory for the process lifetime.
+fn dispatch_settings(
+    request: &RpcRequest,
+    settings: &mut pandamux_core::UserSettings,
+) -> Result<Option<Value>, (i32, String)> {
+    match request.method.as_str() {
+        "config.get" => {
+            let key = request
+                .params
+                .get("key")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let value =
+                pandamux_core::settings_get(settings, key).map_err(|message| (-32602, message))?;
+            if key.is_empty() {
+                Ok(Some(json!({ "settings": value })))
+            } else {
+                Ok(Some(json!({ "key": key, "value": value })))
+            }
+        }
+        "config.set" => {
+            let key = request
+                .params
+                .get("key")
+                .and_then(Value::as_str)
+                .ok_or_else(|| (-32602, "config.set requires a string key".to_string()))?;
+            let value = request
+                .params
+                .get("value")
+                .cloned()
+                .ok_or_else(|| (-32602, "config.set requires a value".to_string()))?;
+            pandamux_core::settings_set(settings, key, value.clone())
+                .map_err(|message| (-32602, message))?;
+            let value =
+                pandamux_core::settings_get(settings, key).map_err(|message| (-32602, message))?;
+            Ok(Some(json!({ "ok": true, "key": key, "value": value })))
+        }
         _ => Ok(None),
     }
 }
@@ -2015,6 +2076,48 @@ mod tests {
     fn handles_v1_ping() {
         let mut backend = Backend::new(false);
         assert_eq!(backend.handle_line("ping"), "pong");
+    }
+
+    #[test]
+    fn config_get_returns_whole_settings_and_dotted_keys() {
+        let mut backend = Backend::new(false);
+        let parsed = handle(
+            &mut backend,
+            r#"{"method":"config.get","params":{},"id":1}"#,
+        );
+        assert_eq!(
+            parsed["result"]["settings"]["terminal"]["scrollbackLines"],
+            10_000
+        );
+        let parsed = handle(
+            &mut backend,
+            r#"{"method":"config.get","params":{"key":"terminal.scrollbackLines"},"id":2}"#,
+        );
+        assert_eq!(parsed["result"]["value"], 10_000);
+    }
+
+    #[test]
+    fn config_set_mutates_and_rejects_bad_keys() {
+        let mut backend = Backend::new(false);
+        let parsed = handle(
+            &mut backend,
+            r#"{"method":"config.set","params":{"key":"terminal.scrollbackLines","value":50000},"id":1}"#,
+        );
+        assert_eq!(parsed["result"]["ok"], true);
+        assert_eq!(parsed["result"]["value"], 50_000);
+        assert_eq!(backend.settings.terminal.scrollback_lines, 50_000);
+
+        let parsed = handle(
+            &mut backend,
+            r#"{"method":"config.set","params":{"key":"terminal.scrollbak","value":1},"id":2}"#,
+        );
+        assert_eq!(parsed["error"]["code"], -32602);
+        let parsed = handle(
+            &mut backend,
+            r#"{"method":"config.set","params":{"key":"terminal.scrollbackLines","value":"many"},"id":3}"#,
+        );
+        assert_eq!(parsed["error"]["code"], -32602);
+        assert_eq!(backend.settings.terminal.scrollback_lines, 50_000);
     }
 
     #[test]

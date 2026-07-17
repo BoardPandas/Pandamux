@@ -6,8 +6,9 @@ use pandamux_core::{
     AgentRegistry, AppIntent, AppState, ClipboardConfig, Localizer, NewNotification,
     NotificationSource, Notifications, PaneId, PaneIntent, ProjectError, ProjectErrorCategory,
     ProjectLocation, SidebarState, SplitDirection, SplitNode, SplitPaneParams, SshProfileId,
-    SshProfiles, SurfaceContents, SurfaceId, SurfaceIntent, SurfaceType, ThemeStore, WorkspaceId,
-    WorkspaceIntent, find_leaf, find_pane_id_for_surface, get_all_pane_ids, parse_ghostty_theme,
+    SshProfiles, SurfaceContents, SurfaceId, SurfaceIntent, SurfaceType, ThemeStore, UserSettings,
+    WorkspaceId, WorkspaceIntent, find_leaf, find_pane_id_for_surface, get_all_pane_ids,
+    parse_ghostty_theme,
 };
 use pandamux_term::{
     DEFAULT_GRID_SIZE, GridSize, PtyCommand, PtySessionManager, RemoteSessionManager, RemoteStatus,
@@ -15,12 +16,12 @@ use pandamux_term::{
     wrap_paste,
 };
 use pandamux_ui::{
-    ChromeState, ContextMenuAction, ContextMenuViewState, DragView, FindViewState, LauncherStep,
-    LinkSpan, NotificationCard, NotificationsViewState, Overlay, PaletteItem, PaletteViewState,
-    QuickLaunchViewState, RailItem, SessionActivity, SessionLauncherViewState, SessionsViewState,
-    SettingsSection, SettingsViewState, ShellKind, ShellMessage, ShellViewModel, SshProfileForm,
-    TermScheme, TerminalSnapshot, UiTheme, app_view, filter_items, project_sessions_with_profiles,
-    project_workspace_shell, shell_view,
+    Accent, ChromeState, ContextMenuAction, ContextMenuViewState, DragView, FindViewState,
+    LauncherStep, LinkSpan, NotificationCard, NotificationsViewState, Overlay, PaletteItem,
+    PaletteViewState, QuickLaunchViewState, RailItem, SessionActivity, SessionLauncherViewState,
+    SessionsViewState, SettingsSection, SettingsViewState, ShellKind, ShellMessage, ShellViewModel,
+    SshProfileForm, TermScheme, TerminalSnapshot, TerminalToggle, UiTheme, app_view, filter_items,
+    project_sessions_with_profiles, project_workspace_shell, shell_view,
 };
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -42,6 +43,8 @@ const AUTOSAVE_TICKS: u64 = 300;
 /// Ticks a viewport-reported size must hold steady before the engine and
 /// PTY/SSH channel are resized (~200ms, absorbing live window drags).
 const RESIZE_SETTLE_TICKS: u64 = 2;
+/// Ticks settings changes must be quiet before the debounced save (~500ms).
+const SETTINGS_SAVE_SETTLE_TICKS: u64 = 5;
 /// Interval between GitHub release update checks (6 hours).
 const UPDATE_CHECK_INTERVAL_SECS: u64 = 6 * 60 * 60;
 
@@ -55,6 +58,17 @@ pub struct NativeShellRuntime {
     profile_store: SshProfileStore,
     profile_config: SshProfileConfig,
     profile_store_available: bool,
+    /// Persistent user settings (config/settings.json).
+    settings: UserSettings,
+    /// Where the settings file lives (async save tasks rebuild the store).
+    settings_dir: std::path::PathBuf,
+    /// False when the settings file is corrupt: saves are refused so a broken
+    /// file is never clobbered (matching the SSH profile store policy).
+    settings_store_available: bool,
+    settings_dirty: bool,
+    settings_dirty_since: u64,
+    /// In-progress text of the scrollback-lines input on the Terminal tab.
+    scrollback_input: String,
     find: FindViewState,
     find_matches: Vec<(usize, usize, usize)>,
     notifications: Notifications,
@@ -142,6 +156,15 @@ impl NativeShellRuntime {
         } else {
             (SshProfileConfig::default(), None, true)
         };
+        let settings_dir = crate::persistence::SettingsStore::default_dir();
+        let (settings, settings_load_error, settings_store_available) = if live_ptys {
+            match crate::persistence::SettingsStore::new(&settings_dir).load() {
+                Ok(settings) => (settings, None, true),
+                Err(error) => (UserSettings::default(), Some(error.to_string()), false),
+            }
+        } else {
+            (UserSettings::default(), None, true)
+        };
         let ssh_profiles = profile_config.registry();
         // Only the real (live) app touches disk. Tests/smoke use default state so
         // they stay hermetic. On a version change the volatile auto-session is
@@ -168,6 +191,12 @@ impl NativeShellRuntime {
             profile_store,
             profile_config,
             profile_store_available,
+            scrollback_input: settings.terminal.scrollback_lines.to_string(),
+            settings,
+            settings_dir,
+            settings_store_available,
+            settings_dirty: false,
+            settings_dirty_since: 0,
             find: FindViewState::default(),
             find_matches: Vec::new(),
             notifications: Notifications::new(),
@@ -198,7 +227,7 @@ impl NativeShellRuntime {
             settings_section: SettingsSection::default(),
             view_model,
             terminals: Vec::new(),
-            last_error: profile_load_error,
+            last_error: profile_load_error.or(settings_load_error),
             pipe_name: std::env::var("PANDAMUX_PIPE")
                 .unwrap_or_else(|_| r"\\.\pipe\pandamux".to_string()),
             pipe_registry: Arc::new(StdMutex::new(HashMap::new())),
@@ -206,6 +235,7 @@ impl NativeShellRuntime {
             last_update_offer: None,
             update_checked_once: false,
         };
+        runtime.apply_settings();
         if live_ptys {
             runtime.load_bundled_themes();
             runtime.raise_notification(NewNotification {
@@ -801,7 +831,14 @@ impl NativeShellRuntime {
             ShellMessage::WindowMaximizeToggled => {
                 window::latest().and_then(window::toggle_maximize)
             }
-            ShellMessage::WindowClosePressed => window::latest().and_then(window::close),
+            ShellMessage::WindowClosePressed => {
+                self.save_settings_now();
+                window::latest().and_then(window::close)
+            }
+            ShellMessage::Tick => {
+                self.update_shell(ShellMessage::Tick);
+                self.settings_flush_task()
+            }
             ShellMessage::PollRequested => {
                 let cwd = self.focused_cwd();
                 let poll = Task::perform(crate::pollers::poll_all(cwd), |result| {
@@ -1282,6 +1319,7 @@ impl NativeShellRuntime {
             }
             ShellMessage::AccentSelected(accent) => {
                 self.chrome.accent = accent;
+                self.sync_ui_settings();
             }
             ShellMessage::PollRequested => {
                 // Kicked off from `update` as a Task; nothing to do here.
@@ -1335,12 +1373,49 @@ impl NativeShellRuntime {
             }
             ShellMessage::ToggleStatusBar => {
                 self.chrome.show_status_bar = !self.chrome.show_status_bar;
+                self.sync_ui_settings();
             }
             ShellMessage::ToggleTheme => {
                 self.chrome.ui_theme = self.chrome.ui_theme.toggled();
+                self.sync_ui_settings();
             }
             ShellMessage::CycleAccent => {
                 self.chrome.accent = self.chrome.accent.next();
+                self.sync_ui_settings();
+            }
+            ShellMessage::ScrollbackLinesChanged(value) => {
+                self.scrollback_input = value.chars().filter(char::is_ascii_digit).collect();
+                if let Ok(lines) = self.scrollback_input.parse::<u32>() {
+                    let clamped = lines.clamp(
+                        pandamux_core::settings::SCROLLBACK_LINES_MIN,
+                        pandamux_core::settings::SCROLLBACK_LINES_MAX,
+                    );
+                    if self.settings.terminal.scrollback_lines != clamped {
+                        self.settings.terminal.scrollback_lines = clamped;
+                        self.apply_scrollback_setting();
+                        self.mark_settings_dirty();
+                    }
+                }
+            }
+            ShellMessage::TerminalSettingToggled(toggle) => {
+                let terminal = &mut self.settings.terminal;
+                match toggle {
+                    TerminalToggle::WelcomePrompt => {
+                        terminal.welcome_prompt_enabled = !terminal.welcome_prompt_enabled;
+                    }
+                    TerminalToggle::RightClickPaste => {
+                        terminal.right_click_paste_optin = !terminal.right_click_paste_optin;
+                    }
+                    TerminalToggle::ConfirmClose => {
+                        terminal.confirm_close_on_running = !terminal.confirm_close_on_running;
+                    }
+                }
+                self.mark_settings_dirty();
+            }
+            ShellMessage::SettingsSaved(result) => {
+                if let Err(error) = result {
+                    self.last_error = Some(format!("save settings: {error}"));
+                }
             }
             ShellMessage::SplitFocused(direction) => {
                 if let Some(pane_id) = self.focused_pane_id() {
@@ -1410,6 +1485,7 @@ impl NativeShellRuntime {
                     remote_configs: &mut self.remote_configs,
                     ssh_profiles: &mut self.ssh_profiles,
                     clipboard_config: &mut self.clipboard_config,
+                    settings: &mut self.settings,
                     now_ms: now_ms(),
                     spawn_ptys: self.live_ptys,
                 };
@@ -1425,6 +1501,11 @@ impl NativeShellRuntime {
                             | "ssh.profile.import_config"
                     ) {
                         self.save_profiles();
+                    }
+                    if request.method == "config.set" {
+                        // Live-apply the mutated settings and schedule a save.
+                        self.apply_settings();
+                        self.mark_settings_dirty();
                     }
                     if matches!(
                         request.method.as_str(),
@@ -1601,6 +1682,8 @@ impl NativeShellRuntime {
             ui_theme: self.chrome.ui_theme,
             accent: self.chrome.accent,
             show_status_bar: self.chrome.show_status_bar,
+            terminal: self.settings.terminal.clone(),
+            scrollback_input: self.scrollback_input.clone(),
             ..SettingsViewState::default()
         };
         self.view_model = ShellViewModel {
@@ -2008,6 +2091,73 @@ impl NativeShellRuntime {
             self.chrome.shell_kind = ShellKind::classify(&workspace.shell);
             self.chrome.active_session_name = workspace.title.clone();
         }
+    }
+
+    /// Push the loaded settings into live state: chrome preferences and the
+    /// engine scrollback limits. Called at startup and after `config.set`.
+    fn apply_settings(&mut self) {
+        self.chrome.ui_theme = theme_from_setting(&self.settings.ui.theme);
+        self.chrome.accent = accent_from_setting(&self.settings.ui.accent);
+        self.chrome.show_status_bar = self.settings.ui.show_status_bar;
+        self.scrollback_input = self.settings.terminal.scrollback_lines.to_string();
+        self.apply_scrollback_setting();
+    }
+
+    fn apply_scrollback_setting(&mut self) {
+        let lines = self.settings.terminal.scrollback_lines as usize;
+        self.ptys.set_scrollback_lines(lines);
+        self.remotes.set_scrollback_lines(lines);
+    }
+
+    /// Mirror the chrome preferences into the settings and schedule a save.
+    fn sync_ui_settings(&mut self) {
+        self.settings.ui.theme = theme_to_setting(self.chrome.ui_theme).to_string();
+        self.settings.ui.accent = accent_to_setting(self.chrome.accent).to_string();
+        self.settings.ui.show_status_bar = self.chrome.show_status_bar;
+        self.mark_settings_dirty();
+    }
+
+    fn mark_settings_dirty(&mut self) {
+        self.settings_dirty = true;
+        self.settings_dirty_since = self.tick;
+    }
+
+    /// Debounced async settings save: runs once changes have been quiet for
+    /// [`SETTINGS_SAVE_SETTLE_TICKS`] (~500ms). File IO happens on a blocking
+    /// worker, never the async executor.
+    fn settings_flush_task(&mut self) -> Task<ShellMessage> {
+        if !self.settings_dirty
+            || !self.live_ptys
+            || !self.settings_store_available
+            || self.tick.wrapping_sub(self.settings_dirty_since) < SETTINGS_SAVE_SETTLE_TICKS
+        {
+            return Task::none();
+        }
+        self.settings_dirty = false;
+        let dir = self.settings_dir.clone();
+        let snapshot = self.settings.clone();
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    crate::persistence::SettingsStore::new(dir)
+                        .save(&snapshot)
+                        .map_err(|error| error.to_string())
+                })
+                .await
+                .unwrap_or_else(|error| Err(error.to_string()))
+            },
+            ShellMessage::SettingsSaved,
+        )
+    }
+
+    /// Synchronous flush used on window close (the async task would race the
+    /// process exit).
+    fn save_settings_now(&mut self) {
+        if !self.settings_dirty || !self.live_ptys || !self.settings_store_available {
+            return;
+        }
+        self.settings_dirty = false;
+        let _ = crate::persistence::SettingsStore::new(&self.settings_dir).save(&self.settings);
     }
 
     /// Apply viewport-driven resizes that have settled for
@@ -2495,6 +2645,40 @@ fn theme_iced_shell(state: &NativeShellRuntime) -> Theme {
     match state.chrome.ui_theme {
         UiTheme::Dark => Theme::Dark,
         UiTheme::Light => Theme::Light,
+    }
+}
+
+// Settings string <-> UI enum mapping. Unknown values fall back to defaults so
+// a hand-edited settings file never breaks startup.
+fn theme_from_setting(value: &str) -> UiTheme {
+    match value {
+        "light" => UiTheme::Light,
+        _ => UiTheme::Dark,
+    }
+}
+
+fn theme_to_setting(theme: UiTheme) -> &'static str {
+    match theme {
+        UiTheme::Dark => "dark",
+        UiTheme::Light => "light",
+    }
+}
+
+fn accent_from_setting(value: &str) -> Accent {
+    match value {
+        "gold" => Accent::Gold,
+        "blue" => Accent::Blue,
+        "mauve" => Accent::Mauve,
+        _ => Accent::Teal,
+    }
+}
+
+fn accent_to_setting(accent: Accent) -> &'static str {
+    match accent {
+        Accent::Teal => "teal",
+        Accent::Gold => "gold",
+        Accent::Blue => "blue",
+        Accent::Mauve => "mauve",
     }
 }
 
@@ -3406,6 +3590,48 @@ mod tests {
         ));
         assert!(runtime.view_model().context_menu.is_none());
         assert_eq!(runtime.view_model().projection.visible_panes.len(), 2);
+    }
+
+    #[test]
+    fn ui_preference_changes_mark_settings_dirty() {
+        let mut runtime = NativeShellRuntime::default();
+        assert!(!runtime.settings_dirty);
+        runtime.update_shell(ShellMessage::ToggleTheme);
+        assert!(runtime.settings_dirty);
+        assert_eq!(runtime.settings.ui.theme, "light");
+        runtime.update_shell(ShellMessage::ToggleStatusBar);
+        assert!(!runtime.settings.ui.show_status_bar);
+    }
+
+    #[test]
+    fn scrollback_input_filters_digits_and_clamps() {
+        let mut runtime = NativeShellRuntime::default();
+        runtime.update_shell(ShellMessage::ScrollbackLinesChanged("50k00".to_string()));
+        assert_eq!(runtime.scrollback_input, "5000");
+        assert_eq!(runtime.settings.terminal.scrollback_lines, 5_000);
+        runtime.update_shell(ShellMessage::ScrollbackLinesChanged("5".to_string()));
+        assert_eq!(
+            runtime.settings.terminal.scrollback_lines,
+            pandamux_core::settings::SCROLLBACK_LINES_MIN
+        );
+        assert!(runtime.settings_dirty);
+    }
+
+    #[test]
+    fn terminal_toggles_flip_settings() {
+        let mut runtime = NativeShellRuntime::default();
+        runtime.update_shell(ShellMessage::TerminalSettingToggled(
+            TerminalToggle::WelcomePrompt,
+        ));
+        assert!(!runtime.settings.terminal.welcome_prompt_enabled);
+        runtime.update_shell(ShellMessage::TerminalSettingToggled(
+            TerminalToggle::RightClickPaste,
+        ));
+        assert!(runtime.settings.terminal.right_click_paste_optin);
+        runtime.update_shell(ShellMessage::TerminalSettingToggled(
+            TerminalToggle::ConfirmClose,
+        ));
+        assert!(!runtime.settings.terminal.confirm_close_on_running);
     }
 
     #[test]

@@ -5,6 +5,7 @@ pub mod ids;
 pub mod notification;
 pub mod project;
 pub mod protocol;
+pub mod settings;
 pub mod sidebar;
 pub mod split_tree;
 pub mod ssh;
@@ -25,6 +26,10 @@ pub use project::{
     strip_windows_verbatim,
 };
 pub use protocol::{RpcError, RpcRequest, RpcResponse};
+pub use settings::{
+    KeyboardSettings, SETTINGS_SCHEMA_VERSION, TerminalSettings, UiSettings, UserSettings,
+    settings_get, settings_set,
+};
 pub use sidebar::{LogEntry, Progress, SidebarState, StatusEntry};
 pub use split_tree::{
     BranchNode, DropZone, GridLayoutResult, LeafNode, MoveResult, SplitDirection, SplitNode,
