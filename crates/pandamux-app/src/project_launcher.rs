@@ -467,7 +467,7 @@ mod tests {
         let mut app = AppState::default();
         let before = app.clone();
         let target = LaunchTarget {
-            workspace_id: app.active_workspace_id.clone(),
+            workspace_id: app.active_workspace_id.clone().expect("default workspace"),
             pane_id: PaneId::generate(),
             surface_id: SurfaceId::generate(),
             existing_workspace: false,

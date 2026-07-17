@@ -166,16 +166,17 @@ impl NativeShellRuntime {
             (UserSettings::default(), None, true)
         };
         let ssh_profiles = profile_config.registry();
-        // Only the real (live) app touches disk. Tests/smoke use default state so
-        // they stay hermetic. On a version change the volatile auto-session is
-        // cleared, so we start clean; otherwise restore the last layout.
+        // Only the real (live) app touches disk. Tests/smoke use default state
+        // so they stay hermetic. A version change backs the old session up and
+        // still restores it (serde defaults keep old files loading); only a
+        // parse failure falls back to a clean default state.
         let app_state = if live_ptys {
-            let version_changed = store.handle_version_change(env!("CARGO_PKG_VERSION"));
-            if version_changed {
-                AppState::default()
-            } else {
-                store.load_session().unwrap_or_default()
-            }
+            store.handle_version_change(env!("CARGO_PKG_VERSION"));
+            let mut app_state = store.load_session().unwrap_or_default();
+            // Assign project identities to any workspaces that predate the
+            // registry (collapses historical per-host duplicates, spec 1.4).
+            pandamux_core::ensure_project_registry(&mut app_state, now_ms());
+            app_state
         } else {
             AppState::default()
         };
@@ -1548,8 +1549,11 @@ impl NativeShellRuntime {
     /// keeps the core `surface.close` / `pane.close` intents (and their CLI
     /// contract) unchanged: the cascade is UI-layer close policy.
     fn close_session(&mut self, workspace_id: Option<WorkspaceId>, surface_id: SurfaceId) {
-        let workspace_id =
-            workspace_id.unwrap_or_else(|| self.app_state.active_workspace_id.clone());
+        let Some(workspace_id) =
+            workspace_id.or_else(|| self.app_state.active_workspace_id.clone())
+        else {
+            return;
+        };
         let Some(workspace) = self.app_state.workspace(&workspace_id) else {
             self.last_error = Some(format!("workspace not found: {workspace_id}"));
             return;
@@ -3132,7 +3136,11 @@ mod tests {
         let mut runtime = NativeShellRuntime::default();
         // The default workspace has a single pane with a single surface, so its
         // tab X hits the "last surface in a pane" guard. Capture its ids first.
-        let default_ws = runtime.app_state.active_workspace_id.clone();
+        let default_ws = runtime
+            .app_state
+            .active_workspace_id
+            .clone()
+            .expect("default workspace");
         let surface_id = runtime
             .view_model()
             .projection
@@ -3321,7 +3329,11 @@ mod tests {
     #[test]
     fn session_panel_projects_selects_and_toggles() {
         let mut runtime = NativeShellRuntime::default();
-        let original_ws = runtime.app_state.active_workspace_id.clone();
+        let original_ws = runtime
+            .app_state
+            .active_workspace_id
+            .clone()
+            .expect("default workspace");
         assert_eq!(runtime.view_model().sessions.total, 1);
 
         // Launching a quick-launch profile creates a workspace and switches to it.
@@ -3329,7 +3341,10 @@ mod tests {
             shell: "pwsh".to_string(),
             title: "PowerShell 7".to_string(),
         });
-        assert_ne!(runtime.app_state.active_workspace_id, original_ws);
+        assert_ne!(
+            runtime.app_state.active_workspace_id,
+            Some(original_ws.clone())
+        );
         assert_eq!(runtime.view_model().sessions.total, 2);
 
         // Selecting the original session activates its workspace (no layout swap).
@@ -3346,7 +3361,10 @@ mod tests {
             workspace_id: entry.workspace_id.clone(),
             surface_id: entry.surface_id.clone(),
         });
-        assert_eq!(runtime.app_state.active_workspace_id, original_ws);
+        assert_eq!(
+            runtime.app_state.active_workspace_id,
+            Some(original_ws.clone())
+        );
         assert_eq!(runtime.last_error(), None);
 
         // Grouping switch is live.

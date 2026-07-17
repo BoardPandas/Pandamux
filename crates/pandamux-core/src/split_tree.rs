@@ -10,11 +10,69 @@ pub enum SurfaceType {
     Browser,
 }
 
+/// What runs inside a terminal surface (spec 2.2 / 2.7). `Terminal` is the
+/// project's default shell; the agent variants launch their CLI as the PTY
+/// program. Old session files without the field deserialize as `None`, which
+/// means `Terminal`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum SessionType {
+    #[default]
+    Terminal,
+    /// A specific PowerShell flavor ("pwsh", "powershell") or another shell.
+    PowerShell {
+        program: String,
+    },
+    Claude,
+    Codex,
+    Gemini,
+    Custom {
+        command: String,
+    },
+}
+
+impl SessionType {
+    /// Short badge label for rail entries and tabs.
+    pub fn label(&self) -> &str {
+        match self {
+            Self::Terminal => "Terminal",
+            Self::PowerShell { .. } => "PowerShell",
+            Self::Claude => "Claude",
+            Self::Codex => "Codex",
+            Self::Gemini => "Gemini",
+            Self::Custom { .. } => "Custom",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SurfaceRef {
     pub id: SurfaceId,
     #[serde(rename = "type")]
     pub surface_type: SurfaceType,
+    /// What runs in this surface. `None` means a plain Terminal (and is what
+    /// pre-existing session files deserialize to).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<SessionType>,
+    /// User-set display name (spec 2.1 rename). Travels with the surface
+    /// through drag-drop moves and persists with the session file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+impl SurfaceRef {
+    pub fn new(id: SurfaceId, surface_type: SurfaceType) -> Self {
+        Self {
+            id,
+            surface_type,
+            session: None,
+            name: None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,10 +126,7 @@ pub fn create_leaf_with_ids(
 ) -> SplitNode {
     SplitNode::Leaf(LeafNode {
         pane_id,
-        surfaces: vec![SurfaceRef {
-            id: surface_id,
-            surface_type,
-        }],
+        surfaces: vec![SurfaceRef::new(surface_id, surface_type)],
         active_surface_index: 0,
     })
 }
@@ -627,10 +682,7 @@ mod move_tests {
             pane_id: PaneId::from(pane),
             surfaces: surfaces
                 .iter()
-                .map(|id| SurfaceRef {
-                    id: SurfaceId::from(*id),
-                    surface_type: SurfaceType::Terminal,
-                })
+                .map(|id| SurfaceRef::new(SurfaceId::from(*id), SurfaceType::Terminal))
                 .collect(),
             active_surface_index: 0,
         })

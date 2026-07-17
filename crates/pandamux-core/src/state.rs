@@ -1,17 +1,30 @@
-use crate::ids::{PaneId, SurfaceId, WorkspaceId};
+use crate::ids::{PaneId, ProjectId, SurfaceId, WorkspaceId};
 use crate::project::{ProjectKey, ProjectSpec};
+use crate::project_registry::{ProjectMatcher, ProjectRecord};
 use crate::split_tree::{
-    DropZone, GridLayoutResult, MoveResult, SplitDirection, SplitNode, SurfaceRef, SurfaceType,
-    build_grid_layout, create_leaf, create_leaf_with_ids, find_leaf, find_pane_id_for_surface,
-    get_all_pane_ids, move_surface, remove_leaf, replace_leaf, split_node,
+    DropZone, GridLayoutResult, MoveResult, SessionType, SplitDirection, SplitNode, SurfaceRef,
+    SurfaceType, build_grid_layout, create_leaf, create_leaf_with_ids, find_leaf,
+    find_pane_id_for_surface, get_all_pane_ids, move_surface, remove_leaf, replace_leaf,
+    split_node,
 };
 use serde::{Deserialize, Serialize};
+
+/// Bumped when session.json needs an explicit migration (additive fields rely
+/// on serde defaults instead and do not bump this).
+pub const APP_STATE_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppState {
+    #[serde(default)]
+    pub schema_version: u32,
     pub workspaces: Vec<WorkspaceState>,
-    pub active_workspace_id: WorkspaceId,
+    /// `None` when every workspace has been closed (the empty state, spec 1.5).
+    /// Old session files with a bare id string deserialize as `Some`.
+    pub active_workspace_id: Option<WorkspaceId>,
+    /// The project registry (spec 1.4): stable identity above ProjectKey.
+    #[serde(default)]
+    pub projects: Vec<ProjectRecord>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -22,6 +35,10 @@ pub struct WorkspaceState {
     pub shell: String,
     #[serde(default)]
     pub project: ProjectSpec,
+    /// Which [`ProjectRecord`] this workspace belongs to. `None` for legacy
+    /// workspaces (assigned by `ensure_project_registry` on load otherwise).
+    #[serde(default)]
+    pub project_id: Option<ProjectId>,
     pub split_tree: SplitNode,
     pub focused_pane_id: Option<PaneId>,
     pub zoomed_pane_id: Option<PaneId>,
@@ -51,6 +68,36 @@ pub enum AppIntent {
     Workspace(WorkspaceIntent),
     Pane(PaneIntent),
     Surface(SurfaceIntent),
+    Project(ProjectIntent),
+}
+
+/// Project-registry mutations (spec 1.4). Rename/Merge/Split mark records
+/// `manual` so heuristics never override a human decision.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ProjectIntent {
+    List,
+    Rename {
+        project_id: ProjectId,
+        name: String,
+    },
+    /// Fold `source` into `target`: workspaces repoint, matchers and known
+    /// locations move over, the source record disappears.
+    Merge {
+        source: ProjectId,
+        target: ProjectId,
+    },
+    /// Detach one workspace into a fresh record (undo for a wrong merge).
+    Split {
+        workspace_id: WorkspaceId,
+    },
+    /// Attach an async-discovered matcher (a git remote hint). May auto-merge
+    /// this record into an existing owner of the same matcher when neither
+    /// record is manual.
+    AttachMatcher {
+        project_id: ProjectId,
+        matcher: ProjectMatcher,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -87,6 +134,11 @@ pub enum WorkspaceIntent {
     },
     Close {
         workspace_id: WorkspaceId,
+    },
+    /// Close every workspace, or every workspace of one project (spec 1.5).
+    CloseAll {
+        #[serde(default)]
+        project_id: Option<ProjectId>,
     },
     List,
 }
@@ -143,6 +195,19 @@ pub enum SurfaceIntent {
         target_pane_id: PaneId,
         zone: DropZone,
     },
+    /// User rename of a session entry (spec 2.1). `None` clears back to the
+    /// derived name. Searches every workspace when `workspace_id` is `None`.
+    Rename {
+        workspace_id: Option<WorkspaceId>,
+        surface_id: SurfaceId,
+        name: Option<String>,
+    },
+    /// Record what runs in a surface (spec 2.2/2.7 session types).
+    SetSessionType {
+        workspace_id: Option<WorkspaceId>,
+        surface_id: SurfaceId,
+        session: SessionType,
+    },
     List {
         workspace_id: Option<WorkspaceId>,
         pane_id: Option<PaneId>,
@@ -198,8 +263,29 @@ pub enum AppDelta {
     WorkspaceClosed {
         workspace_id: WorkspaceId,
     },
+    WorkspacesClosed {
+        workspace_ids: Vec<WorkspaceId>,
+    },
     WorkspaceListReported {
         workspaces: Vec<WorkspaceSummary>,
+    },
+    ProjectListReported {
+        projects: Vec<ProjectRecord>,
+    },
+    ProjectRenamed {
+        project_id: ProjectId,
+        name: String,
+    },
+    ProjectsMerged {
+        source: ProjectId,
+        target: ProjectId,
+    },
+    ProjectSplit {
+        workspace_id: WorkspaceId,
+        project_id: ProjectId,
+    },
+    MatcherAttached {
+        project_id: ProjectId,
     },
     LayoutGridApplied {
         workspace_id: WorkspaceId,
@@ -246,6 +332,16 @@ pub enum AppDelta {
         workspace_id: WorkspaceId,
         tree: SplitNode,
     },
+    SurfaceRenamed {
+        workspace_id: WorkspaceId,
+        surface_id: SurfaceId,
+        name: Option<String>,
+    },
+    SurfaceSessionTypeSet {
+        workspace_id: WorkspaceId,
+        surface_id: SurfaceId,
+        session: SessionType,
+    },
     SurfaceListReported {
         workspace_id: WorkspaceId,
         surfaces: Vec<SurfaceRef>,
@@ -264,16 +360,19 @@ impl Default for AppState {
     fn default() -> Self {
         let workspace_id = WorkspaceId::from("ws-default");
         Self {
+            schema_version: APP_STATE_SCHEMA_VERSION,
             workspaces: vec![WorkspaceState {
                 id: workspace_id.clone(),
                 title: "Workspace".to_string(),
                 shell: "pwsh".to_string(),
                 project: ProjectSpec::default(),
+                project_id: None,
                 split_tree: create_leaf(Some(PaneId::from("pane-default")), SurfaceType::Terminal),
                 focused_pane_id: Some(PaneId::from("pane-default")),
                 zoomed_pane_id: None,
             }],
-            active_workspace_id: workspace_id,
+            active_workspace_id: Some(workspace_id),
+            projects: Vec::new(),
         }
     }
 }
@@ -285,11 +384,14 @@ impl AppState {
             AppIntent::Workspace(intent) => self.apply_workspace(intent),
             AppIntent::Pane(intent) => self.apply_pane(intent),
             AppIntent::Surface(intent) => self.apply_surface(intent),
+            AppIntent::Project(intent) => self.apply_project(intent),
         }
     }
 
     pub fn active_workspace(&self) -> Option<&WorkspaceState> {
-        self.workspace(&self.active_workspace_id)
+        self.active_workspace_id
+            .as_ref()
+            .and_then(|workspace_id| self.workspace(workspace_id))
     }
 
     pub fn workspace(&self, workspace_id: &WorkspaceId) -> Option<&WorkspaceState> {
@@ -314,8 +416,25 @@ impl AppState {
             .find(|workspace| &workspace.id == workspace_id)
     }
 
-    fn resolve_workspace_id(&self, workspace_id: Option<WorkspaceId>) -> WorkspaceId {
-        workspace_id.unwrap_or_else(|| self.active_workspace_id.clone())
+    /// The workspace an intent targets: an explicit id, else the active
+    /// workspace. Errors cleanly on the empty state so pipe clients never see
+    /// a panic when everything is closed.
+    fn resolve_workspace_id(
+        &self,
+        workspace_id: Option<WorkspaceId>,
+    ) -> Result<WorkspaceId, String> {
+        workspace_id
+            .or_else(|| self.active_workspace_id.clone())
+            .ok_or_else(|| "no workspace is open".to_string())
+    }
+
+    /// Find which workspace owns a surface (rename/session-type intents from
+    /// the rail may target a non-active workspace).
+    fn workspace_id_for_surface(&self, surface_id: &SurfaceId) -> Option<WorkspaceId> {
+        self.workspaces
+            .iter()
+            .find(|workspace| find_pane_id_for_surface(&workspace.split_tree, surface_id).is_some())
+            .map(|workspace| workspace.id.clone())
     }
 
     fn apply_system(&mut self, intent: SystemIntent) -> Result<AppDelta, String> {
@@ -333,7 +452,7 @@ impl AppState {
                 },
             }),
             SystemIntent::Tree { workspace_id } => {
-                let workspace_id = self.resolve_workspace_id(workspace_id);
+                let workspace_id = self.resolve_workspace_id(workspace_id)?;
                 let workspace = self
                     .workspace(&workspace_id)
                     .ok_or_else(|| format!("workspace not found: {workspace_id}"))?;
@@ -356,6 +475,7 @@ impl AppState {
                     title: title.unwrap_or_else(|| "Workspace".to_string()),
                     shell: shell.unwrap_or_else(|| "pwsh".to_string()),
                     project: ProjectSpec::default(),
+                    project_id: None,
                     split_tree,
                     focused_pane_id,
                     zoomed_pane_id: None,
@@ -363,7 +483,7 @@ impl AppState {
                 let summary = workspace.summary();
                 let tree = workspace.split_tree.clone();
                 self.workspaces.push(workspace);
-                self.active_workspace_id = workspace_id;
+                self.active_workspace_id = Some(workspace_id);
                 Ok(AppDelta::WorkspaceCreated {
                     workspace: summary,
                     tree,
@@ -392,6 +512,7 @@ impl AppState {
                     title,
                     shell,
                     project,
+                    project_id: None,
                     split_tree,
                     focused_pane_id: Some(pane_id),
                     zoomed_pane_id: None,
@@ -399,7 +520,7 @@ impl AppState {
                 let summary = workspace.summary();
                 let tree = workspace.split_tree.clone();
                 self.workspaces.push(workspace);
-                self.active_workspace_id = workspace_id;
+                self.active_workspace_id = Some(workspace_id);
                 Ok(AppDelta::WorkspaceCreated {
                     workspace: summary,
                     tree,
@@ -409,7 +530,7 @@ impl AppState {
                 if self.workspace(&workspace_id).is_none() {
                     return Err(format!("workspace not found: {workspace_id}"));
                 }
-                self.active_workspace_id = workspace_id.clone();
+                self.active_workspace_id = Some(workspace_id.clone());
                 Ok(AppDelta::WorkspaceSelected { workspace_id })
             }
             WorkspaceIntent::Rename {
@@ -426,19 +547,50 @@ impl AppState {
                 })
             }
             WorkspaceIntent::Close { workspace_id } => {
-                if self.workspaces.len() == 1 {
-                    return Err("cannot close the last workspace".to_string());
-                }
+                // Closing the last workspace is allowed: the app lands on the
+                // empty state ("All sessions ended", spec 1.5).
                 let original_len = self.workspaces.len();
                 self.workspaces
                     .retain(|workspace| workspace.id != workspace_id);
                 if self.workspaces.len() == original_len {
                     return Err(format!("workspace not found: {workspace_id}"));
                 }
-                if self.active_workspace_id == workspace_id {
-                    self.active_workspace_id = self.workspaces[0].id.clone();
+                if self.active_workspace_id.as_ref() == Some(&workspace_id) {
+                    self.active_workspace_id = self
+                        .workspaces
+                        .first()
+                        .map(|workspace| workspace.id.clone());
                 }
+                self.prune_project_records();
                 Ok(AppDelta::WorkspaceClosed { workspace_id })
+            }
+            WorkspaceIntent::CloseAll { project_id } => {
+                let closing: Vec<WorkspaceId> = self
+                    .workspaces
+                    .iter()
+                    .filter(|workspace| {
+                        project_id
+                            .as_ref()
+                            .is_none_or(|id| workspace.project_id.as_ref() == Some(id))
+                    })
+                    .map(|workspace| workspace.id.clone())
+                    .collect();
+                self.workspaces
+                    .retain(|workspace| !closing.contains(&workspace.id));
+                if self
+                    .active_workspace_id
+                    .as_ref()
+                    .is_some_and(|active| closing.contains(active))
+                {
+                    self.active_workspace_id = self
+                        .workspaces
+                        .first()
+                        .map(|workspace| workspace.id.clone());
+                }
+                self.prune_project_records();
+                Ok(AppDelta::WorkspacesClosed {
+                    workspace_ids: closing,
+                })
             }
             WorkspaceIntent::List => Ok(AppDelta::WorkspaceListReported {
                 workspaces: self
@@ -453,7 +605,7 @@ impl AppState {
     fn apply_pane(&mut self, intent: PaneIntent) -> Result<AppDelta, String> {
         match intent {
             PaneIntent::Split(params) => {
-                let workspace_id = self.resolve_workspace_id(params.workspace_id);
+                let workspace_id = self.resolve_workspace_id(params.workspace_id)?;
                 let workspace = self
                     .workspace_mut(&workspace_id)
                     .ok_or_else(|| format!("workspace not found: {workspace_id}"))?;
@@ -490,7 +642,7 @@ impl AppState {
                 workspace_id,
                 pane_id,
             } => {
-                let workspace_id = self.resolve_workspace_id(workspace_id);
+                let workspace_id = self.resolve_workspace_id(workspace_id)?;
                 let workspace = self
                     .workspace_mut(&workspace_id)
                     .ok_or_else(|| format!("workspace not found: {workspace_id}"))?;
@@ -519,7 +671,7 @@ impl AppState {
                 workspace_id,
                 pane_id,
             } => {
-                let workspace_id = self.resolve_workspace_id(workspace_id);
+                let workspace_id = self.resolve_workspace_id(workspace_id)?;
                 let workspace = self
                     .workspace_mut(&workspace_id)
                     .ok_or_else(|| format!("workspace not found: {workspace_id}"))?;
@@ -536,7 +688,7 @@ impl AppState {
                 workspace_id,
                 pane_id,
             } => {
-                let workspace_id = self.resolve_workspace_id(workspace_id);
+                let workspace_id = self.resolve_workspace_id(workspace_id)?;
                 let workspace = self
                     .workspace_mut(&workspace_id)
                     .ok_or_else(|| format!("workspace not found: {workspace_id}"))?;
@@ -561,7 +713,7 @@ impl AppState {
                 if params.count < 1 {
                     return Err("count must be at least 1".to_string());
                 }
-                let workspace_id = self.resolve_workspace_id(params.workspace_id);
+                let workspace_id = self.resolve_workspace_id(params.workspace_id)?;
                 let workspace = self
                     .workspace_mut(&workspace_id)
                     .ok_or_else(|| format!("workspace not found: {workspace_id}"))?;
@@ -588,7 +740,7 @@ impl AppState {
                 })
             }
             PaneIntent::List { workspace_id } => {
-                let workspace_id = self.resolve_workspace_id(workspace_id);
+                let workspace_id = self.resolve_workspace_id(workspace_id)?;
                 let workspace = self
                     .workspace(&workspace_id)
                     .ok_or_else(|| format!("workspace not found: {workspace_id}"))?;
@@ -607,7 +759,7 @@ impl AppState {
                 pane_id,
                 surface_type,
             } => {
-                let workspace_id = self.resolve_workspace_id(workspace_id);
+                let workspace_id = self.resolve_workspace_id(workspace_id)?;
                 let workspace = self
                     .workspace_mut(&workspace_id)
                     .ok_or_else(|| format!("workspace not found: {workspace_id}"))?;
@@ -618,10 +770,7 @@ impl AppState {
                 let leaf = find_leaf(&workspace.split_tree, &pane_id)
                     .ok_or_else(|| format!("pane not found: {pane_id}"))?;
                 let mut leaf = leaf.clone();
-                let surface = SurfaceRef {
-                    id: SurfaceId::generate(),
-                    surface_type,
-                };
+                let surface = SurfaceRef::new(SurfaceId::generate(), surface_type);
                 leaf.surfaces.push(surface.clone());
                 leaf.active_surface_index = leaf.surfaces.len() - 1;
                 workspace.split_tree = replace_leaf(&workspace.split_tree, &pane_id, leaf);
@@ -653,10 +802,7 @@ impl AppState {
                 let leaf = find_leaf(&workspace.split_tree, &pane_id)
                     .ok_or_else(|| format!("pane not found: {pane_id}"))?;
                 let mut leaf = leaf.clone();
-                let surface = SurfaceRef {
-                    id: surface_id,
-                    surface_type,
-                };
+                let surface = SurfaceRef::new(surface_id, surface_type);
                 leaf.surfaces.push(surface.clone());
                 leaf.active_surface_index = leaf.surfaces.len() - 1;
                 workspace.split_tree = replace_leaf(&workspace.split_tree, &pane_id, leaf);
@@ -671,7 +817,7 @@ impl AppState {
                 workspace_id,
                 surface_id,
             } => {
-                let workspace_id = self.resolve_workspace_id(workspace_id);
+                let workspace_id = self.resolve_workspace_id(workspace_id)?;
                 let workspace = self
                     .workspace_mut(&workspace_id)
                     .ok_or_else(|| format!("workspace not found: {workspace_id}"))?;
@@ -697,7 +843,7 @@ impl AppState {
                 workspace_id,
                 surface_id,
             } => {
-                let workspace_id = self.resolve_workspace_id(workspace_id);
+                let workspace_id = self.resolve_workspace_id(workspace_id)?;
                 let workspace = self
                     .workspace_mut(&workspace_id)
                     .ok_or_else(|| format!("workspace not found: {workspace_id}"))?;
@@ -729,7 +875,7 @@ impl AppState {
                 target_pane_id,
                 zone,
             } => {
-                let workspace_id = self.resolve_workspace_id(workspace_id);
+                let workspace_id = self.resolve_workspace_id(workspace_id)?;
                 let workspace = self
                     .workspace_mut(&workspace_id)
                     .ok_or_else(|| format!("workspace not found: {workspace_id}"))?;
@@ -751,11 +897,56 @@ impl AppState {
                     }),
                 }
             }
+            SurfaceIntent::Rename {
+                workspace_id,
+                surface_id,
+                name,
+            } => {
+                let workspace_id = match workspace_id {
+                    Some(workspace_id) => workspace_id,
+                    None => self
+                        .workspace_id_for_surface(&surface_id)
+                        .ok_or_else(|| format!("surface not found: {surface_id}"))?,
+                };
+                let name = name.filter(|name| !name.trim().is_empty());
+                self.update_surface(&workspace_id, &surface_id, |surface| {
+                    surface.name = name.clone();
+                })?;
+                Ok(AppDelta::SurfaceRenamed {
+                    workspace_id,
+                    surface_id,
+                    name,
+                })
+            }
+            SurfaceIntent::SetSessionType {
+                workspace_id,
+                surface_id,
+                session,
+            } => {
+                let workspace_id = match workspace_id {
+                    Some(workspace_id) => workspace_id,
+                    None => self
+                        .workspace_id_for_surface(&surface_id)
+                        .ok_or_else(|| format!("surface not found: {surface_id}"))?,
+                };
+                self.update_surface(&workspace_id, &surface_id, |surface| {
+                    surface.session = if session == SessionType::Terminal {
+                        None
+                    } else {
+                        Some(session.clone())
+                    };
+                })?;
+                Ok(AppDelta::SurfaceSessionTypeSet {
+                    workspace_id,
+                    surface_id,
+                    session,
+                })
+            }
             SurfaceIntent::List {
                 workspace_id,
                 pane_id,
             } => {
-                let workspace_id = self.resolve_workspace_id(workspace_id);
+                let workspace_id = self.resolve_workspace_id(workspace_id)?;
                 let workspace = self
                     .workspace(&workspace_id)
                     .ok_or_else(|| format!("workspace not found: {workspace_id}"))?;
@@ -773,6 +964,176 @@ impl AppState {
                     workspace_id,
                     surfaces,
                 })
+            }
+        }
+    }
+}
+
+impl AppState {
+    /// Mutate one surface in place (rename / session type), rebuilding the
+    /// immutable leaf like the other surface intents do.
+    fn update_surface(
+        &mut self,
+        workspace_id: &WorkspaceId,
+        surface_id: &SurfaceId,
+        mutate: impl Fn(&mut SurfaceRef),
+    ) -> Result<(), String> {
+        let workspace = self
+            .workspace_mut(workspace_id)
+            .ok_or_else(|| format!("workspace not found: {workspace_id}"))?;
+        let pane_id = find_pane_id_for_surface(&workspace.split_tree, surface_id)
+            .ok_or_else(|| format!("surface not found: {surface_id}"))?;
+        let leaf = find_leaf(&workspace.split_tree, &pane_id)
+            .ok_or_else(|| format!("pane not found: {pane_id}"))?;
+        let mut leaf = leaf.clone();
+        let surface = leaf
+            .surfaces
+            .iter_mut()
+            .find(|surface| &surface.id == surface_id)
+            .ok_or_else(|| format!("surface not found: {surface_id}"))?;
+        mutate(surface);
+        workspace.split_tree = replace_leaf(&workspace.split_tree, &pane_id, leaf);
+        Ok(())
+    }
+
+    /// Drop machine-created registry records no workspace references anymore.
+    fn prune_project_records(&mut self) {
+        let referenced: Vec<ProjectId> = self
+            .workspaces
+            .iter()
+            .filter_map(|workspace| workspace.project_id.clone())
+            .collect();
+        self.projects
+            .retain(|record| record.manual || referenced.contains(&record.id));
+    }
+
+    fn apply_project(&mut self, intent: ProjectIntent) -> Result<AppDelta, String> {
+        match intent {
+            ProjectIntent::List => Ok(AppDelta::ProjectListReported {
+                projects: self.projects.clone(),
+            }),
+            ProjectIntent::Rename { project_id, name } => {
+                let record = self
+                    .projects
+                    .iter_mut()
+                    .find(|record| record.id == project_id)
+                    .ok_or_else(|| format!("project not found: {project_id}"))?;
+                record.name = name.clone();
+                record.manual = true;
+                Ok(AppDelta::ProjectRenamed { project_id, name })
+            }
+            ProjectIntent::Merge { source, target } => {
+                if source == target {
+                    return Err("cannot merge a project into itself".to_string());
+                }
+                if !self.projects.iter().any(|record| record.id == target) {
+                    return Err(format!("project not found: {target}"));
+                }
+                let source_index = self
+                    .projects
+                    .iter()
+                    .position(|record| record.id == source)
+                    .ok_or_else(|| format!("project not found: {source}"))?;
+                let source_record = self.projects.remove(source_index);
+                let target_record = self
+                    .projects
+                    .iter_mut()
+                    .find(|record| record.id == target)
+                    .expect("target checked above");
+                for matcher in source_record.matchers {
+                    if !target_record.matchers.contains(&matcher) {
+                        target_record.matchers.push(matcher);
+                    }
+                }
+                for location in source_record.known_locations {
+                    if !target_record.known_locations.contains(&location) {
+                        target_record.known_locations.push(location);
+                    }
+                }
+                target_record.manual = true;
+                for workspace in &mut self.workspaces {
+                    if workspace.project_id.as_ref() == Some(&source) {
+                        workspace.project_id = Some(target.clone());
+                    }
+                }
+                Ok(AppDelta::ProjectsMerged { source, target })
+            }
+            ProjectIntent::Split { workspace_id } => {
+                let workspace = self
+                    .workspaces
+                    .iter()
+                    .find(|workspace| workspace.id == workspace_id)
+                    .ok_or_else(|| format!("workspace not found: {workspace_id}"))?;
+                let location = workspace.project.location.clone();
+                let old_project_id = workspace.project_id.clone();
+                let mut matchers = Vec::new();
+                if let Ok(Some(key)) = ProjectKey::from_location(&location) {
+                    matchers.push(ProjectMatcher::Location {
+                        key: key.as_str().to_string(),
+                    });
+                }
+                let record = ProjectRecord {
+                    id: crate::ids::ProjectId::generate(),
+                    name: crate::project::project_title(&location),
+                    matchers,
+                    known_locations: vec![location],
+                    created_at_ms: 0,
+                    manual: true,
+                };
+                let project_id = record.id.clone();
+                // The record left behind was also human-shaped now: stop
+                // heuristics from re-merging what the user just separated.
+                if let Some(old_id) = old_project_id
+                    && let Some(old) = self.projects.iter_mut().find(|record| record.id == old_id)
+                {
+                    old.manual = true;
+                }
+                self.projects.push(record);
+                if let Some(workspace) = self.workspace_mut(&workspace_id) {
+                    workspace.project_id = Some(project_id.clone());
+                }
+                self.prune_project_records();
+                Ok(AppDelta::ProjectSplit {
+                    workspace_id,
+                    project_id,
+                })
+            }
+            ProjectIntent::AttachMatcher {
+                project_id,
+                matcher,
+            } => {
+                let this_manual = self
+                    .projects
+                    .iter()
+                    .find(|record| record.id == project_id)
+                    .ok_or_else(|| format!("project not found: {project_id}"))?
+                    .manual;
+                // An existing machine-created owner of the same matcher absorbs
+                // this record (the late git-remote hint proved they are one
+                // project), unless a human shaped either record.
+                let owner = self
+                    .projects
+                    .iter()
+                    .find(|record| record.id != project_id && record.matchers.contains(&matcher))
+                    .map(|record| (record.id.clone(), record.manual));
+                if let Some((owner_id, owner_manual)) = owner
+                    && !this_manual
+                    && !owner_manual
+                {
+                    return self.apply_project(ProjectIntent::Merge {
+                        source: project_id,
+                        target: owner_id,
+                    });
+                }
+                let record = self
+                    .projects
+                    .iter_mut()
+                    .find(|record| record.id == project_id)
+                    .expect("checked above");
+                if !record.matchers.contains(&matcher) {
+                    record.matchers.push(matcher);
+                }
+                Ok(AppDelta::MatcherAttached { project_id })
             }
         }
     }

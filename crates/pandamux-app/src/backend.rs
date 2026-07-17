@@ -671,9 +671,8 @@ fn dispatch_agents(
             }
 
             // Distribute round-robins across the panes that exist up front.
-            let workspace_id = app.active_workspace_id.clone();
             let panes = app
-                .workspace(&workspace_id)
+                .active_workspace()
                 .map(|workspace| get_all_pane_ids(&workspace.split_tree))
                 .unwrap_or_default();
 
@@ -1106,7 +1105,8 @@ fn dispatch_ssh(
         "ssh.connect" => {
             let config = ssh_config_from_params(&request.params)?;
             let workspace_id = opt_id(&request.params, "workspaceId")
-                .unwrap_or_else(|| app.active_workspace_id.clone());
+                .or_else(|| app.active_workspace_id.clone())
+                .ok_or_else(|| (-32000, "no workspace is open".to_string()))?;
             let pane_id = opt_id(&request.params, "paneId").or_else(|| {
                 app.workspace(&workspace_id)
                     .and_then(|workspace| workspace.focused_pane_id.clone())
@@ -1852,7 +1852,54 @@ fn delta_to_result(delta: AppDelta) -> Value {
         AppDelta::WorkspaceSelected { .. }
         | AppDelta::WorkspaceRenamed { .. }
         | AppDelta::WorkspaceClosed { .. } => json!({ "ok": true }),
+        AppDelta::WorkspacesClosed { workspace_ids } => json!({
+            "ok": true,
+            "closedWorkspaceIds": workspace_ids,
+        }),
         AppDelta::WorkspaceListReported { workspaces } => json!({ "workspaces": workspaces }),
+        AppDelta::ProjectListReported { projects } => json!({ "projects": projects }),
+        AppDelta::ProjectRenamed { project_id, name } => json!({
+            "ok": true,
+            "projectId": project_id,
+            "name": name,
+        }),
+        AppDelta::ProjectsMerged { source, target } => json!({
+            "ok": true,
+            "source": source,
+            "target": target,
+        }),
+        AppDelta::ProjectSplit {
+            workspace_id,
+            project_id,
+        } => json!({
+            "ok": true,
+            "workspaceId": workspace_id,
+            "projectId": project_id,
+        }),
+        AppDelta::MatcherAttached { project_id } => json!({
+            "ok": true,
+            "projectId": project_id,
+        }),
+        AppDelta::SurfaceRenamed {
+            workspace_id,
+            surface_id,
+            name,
+        } => json!({
+            "ok": true,
+            "workspaceId": workspace_id,
+            "surfaceId": surface_id,
+            "name": name,
+        }),
+        AppDelta::SurfaceSessionTypeSet {
+            workspace_id,
+            surface_id,
+            session,
+        } => json!({
+            "ok": true,
+            "workspaceId": workspace_id,
+            "surfaceId": surface_id,
+            "session": session,
+        }),
         AppDelta::LayoutGridApplied {
             workspace_id,
             tree,
@@ -2003,8 +2050,9 @@ fn resolve_terminal_surface_id(
         return Err((-32000, format!("terminal surface not found: {surface_id}")));
     }
 
-    let workspace_id =
-        opt_id(params, "workspaceId").unwrap_or_else(|| app.active_workspace_id.clone());
+    let workspace_id = opt_id(params, "workspaceId")
+        .or_else(|| app.active_workspace_id.clone())
+        .ok_or_else(|| (-32000, "no workspace is open".to_string()))?;
     let workspace = app
         .workspace(&workspace_id)
         .ok_or_else(|| (-32000, format!("workspace not found: {workspace_id}")))?;

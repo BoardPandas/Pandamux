@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.43.0]
+## [0.44.0]
+
+### Added
+
+- **Projects are now a single logical entity across machines** (core data model). A project registry gives every project a stable identity: the same repo opened locally and over SSH (or from two different hosts) resolves to ONE project, matched by exact location, then git remote URL, then folder name. Existing per-host duplicate entries merge automatically on first load, and manual merge/rename/split operations exist for cases the matcher gets wrong; a project the user shaped by hand is never re-merged by heuristics.
+- **Sessions can carry a type (Terminal, PowerShell, Claude, Codex, Gemini, custom) and a user-set name**, both persisted with the session file (the launcher and rail UI land in upcoming releases).
+- **Closing the last workspace is now allowed** (core): the app state supports being empty, and a close-all operation (global or per project) exists for the UI and pipe clients. Pipe calls against an empty app get clean errors instead of panics.
+
+### Changed
+
+- **Updating PandaMUX no longer discards your open sessions.** The auto-restore session used to be wiped on every version change; it is now backed up as `session.v<old>.bak.json` and restored normally, so project identities, renames, and layouts survive updates.
 
 ### Added
 

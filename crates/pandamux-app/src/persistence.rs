@@ -372,6 +372,12 @@ impl SessionStore {
     /// Returns true if the app version changed (or first launch), clearing ONLY
     /// the volatile auto-restore `session.json`. Named sessions and the
     /// last-session pointer are intentionally preserved across updates.
+    /// Record a version change WITHOUT wiping the auto-restore session. The
+    /// session schema is forward-compatible via serde defaults (the project
+    /// registry, renames, and Home layout must survive updates), so on a
+    /// version change the old file is backed up as
+    /// `session.v<old-version>.bak.json` and then loaded normally; only a
+    /// parse failure falls back to a default state (in `load_session`).
     pub fn handle_version_change(&self, current_version: &str) -> bool {
         if self.ensure_dirs().is_err() {
             return false;
@@ -382,7 +388,20 @@ impl SessionStore {
         if saved == current_version {
             return false;
         }
-        let _ = fs::remove_file(self.session_file());
+        if !saved.is_empty() && self.session_file().exists() {
+            let tag: String = saved
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            let backup = self.sessions_dir().join(format!("session.v{tag}.bak.json"));
+            let _ = fs::copy(self.session_file(), backup);
+        }
         let _ = fs::write(self.version_file(), current_version);
         true
     }
@@ -561,20 +580,32 @@ mod tests {
     }
 
     #[test]
-    fn version_change_clears_auto_session_but_keeps_named() {
+    fn version_change_keeps_auto_session_and_backs_it_up() {
         let store = temp_store("version");
-        store.save_session(&AppState::default()).expect("save auto");
+        let state = split_state();
+        store.save_session(&state).expect("save auto");
         store
             .save_named("keep", 100, &AppState::default())
             .expect("save named");
 
-        // First call for a new version reports change and clears session.json.
+        // Establish a recorded version, then bump it: the auto session
+        // SURVIVES (the registry/renames/Home layout must not be lost on
+        // update) and the pre-bump file is backed up.
         assert!(store.handle_version_change("0.17.0"));
-        assert!(store.load_session().is_none());
-        // Named session survives.
+        assert!(store.load_session().is_some());
+        assert!(store.handle_version_change("0.18.0"));
+        assert_eq!(store.load_session().expect("kept session"), state);
+        assert!(
+            store
+                .base
+                .join("sessions")
+                .join("session.v0.17.0.bak.json")
+                .exists(),
+            "version bump must back up the previous session file"
+        );
+        // Named session survives; same version again reports no change.
         assert!(store.load_named("keep").is_some());
-        // Same version again reports no change.
-        assert!(!store.handle_version_change("0.17.0"));
+        assert!(!store.handle_version_change("0.18.0"));
     }
 
     #[test]

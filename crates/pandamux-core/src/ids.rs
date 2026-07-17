@@ -45,3 +45,4 @@ prefixed_id!(PaneId, "pane-");
 prefixed_id!(SurfaceId, "surf-");
 prefixed_id!(WindowId, "win-");
 prefixed_id!(SshProfileId, "ssh-");
+prefixed_id!(ProjectId, "proj-");
