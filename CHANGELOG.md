@@ -7,7 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.41.0]
+## [0.42.0]
+
+### Added
+
+- **Text selection works in every terminal pane.** Click-and-drag selects text (including into scrollback by dragging past the edge), double-click selects a word, triple-click selects a line; the selection is highlighted and tracks new output. Apps that own the mouse (like vim) keep their clicks; hold Shift to force a local selection, matching Windows Terminal.
+- **Copy and paste are fully wired.** Ctrl+C copies when a selection exists and still interrupts the running process otherwise; Ctrl+Shift+C always copies. Ctrl+V and Ctrl+Shift+V paste from the OS clipboard with bracketed paste when the app supports it, so multi-line pastes arrive intact (including inside Claude Code prompts) and never fire commands unexpectedly in PowerShell.
+- **Right-clicking a terminal opens a context menu** with Copy, Paste, Select All, Clear Buffer, Find, Split Right, Split Down, and Close Tab. Right-click never auto-pastes: the classic conhost behavior stays off.
 
 ### Added
 

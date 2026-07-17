@@ -27,7 +27,7 @@ use pandamux_term::{CellColor, SelectionSpan, StyledCell, TermModes};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ShellMessage {
     Tick,
     // Pane / surface intents
@@ -198,6 +198,40 @@ pub enum ShellMessage {
     },
     /// Shift+PageUp (-1) / Shift+PageDown (+1) scrolls the focused surface.
     ScrollPageFocused(i8),
+    /// Mouse selection lifecycle on a terminal canvas (spec 1.3). Coordinates
+    /// are display cells; `right_half` disambiguates which side of the cell
+    /// the pointer grabbed.
+    SelectionStarted {
+        surface_id: SurfaceId,
+        mode: pandamux_term::SelectionMode,
+        line: usize,
+        col: usize,
+        right_half: bool,
+    },
+    SelectionUpdated {
+        surface_id: SurfaceId,
+        line: usize,
+        col: usize,
+        right_half: bool,
+    },
+    SelectionFinished(SurfaceId),
+    /// Right-click on a terminal canvas: open the context menu at window
+    /// coordinates. Never auto-pastes (spec 1.3).
+    ContextMenuRequested {
+        surface_id: SurfaceId,
+        x: f32,
+        y: f32,
+    },
+    ContextMenuDismissed,
+    ContextMenuAction(crate::context_menu::ContextMenuAction),
+    /// Ctrl+C: copy the selection if one exists, else send SIGINT (spec 1.3).
+    CopyOrInterrupt,
+    /// Ctrl+Shift+C / menu Copy: copy the selection (no SIGINT fallback).
+    CopySelectionRequested,
+    /// Ctrl+V / Ctrl+Shift+V / menu Paste: paste the OS clipboard.
+    PasteRequested,
+    SelectAllRequested,
+    ClearBufferRequested,
     /// No-op (e.g. an unmapped key press); ignored by the runtime.
     Noop,
 }
@@ -314,6 +348,8 @@ pub struct ShellViewModel {
     pub term_scheme: TermScheme,
     /// Per-surface terminal color-scheme overrides (resolved from `set-color-scheme`).
     pub surface_term_schemes: HashMap<SurfaceId, TermScheme>,
+    /// The open right-click context menu, if any (spec 1.3).
+    pub context_menu: Option<crate::context_menu::ContextMenuViewState>,
 }
 
 // ---------------------------------------------------------------------------
@@ -332,6 +368,56 @@ pub struct ViewportState {
     scroll_activity: Option<Instant>,
     /// Active scrollbar-thumb drag: the pointer's grab offset inside the thumb.
     scrollbar_drag: Option<f32>,
+    /// A mouse selection drag is in flight.
+    selecting: bool,
+    /// Last cell a selection update was published for (dedupe to cell moves).
+    last_sel_cell: Option<(usize, usize, bool)>,
+    /// Multi-click detection: when/where the last press landed and its count.
+    last_click: Option<(Instant, Point, u8)>,
+    /// Whether Shift is held (forces local selection over app mouse modes).
+    shift_down: bool,
+}
+
+/// Multi-click window: presses within this interval and radius chain into
+/// double/triple clicks.
+const MULTI_CLICK_WINDOW: Duration = Duration::from_millis(400);
+const MULTI_CLICK_RADIUS: f32 = 4.0;
+
+/// Chain click counts: 1 = simple, 2 = word, 3 = line (wraps back to 1).
+fn next_click_count(previous: Option<(Instant, Point, u8)>, position: Point) -> u8 {
+    match previous {
+        Some((at, last_position, count))
+            if at.elapsed() < MULTI_CLICK_WINDOW
+                && (position.x - last_position.x).abs() <= MULTI_CLICK_RADIUS
+                && (position.y - last_position.y).abs() <= MULTI_CLICK_RADIUS =>
+        {
+            if count >= 3 {
+                1
+            } else {
+                count + 1
+            }
+        }
+        _ => 1,
+    }
+}
+
+/// Hit-test a viewport-relative point to a display cell. Returns
+/// `(line, col, right_half)`, clamped to the grid.
+fn cell_at(
+    position: Point,
+    metrics: crate::metrics::CellMetrics,
+    columns: usize,
+    rows: usize,
+) -> (usize, usize, bool) {
+    let pad = theme::TERMINAL_PADDING;
+    let x = ((position.x - pad) / metrics.width).max(0.0);
+    let y = ((position.y - pad) / metrics.height).max(0.0);
+    let raw_col = x as usize;
+    let col = raw_col.min(columns.saturating_sub(1));
+    let line = (y as usize).min(rows.saturating_sub(1));
+    // A pointer clamped back from beyond the last column grabbed its right side.
+    let right_half = raw_col > col || x.fract() > 0.5;
+    (line, col, right_half)
 }
 
 /// How long the scrollbar stays visible after scroll activity without hover.
@@ -416,6 +502,8 @@ pub struct TerminalViewport {
     history_size: usize,
     /// Selection spans to highlight, in rendered-cell indices.
     selection: Vec<SelectionSpan>,
+    /// Terminal mode flags (mouse-owned apps suppress local selection).
+    modes: TermModes,
 }
 
 impl TerminalViewport {
@@ -435,6 +523,7 @@ impl TerminalViewport {
             display_offset: 0,
             history_size: 0,
             selection: Vec::new(),
+            modes: TermModes::default(),
         }
     }
 
@@ -444,16 +533,18 @@ impl TerminalViewport {
         self
     }
 
-    /// Supply the scroll state (offset + history) and selection spans.
+    /// Supply the scroll state, selection spans, and terminal modes.
     pub fn with_view_state(
         mut self,
         display_offset: usize,
         history_size: usize,
         selection: Vec<SelectionSpan>,
+        modes: TermModes,
     ) -> Self {
         self.display_offset = display_offset;
         self.history_size = history_size;
         self.selection = selection;
+        self.modes = modes;
         self
     }
 
@@ -638,7 +729,50 @@ impl canvas::Program<ShellMessage> for TerminalViewport {
                             );
                         }
                     }
+                    // Mouse-owned apps keep their clicks unless Shift forces a
+                    // local selection (Windows Terminal behavior).
+                    if self.modes.mouse_reporting && !state.shift_down {
+                        return None;
+                    }
+                    let count = next_click_count(state.last_click.take(), position);
+                    state.last_click = Some((Instant::now(), position, count));
+                    let mode = match count {
+                        2 => pandamux_term::SelectionMode::Word,
+                        3 => pandamux_term::SelectionMode::Line,
+                        _ => pandamux_term::SelectionMode::Simple,
+                    };
+                    let (line, col, right_half) =
+                        cell_at(position, self.metrics, self.columns, self.rows);
+                    state.selecting = true;
+                    state.last_sel_cell = Some((line, col, right_half));
+                    // Published without capture so the pane's mouse_area still
+                    // receives the press and focuses the pane.
+                    return Some(canvas::Action::publish(ShellMessage::SelectionStarted {
+                        surface_id: surface_id.clone(),
+                        mode,
+                        line,
+                        col,
+                        right_half,
+                    }));
                 }
+            }
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
+                if cursor.is_over(bounds)
+                    && let Some(absolute) = cursor.position()
+                {
+                    // Opens the menu; never pastes or writes to the PTY.
+                    return Some(
+                        canvas::Action::publish(ShellMessage::ContextMenuRequested {
+                            surface_id: surface_id.clone(),
+                            x: absolute.x,
+                            y: absolute.y,
+                        })
+                        .and_capture(),
+                    );
+                }
+            }
+            canvas::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(modifiers)) => {
+                state.shift_down = modifiers.shift();
             }
             canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 if let Some(grab) = state.scrollbar_drag
@@ -662,10 +796,48 @@ impl canvas::Program<ShellMessage> for TerminalViewport {
                     }
                     return Some(canvas::Action::capture());
                 }
+                if state.selecting {
+                    if let Some(position) = cursor.position_in(bounds) {
+                        let cell = cell_at(position, self.metrics, self.columns, self.rows);
+                        if state.last_sel_cell != Some(cell) {
+                            state.last_sel_cell = Some(cell);
+                            let (line, col, right_half) = cell;
+                            return Some(canvas::Action::publish(ShellMessage::SelectionUpdated {
+                                surface_id: surface_id.clone(),
+                                line,
+                                col,
+                                right_half,
+                            }));
+                        }
+                    } else if let Some(absolute) = cursor.position() {
+                        // Dragging past the top/bottom edge extends the
+                        // selection into scrollback by scrolling the view.
+                        let lines = if absolute.y < bounds.y {
+                            2
+                        } else if absolute.y > bounds.y + bounds.height {
+                            -2
+                        } else {
+                            0
+                        };
+                        if lines != 0 {
+                            return Some(canvas::Action::publish(ShellMessage::ViewportScrolled {
+                                surface_id: surface_id.clone(),
+                                lines,
+                            }));
+                        }
+                    }
+                }
             }
             canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 if state.scrollbar_drag.take().is_some() {
                     return Some(canvas::Action::capture());
+                }
+                if state.selecting {
+                    state.selecting = false;
+                    state.last_sel_cell = None;
+                    return Some(canvas::Action::publish(ShellMessage::SelectionFinished(
+                        surface_id.clone(),
+                    )));
                 }
             }
             _ => {}
@@ -976,6 +1148,11 @@ pub fn app_view(model: &ShellViewModel) -> Element<'_, ShellMessage> {
         }
     }
 
+    // The right-click context menu sits above every other overlay.
+    if let Some(menu) = &model.context_menu {
+        layers = layers.push(crate::context_menu::context_menu_layer(menu, palette));
+    }
+
     // A root release handler completes any in-flight drag (drop or focus). It is
     // a no-op when nothing is being dragged. While a drag is armed, a root
     // `on_move` confirms it (the movement gate) so a stationary click stays a
@@ -1124,6 +1301,7 @@ fn pane_view<'a>(
                             snapshot.display_offset,
                             snapshot.history_size,
                             snapshot.selection.clone(),
+                            snapshot.modes,
                         )
                         .with_cells(snapshot.cells.clone(), snapshot.cursor)
                         .with_cursor(is_focused && cursor_on && snapshot.cursor_visible)
@@ -1567,6 +1745,7 @@ mod tests {
             drag: None,
             term_scheme: TermScheme::default(),
             surface_term_schemes: HashMap::new(),
+            context_menu: None,
         }
     }
 
@@ -1598,6 +1777,81 @@ mod tests {
                 (recovered as i64 - offset as i64).abs() <= 1,
                 "offset {offset} round-tripped to {recovered}"
             );
+        }
+    }
+
+    #[test]
+    fn cell_hit_test_accounts_for_padding_and_clamps() {
+        let metrics = crate::metrics::CellMetrics {
+            width: 8.0,
+            height: 20.0,
+        };
+        let pad = theme::TERMINAL_PADDING;
+        // First cell, left half.
+        assert_eq!(
+            cell_at(Point::new(pad + 1.0, pad + 1.0), metrics, 80, 24),
+            (0, 0, false)
+        );
+        // Third column, right half of the cell.
+        assert_eq!(
+            cell_at(
+                Point::new(pad + 2.0 * 8.0 + 7.0, pad + 1.0),
+                metrics,
+                80,
+                24
+            ),
+            (0, 2, true)
+        );
+        // Row math.
+        assert_eq!(
+            cell_at(
+                Point::new(pad + 1.0, pad + 3.0 * 20.0 + 5.0),
+                metrics,
+                80,
+                24
+            ),
+            (3, 0, false)
+        );
+        // Clamped to the grid bounds, including negative overshoot.
+        assert_eq!(
+            cell_at(Point::new(10_000.0, 10_000.0), metrics, 80, 24),
+            (23, 79, true)
+        );
+        let (line, col, _) = cell_at(Point::new(-50.0, -50.0), metrics, 80, 24);
+        assert_eq!((line, col), (0, 0));
+    }
+
+    #[test]
+    fn click_counts_chain_within_the_window_and_wrap() {
+        let origin = Point::new(100.0, 100.0);
+        assert_eq!(next_click_count(None, origin), 1);
+        let now = Instant::now();
+        assert_eq!(next_click_count(Some((now, origin, 1)), origin), 2);
+        assert_eq!(next_click_count(Some((now, origin, 2)), origin), 3);
+        // A fourth quick click starts over.
+        assert_eq!(next_click_count(Some((now, origin, 3)), origin), 1);
+        // A press far away resets the chain.
+        assert_eq!(
+            next_click_count(Some((now, origin, 1)), Point::new(200.0, 200.0)),
+            1
+        );
+        // A stale press resets the chain.
+        let stale = now - Duration::from_millis(600);
+        assert_eq!(next_click_count(Some((stale, origin, 1)), origin), 1);
+    }
+
+    #[test]
+    fn context_menu_layer_builds_for_both_selection_states() {
+        let palette = Palette::new(crate::theme::UiTheme::Dark, crate::theme::Accent::Teal);
+        for has_selection in [false, true] {
+            let state = crate::context_menu::ContextMenuViewState {
+                surface_id: SurfaceId::generate(),
+                pane_id: Some(PaneId::generate()),
+                x: 200.0,
+                y: 150.0,
+                has_selection,
+            };
+            let _menu = crate::context_menu::context_menu_layer(&state, palette);
         }
     }
 

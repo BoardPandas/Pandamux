@@ -12,13 +12,14 @@ use pandamux_core::{
 use pandamux_term::{
     DEFAULT_GRID_SIZE, GridSize, PtyCommand, PtySessionManager, RemoteSessionManager, RemoteStatus,
     ScrollAmount, SearchOptions, SelectionSpan, SshConfig, TermModes, detect_links, search_lines,
+    wrap_paste,
 };
 use pandamux_ui::{
-    ChromeState, DragView, FindViewState, LauncherStep, LinkSpan, NotificationCard,
-    NotificationsViewState, Overlay, PaletteItem, PaletteViewState, QuickLaunchViewState, RailItem,
-    SessionActivity, SessionLauncherViewState, SessionsViewState, SettingsSection,
-    SettingsViewState, ShellKind, ShellMessage, ShellViewModel, SshProfileForm, TermScheme,
-    TerminalSnapshot, UiTheme, app_view, filter_items, project_sessions_with_profiles,
+    ChromeState, ContextMenuAction, ContextMenuViewState, DragView, FindViewState, LauncherStep,
+    LinkSpan, NotificationCard, NotificationsViewState, Overlay, PaletteItem, PaletteViewState,
+    QuickLaunchViewState, RailItem, SessionActivity, SessionLauncherViewState, SessionsViewState,
+    SettingsSection, SettingsViewState, ShellKind, ShellMessage, ShellViewModel, SshProfileForm,
+    TermScheme, TerminalSnapshot, UiTheme, app_view, filter_items, project_sessions_with_profiles,
     project_workspace_shell, shell_view,
 };
 use std::collections::{HashMap, HashSet};
@@ -90,6 +91,8 @@ pub struct NativeShellRuntime {
     clipboard_config: ClipboardConfig,
     /// Active drag-and-drop of a tab, if any (plan Section 12.3).
     drag: Option<DragView>,
+    /// The open right-click context menu, if any (spec 1.3).
+    context_menu: Option<ContextMenuViewState>,
     copy_mode: bool,
     /// Command-palette state (query + selection persist across refreshes; items
     /// are rebuilt each refresh).
@@ -185,6 +188,7 @@ impl NativeShellRuntime {
             pending_plus_workspace: None,
             clipboard_config: ClipboardConfig::default(),
             drag: None,
+            context_menu: None,
             copy_mode: false,
             palette: PaletteViewState::default(),
             settings_section: SettingsSection::default(),
@@ -868,6 +872,106 @@ impl NativeShellRuntime {
                     self.scroll_surface_amount(&surface_id, amount);
                 }
             }
+            ShellMessage::SelectionStarted {
+                surface_id,
+                mode,
+                line,
+                col,
+                right_half,
+            } => {
+                let id = surface_id.as_str();
+                if self.remotes.has(id) {
+                    self.remotes
+                        .start_selection(id, mode, line, col, right_half);
+                } else {
+                    self.ptys.start_selection(id, mode, line, col, right_half);
+                }
+            }
+            ShellMessage::SelectionUpdated {
+                surface_id,
+                line,
+                col,
+                right_half,
+            } => {
+                let id = surface_id.as_str();
+                if self.remotes.has(id) {
+                    self.remotes.update_selection(id, line, col, right_half);
+                } else {
+                    self.ptys.update_selection(id, line, col, right_half);
+                }
+            }
+            ShellMessage::SelectionFinished(_) => {
+                // Selection state lives in the engine; reserved for a future
+                // copy-on-select setting.
+            }
+            ShellMessage::ContextMenuRequested { surface_id, x, y } => {
+                let id = surface_id.as_str();
+                let has_selection = if self.remotes.has(id) {
+                    self.remotes.has_selection(id)
+                } else {
+                    self.ptys.has_selection(id)
+                };
+                let pane_id = self.app_state.active_workspace().and_then(|workspace| {
+                    pandamux_core::find_pane_id_for_surface(&workspace.split_tree, &surface_id)
+                });
+                self.context_menu = Some(ContextMenuViewState {
+                    surface_id,
+                    pane_id,
+                    x,
+                    y,
+                    has_selection,
+                });
+            }
+            ShellMessage::ContextMenuDismissed => {
+                self.context_menu = None;
+            }
+            ShellMessage::ContextMenuAction(action) => {
+                self.run_context_menu_action(action);
+            }
+            ShellMessage::CopyOrInterrupt => {
+                // Overlay text inputs own their clipboard; do nothing there.
+                if self.chrome.active_overlay == Overlay::None {
+                    let copied = self
+                        .active_surface_id()
+                        .is_some_and(|surface_id| self.copy_surface_selection(&surface_id));
+                    if !copied {
+                        self.write_terminal_input(&[0x03]);
+                    }
+                }
+            }
+            ShellMessage::CopySelectionRequested => {
+                if self.chrome.active_overlay == Overlay::None
+                    && let Some(surface_id) = self.active_surface_id()
+                {
+                    self.copy_surface_selection(&surface_id);
+                }
+            }
+            ShellMessage::PasteRequested => {
+                if self.chrome.active_overlay == Overlay::None
+                    && let Some(surface_id) = self.active_surface_id()
+                {
+                    self.paste_into_surface(&surface_id);
+                }
+            }
+            ShellMessage::SelectAllRequested => {
+                if self.chrome.active_overlay == Overlay::None
+                    && let Some(surface_id) = self.active_surface_id()
+                {
+                    let id = surface_id.as_str();
+                    if self.remotes.has(id) {
+                        self.remotes.select_all(id);
+                    } else {
+                        self.ptys.select_all(id);
+                    }
+                }
+            }
+            ShellMessage::ClearBufferRequested => {
+                if self.chrome.active_overlay == Overlay::None
+                    && let Some(surface_id) = self.active_surface_id()
+                {
+                    self.clear_surface_buffer(&surface_id);
+                }
+            }
             ShellMessage::Noop
             | ShellMessage::WindowDragStarted
             | ShellMessage::WindowMinimizePressed
@@ -1046,15 +1150,19 @@ impl NativeShellRuntime {
             ShellMessage::OverlayDismissed => {
                 let had_overlay = self.chrome.active_overlay != Overlay::None;
                 let had_drag = self.drag.is_some();
+                let had_menu = self.context_menu.is_some();
                 self.chrome.active_overlay = Overlay::None;
-                // Esc also cancels an in-flight drag.
+                // Esc also cancels an in-flight drag and the context menu.
                 self.drag = None;
+                self.context_menu = None;
                 // A bare Esc with nothing to dismiss goes to the terminal.
-                if !had_overlay && !had_drag {
+                if !had_overlay && !had_drag && !had_menu {
                     self.write_terminal_input(&[0x1b]);
                 }
             }
             ShellMessage::TerminalInput(bytes) => {
+                // Typing closes the context menu rather than being eaten by it.
+                self.context_menu = None;
                 // Suppressed while an overlay is open; its own text inputs consume
                 // typing (the global key subscription still fires in parallel).
                 if self.chrome.active_overlay == Overlay::None {
@@ -1505,6 +1613,7 @@ impl NativeShellRuntime {
                         .map(|theme| (surface_id.clone(), TermScheme::from_theme(theme)))
                 })
                 .collect(),
+            context_menu: self.context_menu.clone(),
         };
     }
 
@@ -1704,6 +1813,109 @@ impl NativeShellRuntime {
             return;
         }
         self.scroll_surface_amount(surface_id, ScrollAmount::Lines(lines));
+    }
+
+    /// Copy a surface's selection to the OS clipboard. Returns true when a
+    /// non-empty selection was copied (the highlight clears afterwards).
+    fn copy_surface_selection(&mut self, surface_id: &SurfaceId) -> bool {
+        let id = surface_id.as_str();
+        let text = if self.remotes.has(id) {
+            self.remotes.selection_text(id)
+        } else {
+            self.ptys.selection_text(id)
+        };
+        let Some(text) = text.filter(|text| !text.is_empty()) else {
+            return false;
+        };
+        if let Err(error) = crate::clipboard_os::set_text(&text) {
+            self.last_error = Some(error);
+            return false;
+        }
+        if self.remotes.has(id) {
+            self.remotes.clear_selection(id);
+        } else {
+            self.ptys.clear_selection(id);
+        }
+        true
+    }
+
+    /// Paste the OS clipboard into a surface, bracket-wrapped when the app has
+    /// requested bracketed paste (multi-line text arrives intact); otherwise
+    /// newlines normalize to carriage returns as a raw terminal expects.
+    fn paste_into_surface(&mut self, surface_id: &SurfaceId) {
+        let text = match crate::clipboard_os::get_text() {
+            Ok(text) if !text.is_empty() => text,
+            // An empty or non-text clipboard is a quiet no-op, not an error.
+            _ => return,
+        };
+        const MAX_PASTE_BYTES: usize = 8 * 1024 * 1024;
+        if text.len() > MAX_PASTE_BYTES {
+            self.last_error = Some("clipboard text exceeds the 8 MiB paste cap".to_string());
+            return;
+        }
+        let id = surface_id.as_str();
+        let bracketed = if self.remotes.has(id) {
+            self.remotes.bracketed_paste_active(id)
+        } else {
+            self.ptys.bracketed_paste_active(id)
+        };
+        let payload = paste_payload(&text, bracketed);
+        self.scroll_surface_amount(surface_id, ScrollAmount::Bottom);
+        self.write_surface_input(surface_id, &payload);
+    }
+
+    /// Clear a surface's scrollback, then nudge the shell to repaint its
+    /// prompt (Ctrl+L semantics, matching Windows Terminal's Clear Buffer).
+    fn clear_surface_buffer(&mut self, surface_id: &SurfaceId) {
+        let id = surface_id.as_str();
+        if self.remotes.has(id) {
+            self.remotes.clear_buffer(id);
+        } else {
+            self.ptys.clear_buffer(id);
+        }
+        self.write_surface_input(surface_id, &[0x0c]);
+    }
+
+    /// Dispatch a context-menu item against the surface the menu targeted.
+    fn run_context_menu_action(&mut self, action: ContextMenuAction) {
+        let Some(menu) = self.context_menu.take() else {
+            return;
+        };
+        match action {
+            ContextMenuAction::Copy => {
+                self.copy_surface_selection(&menu.surface_id);
+            }
+            ContextMenuAction::Paste => self.paste_into_surface(&menu.surface_id),
+            ContextMenuAction::SelectAll => {
+                let id = menu.surface_id.as_str();
+                if self.remotes.has(id) {
+                    self.remotes.select_all(id);
+                } else {
+                    self.ptys.select_all(id);
+                }
+            }
+            ContextMenuAction::ClearBuffer => self.clear_surface_buffer(&menu.surface_id),
+            ContextMenuAction::Find => self.update_shell(ShellMessage::FindOpened),
+            ContextMenuAction::SplitRight => {
+                if let Some(pane_id) = menu.pane_id {
+                    self.update_shell(ShellMessage::PaneSplit {
+                        pane_id,
+                        direction: SplitDirection::Horizontal,
+                    });
+                }
+            }
+            ContextMenuAction::SplitDown => {
+                if let Some(pane_id) = menu.pane_id {
+                    self.update_shell(ShellMessage::PaneSplit {
+                        pane_id,
+                        direction: SplitDirection::Vertical,
+                    });
+                }
+            }
+            ContextMenuAction::CloseTab => {
+                self.update_shell(ShellMessage::SurfaceClosed(menu.surface_id));
+            }
+        }
     }
 
     fn scroll_surface_amount(&mut self, surface_id: &SurfaceId, amount: ScrollAmount) {
@@ -2226,8 +2438,23 @@ fn shortcut_for(ctrl: bool, shift: bool, character: &str) -> ShellMessage {
         (false, "d") => ShellMessage::SplitFocused(SplitDirection::Horizontal),
         (true, "d") => ShellMessage::SplitFocused(SplitDirection::Vertical),
         (false, "w") => ShellMessage::CloseFocusedPane,
+        // Clipboard (spec 1.3). Ctrl+C stays SIGINT when nothing is selected;
+        // Ctrl+V pastes instead of sending a literal 0x16.
+        (false, "c") => ShellMessage::CopyOrInterrupt,
+        (true, "c") => ShellMessage::CopySelectionRequested,
+        (false, "v") | (true, "v") => ShellMessage::PasteRequested,
         _ => ShellMessage::Noop,
     }
+}
+
+/// Build the paste byte payload: bracketed pastes pass the text through inside
+/// the markers; unbracketed pastes normalize newlines to carriage returns so
+/// multi-line text arrives as a raw shell expects.
+fn paste_payload(text: &str, bracketed: bool) -> Vec<u8> {
+    if bracketed {
+        return wrap_paste(text.as_bytes(), true);
+    }
+    text.replace("\r\n", "\r").replace('\n', "\r").into_bytes()
 }
 
 fn theme_iced_shell(state: &NativeShellRuntime) -> Theme {
@@ -2362,6 +2589,7 @@ fn initial_view_model(app_state: &AppState, chrome: &ChromeState) -> ShellViewMo
         drag: None,
         term_scheme: TermScheme::default(),
         surface_term_schemes: HashMap::new(),
+        context_menu: None,
     }
 }
 
@@ -3029,6 +3257,74 @@ mod tests {
     }
 
     #[test]
+    fn clipboard_shortcuts_map_copy_and_paste() {
+        assert_eq!(
+            shortcut_for(true, false, "c"),
+            ShellMessage::CopyOrInterrupt
+        );
+        assert_eq!(
+            shortcut_for(true, true, "c"),
+            ShellMessage::CopySelectionRequested
+        );
+        assert_eq!(shortcut_for(true, false, "v"), ShellMessage::PasteRequested);
+        assert_eq!(shortcut_for(true, true, "v"), ShellMessage::PasteRequested);
+    }
+
+    #[test]
+    fn paste_payload_normalizes_newlines_only_when_unbracketed() {
+        // Raw shells get carriage returns for every newline flavor.
+        assert_eq!(paste_payload("a\r\nb\nc", false), b"a\rb\rc".to_vec());
+        // Bracketed pastes keep the bytes intact inside the markers.
+        let wrapped = paste_payload("a\r\nb\nc", true);
+        assert!(wrapped.starts_with(b"\x1b[200~"));
+        assert!(wrapped.ends_with(b"\x1b[201~"));
+        let inner = &wrapped[6..wrapped.len() - 6];
+        assert_eq!(inner, b"a\r\nb\nc");
+    }
+
+    #[test]
+    fn context_menu_opens_targets_surface_and_dismisses() {
+        let mut runtime = NativeShellRuntime::default();
+        let surface_id = runtime.active_surface_id().expect("focused surface");
+
+        runtime.update_shell(ShellMessage::ContextMenuRequested {
+            surface_id: surface_id.clone(),
+            x: 120.0,
+            y: 90.0,
+        });
+        let menu = runtime
+            .view_model()
+            .context_menu
+            .clone()
+            .expect("menu open");
+        assert_eq!(menu.surface_id, surface_id);
+        assert!(menu.pane_id.is_some(), "pane resolved for split items");
+        assert!(!menu.has_selection, "no selection without a live session");
+
+        // Esc closes the menu without sending ESC to the terminal.
+        runtime.update_shell(ShellMessage::OverlayDismissed);
+        assert!(runtime.view_model().context_menu.is_none());
+        assert_eq!(runtime.last_error(), None);
+    }
+
+    #[test]
+    fn menu_split_action_splits_the_pane() {
+        let mut runtime = NativeShellRuntime::default();
+        let surface_id = runtime.active_surface_id().expect("focused surface");
+        runtime.update_shell(ShellMessage::ContextMenuRequested {
+            surface_id,
+            x: 0.0,
+            y: 0.0,
+        });
+        assert_eq!(runtime.view_model().projection.visible_panes.len(), 1);
+        runtime.update_shell(ShellMessage::ContextMenuAction(
+            ContextMenuAction::SplitRight,
+        ));
+        assert!(runtime.view_model().context_menu.is_none());
+        assert_eq!(runtime.view_model().projection.visible_panes.len(), 2);
+    }
+
+    #[test]
     fn scroll_messages_are_safe_without_live_sessions() {
         let mut runtime = NativeShellRuntime::default();
         let surface_id = runtime.active_surface_id().expect("focused surface");
@@ -3275,10 +3571,16 @@ mod tests {
             decode_character("z", None, false, false),
             ShellMessage::TerminalInput(b"z".to_vec())
         );
-        // Ctrl+C is not a chrome shortcut, so it reaches the terminal as 0x03.
+        // Ctrl+C maps to the conditional copy shortcut; its handler falls back
+        // to sending SIGINT (0x03) when no selection exists (spec 1.3).
         assert_eq!(
             decode_character("c", None, true, false),
-            ShellMessage::TerminalInput(vec![0x03])
+            ShellMessage::CopyOrInterrupt
+        );
+        // Unmapped Ctrl+letters still reach the terminal as control codes.
+        assert_eq!(
+            decode_character("l", None, true, false),
+            ShellMessage::TerminalInput(vec![0x0c])
         );
         // Ctrl+D IS a chrome shortcut (split), so it wins over the control code.
         assert_eq!(

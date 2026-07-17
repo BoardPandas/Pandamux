@@ -13,7 +13,7 @@ use iced::{Alignment, Color, Element, Length, Padding};
 
 /// One palette row: a glyph, a label, an optional shortcut chip, and the action
 /// it dispatches when activated.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PaletteItem {
     pub glyph: String,
     pub label: String,
@@ -37,7 +37,7 @@ impl PaletteItem {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct PaletteViewState {
     pub query: String,
     /// The filtered, ready-to-render items (the runtime filters against `query`).

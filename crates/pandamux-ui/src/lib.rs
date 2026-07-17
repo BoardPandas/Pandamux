@@ -5,6 +5,8 @@ pub mod command_palette;
 #[cfg(feature = "iced-runtime")]
 pub mod content_views;
 #[cfg(feature = "iced-runtime")]
+pub mod context_menu;
+#[cfg(feature = "iced-runtime")]
 pub mod iced_shell;
 #[cfg(feature = "iced-runtime")]
 pub mod icons;
@@ -28,6 +30,8 @@ pub use chrome::{ChromeState, Overlay, RailItem, SessionActivity};
 pub use command_palette::{
     PaletteItem, PaletteViewState, QuickLaunchProfile, QuickLaunchViewState, filter_items,
 };
+#[cfg(feature = "iced-runtime")]
+pub use context_menu::{ContextMenuAction, ContextMenuViewState};
 #[cfg(feature = "iced-runtime")]
 pub use iced_shell::{
     DragView, LinkSpan, ShellMessage, ShellViewModel, TerminalSnapshot, app_view, shell_view,
