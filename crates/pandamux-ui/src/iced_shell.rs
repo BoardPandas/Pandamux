@@ -107,9 +107,11 @@ pub enum ShellMessage {
     /// Inline project rename lifecycle (spec 1.4 manual path).
     ProjectRenameEdited(String),
     ProjectRenameCommitted,
-    /// Close every session of a project (or everything when None). Spec 1.5;
-    /// the confirm gate lands with the empty-state stage.
+    /// Close every session of a project (or everything when None), behind the
+    /// confirm modal (spec 1.5).
     CloseAllRequested(Option<pandamux_core::ProjectId>),
+    /// The confirm modal's affirmative button: run the parked action.
+    ConfirmAccepted,
     // Overlays (command palette / quick-launch / settings)
     /// Dismiss whatever centered overlay is open (backdrop click / Esc).
     OverlayDismissed,
@@ -392,6 +394,8 @@ pub struct ShellViewModel {
     pub context_menu: Option<crate::context_menu::ContextMenuViewState>,
     /// The open session-rail actions menu, if any (spec 2.1/1.4).
     pub rail_menu: Option<crate::context_menu::RailMenuViewState>,
+    /// The confirm modal's content while `Overlay::Confirm` is open.
+    pub confirm: Option<crate::overlays::ConfirmViewState>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1191,6 +1195,11 @@ pub fn app_view(model: &ShellViewModel) -> Element<'_, ShellMessage> {
         Overlay::Settings => {
             layers = layers.push(settings::settings_modal(&model.settings, palette));
         }
+        Overlay::Confirm => {
+            if let Some(confirm) = &model.confirm {
+                layers = layers.push(overlays::confirm_modal(confirm, palette));
+            }
+        }
     }
 
     // The right-click context menus sit above every other overlay.
@@ -1219,6 +1228,47 @@ pub fn shell_view(model: &ShellViewModel) -> Element<'_, ShellMessage> {
     workspace_view(model, model.chrome.palette())
 }
 
+/// The "All sessions ended" landing screen (spec 1.5): shown when every
+/// workspace has closed, with a prominent path back into the launcher.
+fn empty_state_view<'a>(palette: Palette) -> Element<'a, ShellMessage> {
+    let start = button(
+        text("Start a new session")
+            .size(theme::SIZE_BODY)
+            .color(palette.bgc),
+    )
+    .padding(Padding::from([9.0, 18.0]))
+    .on_press(ShellMessage::NewSessionRequested)
+    .style(move |_theme, status| {
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        button::Style {
+            background: Some(
+                theme::with_alpha(palette.accent, if hovered { 1.0 } else { 0.9 }).into(),
+            ),
+            text_color: palette.bgc,
+            border: theme::border(Color::TRANSPARENT, 0.0, theme::RADIUS_ROW),
+            ..Default::default()
+        }
+    });
+    let body = column![
+        text("All sessions ended")
+            .size(theme::SIZE_TITLE)
+            .font(theme::ui(iced::font::Weight::Semibold))
+            .color(palette.t1),
+        text("Open a project to get back to work.")
+            .size(theme::SIZE_BODY)
+            .color(palette.t3),
+        start,
+    ]
+    .spacing(12)
+    .align_x(Alignment::Center);
+    container(body)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(Alignment::Center)
+        .align_y(Alignment::Center)
+        .into()
+}
+
 /// Placeholder for the Home dashboard main area (the pinned cross-project
 /// split view lands in the Home stage; the view switch is already real).
 fn home_placeholder_view<'a>(palette: Palette) -> Element<'a, ShellMessage> {
@@ -1242,6 +1292,10 @@ fn home_placeholder_view<'a>(palette: Palette) -> Element<'a, ShellMessage> {
 }
 
 fn workspace_view<'a>(model: &'a ShellViewModel, palette: Palette) -> Element<'a, ShellMessage> {
+    // Every session closed: the valid empty state (spec 1.5).
+    if model.projection.visible_panes.is_empty() {
+        return empty_state_view(palette);
+    }
     let focused = model.projection.focused_pane_id.as_ref();
     let find_highlight = if model.find.open {
         model.find.current_match
@@ -1817,6 +1871,7 @@ mod tests {
             surface_term_schemes: HashMap::new(),
             context_menu: None,
             rail_menu: None,
+            confirm: None,
         }
     }
 

@@ -7,7 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.47.0]
+## [0.48.0]
+
+### Added
+
+- **Everything can be closed now** (spec 1.5). Closing the last tab of the last project no longer silently refuses: the app lands on a proper "All sessions ended" screen with a prominent "Start a new session" button that opens the launcher. Reopening from the empty state works normally.
+- **Close all sessions** is available from the command palette (global) and each project's right-click menu (per project), with a confirmation prompt since it may end running work. Enter confirms, Esc cancels.
 
 ### Added
 

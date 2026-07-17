@@ -42,7 +42,7 @@ pub use icons::{Icon, icon};
 #[cfg(feature = "iced-runtime")]
 pub use metrics::CellMetrics;
 #[cfg(feature = "iced-runtime")]
-pub use overlays::{FindViewState, NotificationCard, NotificationsViewState};
+pub use overlays::{ConfirmViewState, FindViewState, NotificationCard, NotificationsViewState};
 #[cfg(feature = "iced-runtime")]
 pub use session_launcher::{
     LauncherItem, LauncherStep, SessionLauncherViewState, SshProfileForm, session_launcher,

@@ -46,6 +46,9 @@ pub enum Overlay {
     CommandPalette,
     QuickLaunch,
     Settings,
+    /// A destructive-action confirmation (close all, close running tab). The
+    /// pending action lives in the runtime; the modal is generic.
+    Confirm,
 }
 
 /// What the main area shows: the active workspace's split view, or the Home

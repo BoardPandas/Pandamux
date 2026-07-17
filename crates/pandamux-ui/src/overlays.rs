@@ -80,6 +80,74 @@ pub fn find_bar<'a>(state: &FindViewState, palette: Palette) -> Element<'a, Shel
         .into()
 }
 
+/// A generic destructive-action confirmation (spec 1.5 close-all, spec 2.6
+/// close-running-tab). Cancel dismisses; the confirm button fires
+/// [`ShellMessage::ConfirmAccepted`] and the runtime runs whatever it parked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConfirmViewState {
+    pub title: String,
+    pub body: String,
+    pub action_label: String,
+}
+
+pub fn confirm_modal<'a>(
+    state: &'a ConfirmViewState,
+    palette: Palette,
+) -> Element<'a, ShellMessage> {
+    let cancel = button(text("Cancel").size(theme::SIZE_BODY).color(palette.t2))
+        .padding(Padding::from([6.0, 14.0]))
+        .on_press(ShellMessage::OverlayDismissed)
+        .style(move |_theme, status| {
+            let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+            button::Style {
+                background: hovered.then(|| palette.ov(0.08).into()),
+                text_color: palette.t2,
+                border: theme::border(palette.ov(0.12), 1.0, theme::RADIUS_ROW),
+                ..Default::default()
+            }
+        });
+    let confirm = button(
+        text(state.action_label.clone())
+            .size(theme::SIZE_BODY)
+            .color(palette.bgc),
+    )
+    .padding(Padding::from([6.0, 14.0]))
+    .on_press(ShellMessage::ConfirmAccepted)
+    .style(move |_theme, status| {
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        button::Style {
+            background: Some(
+                theme::with_alpha(palette.accent, if hovered { 1.0 } else { 0.9 }).into(),
+            ),
+            text_color: palette.bgc,
+            border: theme::border(Color::TRANSPARENT, 0.0, theme::RADIUS_ROW),
+            ..Default::default()
+        }
+    });
+
+    let card = container(
+        column![
+            text(state.title.clone())
+                .size(theme::SIZE_TITLE)
+                .font(theme::ui(iced::font::Weight::Semibold))
+                .color(palette.t1),
+            text(state.body.clone())
+                .size(theme::SIZE_BODY)
+                .color(palette.t3),
+            row![Space::new().width(Length::Fill), cancel, confirm]
+                .spacing(8)
+                .align_y(Alignment::Center),
+        ]
+        .spacing(12)
+        .padding(16)
+        .width(Length::Fixed(380.0)),
+    )
+    .width(Length::Fixed(380.0))
+    .style(move |_theme| crate::command_palette::overlay_card_style(palette));
+
+    crate::command_palette::modal(card, palette, Alignment::Center)
+}
+
 pub fn copy_mode_indicator<'a>(palette: Palette) -> Element<'a, ShellMessage> {
     container(
         text("COPY MODE  \u{2022}  hjkl / arrows to move  \u{2022}  Esc to exit")

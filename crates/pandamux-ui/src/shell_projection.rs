@@ -19,6 +19,29 @@ pub struct ShellProjection {
     pub columns: Vec<ColumnProjection>,
 }
 
+impl ShellProjection {
+    /// The empty-state projection: every workspace has closed (spec 1.5). The
+    /// UI renders the "All sessions ended" screen when `visible_panes` is
+    /// empty.
+    pub fn empty() -> Self {
+        Self {
+            workspace_id: WorkspaceId::from("ws-none"),
+            title: String::new(),
+            focused_pane_id: None,
+            zoomed_pane_id: None,
+            root: ShellNodeProjection::Pane(PaneProjection {
+                id: PaneId::from("pane-none"),
+                is_focused: false,
+                is_zoomed: false,
+                surfaces: Vec::new(),
+                active_surface_id: None,
+            }),
+            visible_panes: Vec::new(),
+            columns: Vec::new(),
+        }
+    }
+}
+
 /// One vertical column of stacked panes in the design's column layout.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ColumnProjection {

@@ -113,6 +113,8 @@ pub struct NativeShellRuntime {
     pending_type_launch: Option<PendingTypeLaunch>,
     /// The chosen type parked while an SSH credential is collected.
     pending_session_type: Option<SessionType>,
+    /// The destructive action parked behind the confirm modal (spec 1.5/2.6).
+    pending_confirm: Option<PendingConfirm>,
     /// Persistent clipboard policy (plan F1).
     clipboard_config: ClipboardConfig,
     /// Active drag-and-drop of a tab, if any (plan Section 12.3).
@@ -153,6 +155,13 @@ struct PendingRemoteLaunch {
     config: SshConfig,
     /// What to run once the remote PTY is ready (Terminal = nothing extra).
     session: SessionType,
+}
+
+/// A destructive action waiting on the confirm modal (spec 1.5; the
+/// close-running-tab variant joins with the keymap stage).
+#[derive(Clone, Debug)]
+enum PendingConfirm {
+    CloseAll { project_id: Option<ProjectId> },
 }
 
 /// Where the launcher's SessionType step will launch once a type is chosen
@@ -265,6 +274,7 @@ impl NativeShellRuntime {
             launcher_prefs,
             pending_type_launch: None,
             pending_session_type: None,
+            pending_confirm: None,
             clipboard_config: ClipboardConfig::default(),
             drag: None,
             context_menu: None,
@@ -1545,23 +1555,25 @@ impl NativeShellRuntime {
                 }
             }
             ShellMessage::CloseAllRequested(project_id) => {
-                let _ = self
-                    .app_state
-                    .apply(AppIntent::Workspace(WorkspaceIntent::CloseAll {
-                        project_id,
-                    }));
-                // Until the empty-state stage lands, an emptied app gets a
-                // fresh default workspace so the view stays valid.
-                if self.app_state.workspaces.is_empty() {
-                    let _ = self
-                        .app_state
-                        .apply(AppIntent::Workspace(WorkspaceIntent::Create {
-                            title: None,
-                            shell: None,
-                        }));
-                }
-                if self.live_ptys {
-                    let _ = self.store.save_session(&self.app_state);
+                // Destructive and possibly killing running work: confirm first
+                // (spec 1.5).
+                self.pending_confirm = Some(PendingConfirm::CloseAll { project_id });
+                self.chrome.active_overlay = Overlay::Confirm;
+            }
+            ShellMessage::ConfirmAccepted => {
+                self.chrome.active_overlay = Overlay::None;
+                match self.pending_confirm.take() {
+                    Some(PendingConfirm::CloseAll { project_id }) => {
+                        let _ =
+                            self.app_state
+                                .apply(AppIntent::Workspace(WorkspaceIntent::CloseAll {
+                                    project_id,
+                                }));
+                        if self.live_ptys {
+                            let _ = self.store.save_session(&self.app_state);
+                        }
+                    }
+                    None => {}
                 }
             }
             ShellMessage::SessionGroupingChanged(grouping) => {
@@ -1784,12 +1796,14 @@ impl NativeShellRuntime {
                     || self.session_rename.is_some()
                     || self.project_rename.is_some();
                 self.chrome.active_overlay = Overlay::None;
-                // Esc also cancels an in-flight drag, menus, and renames.
+                // Esc also cancels an in-flight drag, menus, renames, and any
+                // parked destructive action.
                 self.drag = None;
                 self.context_menu = None;
                 self.rail_menu = None;
                 self.session_rename = None;
                 self.project_rename = None;
+                self.pending_confirm = None;
                 // A bare Esc with nothing to dismiss goes to the terminal.
                 if !had_overlay && !had_drag && !had_menu {
                     self.write_terminal_input(&[0x1b]);
@@ -1889,6 +1903,11 @@ impl NativeShellRuntime {
                 // With no overlay open, plain Enter is a terminal carriage return.
                 if self.chrome.active_overlay == Overlay::None {
                     self.write_terminal_input(b"\r");
+                    return;
+                }
+                // Enter on the confirm modal accepts (spec 1.5).
+                if self.chrome.active_overlay == Overlay::Confirm {
+                    self.update_shell(ShellMessage::ConfirmAccepted);
                     return;
                 }
                 // Enter activates the highlighted launcher row on the
@@ -2196,11 +2215,10 @@ impl NativeShellRuntime {
                 workspace_id: Some(workspace_id),
                 pane_id,
             })
-        } else if self.app_state.workspaces.len() > 1 {
-            AppIntent::Workspace(WorkspaceIntent::Close { workspace_id })
         } else {
-            // Last terminal in the app: nothing to fall back to.
-            return;
+            // The last tab of the last workspace closes too: the app lands on
+            // the "All sessions ended" empty state (spec 1.5).
+            AppIntent::Workspace(WorkspaceIntent::Close { workspace_id })
         };
         self.last_error = self.app_state.apply(intent).err();
     }
@@ -2321,7 +2339,7 @@ impl NativeShellRuntime {
                 .app_state
                 .active_workspace()
                 .map(project_workspace_shell)
-                .expect("default app state always has an active workspace"),
+                .unwrap_or_else(pandamux_ui::ShellProjection::empty),
             terminals: self.terminals.clone(),
             chrome: self.chrome.clone(),
             cursor_on: self.cursor_on(),
@@ -2350,7 +2368,31 @@ impl NativeShellRuntime {
                 .collect(),
             context_menu: self.context_menu.clone(),
             rail_menu: self.rail_menu.clone(),
+            confirm: self.confirm_view(),
         };
+    }
+
+    /// The confirm modal's content for whatever destructive action is parked.
+    fn confirm_view(&self) -> Option<pandamux_ui::ConfirmViewState> {
+        match self.pending_confirm.as_ref()? {
+            PendingConfirm::CloseAll { project_id } => {
+                let scope = project_id
+                    .as_ref()
+                    .and_then(|id| {
+                        self.app_state
+                            .projects
+                            .iter()
+                            .find(|record| &record.id == id)
+                    })
+                    .map(|record| format!("every session in {}", record.name))
+                    .unwrap_or_else(|| "every open session".to_string());
+                Some(pandamux_ui::ConfirmViewState {
+                    title: "Close all sessions?".to_string(),
+                    body: format!("This closes {scope} and may end running work."),
+                    action_label: "Close all".to_string(),
+                })
+            }
+        }
     }
 
     /// Build the full command-palette item list (commands + pane actions +
@@ -2362,6 +2404,12 @@ impl NativeShellRuntime {
                 "New session",
                 Some("Ctrl T"),
                 ShellMessage::NewSessionRequested,
+            ),
+            PaletteItem::new(
+                "\u{00d7}",
+                "Close all sessions",
+                None,
+                ShellMessage::CloseAllRequested(None),
             ),
             PaletteItem::new(
                 "\u{1f50d}",
@@ -3546,11 +3594,11 @@ fn terminal_snapshots(
 /// A minimal view model for construction time; overwritten by the first
 /// `refresh_terminal_snapshots` call.
 fn initial_view_model(app_state: &AppState, chrome: &ChromeState) -> ShellViewModel {
-    let workspace = app_state
-        .active_workspace()
-        .expect("default app state should always have an active workspace");
     ShellViewModel {
-        projection: project_workspace_shell(workspace),
+        projection: app_state
+            .active_workspace()
+            .map(project_workspace_shell)
+            .unwrap_or_else(pandamux_ui::ShellProjection::empty),
         terminals: Vec::new(),
         chrome: chrome.clone(),
         cursor_on: true,
@@ -3567,6 +3615,7 @@ fn initial_view_model(app_state: &AppState, chrome: &ChromeState) -> ShellViewMo
         surface_term_schemes: HashMap::new(),
         context_menu: None,
         rail_menu: None,
+        confirm: None,
     }
 }
 
@@ -3920,27 +3969,6 @@ mod tests {
 
         assert_eq!(runtime.app_state.workspaces.len(), 1);
         assert!(runtime.app_state.workspace(&default_ws).is_none());
-        assert_eq!(runtime.last_error(), None);
-    }
-
-    #[test]
-    fn closing_the_only_session_in_the_app_is_a_noop() {
-        let mut runtime = NativeShellRuntime::default();
-        let surface_id = runtime
-            .view_model()
-            .projection
-            .visible_panes
-            .first()
-            .and_then(|pane| pane.surfaces.first())
-            .expect("default surface")
-            .id
-            .clone();
-
-        runtime.update_shell(ShellMessage::SurfaceClosed(surface_id));
-
-        // The very last terminal stays put; no error is raised.
-        assert_eq!(runtime.app_state.workspaces.len(), 1);
-        assert_eq!(runtime.view_model().projection.visible_panes.len(), 1);
         assert_eq!(runtime.last_error(), None);
     }
 
@@ -4477,12 +4505,45 @@ mod tests {
     }
 
     #[test]
-    fn close_all_keeps_the_app_usable_until_empty_state_lands() {
+    fn close_all_confirms_then_lands_on_the_empty_state() {
         let mut runtime = NativeShellRuntime::default();
+        // The request parks behind the confirm modal.
         runtime.update_shell(ShellMessage::CloseAllRequested(None));
+        assert_eq!(runtime.view_model().chrome.active_overlay, Overlay::Confirm);
+        assert!(runtime.view_model().confirm.is_some());
         assert!(!runtime.app_state.workspaces.is_empty());
-        assert!(runtime.app_state.active_workspace_id.is_some());
+
+        // Esc cancels without closing anything.
+        runtime.update_shell(ShellMessage::OverlayDismissed);
+        assert!(!runtime.app_state.workspaces.is_empty());
+
+        // Confirming closes everything: the valid empty state (spec 1.5).
+        runtime.update_shell(ShellMessage::CloseAllRequested(None));
+        runtime.update_shell(ShellMessage::ConfirmAccepted);
+        assert!(runtime.app_state.workspaces.is_empty());
+        assert_eq!(runtime.app_state.active_workspace_id, None);
+        assert!(runtime.view_model().projection.visible_panes.is_empty());
+        // The empty-state view builds, and its CTA reopens the launcher.
+        {
+            let _view = app_view(runtime.view_model());
+        }
+        runtime.update_shell(ShellMessage::NewSessionRequested);
+        assert_eq!(
+            runtime.view_model().chrome.active_overlay,
+            Overlay::QuickLaunch
+        );
         assert_eq!(runtime.last_error(), None);
+    }
+
+    #[test]
+    fn closing_the_last_tab_reaches_the_empty_state() {
+        let mut runtime = NativeShellRuntime::default();
+        let surface_id = runtime.active_surface_id().expect("focused surface");
+        runtime.update_shell(ShellMessage::SurfaceClosed(surface_id));
+        assert!(runtime.app_state.workspaces.is_empty());
+        assert!(runtime.view_model().projection.visible_panes.is_empty());
+        assert_eq!(runtime.last_error(), None);
+        let _view = app_view(runtime.view_model());
     }
 
     #[test]
@@ -4639,6 +4700,10 @@ mod tests {
         runtime.update_shell(ShellMessage::PaletteMoveSelection(1));
         assert_eq!(runtime.view_model().palette.selected, 1);
         runtime.update_shell(ShellMessage::PaletteActivate);
+        // Item 1 is "Close all sessions": activating it runs the action,
+        // which parks behind its confirm modal.
+        assert_eq!(runtime.view_model().chrome.active_overlay, Overlay::Confirm);
+        runtime.update_shell(ShellMessage::OverlayDismissed);
         assert_eq!(runtime.view_model().chrome.active_overlay, Overlay::None);
     }
 
