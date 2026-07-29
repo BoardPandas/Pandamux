@@ -415,7 +415,6 @@
         <li><a href="#shortcuts">Raccourcis clavier</a></li>
         <li><a href="#claude-code">Travailler avec Claude Code</a></li>
         <li><a href="#split-panes">Diviser un panneau</a></li>
-        <li><a href="#browser">Le navigateur intégré</a></li>
         <li><a href="#notifications">Notifications</a></li>
         <li><a href="#sessions">Sauvegarder une session</a></li>
         <li><a href="#themes">Thèmes</a></li>
@@ -444,7 +443,7 @@
       <ul>
         <li>Une <strong>fenêtre unique</strong> qui peut contenir autant de terminaux que tu veux</li>
         <li>Une <strong>barre latérale</strong> qui liste tous tes espaces de travail, avec la branche git, le répertoire courant, les ports actifs, le statut des PR GitHub, et les notifications</li>
-        <li>Un <strong>navigateur web intégré</strong> (à droite) qui peut afficher ce que ton agent Claude Code est en train de faire en temps réel</li>
+        <li>Des <strong>sessions SSH distantes</strong> qui ouvrent un shell distant dans n'importe quel pane, avec transfert de fichiers SFTP intégré</li>
         <li>Des <strong>notifications visuelles et sonores</strong> quand un agent a fini une tâche ou attend une réponse</li>
         <li>L'<strong>intégration automatique</strong> avec Claude Code, sans avoir à configurer quoi que ce soit</li>
       </ul>
@@ -498,7 +497,6 @@
       <ul>
         <li><strong>À gauche</strong> : la <em>barre latérale</em> avec un seul espace de travail appelé quelque chose comme <code>ws-1</code>. C'est ton "onglet" actuel.</li>
         <li><strong>Au centre</strong> : un terminal PowerShell prêt à recevoir des commandes.</li>
-        <li><strong>À droite</strong> : potentiellement un panneau navigateur vide (tu peux le fermer avec <kbd>Ctrl+Shift+B</kbd> si tu n'en as pas besoin).</li>
         <li><strong>En haut</strong> : une barre de titre avec le nom de PandaMUX, une cloche de notifications, et les boutons fenêtre classiques.</li>
       </ul>
       <p>
@@ -518,7 +516,7 @@
 
       <h3>Pane (panneau)</h3>
       <p>
-        Un <strong>pane</strong> est un bloc visuel à l'intérieur du workspace. Quand tu divises ton écran en deux pour avoir un terminal à gauche et un autre à droite, tu crées deux panes. Chaque pane peut afficher un terminal, un navigateur, ou un document markdown.
+        Un <strong>pane</strong> est un bloc visuel à l'intérieur du workspace. Quand tu divises ton écran en deux pour avoir un terminal à gauche et un autre à droite, tu crées deux panes. Chaque pane peut afficher un terminal, un document markdown, ou un diff.
       </p>
 
       <h3>Surface (onglet)</h3>
@@ -538,7 +536,7 @@
         </div>
         <div class="grid-card">
           <h4>Pane</h4>
-          <p>Un bloc visuel. Peut contenir terminal, navigateur, ou markdown.</p>
+          <p>Un bloc visuel. Peut contenir terminal, markdown, ou diff.</p>
         </div>
         <div class="grid-card">
           <h4>Surface</h4>
@@ -584,9 +582,6 @@
         <div><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd></div>
         <div>Rechercher dans le terminal courant</div>
 
-        <div><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd></div>
-        <div>Ouvrir/fermer le navigateur intégré</div>
-
         <div><kbd>F11</kbd></div>
         <div>Plein écran</div>
 
@@ -604,12 +599,11 @@
         C'est ici que PandaMUX devient intéressant. PandaMUX détecte automatiquement Claude Code et configure son intégration sans que tu aies à faire quoi que ce soit. Quand tu lances <code>claude</code> dans un terminal PandaMUX, les choses suivantes se passent en arrière-plan :
       </p>
       <ul>
-        <li>PandaMUX injecte ses instructions dans <code>~/.claude/CLAUDE.md</code> (lecture seule, surgical, non-intrusif) pour que Claude Code sache qu'il tourne dans PandaMUX et utilise le navigateur intégré au lieu d'ouvrir Playwright.</li>
+        <li>PandaMUX injecte ses instructions dans <code>~/.claude/CLAUDE.md</code> (lecture seule, surgical, non-intrusif) pour que Claude Code sache qu'il tourne dans PandaMUX et puisse le piloter via la CLI <code>pandamux</code>.</li>
         <li>Les <strong>hooks Claude Code</strong> (<code>SessionStart</code>, <code>PostToolUse</code>, <code>SubagentStop</code>, <code>Stop</code>) sont auto-enregistrés. Ils rapportent en temps réel dans la barre latérale l'activité de l'agent : quels outils il utilise, combien, s'il est en pause, s'il attend une réponse.</li>
-        <li>Un <strong>proxy CDP</strong> sur <code>localhost:9222</code> expose le navigateur intégré à Claude Code via <code>chrome-devtools-mcp</code>. Chaque page, clic, formulaire que l'agent visite est affiché dans ton panneau navigateur.</li>
       </ul>
       <p>
-        Résultat concret : tu lances <code>claude</code>, tu lui demandes "navigue sur github.com et cherche le repo PandaMUX", et tu vois en temps réel dans le panneau navigateur ce qu'il fait. Pas besoin de Playwright, pas de fenêtres invisibles, pas de configuration.
+        Résultat concret : tu lances <code>claude</code>, et la barre latérale te montre quels outils l'agent utilise et quand il t'attend, pendant que l'agent peut ouvrir des panes, diviser la disposition et t'envoyer des notifications. Pas de configuration.
       </p>
 
       <h3>Le plugin pandamux-orchestrator</h3>
@@ -651,22 +645,6 @@
       </div>
 
       <!-- ─────────────────────────────────────────────────────── -->
-      <h2 id="browser">Le navigateur intégré</h2>
-      <p>
-        PandaMUX embarque un vrai navigateur Chromium (pas une webview basique) que tu peux ouvrir à côté de n'importe quel terminal. Il sert à deux choses :
-      </p>
-      <ol>
-        <li><strong>Voir en direct ce que Claude Code fait</strong> quand il navigue sur le web via <code>chrome-devtools-mcp</code>. Chaque action de l'agent est visible en temps réel, comme si tu regardais par-dessus son épaule.</li>
-        <li><strong>Consulter la documentation d'une librairie, vérifier un dashboard, ouvrir Stack Overflow</strong> sans quitter PandaMUX.</li>
-      </ol>
-      <p>
-        Pour ouvrir un navigateur, utilise <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd>. Un pane navigateur s'ouvre à droite. Tape une URL dans la barre d'adresse, ou clique sur le bouton "nouvelle surface" pour avoir plusieurs onglets navigateur dans le même pane.
-      </p>
-      <p>
-        Le navigateur supporte les DevTools complets (clic droit → <em>Inspecter</em>), l'extension des shortcuts Chrome, et la navigation avec <kbd>Alt</kbd>+<kbd>←</kbd> et <kbd>Alt</kbd>+<kbd>→</kbd>.
-      </p>
-
-      <!-- ─────────────────────────────────────────────────────── -->
       <h2 id="notifications">Comprendre les notifications</h2>
       <p>
         Quand un agent finit une tâche ou a besoin de ton attention, PandaMUX t'alerte de plusieurs façons simultanément :
@@ -696,7 +674,7 @@
       <!-- ─────────────────────────────────────────────────────── -->
       <h2 id="sessions">Sauvegarder et restaurer une session</h2>
       <p>
-        PandaMUX sauvegarde automatiquement l'état de ta fenêtre toutes les 30 secondes : workspaces, panes, onglets, répertoires courants, URLs du navigateur. Quand tu ferme PandaMUX et que tu le relance, tu retrouves exactement la même disposition.
+        PandaMUX sauvegarde automatiquement l'état de ta fenêtre toutes les 30 secondes : workspaces, panes, onglets, répertoires courants. Quand tu ferme PandaMUX et que tu le relance, tu retrouves exactement la même disposition.
       </p>
       <p>
         Tu peux aussi sauvegarder manuellement une session avec un nom spécifique pour y revenir plus tard :
@@ -772,9 +750,6 @@ pandamux send "npm run dev"
 # Lister tous les workspaces
 pandamux list-workspaces
 
-# Ouvrir une URL dans le navigateur intégré
-pandamux browser open https://github.com/BoardPandas/Pandamux
-
 # Déclencher une notification
 pandamux notify "Build terminé avec succès"
 
@@ -841,7 +816,7 @@ pandamux tree</code></pre>
         Vérifie aussi que <code>~/.claude/CLAUDE.md</code> contient bien une section commençant par <code># pandamux</code>. Si elle manque, c'est que l'auto-injection a échoué. Relance PandaMUX depuis un terminal admin et regarde les logs.
       </p>
 
-      <h3>Le navigateur intégré est lent ou noir</h3>
+      <h3>Le rendu est lent ou la fenêtre est noire</h3>
       <p>
         Active l'accélération GPU dans les paramètres → <em>Avancé</em> → <em>Hardware acceleration</em>. Sur les machines plus anciennes sans GPU dédié, ça peut faire une grosse différence. Si tu es sur un GPU très ancien ou une VM, désactive plutôt l'accélération — elle peut produire des artefacts.
       </p>
@@ -853,7 +828,7 @@ pandamux tree</code></pre>
 
       <h3>Puis-je utiliser PandaMUX sur macOS ou Linux ?</h3>
       <p>
-        Non. PandaMUX est spécifiquement conçu pour Windows (il utilise ConPTY, des APIs Win32 natives, et des optimisations Electron pour Windows). Pour macOS, utilise <a href="https://cmux.com" target="_blank" rel="noopener">cmux</a>, qui est le projet parent écrit en Swift/AppKit. Pour Linux, il y a tmux, Ghostty, ou Warp — mais tu n'auras pas le plugin pandamux-orchestrator.
+        Non. PandaMUX est spécifiquement conçu pour Windows (il utilise ConPTY, des APIs Win32 natives, et une compilation Rust native ciblant Windows). Pour macOS, utilise <a href="https://cmux.com" target="_blank" rel="noopener">cmux</a>, qui est le projet parent écrit en Swift/AppKit. Pour Linux, il y a tmux, Ghostty, ou Warp — mais tu n'auras pas le plugin pandamux-orchestrator.
       </p>
 
       <!-- ─────────────────────────────────────────────────────── -->

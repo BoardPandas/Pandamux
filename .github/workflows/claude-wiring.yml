@@ -1,0 +1,44 @@
+name: Claude Wiring
+
+# Guards the .claude/ setup against silent miswiring: rule `paths:` globs that
+# match zero files, and hook matchers written in permissions syntax. Both fail
+# quietly at runtime, so only a check can tell a dead rule from a dormant one.
+#
+# This workflow covers edits to .claude/ itself. rust.yml runs the same guard on
+# crates/** changes, which catches the other direction of drift: a refactor that
+# moves the tree out from under a rule glob without touching .claude/ at all.
+
+on:
+  pull_request:
+    paths:
+      - ".claude/**"
+      - "CLAUDE.md"
+      - "scripts/check-claude-wiring.mjs"
+      - ".github/workflows/claude-wiring.yml"
+  push:
+    branches: ["master", "main"]
+    paths:
+      - ".claude/**"
+      - "CLAUDE.md"
+      - "scripts/check-claude-wiring.mjs"
+      - ".github/workflows/claude-wiring.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  wiring:
+    name: Rule scoping + hook matchers
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Claude wiring guard
+        run: node scripts/check-claude-wiring.mjs

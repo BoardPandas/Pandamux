@@ -10,10 +10,14 @@ Before creating this plan, you MUST consult both knowledge bases for relevant en
 1. LL-G (Lessons Learned / Gotchas):
    WebFetch https://raw.githubusercontent.com/BoardPandas/LL-G/main/llms.txt
    Then fetch sub-indexes for each technology in your plan.
+   Shelves matching this repo: rust, claude-code, windows, bash, powershell,
+   git, github-actions.
 
 2. BP (Best Practices):
    WebFetch https://raw.githubusercontent.com/BoardPandas/BP/main/llms.txt
    Then fetch concern indexes relevant to your plan.
+   Concerns matching this repo: claude-config, versioning, safety,
+   deployment, documentation, security.
 
 Load ALL HIGH-severity LL-G entries and ALL FOUNDATIONAL BP entries for matched technologies.
 Incorporate relevant gotchas and practices into your plan BEFORE writing it.

@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PandaMUX — Le terminal concu pour Claude Code</title>
-  <meta name="description" content="Application Windows basee sur Electron. Onglets verticaux, notifications quand les agents ont besoin d'attention, panneaux divises, navigateur integre et une API pipe pour l'automatisation." />
+  <meta name="description" content="Application Windows native ecrite en Rust. Onglets verticaux, notifications quand les agents ont besoin d'attention, panneaux divises, sessions SSH distantes et une API pipe pour l'automatisation." />
   <link rel="icon" type="image/png" href="assets/favicon.png" />
   <link rel="apple-touch-icon" href="assets/favicon.png" />
 
@@ -545,9 +545,9 @@
       </h1>
 
       <p class="fade-in fade-in-d2" data-i18n="hero.desc">
-        Application Windows bas&eacute;e sur Electron. Onglets verticaux,
+        Application Windows native &eacute;crite en Rust. Onglets verticaux,
         notifications quand les agents ont besoin d'attention, panneaux
-        divis&eacute;s, navigateur int&eacute;gr&eacute; et une API pipe pour l'automatisation.
+        divis&eacute;s, sessions SSH distantes et une API pipe pour l'automatisation.
       </p>
 
       <div class="hero-buttons fade-in fade-in-d3">
@@ -604,18 +604,17 @@
     <section class="features fade-in fade-in-d4">
       <h2 data-i18n="features.title">Fonctionnalit&eacute;s</h2>
       <ul>
-        <li><strong data-i18n="f1.name">Int&eacute;gration passive Claude Code</strong> : <span data-i18n-html="f1.desc">PandaMUX observe Claude Code sans modifier son comportement. Un proxy CDP sur <code>localhost:9222</code> permet au navigateur int&eacute;gr&eacute; de montrer chaque action en temps r&eacute;el. Les hooks auto-configur&eacute;s rapportent l'activit&eacute; des agents et outils dans la barre lat&eacute;rale. Z&eacute;ro configuration.</span></li>
-        <li><strong data-i18n="f2.name">Navigateur int&eacute;gr&eacute;</strong> : <span data-i18n-html="f2.desc">ouvrez un navigateur &agrave; c&ocirc;t&eacute; de votre terminal avec une API scriptable. Quand Claude Code navigue via <code>chrome-devtools-mcp</code>, chaque page, clic et formulaire est visible dans le panneau navigateur.</span></li>
-        <li><strong data-i18n="f3.name">Anneaux de notification</strong> : <span data-i18n-html="f3.desc">les panneaux s'illuminent en bleu quand les agents ont besoin d'attention. Notification Windows toast, flash barre des t&acirc;ches, et centre de notifications int&eacute;gr&eacute;.</span></li>
-        <li><strong data-i18n="f4.name">Onglets verticaux</strong> : <span data-i18n-html="f4.desc">la barre lat&eacute;rale affiche la branche git, le r&eacute;pertoire de travail, les ports, le nombre d'agents, le statut PR et le texte de notification. Double-clic pour renommer.</span></li>
-        <li><strong data-i18n="f5.name">Panneaux divis&eacute;s</strong> : <span data-i18n-html="f5.desc">divisions horizontales et verticales dans chaque onglet. Ctrl+D pour diviser &agrave; droite, Ctrl+Shift+D pour diviser en bas.</span></li>
-        <li><strong data-i18n="f6.name">Indicateurs d'activit&eacute;</strong> : <span data-i18n-html="f6.desc">orange pulsant = en cours, vert = termin&eacute;, rouge = interrompu. Visible d'un coup d'&oelig;il dans la barre lat&eacute;rale.</span></li>
-        <li><strong data-i18n="f7.name">Sessions sauvegard&eacute;es</strong> : <span data-i18n-html="f7.desc">sauvegardez vos splits, r&eacute;pertoires et URL navigateur. Restauration automatique au d&eacute;marrage.</span></li>
-        <li><strong data-i18n="f8.name">Scriptable</strong> : <span data-i18n-html="f8.desc">CLI et API named pipe (<code>\\.\pipe\pandamux</code>) pour l'automatisation et le scripting. Protocole JSON-RPC v2 compatible avec cmux.</span></li>
-        <li><strong data-i18n="f9.name">Natif Windows</strong> : <span data-i18n-html="f9.desc">ConPTY pour l'&eacute;mulation de terminal, notifications toast Windows, flash barre des t&acirc;ches, title bar overlay native.</span></li>
-        <li><strong data-i18n="f10.name">Acc&eacute;l&eacute;ration GPU</strong> : <span data-i18n-html="f10.desc">propuls&eacute; par xterm.js avec rendu WebGL pour un affichage fluide.</span></li>
-        <li><strong data-i18n="f11.name">Th&egrave;mes compatibles</strong> : <span data-i18n-html="f11.desc">importez vos th&egrave;mes depuis Windows Terminal ou Ghostty. 450+ th&egrave;mes Ghostty inclus.</span></li>
-        <li><strong data-i18n="f12.name">Raccourcis clavier</strong> : <span data-i18n-html="f12.desc">raccourcis complets pour les espaces de travail, les divisions, le navigateur et plus.</span></li>
+        <li><strong data-i18n="f1.name">Int&eacute;gration passive Claude Code</strong> : <span data-i18n-html="f1.desc">PandaMUX observe Claude Code sans modifier son comportement. Les hooks auto-configur&eacute;s rapportent l'activit&eacute; des agents et outils dans la barre lat&eacute;rale. Z&eacute;ro configuration.</span></li>
+        <li><strong data-i18n="f2.name">Anneaux de notification</strong> : <span data-i18n-html="f2.desc">les panneaux s'illuminent en bleu quand les agents ont besoin d'attention. Notification Windows toast, flash barre des t&acirc;ches, et centre de notifications int&eacute;gr&eacute;.</span></li>
+        <li><strong data-i18n="f3.name">Onglets verticaux</strong> : <span data-i18n-html="f3.desc">la barre lat&eacute;rale affiche la branche git, le r&eacute;pertoire de travail, les ports, le nombre d'agents, le statut PR et le texte de notification. Double-clic pour renommer.</span></li>
+        <li><strong data-i18n="f4.name">Panneaux divis&eacute;s</strong> : <span data-i18n-html="f4.desc">divisions horizontales et verticales dans chaque onglet. Ctrl+D pour diviser &agrave; droite, Ctrl+Shift+D pour diviser en bas.</span></li>
+        <li><strong data-i18n="f5.name">Indicateurs d'activit&eacute;</strong> : <span data-i18n-html="f5.desc">orange pulsant = en cours, vert = termin&eacute;, rouge = interrompu. Visible d'un coup d'&oelig;il dans la barre lat&eacute;rale.</span></li>
+        <li><strong data-i18n="f6.name">Sessions sauvegard&eacute;es</strong> : <span data-i18n-html="f6.desc">sauvegardez vos splits et r&eacute;pertoires. Restauration automatique au d&eacute;marrage.</span></li>
+        <li><strong data-i18n="f7.name">Scriptable</strong> : <span data-i18n-html="f7.desc">CLI et API named pipe (<code>\\.\pipe\pandamux</code>) pour l'automatisation et le scripting. Protocole JSON-RPC v2 compatible avec cmux.</span></li>
+        <li><strong data-i18n="f8.name">Natif Windows</strong> : <span data-i18n-html="f8.desc">ConPTY pour l'&eacute;mulation de terminal, notifications toast Windows, flash barre des t&acirc;ches, title bar overlay native.</span></li>
+        <li><strong data-i18n="f9.name">Acc&eacute;l&eacute;ration GPU</strong> : <span data-i18n-html="f9.desc">propuls&eacute; par wgpu avec rendu GPU pour un affichage fluide.</span></li>
+        <li><strong data-i18n="f10.name">Th&egrave;mes compatibles</strong> : <span data-i18n-html="f10.desc">importez vos th&egrave;mes depuis Windows Terminal ou Ghostty. 450+ th&egrave;mes Ghostty inclus.</span></li>
+        <li><strong data-i18n="f11.name">Raccourcis clavier</strong> : <span data-i18n-html="f11.desc">raccourcis complets pour les espaces de travail, les divisions, les sessions SSH et plus.</span></li>
       </ul>
     </section>
 
@@ -633,7 +632,7 @@
           <span data-i18n="faq1.q">Quelle est la relation entre PandaMUX et cmux ?</span>
           <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
         </button>
-        <div class="faq-answer"><p data-i18n-html="faq1.a">PandaMUX est un fork Windows de <a href="https://github.com/manaflow-ai/cmux" target="_blank" rel="noopener">cmux</a>. cmux est une application macOS native (Swift + AppKit + Ghostty). PandaMUX reproduit la m&ecirc;me exp&eacute;rience sur Windows en utilisant Electron + xterm.js + ConPTY. Le protocole CLI/pipe est compatible entre les deux.</p></div>
+        <div class="faq-answer"><p data-i18n-html="faq1.a">PandaMUX est un fork Windows de <a href="https://github.com/manaflow-ai/cmux" target="_blank" rel="noopener">cmux</a>. cmux est une application macOS native (Swift + AppKit + Ghostty). PandaMUX reproduit la m&ecirc;me exp&eacute;rience sur Windows en utilisant Rust + Iced + alacritty_terminal + ConPTY. Le protocole CLI/pipe est compatible entre les deux.</p></div>
       </div>
       <div class="faq-item">
         <button class="faq-question" onclick="this.parentElement.classList.toggle('open')">
@@ -661,7 +660,7 @@
           <span data-i18n="faq5.q">En quoi c'est diff&eacute;rent de Windows Terminal ?</span>
           <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
         </button>
-        <div class="faq-answer"><p data-i18n-html="faq5.a">Windows Terminal est un excellent &eacute;mulateur de terminal, mais il n'a pas de syst&egrave;me de notification, pas de visibilit&eacute; sur l'activit&eacute; des agents, pas de navigateur int&eacute;gr&eacute;, et pas de m&eacute;tadonn&eacute;es live dans les onglets. PandaMUX est con&ccedil;u sp&eacute;cifiquement pour superviser des agents IA.</p></div>
+        <div class="faq-answer"><p data-i18n-html="faq5.a">Windows Terminal est un excellent &eacute;mulateur de terminal, mais il n'a pas de syst&egrave;me de notification, pas de visibilit&eacute; sur l'activit&eacute; des agents, et pas de m&eacute;tadonn&eacute;es live dans les onglets. PandaMUX est con&ccedil;u sp&eacute;cifiquement pour superviser des agents IA.</p></div>
       </div>
       <div class="faq-item">
         <button class="faq-question" onclick="this.parentElement.classList.toggle('open')">

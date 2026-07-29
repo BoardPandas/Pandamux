@@ -3,15 +3,11 @@ description: Enforce BP best practices check before starting new work
 paths:
   - "CLAUDE.md"
   - ".claude/**"
-  - "Dockerfile*"
-  - "docker-compose*"
-  - "biome.*"
-  - "turbo.json"
-  - "pnpm-workspace.yaml"
-  - "vitest.config.*"
-  - "playwright.config.*"
-  - "jest.config.*"
   - ".github/**"
+  - "Cargo.toml"
+  - "crates/*/Cargo.toml"
+  - "netlify.toml"
+  - "winget/**"
 ---
 
 # RULE 3 Enforcement: Check BP Before Configuration Work

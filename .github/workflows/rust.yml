@@ -29,6 +29,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Install Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      # Catches a refactor that moves the tree out from under a rule `paths:` glob.
+      # Edits to .claude/ itself are covered by claude-wiring.yml, which this
+      # workflow's path filters deliberately do not match.
+      - name: Claude wiring guard (rule scoping + hook matchers)
+        run: node scripts/check-claude-wiring.mjs
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 

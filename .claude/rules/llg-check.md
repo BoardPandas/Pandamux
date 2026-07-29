@@ -1,13 +1,11 @@
 ---
 description: Enforce LL-G knowledge base check before writing code
 paths:
-  - "src/**"
-  - "lib/**"
-  - "app/**"
-  - "worker/**"
-  - "api/**"
+  - "crates/**"
   - "scripts/**"
-  - "middleware.*"
+  - "resources/shell-integration/**"
+  - "resources/pandamux-orchestrator/**"
+  - "site/**"
 ---
 
 # RULE 1 Enforcement: Check LL-G Before Writing Code

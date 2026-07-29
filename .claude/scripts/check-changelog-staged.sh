@@ -40,7 +40,11 @@ staged=$(git diff --cached --name-only 2>/dev/null)
 if echo "$staged" | grep -q "^CHANGELOG.md$"; then
   exit 0
 else
-  echo "BLOCKED: CHANGELOG.md is not staged. Update the changelog and version before committing."
-  echo "(Merge commits are exempt. For a genuinely trivial commit, set SKIP_CHANGELOG=1 to bypass.)"
+  # A blocking hook (exit 2) has its stdout DISCARDED; only stderr reaches Claude.
+  # Without the >&2 redirect the commit is refused with "No stderr output" and no reason.
+  {
+    echo "BLOCKED: CHANGELOG.md is not staged. Update the changelog and version before committing."
+    echo "(Merge commits are exempt. For a genuinely trivial commit, set SKIP_CHANGELOG=1 to bypass.)"
+  } >&2
   exit 2
 fi

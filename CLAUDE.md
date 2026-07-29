@@ -4,11 +4,11 @@ Native Windows terminal multiplexer for AI agents. Rust workspace: Iced (GPU UI)
 
 **Owner**: BoardPandas (github.com/BoardPandas). Prefers fast, pragmatic solutions; tests live.
 **Repo**: github.com/BoardPandas/Pandamux | **Site**: pandamux.boardpandas.ai (Netlify, static from `site/`)
-**Version**: single source is `[workspace.package] version` in the root `Cargo.toml` (currently 0.35.x). See `CHANGELOG.md`.
+**Version**: single source is `[workspace.package] version` in the root `Cargo.toml`. Read it there rather than trusting a number quoted here. See `CHANGELOG.md`.
 
 > **History**: this app was rewritten from an Electron/TypeScript prototype into a fully native Rust application (plan: `tasks/plan-repo.md`). The Electron build was a never-shipped fork pull and has been deleted (Phase 7). The browser/CDP pane was intentionally dropped; agents use Claude Code's own browser tooling instead.
 >
-> Phases 1-6 are complete (native terminal engine, Iced shell, pipe/CLI parity, peripheral UI, SSH remote surfaces + OSC 52 + SFTP image paste). Phase 7 (ship: signed installer + release CI) is landing now. The `.claude/` folder is the source of truth for how this repo runs (commits, changelog, knowledge-base checks, agents). See Conventions at the bottom.
+> Phases 1-7 are complete (native terminal engine, Iced shell, pipe/CLI parity, peripheral UI, SSH remote surfaces + OSC 52 + SFTP image paste, and ship: signed installer + release CI). Signed releases have been publishing from the tag workflow since v0.37. The `.claude/` folder is the source of truth for how this repo runs (commits, changelog, knowledge-base checks, agents). See Conventions at the bottom.
 
 ---
 
@@ -34,6 +34,7 @@ cargo run  -p pandamux-app --features iced-runtime -- --headless         # force
 # Checks
 cargo fmt --all --check
 .\scripts\check-rust-boundaries.ps1     # enforces the crate-isolation invariant (Section 6.1 of the plan)
+node scripts/check-claude-wiring.mjs    # rule `paths:` globs resolve + hook matchers are tool names
 cargo test --workspace
 cargo test -p pandamux-ui  --features iced-runtime --lib
 cargo test -p pandamux-app --features iced-runtime --bin pandamux
@@ -136,7 +137,7 @@ Scripts in `resources/shell-integration/` (bash/zsh/PowerShell/cmd) report cwd, 
 
 ## Website (pandamux.boardpandas.ai)
 
-Static site in `site/`, deployed to Netlify (`netlify.toml`). `site/index.html` is the landing page with i18n (en/fr/ar/ja via `site/i18n.js`, URL-hash switching). The public site still describes the previous download; it is updated to the native app when the first native release ships (`npx netlify deploy --prod --dir site`).
+Static site in `site/`, deployed to Netlify (`netlify.toml`). `site/index.html` is the landing page with i18n (en/fr/ar/ja via `site/i18n.js`, URL-hash switching). **Known stale**: the public site still describes the Electron-era download even though signed native releases have been shipping since v0.37. Updating its copy to the native app + NSIS installer is an open task (`npx netlify deploy --prod --dir site` to publish).
 
 ---
 

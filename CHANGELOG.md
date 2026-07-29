@@ -11,14 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Check for updates from Settings, and a one-click install.** Settings > General now has a Software update row showing the running version with a **Check for updates** button; when a newer release is found it offers an **Install** button that downloads the signed installer and runs it. The manual check reports "you're on the latest version" or a failure reason, and ignores the usual quarantine delay so an explicit check surfaces a new release right away.
 - **An update banner on launch.** When the automatic check (on launch and every few hours) finds a newer release, PandaMUX shows a banner across the top with **Install** and **Dismiss**. Installing downloads and launches the installer, then closes PandaMUX so the update can finish (your sessions are restored on next launch). Dismissing hides the banner until a newer version appears. This replaces the previous update toast.
+- A CI guard for the `.claude/` wiring (`scripts/check-claude-wiring.mjs`, run by the new Claude Wiring workflow and by the Rust workflow). It fails the build when a rule's `paths:` globs match no files or a hook matcher is written in permissions syntax, both of which otherwise fail silently and are indistinguishable from a rule that simply has not fired yet. Both workflows pin Node 24 LTS via `actions/setup-node@v7` rather than relying on whatever the runner ships. (Internal tooling; no runtime change.)
 
 ### Fixed
 
 - Restored the launcher double-submit regression test to the current two-step launch flow (spec 2.7): it now drives a folder submit followed by two session-type choices and confirms only one project is created.
+- The knowledge-base rule that is supposed to fire before code edits was scoped to `src/`, `lib/`, `app/`, `worker/` and `api/`, none of which exist in the Rust workspace, so it had never applied to a single source file. It now points at `crates/` and the other real source trees. (Internal tooling; no runtime change.)
+- A commit blocked for a missing changelog entry now explains why. The check wrote its reason to stdout, which is discarded for a blocking hook, so the commit was refused with no message attached. (Internal tooling; no runtime change.)
 
 ### Changed
 
+- The website and documentation now describe the native Rust app. They still called PandaMUX an Electron application, credited xterm.js and WebGL for GPU rendering, and quoted the old Electron stack in the cmux comparison, across all 22 locales. GPU rendering is now correctly attributed to wgpu.
 - Regenerated the developer documentation under `docs/` for the native Rust workspace. The prior wiki still described the deleted Electron/TypeScript prototype; it now covers the five crates (core/term/ui/app/cli), the named-pipe control plane, SSH remote surfaces, agent orchestration, shell integration, configuration, and the release pipeline, with the obsolete Electron pages moved to `docs/archive/`. (Internal docs only; no runtime change.)
+
+### Removed
+
+- The embedded browser is gone from the website and the documentation. It was still listed as a headline feature, with a CDP proxy on `localhost:9222`, a Ctrl+Shift+B shortcut, a `pandamux browser open` example, and its own docs section, but the browser pane was dropped in the native rewrite and the CLI rejects `pandamux browser`. Agents use Claude Code's own browser tooling instead. Session restore and the keyboard-shortcut summary no longer mention browser URLs either.
 
 ## [0.52.0]
 
