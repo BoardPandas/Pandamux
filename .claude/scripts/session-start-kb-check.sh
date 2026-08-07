@@ -19,19 +19,10 @@ Before writing code or starting new work, consult the knowledge bases:
    Then fetch kb/<tech>/llms.txt for each technology you will use.
    Read ALL HIGH-severity entries; read MEDIUM entries matching your task.
 
-   Shelves that exist and match THIS repo (pick the ones your task touches,
-   do not guess at names): rust, claude-code, windows, bash, powershell,
-   git, github-actions.
-   Editing anything under .claude/ means kb/claude-code/ is the relevant
-   shelf: it documents the hook and rule-scoping gotchas directly.
-
 2. BP (Best Practices) -- what TO do:
    WebFetch https://raw.githubusercontent.com/BoardPandas/BP/main/llms.txt
    Then fetch practices/<concern>/llms.txt for each relevant concern.
    Load ALL FOUNDATIONAL entries; load RECOMMENDED entries matching the stack.
-
-   Concerns that match THIS repo: claude-config, versioning, safety,
-   deployment, documentation, security.
 
 Skip only if this session is purely conversational or trivial. If you already
 loaded the relevant entries earlier in this conversation, you need not re-fetch.

@@ -1,50 +1,38 @@
 #!/usr/bin/env bash
-# Pre-commit hook: verify CHANGELOG.md is in staged changes
-# Exit 0 = pass, Exit 2 = block with message
+# PreToolUse hook (matcher: Bash, if: Bash(git commit*)).
+# Verifies CHANGELOG.md is staged before a commit is allowed through.
+#
+# Exit 0 = allow. Exit 2 = block.
+#
+# A blocking hook's STDOUT IS DISCARDED -- the message must go to stderr or the
+# user gets a refused command with no reason attached. That is what happened
+# here for every block until 2026-07-29; the harness reported literally
+# "No stderr output". (LL-G kb/claude-code/hook-empty-path-formats-repo.md)
 #
 # Escape hatches (exit 0 without requiring CHANGELOG.md):
 #   - Merge commits (MERGE_HEAD exists) -- the merged branches carry their own entries.
-#   - SKIP_CHANGELOG=1 in the environment -- for reverts, hotfixes, or trivial commits
-#     where a changelog entry is genuinely not warranted.
+#   - SKIP_CHANGELOG=1 in the environment -- for reverts, hotfixes, or trivial commits.
+#   - The command stages CHANGELOG.md itself as part of a compound command.
 
-# Self-filter: only act on actual git commit invocations. The "if" rule in
-# settings.json fires conservatively on commands containing opaque command
-# substitutions (e.g. "$(base64 file)"), so the hook can run for unrelated
-# commands. The hook input JSON carries the unexpanded command text.
-input=$(cat)
-if ! printf '%s' "$input" | grep -qE 'git[[:space:]]+commit'; then
-  exit 0
-fi
+. "$(dirname "$0")/_git-commit-filter.sh"
 
-# Merge commit: no changelog entry expected.
-if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
-  exit 0
-fi
+read_hook_input
 
-# Explicit opt-out.
-if [ "${SKIP_CHANGELOG:-}" = "1" ]; then
-  echo "SKIP_CHANGELOG=1 set -- bypassing changelog staged check."
-  exit 0
-fi
+# The settings.json "if" rule fires conservatively on commands containing opaque
+# substitutions, so re-check here before doing anything.
+is_git_commit || exit 0
 
-# This hook fires BEFORE the command runs. A compound command like
-# "git add CHANGELOG.md Cargo.toml && git commit ..." stages the changelog
-# as part of the same call, so the staged check below cannot see it yet.
-# Allow any command that stages CHANGELOG.md itself.
-if printf '%s' "$input" | grep -qE 'git add [^&|;]*CHANGELOG\.md'; then
-  exit 0
-fi
+is_changelog_exempt && exit 0
+changelog_is_handled && exit 0
 
-staged=$(git diff --cached --name-only 2>/dev/null)
-
-if echo "$staged" | grep -q "^CHANGELOG.md$"; then
-  exit 0
-else
-  # A blocking hook (exit 2) has its stdout DISCARDED; only stderr reaches Claude.
-  # Without the >&2 redirect the commit is refused with "No stderr output" and no reason.
-  {
-    echo "BLOCKED: CHANGELOG.md is not staged. Update the changelog and version before committing."
-    echo "(Merge commits are exempt. For a genuinely trivial commit, set SKIP_CHANGELOG=1 to bypass.)"
-  } >&2
-  exit 2
-fi
+{
+  echo "BLOCKED: CHANGELOG.md is not staged. Update the changelog and version before committing."
+  echo ""
+  echo "  1. Review staged changes:  git diff --cached --stat"
+  echo "  2. Add entries under [Unreleased] in CHANGELOG.md"
+  echo "  3. Bump the version in package.json (at least Patch)"
+  echo "  4. git add CHANGELOG.md package.json"
+  echo ""
+  echo "Merge commits are exempt. For a genuinely trivial commit, set SKIP_CHANGELOG=1 to bypass."
+} >&2
+exit 2

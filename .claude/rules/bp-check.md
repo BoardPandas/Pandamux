@@ -4,10 +4,15 @@ paths:
   - "CLAUDE.md"
   - ".claude/**"
   - ".github/**"
-  - "Cargo.toml"
-  - "crates/*/Cargo.toml"
-  - "netlify.toml"
-  - "winget/**"
+  - "package.json"
+  - "Dockerfile*"
+  - "docker-compose*"
+  - "biome.*"
+  - "turbo.json"
+  - "pnpm-workspace.yaml"
+  - "vitest.config.*"
+  - "playwright.config.*"
+  - "jest.config.*"
 ---
 
 # RULE 3 Enforcement: Check BP Before Configuration Work

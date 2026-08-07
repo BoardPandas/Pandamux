@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Changed
+
+- **Claude Code configuration synced to the current shared template.** Hook
+  scripts, path-scoped rules, references and repo-maintenance skills were
+  refreshed, `settings.json` was restructured, and the `triage-issues` skill
+  was added. No application code or runtime behaviour changes.
 
 ### Added
 
