@@ -1,5 +1,7 @@
 # wmux ↔ OpenCode Compatibility — Design
 
+> **Historical design record:** This page captures earlier design or implementation work and is not current guidance. Verify behavior against the [documentation index](../../README.md), the [developer guide](../../../CLAUDE.md), and the current Rust source.
+
 **Date:** 2026-06-01
 **Goal:** Make wmux officially, fully compatible with OpenCode (SST `opencode`, v1.2.6+), at parity with the existing Claude Code integration: live activity sidebar, auto-injected wmux instructions, tool/hook tracking, and parallel orchestration of OpenCode worker agents.
 

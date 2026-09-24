@@ -2,17 +2,17 @@
 description: Enforce BP best practices check before starting new work
 paths:
   - "CLAUDE.md"
+  - "AGENTS.md"
   - ".claude/**"
+  - ".agents/**"
   - ".github/**"
-  - "package.json"
-  - "Dockerfile*"
-  - "docker-compose*"
-  - "biome.*"
-  - "turbo.json"
-  - "pnpm-workspace.yaml"
-  - "vitest.config.*"
-  - "playwright.config.*"
-  - "jest.config.*"
+  - "Cargo.toml"
+  - "Cargo.lock"
+  - "crates/*/Cargo.toml"
+  - "docs/_toc.yaml"
+  - "netlify.toml"
+  - "resources/pandamux-orchestrator/**"
+  - "winget/**"
 ---
 
 # RULE 3 Enforcement: Check BP Before Configuration Work
@@ -26,7 +26,7 @@ Before creating or modifying infrastructure, tooling, or configuration files mat
    WebFetch https://raw.githubusercontent.com/BoardPandas/BP/main/llms.txt
    ```
 
-2. **Identify relevant concerns** from the file you're about to write (e.g., testing config -> testing, Dockerfile -> deployment, CLAUDE.md -> claude-config).
+2. **Identify relevant concerns** from the file you're about to write (for example Claude configuration, documentation, GitHub Actions, Cargo workspace structure, versioning, or deployment).
 
 3. **Fetch each relevant concern index:**
    ```
@@ -39,13 +39,12 @@ Before creating or modifying infrastructure, tooling, or configuration files mat
 
 ## When to check
 
-- Setting up new tooling (linters, formatters, test runners)
-- Creating or modifying Dockerfiles
+- Setting up or changing repository tooling
 - Configuring CI/CD pipelines
-- Structuring `.claude/` configuration
-- Setting up monorepo workspaces
+- Structuring `.claude/` or `.agents/` configuration
+- Changing the Cargo workspace or crate manifests
+- Changing release, Netlify, or winget configuration
 - Adding versioning or changelog automation
-- Configuring environment/secrets management
 
 ## Do NOT skip this check
 

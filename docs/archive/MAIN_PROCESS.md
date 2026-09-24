@@ -17,6 +17,8 @@ The following files were used as evidence for this page:
 
 # Main Process Modules
 
+> **Historical archive:** This page documents the removed Electron/TypeScript prototype. For current behavior, use the [documentation index](../README.md), the [developer guide](../../CLAUDE.md), and the Rust source.
+
 > **Related Pages**: [Architecture](ARCHITECTURE.md), [Named Pipe Control Plane](../features/NAMED_PIPE_IPC.md)
 
 ---

@@ -11,12 +11,14 @@ Every substantive claim in a generated page must be backed by a citation pointin
 
 ## URL format
 
-Use repo-relative paths in markdown links so the docs remain valid in the working tree, on GitHub, and on any web renderer that resolves relative paths.
+Resolve source files from the repository root, but write each Markdown link target relative to the directory containing the generated page. Markdown renderers resolve a relative link from the page, not from the repository root. A page at `docs/core/ARCHITECTURE.md` therefore links to `crates/app/src/main.rs` as `../../crates/app/src/main.rs`; a page at `docs/OVERVIEW.md` links to root `README.md` as `../README.md`.
 
 ```
-[file.ext:42](path/to/file.ext#L42)
-[file.ext:42-50](path/to/file.ext#L42-L50)
+[README.md:42](../README.md#L42)
+[main.rs:42-50](../../crates/app/src/main.rs#L42-L50)
 ```
+
+Never emit a repository-root-looking target such as `crates/app/src/main.rs#L42` from a page under `docs/`; it resolves underneath that page's directory and breaks. Before finishing, resolve every local target from `dirname(page)` and require the target file or directory to exist.
 
 If `Docs/_toc.yaml` defines `repo_base_url` and `ref_commit_hash`, you may emit absolute URLs instead. Pick one style per page and stick with it.
 
@@ -36,9 +38,9 @@ If `Docs/_toc.yaml` defines `repo_base_url` and `ref_commit_hash`, you may emit 
 
 Place a citation immediately after the claim it supports, wrapped in parentheses, and BEFORE the closing period of the sentence:
 
-- Right: `The middleware rejects unauthenticated requests with 401 ([auth.ts:84-92](src/middleware/auth.ts#L84-L92)).`
-- Wrong: `The middleware rejects unauthenticated requests with 401. [auth.ts:84-92](src/middleware/auth.ts#L84-L92)`
-- Wrong: `The middleware rejects unauthenticated requests with 401 [auth.ts:84-92](src/middleware/auth.ts#L84-L92).`
+- Right: `The middleware rejects unauthenticated requests with 401 ([auth.ts:84-92](../../src/middleware/auth.ts#L84-L92)).`
+- Wrong: `The middleware rejects unauthenticated requests with 401. [auth.ts:84-92](../../src/middleware/auth.ts#L84-L92)`
+- Wrong: `The middleware rejects unauthenticated requests with 401 [auth.ts:84-92](../../src/middleware/auth.ts#L84-L92).`
 
 The parentheses make the citation visually separable from the prose.
 
@@ -49,8 +51,8 @@ Wrap citations in parentheses inside table cells too:
 ```markdown
 | Endpoint | Method | Description |
 |---|---|---|
-| `/v1/auth/login` | POST | Issue a session token ([login.ts:1-40](src/routes/login.ts#L1-L40)) |
-| `/v1/auth/logout` | POST | Revoke the current session ([logout.ts:1-22](src/routes/logout.ts#L1-L22)) |
+| `/v1/auth/login` | POST | Issue a session token ([login.ts:1-40](../../src/routes/login.ts#L1-L40)) |
+| `/v1/auth/logout` | POST | Revoke the current session ([logout.ts:1-22](../../src/routes/logout.ts#L1-L22)) |
 ```
 
 ## End-of-section citations
@@ -58,7 +60,7 @@ Wrap citations in parentheses inside table cells too:
 End each section with a `Sources:` line summarizing every file cited in that section. This gives readers a one-glance reference list per topic and is the primary citation mechanism when a section is mostly tabular.
 
 ```markdown
-Sources: [auth.ts:1-120](src/middleware/auth.ts#L1-L120), [session.ts:40-90](src/lib/session.ts#L40-L90)
+Sources: [auth.ts:1-120](../../src/middleware/auth.ts#L1-L120), [session.ts:40-90](../../src/lib/session.ts#L40-L90)
 <!-- END:AUTOGEN myapp_02_auth_middleware -->
 ```
 
@@ -88,7 +90,7 @@ export const requireSession = async (req, res, next) => {
 };
 ```
 
-Sources: [auth.ts:84-92](src/middleware/auth.ts#L84-L92)
+Sources: [auth.ts:84-92](../../src/middleware/auth.ts#L84-L92)
 
 ## What NOT to cite
 
@@ -104,7 +106,7 @@ If you cannot find a source for a claim that the page template requires (e.g., t
 ```markdown
 ## Error Handling
 
-_TBD_ — no explicit error-handling code found in [src/foo/](src/foo/) at commit {hash}. Add a section here once handlers are introduced.
+_TBD_ - no explicit error-handling code found in [src/foo/](../../src/foo/) at commit {hash}. Add a section here once handlers are introduced.
 ```
 
 This keeps the section structurally complete and makes the gap searchable.

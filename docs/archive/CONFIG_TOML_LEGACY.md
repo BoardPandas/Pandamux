@@ -1,5 +1,7 @@
 # PandaMUX config file
 
+> **Superseded:** This document describes the removed Electron-era TOML and Zustand configuration model. The native Rust application persists `UserSettings` as `config/settings.json`; use [`../core/CONFIGURATION.md`](../core/CONFIGURATION.md) for current behavior.
+
 PandaMUX reads `~/.pandamux/config.toml` on startup (Windows: `%USERPROFILE%\.pandamux\config.toml`).
 The file is optional — if it isn't present, built-in defaults apply.
 

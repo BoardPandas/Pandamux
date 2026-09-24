@@ -1,5 +1,7 @@
 # wmux Implementation Plan
 
+> **Historical design record:** This page captures earlier design or implementation work and is not current guidance. Verify behavior against the [documentation index](../../README.md), the [developer guide](../../../CLAUDE.md), and the current Rust source.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build wmux, a Windows terminal multiplexer for AI agents — a 1:1 port of cmux (macOS) using Electron + React + TypeScript + xterm.js.

@@ -24,6 +24,8 @@ The following files were used as evidence for this page:
 
 # AI Agent Integration
 
+> **Historical archive:** This page documents the removed Electron/TypeScript prototype. For current behavior, use the [documentation index](../README.md), the [developer guide](../../CLAUDE.md), and the Rust source.
+
 > **Related Pages**: [Agent Orchestration](AGENT_ORCHESTRATION.md), [Shell Integration and Status](SHELL_INTEGRATION.md)
 
 ---

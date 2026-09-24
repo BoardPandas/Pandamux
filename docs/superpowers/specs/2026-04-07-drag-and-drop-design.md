@@ -1,5 +1,7 @@
 # Drag & Drop Tab Reordering and Pane Splitting
 
+> **Historical design record:** This page captures earlier design or implementation work and is not current guidance. Verify behavior against the [documentation index](../../README.md), the [developer guide](../../../CLAUDE.md), and the current Rust source.
+
 **Date:** 2026-04-07
 **Status:** Approved
 

@@ -2,13 +2,17 @@
 description: Enforce LL-G knowledge base check before writing code
 paths:
   - ".claude/**"
+  - ".agents/**"
+  - ".github/**"
   - "scripts/**"
-  - "src/**"
-  - "lib/**"
-  - "app/**"
-  - "worker/**"
-  - "api/**"
-  - "middleware.*"
+  - "crates/**"
+  - "resources/**"
+  - "site/**"
+  - "spikes/**"
+  - "Cargo.toml"
+  - "Cargo.lock"
+  - "netlify.toml"
+  - "winget/**"
 ---
 
 # RULE 1 Enforcement: Check LL-G Before Writing Code
@@ -22,7 +26,7 @@ Before writing or editing any file matching the paths above, you MUST consult th
    WebFetch https://raw.githubusercontent.com/BoardPandas/LL-G/main/llms.txt
    ```
 
-2. **Identify relevant technologies** from the file you're about to write (e.g., Next.js, TypeScript, Better Auth, Tailwind, etc.).
+2. **Identify relevant technologies** from the file you're about to write (for example Rust, Bash, Claude Code, GitHub Actions, or Windows packaging).
 
    When the file is under `.claude/` or is a hook script, the technology is **`claude-code`** (and `bash` for `.sh` files). That shelf documents the silent-failure modes of this very configuration -- dead hook matchers, ignored frontmatter keys, blocking hooks with no stderr.
 

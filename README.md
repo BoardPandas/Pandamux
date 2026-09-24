@@ -15,7 +15,7 @@
 
 ## What it is
 
-PandaMUX is a Windows terminal multiplexer built for running many Claude Code (and other CLI) agents in parallel, each in its own visible pane. It passively observes Claude Code without changing how it works: auto-configured hooks report agent and tool activity to the sidebar, so you can see at a glance which sessions are working, done, or waiting for you.
+PandaMUX is a Windows terminal multiplexer built for running many Claude Code (and other CLI) agents in parallel, each in its own visible pane. Shell integration and the agent registry surface session state, project context, and attention signals without changing the AI tools themselves.
 
 It is a fully native Rust application (no web view). The terminal grid is GPU-rendered for smooth output at any speed, and the whole app is coordinated through a single named-pipe API that the CLI, shell integration, and the bundled orchestrator plugin all speak.
 
@@ -23,7 +23,7 @@ It is a fully native Rust application (no web view). The terminal grid is GPU-re
 
 ## Features
 
-- **Passive Claude Code integration** — auto-injects a small block into `~/.claude/CLAUDE.md`, installs the pandamux-orchestrator plugin, and reads agent/tool activity into the sidebar. No API keys; runs through your existing Claude Code session.
+- **AI-agent visibility:** runs Claude, Codex, Gemini, and custom commands in visible terminal surfaces while shell integration and agent status keep the sidebar current. No API keys; each tool uses its existing login.
 - **Splits, tabs, workspaces** — split any pane right or down, zoom to full screen, keep multiple keep-alive tabs per pane (PTY sessions stay live when switching), and organize panes into workspaces. Drag-and-drop a tab to split.
 - **Sessions panel** — every shell context indexed across workspaces, grouped by project / type / host; select one to focus its pane.
 - **SSH remote surfaces** — run Claude Code on remote Linux hosts over SSH (russh). Durable via remote `tmux` with reconnect-on-disconnect. Host profiles + `~/.ssh/config` import; agent/key/password auth.
@@ -55,22 +55,21 @@ See [`CLAUDE.md`](CLAUDE.md) for the full build, test, and release documentation
 
 ## Why PandaMUX?
 
-Running many Claude Code sessions in parallel on Windows is painful. Windows Terminal has tabs but no notification system, so you check each tab manually to see if an agent finished or is waiting. tmux works in WSL but loses Windows integration. PandaMUX is a visibility layer for AI coding agents: it does not replace Claude Code or change how it works; it observes and shows you what is happening. The sidebar shows each agent's git branch, open ports, and whether it needs attention, reported over the named pipe by shell-integration scripts in real time.
+Running many Claude Code sessions in parallel on Windows is painful. Windows Terminal has tabs but no notification system, so you check each tab manually to see if an agent finished or is waiting. tmux works in WSL but loses Windows integration. PandaMUX is a visibility layer for AI coding agents: it does not replace Claude Code or change how it works; it observes and shows you what is happening. The sidebar combines shell integration, agent state, and native git and port polling to show project context and attention signals.
 
 ## pandamux-orchestrator
 
-A bundled Claude Code plugin for parallel multi-agent orchestration. Activate with `/pandamux:orchestrate` in any Claude Code session. It analyzes the codebase, decomposes the task into independent units, assigns each to an agent in its own pane, runs them in dependency-aware waves, and has a reviewer agent inspect the combined output and trigger auto-fixes. Auto-installed into the Claude plugin cache on startup; also works without PandaMUX by falling back to native subagents. Bundled under `resources/pandamux-orchestrator/`.
+A bundled Claude Code plugin for parallel multi-agent orchestration. Install it manually with `/plugin install pandamux-orchestrator`, then activate it with `/pandamux:orchestrate`. It analyzes the codebase, decomposes the task into independent units, assigns each to an agent in its own pane, runs them in dependency-aware waves, and has a reviewer agent inspect the combined output and trigger auto-fixes. It also works without PandaMUX by falling back to native subagents. The bundled source lives under `resources/pandamux-orchestrator/`; PandaMUX does not write to `~/.claude` or install the plugin automatically.
 
 ## Shell Integration
 
-PandaMUX injects integration scripts into your shells (PowerShell, CMD, Bash/Zsh in WSL) that report CWD, git branch/dirty state, and shell state (working/done/interrupted) over the named pipe. Per-session cwd tracking also uses OSC 9;9 / OSC 7.
+PandaMUX injects integration scripts into your shells (PowerShell, CMD, Bash/Zsh in WSL). The native backend accepts the V1 `report_pwd` hook, per-session cwd tracking also uses OSC 9;9 / OSC 7, and native pollers compute git and port state independently.
 
 Environment variables available in all shells:
 
 | Variable | Description |
 |----------|-------------|
 | `PANDAMUX` | Always `1` inside PandaMUX |
-| `PANDAMUX_CLI` | Path to the pandamux CLI |
 | `PANDAMUX_SURFACE_ID` | Current surface (tab) ID |
 | `PANDAMUX_PIPE` | Named pipe path (`\\.\pipe\pandamux`) |
 | `PANDAMUX_AGENT_ID` | Agent ID (set for orchestrator-spawned panes) |
@@ -113,12 +112,9 @@ pandamux tree                          # Workspace / pane / surface hierarchy
 
 Connect to `\\.\pipe\pandamux` for programmatic control. Two protocols:
 
-**V1** (text, used by shell integration):
+**V1** (text, currently handles liveness and cwd reporting):
 ```
 report_pwd <surface_id> <path>
-report_git_branch <surface_id> <branch> [dirty]
-report_shell_state <surface_id> idle|running|interrupted
-notify <surface_id> <text>
 ping
 ```
 
@@ -147,7 +143,7 @@ crates/
                    OSC 52, search/serialize/link detection, shell lifecycle.
   pandamux-ui/     Iced app: GPU terminal viewport, panes/splits/tabs, chrome, overlays, theming.
   pandamux-app/    pandamux.exe: tokio runtime, canonical state, pipe server, pollers, persistence,
-                   updater, Claude-context integration.
+                   updater, OS clipboard bridge.
   pandamux-cli/    pandamux-cli.exe: the `pandamux` CLI (pipe client).
 resources/         Runtime assets: themes, sounds, shell-integration, pandamux-orchestrator.
 ```
@@ -156,7 +152,7 @@ Full developer docs, including the release/signing pipeline, are in [`CLAUDE.md`
 
 ## Lineage
 
-PandaMUX is an independent Windows project whose named-pipe protocol and design philosophy trace to [cmux](https://github.com/manaflow-ai/cmux), the macOS terminal for multitasking. It is wire-compatible with cmux's socket protocol but does not reuse cmux's source code.
+PandaMUX is an independent Windows project whose named-pipe protocol and design philosophy trace to [cmux](https://github.com/manaflow-ai/cmux), the macOS terminal for multitasking. Its non-browser V2 pipe surface preserves that protocol lineage, but PandaMUX does not reuse cmux's source code.
 
 ## Contributing
 

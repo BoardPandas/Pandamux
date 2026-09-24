@@ -1,13 +1,14 @@
 # Generation Metadata
 
-- **Commit:** `3accc145c64c10d86785466dbe59b344f6100665`
+- **Commit:** `bd341e05acc22a0cea49d98ec041a358eb789a47`
 - **Branch:** `master`
-- **Generated:** 2026-07-17
-- **Mode:** update (full regeneration)
-- **Base commit:** `0ab9e6463a9017a7b8ea98f10b3f847507658ac4`
-- **Pages generated:** 15
-- **Sections generated:** 79
+- **Generated:** 2026-09-24T19:31:17-04:00
+- **Working tree:** modified by this documentation update
+- **Mode:** update (accuracy, onboarding, history labels, and citation repair)
+- **Previous documentation snapshot:** `3accc145c64c10d86785466dbe59b344f6100665`
+- **Pages updated:** 15
+- **Sections maintained:** 79
 
 ## Notes
 
-The base commit (`0ab9e64`, 2026-07-05) predates the Electron-to-Rust rewrite. The 69 intervening commits replaced the entire TypeScript/Electron codebase with the Rust workspace, so this run regenerated every page against `pandamux-core`/`pandamux-term`/`pandamux-ui`/`pandamux-app`/`pandamux-cli` rather than performing a section-scoped incremental update. The four Electron-only pages with no Rust successor (MAIN_PROCESS, RENDERER_AND_STATE, BROWSER_CDP, AI_INTEGRATION) were moved to `docs/archive/`.
+The maintained wiki still covers the five-crate Rust workspace. This update reconciled repository guidance with current runtime behavior, repaired page-relative citations throughout the generated pages, refreshed TOC source mappings, and labeled historical Electron-era and pre-implementation material. The working tree changes are documentation and repository guidance only; no application source was changed.

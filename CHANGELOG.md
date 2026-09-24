@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Changed
 
+- **AI agents and contributors now have a faster, more reliable documentation path.**
+  `AGENTS.md` defines the reading order and authority hierarchy, current behavior is
+  reconciled across the generated wiki, historical plans are labeled, source citations
+  resolve from every page, and the repository knowledge-base rules target the actual Rust
+  and tooling paths. No application runtime behavior changes.
 - **Claude Code configuration synced to the current shared template.** Hook
   scripts, path-scoped rules, references and repo-maintenance skills were
   refreshed, `settings.json` was restructured, and the `triage-issues` skill

@@ -1,5 +1,7 @@
 # wmux-orchestrator Plugin Implementation Plan
 
+> **Historical design record:** This page captures earlier design or implementation work and is not current guidance. Verify behavior against the [documentation index](../../README.md), the [developer guide](../../../CLAUDE.md), and the current Rust source.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a Claude Code plugin that decomposes dev tasks into parallel sub-tasks, spawns multiple Claude Code instances across wmux panes with wave-based orchestration, and auto-reviews results.

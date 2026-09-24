@@ -1,5 +1,7 @@
 # Drag & Drop Tab Reordering and Pane Splitting — Implementation Plan
 
+> **Historical design record:** This page captures earlier design or implementation work and is not current guidance. Verify behavior against the [documentation index](../../README.md), the [developer guide](../../../CLAUDE.md), and the current Rust source.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Unified drag-and-drop for terminal tabs — reorder within a pane, move between panes, and split panes by dropping on edges with VS Code-style drop zones.

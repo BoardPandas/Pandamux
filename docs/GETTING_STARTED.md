@@ -8,9 +8,12 @@ The following files were used as evidence for this page:
 - [Cargo.toml:1-24](../Cargo.toml#L1-L24)
 - [README.md:38-55](../README.md#L38-L55)
 - [scripts/check-rust-boundaries.ps1:1-33](../scripts/check-rust-boundaries.ps1#L1-L33)
-- [.github/workflows/rust.yml:1-56](../.github/workflows/rust.yml#L1-L56)
+- [scripts/check-claude-wiring.mjs:1-233](../scripts/check-claude-wiring.mjs#L1-L233)
+- [.github/workflows/rust.yml:1-66](../.github/workflows/rust.yml#L1-L66)
 - [crates/pandamux-app/Cargo.toml:1-73](../crates/pandamux-app/Cargo.toml#L1-L73)
 - [.claude/rules/commit-changelog.md:1-45](../.claude/rules/commit-changelog.md#L1-L45)
+- [.claude/rules/llg-check.md:1-46](../.claude/rules/llg-check.md#L1-L46)
+- [.claude/rules/bp-check.md:1-52](../.claude/rules/bp-check.md#L1-L52)
 
 </details>
 
@@ -23,12 +26,13 @@ The following files were used as evidence for this page:
 <!-- BEGIN:AUTOGEN pandamux_02_getting-started_prerequisites -->
 ## Prerequisites
 
-PandaMUX is a native Windows application built with a Rust stable toolchain; there is no Node/pnpm toolchain to install anymore ([CLAUDE.md:15-17](../CLAUDE.md#L15-L17)).
+PandaMUX is a native Windows application built with a Rust stable toolchain. The app has no Node/pnpm runtime or dependency-install step, but repository validation uses Node 24 for the `.claude/` wiring guard ([CLAUDE.md:15-17](../CLAUDE.md#L15-L17), [.github/workflows/rust.yml:32-41](../.github/workflows/rust.yml#L32-L41)).
 
 | Requirement | Purpose |
 |---|---|
 | Rust stable toolchain (rustup) | Compiles the workspace; `rust-version = "1.88"` is the minimum declared in the workspace manifest ([Cargo.toml:17](../Cargo.toml#L17)). |
 | MSVC build tools | Required for the Windows target, since PandaMUX links against native Windows APIs (ConPTY via `portable-pty`, etc.) ([CLAUDE.md:15-17](../CLAUDE.md#L15-L17)). |
+| Node 24 | Runs `scripts/check-claude-wiring.mjs`, which validates repository automation; it is not an application runtime dependency ([.github/workflows/rust.yml:32-41](../.github/workflows/rust.yml#L32-L41)). |
 
 The repository previously shipped an Electron/TypeScript prototype; that build has been deleted, so no `npm`/`pnpm install` step exists in this workspace ([CLAUDE.md:9](../CLAUDE.md#L9), [CLAUDE.md:17](../CLAUDE.md#L17)).
 
@@ -138,6 +142,7 @@ Run these locally before committing; they mirror what CI enforces on every PR an
 ```bash
 cargo fmt --all --check
 .\scripts\check-rust-boundaries.ps1     # enforces the crate-isolation invariant (Section 6.1 of the plan)
+node scripts/check-claude-wiring.mjs     # validates rule paths and hook matchers
 cargo test --workspace
 cargo test -p pandamux-ui  --features iced-runtime --lib
 cargo test -p pandamux-app --features iced-runtime --bin pandamux
@@ -166,15 +171,17 @@ The CI workflow (`.github/workflows/rust.yml`, `windows-latest`) runs on pull re
 
 | CI step | Command |
 |---|---|
-| Check formatting | `cargo fmt --all --check` ([.github/workflows/rust.yml:36](../.github/workflows/rust.yml#L36)) |
-| Check crate boundaries | `.\scripts\check-rust-boundaries.ps1` ([.github/workflows/rust.yml:38-40](../.github/workflows/rust.yml#L38-L40)) |
-| Test workspace | `cargo test --workspace` ([.github/workflows/rust.yml:42-43](../.github/workflows/rust.yml#L42-L43)) |
-| Test Iced UI feature | `cargo test -p pandamux-ui --features iced-runtime --lib` ([.github/workflows/rust.yml:45-46](../.github/workflows/rust.yml#L45-L46)) |
-| Test Iced app runtime feature | `cargo test -p pandamux-app --features iced-runtime --bin pandamux` ([.github/workflows/rust.yml:48-49](../.github/workflows/rust.yml#L48-L49)) |
-| Smoke Iced app shell view | `cargo run -p pandamux-app --features iced-runtime -- --iced-shell-smoke` ([.github/workflows/rust.yml:51-52](../.github/workflows/rust.yml#L51-L52)) |
-| Build native binaries | `cargo build -p pandamux-app -p pandamux-cli -p pandamux-term` ([.github/workflows/rust.yml:54-55](../.github/workflows/rust.yml#L54-L55)) |
+| Install Node 24 | `actions/setup-node@v7` ([.github/workflows/rust.yml:32-35](../.github/workflows/rust.yml#L32-L35)) |
+| Check Claude wiring | `node scripts/check-claude-wiring.mjs` ([.github/workflows/rust.yml:37-41](../.github/workflows/rust.yml#L37-L41)) |
+| Check formatting | `cargo fmt --all --check` ([.github/workflows/rust.yml:46-47](../.github/workflows/rust.yml#L46-L47)) |
+| Check crate boundaries | `.\scripts\check-rust-boundaries.ps1` ([.github/workflows/rust.yml:49-51](../.github/workflows/rust.yml#L49-L51)) |
+| Test workspace | `cargo test --workspace` ([.github/workflows/rust.yml:53-54](../.github/workflows/rust.yml#L53-L54)) |
+| Test Iced UI feature | `cargo test -p pandamux-ui --features iced-runtime --lib` ([.github/workflows/rust.yml:56-57](../.github/workflows/rust.yml#L56-L57)) |
+| Test Iced app runtime feature | `cargo test -p pandamux-app --features iced-runtime --bin pandamux` ([.github/workflows/rust.yml:59-60](../.github/workflows/rust.yml#L59-L60)) |
+| Smoke Iced app shell view | `cargo run -p pandamux-app --features iced-runtime -- --iced-shell-smoke` ([.github/workflows/rust.yml:62-63](../.github/workflows/rust.yml#L62-L63)) |
+| Build native binaries | `cargo build -p pandamux-app -p pandamux-cli -p pandamux-term` ([.github/workflows/rust.yml:65-66](../.github/workflows/rust.yml#L65-L66)) |
 
-Sources: [.github/workflows/rust.yml:1-56](../.github/workflows/rust.yml#L1-L56), [scripts/check-rust-boundaries.ps1:1-33](../scripts/check-rust-boundaries.ps1#L1-L33), [CLAUDE.md:34-39](../CLAUDE.md#L34-L39)
+Sources: [.github/workflows/rust.yml:1-66](../.github/workflows/rust.yml#L1-L66), [scripts/check-rust-boundaries.ps1:1-33](../scripts/check-rust-boundaries.ps1#L1-L33), [scripts/check-claude-wiring.mjs:1-233](../scripts/check-claude-wiring.mjs#L1-L233), [CLAUDE.md:34-40](../CLAUDE.md#L34-L40)
 <!-- END:AUTOGEN pandamux_02_getting-started_testing -->
 
 ---
@@ -208,7 +215,7 @@ Sources: [CLAUDE.md:44-48](../CLAUDE.md#L44-L48), [crates/pandamux-app/Cargo.tom
 <!-- BEGIN:AUTOGEN pandamux_02_getting-started_conventions -->
 ## Development Conventions
 
-Before every `git commit`, update `CHANGELOG.md` and bump `[workspace.package] version` in the root `Cargo.toml`, then write the commit message to a file and commit with `git commit -F` rather than an inline `-m` ([CLAUDE.md:149](../CLAUDE.md#L149), [.claude/rules/commit-changelog.md:1-4](../.claude/rules/commit-changelog.md#L1-L4)). The version is single-sourced from `[workspace.package] version`, currently `0.53.0`; every crate inherits it via `version.workspace = true`, and it drives `CARGO_PKG_VERSION`, which the in-app updater compares against GitHub releases ([Cargo.toml:12-13](../Cargo.toml#L12-L13), [CLAUDE.md:148](../CLAUDE.md#L148)).
+Before every `git commit`, update `CHANGELOG.md` and bump `[workspace.package] version` in the root `Cargo.toml`, then write the commit message to a file and commit with `git commit -F` rather than an inline `-m` ([CLAUDE.md:149](../CLAUDE.md#L149), [.claude/rules/commit-changelog.md:1-4](../.claude/rules/commit-changelog.md#L1-L4)). The version is single-sourced from `[workspace.package] version`, currently `0.53.3`; every crate inherits it via `version.workspace = true`, and it drives `CARGO_PKG_VERSION`, which the in-app updater compares against GitHub releases ([Cargo.toml:12-13](../Cargo.toml#L12-L13), [CLAUDE.md:148](../CLAUDE.md#L148)).
 
 Every commit bumps at least the Patch segment of SemVer (`Major.Minor.Patch`); Major is never bumped autonomously, and Minor vs. Patch ambiguity should be raised with the user rather than guessed ([.claude/rules/commit-changelog.md:22-30](../.claude/rules/commit-changelog.md#L22-L30)).
 
@@ -218,11 +225,11 @@ Every commit bumps at least the Patch segment of SemVer (`Major.Minor.Patch`); M
 | Minor | New features or enhancements ([.claude/rules/commit-changelog.md:16](../.claude/rules/commit-changelog.md#L16)) |
 | Patch | Bug fixes, security patches, performance, dependency bumps, docs, refactors, config, chores, and anything else ([.claude/rules/commit-changelog.md:17](../.claude/rules/commit-changelog.md#L17)) |
 
-`.claude/` is the source of truth for how the repo runs: it holds the commit/changelog rule, the LL-G and BP knowledge-base checks that must be consulted before code/config work, and the custom agents to use instead of built-in subagent types ([CLAUDE.md:149](../CLAUDE.md#L149)). The crate-isolation invariant is a hard rule enforced by CI, not just a convention: never import Iced outside `pandamux-ui`, never leak `alacritty_terminal` types outside `pandamux-term` ([CLAUDE.md:146](../CLAUDE.md#L146)).
+`.claude/` is the source of truth for how the repo runs: it holds the commit/changelog rule, the path-scoped LL-G and BP knowledge-base checks for code and configuration, and the custom agents to use instead of built-in subagent types ([CLAUDE.md:149](../CLAUDE.md#L149), [llg-check.md:1-46](../.claude/rules/llg-check.md#L1-L46), [bp-check.md:1-52](../.claude/rules/bp-check.md#L1-L52)). The crate-isolation invariant is a hard rule enforced by CI, not just a convention: never import Iced outside `pandamux-ui`, never leak `alacritty_terminal` types outside `pandamux-term` ([CLAUDE.md:146](../CLAUDE.md#L146)).
 
 Writing style across files, code, and comments avoids em dashes and double dashes; use commas, colons, parentheses, or semicolons instead ([CLAUDE.md:150](../CLAUDE.md#L150)).
 
-Sources: [CLAUDE.md:143-150](../CLAUDE.md#L143-L150), [.claude/rules/commit-changelog.md:1-45](../.claude/rules/commit-changelog.md#L1-L45), [Cargo.toml:12-13](../Cargo.toml#L12-L13)
+Sources: [CLAUDE.md:143-150](../CLAUDE.md#L143-L150), [.claude/rules/commit-changelog.md:1-45](../.claude/rules/commit-changelog.md#L1-L45), [.claude/rules/llg-check.md:1-46](../.claude/rules/llg-check.md#L1-L46), [.claude/rules/bp-check.md:1-52](../.claude/rules/bp-check.md#L1-L52), [Cargo.toml:12-13](../Cargo.toml#L12-L13)
 <!-- END:AUTOGEN pandamux_02_getting-started_conventions -->
 
 ---

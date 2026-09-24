@@ -1,5 +1,7 @@
 # wmux v2 Features: Notification Center, Scriptable Browser, Sub-Agent Spawning
 
+> **Historical design record:** This page captures earlier design or implementation work and is not current guidance. Verify behavior against the [documentation index](../../README.md), the [developer guide](../../../CLAUDE.md), and the current Rust source.
+
 > **For agentic workers:** This spec defines the next batch of features for wmux, the Windows terminal multiplexer for AI coding agents.
 
 **Goal:** Add a notification center panel, a CDP-powered scriptable browser API for AI agent browser control, and intelligent sub-agent terminal spawning with round-robin distribution across panes.

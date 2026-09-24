@@ -4,14 +4,14 @@
 
 The following files were used as evidence for this page:
 
-- [pandamux-bash-integration.sh:1-67](resources/shell-integration/pandamux-bash-integration.sh#L1-L67)
-- [pandamux-powershell-integration.ps1:1-108](resources/shell-integration/pandamux-powershell-integration.ps1#L1-L108)
-- [pandamux-cmd-integration.cmd:1-11](resources/shell-integration/pandamux-cmd-integration.cmd#L1-L11)
-- [cwd.rs:1-199](crates/pandamux-term/src/cwd.rs#L1-L199)
-- [backend.rs:192-210](crates/pandamux-app/src/backend.rs#L192-L210)
-- [backend.rs:828-841](crates/pandamux-app/src/backend.rs#L828-L841)
-- [backend.rs:2729-2735](crates/pandamux-app/src/backend.rs#L2729-L2735)
-- [pollers.rs:1-79](crates/pandamux-app/src/pollers.rs#L1-L79)
+- [pandamux-bash-integration.sh:1-67](../../resources/shell-integration/pandamux-bash-integration.sh#L1-L67)
+- [pandamux-powershell-integration.ps1:1-108](../../resources/shell-integration/pandamux-powershell-integration.ps1#L1-L108)
+- [pandamux-cmd-integration.cmd:1-11](../../resources/shell-integration/pandamux-cmd-integration.cmd#L1-L11)
+- [cwd.rs:1-199](../../crates/pandamux-term/src/cwd.rs#L1-L199)
+- [backend.rs:192-210](../../crates/pandamux-app/src/backend.rs#L192-L210)
+- [backend.rs:828-841](../../crates/pandamux-app/src/backend.rs#L828-L841)
+- [backend.rs:2729-2735](../../crates/pandamux-app/src/backend.rs#L2729-L2735)
+- [pollers.rs:1-79](../../crates/pandamux-app/src/pollers.rs#L1-L79)
 
 </details>
 
@@ -40,7 +40,7 @@ graph TD
     G --> H["Status Bar Cwd"]
 ```
 
-Sources: [pandamux-cmd-integration.cmd:1-11](resources/shell-integration/pandamux-cmd-integration.cmd#L1-L11), [pandamux-bash-integration.sh:1-67](resources/shell-integration/pandamux-bash-integration.sh#L1-L67), [cwd.rs:1-13](crates/pandamux-term/src/cwd.rs#L1-L13), [backend.rs:192-210](crates/pandamux-app/src/backend.rs#L192-L210), [backend.rs:828-841](crates/pandamux-app/src/backend.rs#L828-L841)
+Sources: [pandamux-cmd-integration.cmd:1-11](../../resources/shell-integration/pandamux-cmd-integration.cmd#L1-L11), [pandamux-bash-integration.sh:1-67](../../resources/shell-integration/pandamux-bash-integration.sh#L1-L67), [cwd.rs:1-13](../../crates/pandamux-term/src/cwd.rs#L1-L13), [backend.rs:192-210](../../crates/pandamux-app/src/backend.rs#L192-L210), [backend.rs:828-841](../../crates/pandamux-app/src/backend.rs#L828-L841)
 <!-- END:AUTOGEN pandamux_13_shell-integration_overview -->
 
 ---
@@ -58,7 +58,7 @@ PandaMUX ships one integration script per shell family under `resources/shell-in
 
 Bash/zsh and PowerShell both write their pipe messages differently: the bash script appends lines to a temp file the main process tails (`_pandamux_report`) (pandamux-bash-integration.sh:7-13), while PowerShell opens a `NamedPipeClientStream` directly per message (`Send-PandaMUXMessage`) (pandamux-powershell-integration.ps1:7-19). Of these, only `report_pwd` is currently consumed by `pandamux-app::backend::handle_line`; other V1 messages (`report_git_branch`, `report_shell_state`, `ports_kick`, `report_pr`) do not match the `report_pwd ` prefix or a JSON `{` payload and are dropped by the dispatcher's fallthrough, since git branch/ahead-count and open ports are instead recomputed independently by the pollers (see below) (backend.rs:192-210).
 
-Sources: [pandamux-bash-integration.sh:1-67](resources/shell-integration/pandamux-bash-integration.sh#L1-L67), [pandamux-powershell-integration.ps1:1-108](resources/shell-integration/pandamux-powershell-integration.ps1#L1-L108), [pandamux-cmd-integration.cmd:1-11](resources/shell-integration/pandamux-cmd-integration.cmd#L1-L11), [backend.rs:192-210](crates/pandamux-app/src/backend.rs#L192-L210)
+Sources: [pandamux-bash-integration.sh:1-67](../../resources/shell-integration/pandamux-bash-integration.sh#L1-L67), [pandamux-powershell-integration.ps1:1-108](../../resources/shell-integration/pandamux-powershell-integration.ps1#L1-L108), [pandamux-cmd-integration.cmd:1-11](../../resources/shell-integration/pandamux-cmd-integration.cmd#L1-L11), [backend.rs:192-210](../../crates/pandamux-app/src/backend.rs#L192-L210)
 <!-- END:AUTOGEN pandamux_13_shell-integration_scripts -->
 
 ---
@@ -94,7 +94,7 @@ fn parse_cwd_osc(payload: &[u8]) -> Option<String> {
 
 Bash and PowerShell do not rely on this in-stream scanning at all; they instead send the V1 text message `report_pwd <surfaceId> <path>` over the pipe on every prompt (pandamux-bash-integration.sh:15-19, pandamux-powershell-integration.ps1:21-27). `pandamux-app::backend::handle_line` special-cases this prefix before falling into the JSON-RPC path, splitting the surface id from the path and calling `ctx.ptys.set_cwd(surface_id, path.trim())` (backend.rs:198-206); a regression test asserts the line is accepted and produces an empty (no-reply) response (backend.rs:2729-2735). `CwdScanner::set` is the same direct-override entry point the pipe path calls into, bypassing the OSC state machine entirely (cwd.rs:49-52).
 
-Sources: [cwd.rs:1-199](crates/pandamux-term/src/cwd.rs#L1-L199), [backend.rs:192-210](crates/pandamux-app/src/backend.rs#L192-L210), [backend.rs:2729-2735](crates/pandamux-app/src/backend.rs#L2729-L2735)
+Sources: [cwd.rs:1-199](../../crates/pandamux-term/src/cwd.rs#L1-L199), [backend.rs:192-210](../../crates/pandamux-app/src/backend.rs#L192-L210), [backend.rs:2729-2735](../../crates/pandamux-app/src/backend.rs#L2729-L2735)
 <!-- END:AUTOGEN pandamux_13_shell-integration_cwd -->
 
 ---
@@ -110,10 +110,10 @@ Independently of the shell hooks' `report_git_branch`/`ports_kick` messages, `pa
 
 | Poller | Signal | Mechanism | Source |
 |---|---|---|---|
-| `poll_git` | branch name + ahead count | `git rev-parse` / `git rev-list --count` via async `tokio::process::Command` | ([pollers.rs:41-52](crates/pandamux-app/src/pollers.rs#L41-L52)) |
-| `poll_ports` | open localhost dev ports | 120ms `TcpStream::connect` against a fixed candidate list | ([pollers.rs:24-25](crates/pandamux-app/src/pollers.rs#L24-L25), [pollers.rs:70-79](crates/pandamux-app/src/pollers.rs#L70-L79)) |
+| `poll_git` | branch name + ahead count | `git rev-parse` / `git rev-list --count` via async `tokio::process::Command` | ([pollers.rs:41-52](../../crates/pandamux-app/src/pollers.rs#L41-L52)) |
+| `poll_ports` | open localhost dev ports | 120ms `TcpStream::connect` against a fixed candidate list | ([pollers.rs:24-25](../../crates/pandamux-app/src/pollers.rs#L24-L25), [pollers.rs:70-79](../../crates/pandamux-app/src/pollers.rs#L70-L79)) |
 
-Sources: [pollers.rs:1-79](crates/pandamux-app/src/pollers.rs#L1-L79)
+Sources: [pollers.rs:1-79](../../crates/pandamux-app/src/pollers.rs#L1-L79)
 <!-- END:AUTOGEN pandamux_13_shell-integration_pollers -->
 
 ---

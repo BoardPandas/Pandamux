@@ -1,53 +1,39 @@
 # Documentation Generation Summary
 
-## Incremental Update — 2026-07-17
+## Incremental Update - 2026-09-24
 
-- **Mode:** update (full regeneration)
-- **Commit range:** `0ab9e64..3accc14`
-- **Reason:** The base commit predates the Electron-to-Rust rewrite. All 69 intervening commits replaced the TypeScript/Electron codebase with the Rust workspace, so every page was regenerated against `pandamux-core`/`pandamux-term`/`pandamux-ui`/`pandamux-app`/`pandamux-cli` rather than diff-scoped.
+- **Mode:** update (accuracy, onboarding, history labels, and citation repair)
+- **Source snapshot:** `bd341e05acc22a0cea49d98ec041a358eb789a47` on `master`
+- **Previous documentation snapshot:** `3accc145c64c10d86785466dbe59b344f6100665`
+- **Working tree:** modified by this documentation update; the snapshot identifies the source baseline, not a documentation commit
+- **Scope:** 15 maintained pages and 79 generated sections
 
-### Phase A — TOC drift
+### Outcomes
 
-- **New pages: 6**
-  - pandamux_04_core-domain → core/CORE_DOMAIN.md
-  - pandamux_05_terminal-engine → core/TERMINAL_ENGINE.md
-  - pandamux_06_ui-shell → core/UI_SHELL.md
-  - pandamux_07_app-runtime → core/APP_RUNTIME.md
-  - pandamux_11_ssh-remote → features/SSH_REMOTE.md
-  - pandamux_14_release → operations/RELEASE.md (operations/ folder created)
-- **Removed pages: 4 (moved to archive/)** — no Rust successor:
-  - core/MAIN_PROCESS.md, core/RENDERER_AND_STATE.md (Electron process model)
-  - features/BROWSER_CDP.md (browser/CDP pane intentionally dropped)
-  - features/AI_INTEGRATION.md (folded into AGENT_ORCHESTRATION + APP_RUNTIME)
-- **Rewritten in place: 9** — OVERVIEW, GETTING_STARTED, GLOSSARY, core/ARCHITECTURE, core/CONFIGURATION, api/CLI_REFERENCE, features/NAMED_PIPE_IPC, features/AGENT_ORCHESTRATION, features/SHELL_INTEGRATION.
+- Added an AI fast path and an explicit authority order to `AGENTS.md`, with `CLAUDE.md` as the detailed contributor guide and `docs/README.md` as the wiki index.
+- Reconciled current behavior across root guidance and generated docs: JSON settings, complete rewrite and release phases, manual orchestrator-plugin installation, V1 `ping` and `report_pwd`, and the currently unvalidated V2 token field.
+- Moved the obsolete TOML configuration note to `docs/archive/CONFIG_TOML_LEGACY.md` and labeled all archived or historical design records so agents do not treat them as current implementation guidance.
+- Repaired 872 Markdown targets so source citations resolve relative to each documentation page, then updated the doc-sync citation policy and template to preserve that behavior on future runs.
+- Added six missing source mappings to `_toc.yaml`: the commit rule, term and UI manifests, UI metrics, app latency, and the OS clipboard bridge.
+- Replaced 15 dead shared-template path globs in the LL-G and BP rules with live PandaMUX paths, including the Rust crates, repository tooling, release configuration, and agent configuration.
 
-### Phase B — Source diff
+### Coverage and known boundaries
 
-- **Files changed:** the entire application source (TypeScript `src/` deleted; Rust `crates/` added). Every page's `source_files` was re-pointed at Rust modules.
-- **Sections generated:** 79 across 15 pages.
-- **Pages touched:** 15 (all).
-
-### Coverage
-
-- **Crate source files:** 52 of 52 `crates/*/src/*.rs` files are cited (100%).
-- **Per-page citations range 24–140** with tables and code snippets on every page.
-- **`_TBD_` gaps (6 total):**
-  - core/CONFIGURATION.md (2) — settings/keymap fields with no default expressed in code.
-  - features/NAMED_PIPE_IPC.md (3) — method arms delegated elsewhere; flagged rather than guessed.
-  - features/AGENT_ORCHESTRATION.md (1) — a plugin detail not present in the cited source.
-
-### Accuracy notes surfaced during generation
-
-- `pandamux-app::backend::handle_line` special-cases only the V1 `report_pwd` hook; other shell-integration messages (`report_git_branch`, `report_shell_state`, `ports_kick`, `report_pr`) fall through and are instead recomputed independently by `pandamux-app::pollers`. Documented in SHELL_INTEGRATION.md rather than presented as fully wired.
-- `pandamux-app` has no dedicated `claude_context.rs` at this commit (contrary to a line in CLAUDE.md); the Claude-context startup wiring lives in `iced_runtime.rs`/`backend.rs`. Recorded in the TOC notes and AGENT_ORCHESTRATION.md.
+- **Crate source coverage:** 52 of 52 `crates/*/src/*.rs` files are cited (100%).
+- **Source-map additions:** 6 of 6 previously omitted sources are now represented in `_toc.yaml`.
+- **Explicit gaps:** 0 `_TBD_` markers remain in maintained generated pages. Historical documents are excluded from current-accuracy validation.
+- **Protocol boundary:** the CLI supplies `PANDAMUX_PIPE_TOKEN`, but the server does not validate it; the local V2 pipe is not described as authenticated.
+- **Plugin boundary:** PandaMUX bundles the orchestrator plugin but does not write to `~/.claude` or install the plugin automatically.
 
 ### Validation
 
-- **Structure:** 15/15 pages have exactly one PAGE_ID, first-line PAGE_ID, and matched BEGIN/END AUTOGEN markers whose counts and ids match `_toc.yaml` exactly (0 orphans, 0 missing).
-- **Mermaid:** 13 diagram blocks; `mmdc` unavailable, so static checks applied (valid opening line, `graph TD` for flowcharts, quoted flowchart labels, balanced brackets, explicit sequence activation, `;` placeholders). All pass. classDiagram members and stateDiagram `[*]` nodes are valid unquoted syntax.
-- **Internal navigation links** (Related Pages + README index): all resolve.
-- **Source citations** use repo-root-relative paths (e.g. `crates/pandamux-core/src/state.rs#L40-L70`), consistent with the citation-policy convention and the prior doc set; they resolve from the repo root. Archived pages under `docs/archive/` retain their original (now historical) links and are intentionally left unmaintained.
+- **YAML:** `_toc.yaml` parses successfully with 15 pages.
+- **Structure:** 15 of 15 pages have first-line PAGE_ID markers; all 79 BEGIN/END AUTOGEN pairs match `_toc.yaml`, with no missing or orphan sections.
+- **Links:** 1,155 local links across active documentation resolve from their containing pages, with 0 broken targets.
+- **Citations:** 1,083 line-linked citations resolve to existing files and valid line ranges.
+- **Mermaid:** 13 diagram blocks pass static opening checks. `mmdc` is unavailable in this environment, so rendered-diagram validation was not performed.
+- **Claude wiring:** `node scripts/check-claude-wiring.mjs` passes; all path-scoped rule globs resolve and hook matchers are functional.
 
-## Prior generation — 2026-07-05 (init, Electron)
+## Historical context
 
-The original 14-page set documented the Electron/TypeScript prototype at commit `0ab9e64`. Those pages were archived or rewritten by this run.
+The July 2026 full regeneration replaced the Electron-oriented wiki with documentation for the five-crate Rust workspace. Electron-only pages remain in `docs/archive/` for history, and `docs/superpowers/` retains older plans and specifications as design records rather than current authority.

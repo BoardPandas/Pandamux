@@ -1,5 +1,7 @@
 # wmux Visibility Layer — Pure Observer Architecture
 
+> **Historical design record:** This page captures earlier design or implementation work and is not current guidance. Verify behavior against the [documentation index](../../README.md), the [developer guide](../../../CLAUDE.md), and the current Rust source.
+
 > wmux becomes a passive observer of Claude Code. No instructions, no CLI overrides, no behavior changes. Claude Code works natively; wmux watches and displays.
 
 ## Problem

@@ -192,7 +192,7 @@ Run validation in this order:
    - Every page has exactly one `PAGE_ID` marker matching the TOC
    - Every `autogen: true` section has matched `BEGIN:AUTOGEN` / `END:AUTOGEN` markers with the correct ID
    - No orphaned, duplicated, or extra markers
-   - Every internal link `[text](path)` points to a file that exists
+   - Every local link `[text](path)` resolves from the containing page's directory to a file or directory that exists; never validate source citations from the repository root
 2. **Mermaid validation:**
    - If `mmdc` is on PATH (`command -v mmdc` in Bash), extract each ` ```mermaid` block to a uniquely named temp file in the session scratchpad directory (never `/tmp`) and run `mmdc -i {block}.mmd -o {block}.svg --quiet` per block. Unique filenames keep parallel validations from clobbering each other. If `mmdc` is unavailable, fall back to the static checks in `${CLAUDE_SKILL_DIR}/references/mermaid-policy.md` and note that syntactic validation was skipped.
    - For each invalid block, attempt at most 3 fixes per block using the rules in `${CLAUDE_SKILL_DIR}/references/mermaid-policy.md`. If still invalid, comment the block out and add a `<!-- TODO: invalid mermaid -->` marker.

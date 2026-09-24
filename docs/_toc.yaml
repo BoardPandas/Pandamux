@@ -2,9 +2,9 @@ project:
   name: "PandaMUX"
   description: "Native Windows terminal multiplexer for AI agents. A Rust workspace pairing a GPU-accelerated Iced UI, an alacritty_terminal grid, local (portable-pty) and remote (russh) PTYs, a named-pipe control plane, and a pandamux CLI."
   repo_base_url: "https://github.com/BoardPandas/Pandamux/blob"
-  ref_commit_hash: "3accc145c64c10d86785466dbe59b344f6100665"
+  ref_commit_hash: "bd341e05acc22a0cea49d98ec041a358eb789a47"
   branch: "master"
-  updated_at: "2026-07-17"
+  updated_at: "2026-09-24"
 
 pages:
   - id: pandamux_01_overview
@@ -19,6 +19,8 @@ pages:
       - "Cargo.toml"
       - "CHANGELOG.md"
       - "crates/pandamux-app/src/main.rs"
+      - "crates/pandamux-term/Cargo.toml"
+      - "crates/pandamux-ui/Cargo.toml"
     sections:
       - id: pandamux_01_overview_introduction
         title: "Introduction"
@@ -68,7 +70,11 @@ pages:
       - "Cargo.toml"
       - "README.md"
       - "scripts/check-rust-boundaries.ps1"
+      - "scripts/check-claude-wiring.mjs"
       - ".github/workflows/rust.yml"
+      - ".claude/rules/commit-changelog.md"
+      - ".claude/rules/llg-check.md"
+      - ".claude/rules/bp-check.md"
       - "crates/pandamux-app/Cargo.toml"
     sections:
       - id: pandamux_02_getting-started_prerequisites
@@ -94,6 +100,7 @@ pages:
         source_files:
           - ".github/workflows/rust.yml"
           - "scripts/check-rust-boundaries.ps1"
+          - "scripts/check-claude-wiring.mjs"
         diagrams_needed: false
         diagram_types: []
       - id: pandamux_02_getting-started_native
@@ -326,6 +333,7 @@ pages:
       - "crates/pandamux-ui/src/settings.rs"
       - "crates/pandamux-ui/src/theme.rs"
       - "crates/pandamux-ui/src/shell_projection.rs"
+      - "crates/pandamux-ui/src/metrics.rs"
     sections:
       - id: pandamux_06_ui-shell_overview
         title: "Overview and Iced Isolation"
@@ -395,6 +403,8 @@ pages:
       - "crates/pandamux-app/src/project_launcher.rs"
       - "crates/pandamux-app/src/updater.rs"
       - "crates/pandamux-app/src/pipe_server.rs"
+      - "crates/pandamux-app/src/latency.rs"
+      - "crates/pandamux-app/src/clipboard_os.rs"
     sections:
       - id: pandamux_07_app-runtime_entry
         title: "Entry Point and Modes"
@@ -448,7 +458,7 @@ pages:
     title: "Configuration"
     folder: "core"
     filename: "CONFIGURATION.md"
-    description: "The config.toml schema, settings model, keymap, home/path resolution, bundled themes, and environment variables set in spawned shells."
+    description: "The JSON settings format, settings model, keymap, home/path resolution, bundled themes, and environment variables set in spawned shells."
     category: configuration
     source_files:
       - "crates/pandamux-core/src/config.rs"
@@ -456,7 +466,8 @@ pages:
       - "crates/pandamux-core/src/keymap.rs"
       - "crates/pandamux-core/src/home.rs"
       - "crates/pandamux-core/src/i18n.rs"
-      - "docs/config.md"
+      - "crates/pandamux-app/src/persistence.rs"
+      - "crates/pandamux-app/src/backend.rs"
     sections:
       - id: pandamux_08_configuration_layers
         title: "Configuration Sources"
@@ -467,10 +478,11 @@ pages:
         diagrams_needed: false
         diagram_types: []
       - id: pandamux_08_configuration_config-toml
-        title: "config.toml Schema"
+        title: "Settings File Format"
         autogen: true
         source_files:
-          - "crates/pandamux-core/src/config.rs"
+          - "crates/pandamux-core/src/settings.rs"
+          - "crates/pandamux-app/src/persistence.rs"
         diagrams_needed: false
         diagram_types: []
       - id: pandamux_08_configuration_settings
@@ -560,7 +572,7 @@ pages:
     title: "Named Pipe Control Plane"
     folder: "features"
     filename: "NAMED_PIPE_IPC.md"
-    description: "The \\\\.\\pipe\\pandamux server: V1 text hooks, token-authenticated V2 JSON-RPC, the shared intent dispatcher, and the method catalog."
+    description: "The \\\\.\\pipe\\pandamux server: V1 text hooks, currently unauthenticated V2 JSON-RPC, the shared intent dispatcher, and the method catalog."
     category: feature
     source_files:
       - "crates/pandamux-app/src/pipe_server.rs"
@@ -663,14 +675,14 @@ pages:
     title: "Agent Orchestration"
     folder: "features"
     filename: "AGENT_ORCHESTRATION.md"
-    description: "Agent surfaces in visible panes, the agent state model and pipe methods, the bundled orchestrator plugin, and Claude context startup integration."
+    description: "Agent surfaces in visible panes, the agent state model and pipe methods, and the manually installed bundled orchestrator plugin."
     category: feature
     source_files:
       - "crates/pandamux-core/src/agent.rs"
       - "crates/pandamux-app/src/backend.rs"
-      - "crates/pandamux-app/src/iced_runtime.rs"
+      - "crates/pandamux-app/Cargo.toml"
+      - "CHANGELOG.md"
       - "resources/pandamux-orchestrator/README.md"
-      - "resources/claude-instructions/claude-instructions.md"
     sections:
       - id: pandamux_12_agent-orchestration_overview
         title: "Overview"
@@ -694,11 +706,12 @@ pages:
         diagrams_needed: false
         diagram_types: []
       - id: pandamux_12_agent-orchestration_context
-        title: "Claude Context Startup Integration"
+        title: "Plugin Installation and Startup Behavior"
         autogen: true
         source_files:
-          - "crates/pandamux-app/src/iced_runtime.rs"
-          - "resources/claude-instructions/claude-instructions.md"
+          - "CHANGELOG.md"
+          - "crates/pandamux-app/Cargo.toml"
+          - "resources/pandamux-orchestrator/README.md"
         diagrams_needed: false
         diagram_types: []
       - id: pandamux_12_agent-orchestration_plugin
@@ -841,6 +854,6 @@ pages:
 
 notes:
   - "This TOC was rebuilt at commit 3accc14 after the full Electron-to-Rust rewrite (commits between 0ab9e64 and 3accc14). The prior Electron-oriented pages (MAIN_PROCESS, RENDERER_AND_STATE, BROWSER_CDP, AI_INTEGRATION) were moved to docs/archive/ because they have no successor in the Rust workspace (the browser/CDP pane was intentionally dropped)."
-  - "docs/superpowers/plans and docs/superpowers/specs are manually maintained historical plans/specs and are left untouched by doc-sync."
-  - "docs/config.md is a pre-existing manual note; it is cited by the Configuration page but not owned by an AUTOGEN block."
-  - "pandamux-app has no dedicated claude_context.rs module at this commit; Claude-context startup wiring lives in iced_runtime.rs and backend.rs."
+  - "docs/superpowers/plans and docs/superpowers/specs are manually maintained historical design records; each carries a banner directing readers to current implementation guidance."
+  - "The obsolete docs/config.md TOML proposal was moved to docs/archive/CONFIG_TOML_LEGACY.md; shipping settings are persisted as config/settings.json."
+  - "The app does not write to ~/.claude or auto-install the bundled orchestrator plugin; installation is manual."

@@ -1,15 +1,15 @@
 # PandaMUX Documentation
 
-> **Latest Updates (July 2026):**
-> - **v0.53 (Unreleased):** Check-for-updates button and one-click install in Settings, plus an update banner on launch that downloads and runs the signed installer.
-> - **v0.52.0:** SSH connections are now shared per host (spec 1.6), so a second session to a connected host starts near-instantly; closing an SSH tab keeps the host connection pooled.
-> - **v0.52.0:** Project and tab shortcuts (Ctrl+1..9, Ctrl+Tab), a keyboard-shortcut cheat sheet (Ctrl+/ or F1), and custom keybindings via `keyboard.overrides`.
-> - **v0.52.0:** Fresh bare terminals offer a skippable tool chooser (Claude / Codex / Gemini / custom); the Home dashboard is live across projects (spec 2.5).
+> **Current snapshot (September 2026):**
+> - The workspace manifest is at `0.53.3`; read `Cargo.toml` and `CHANGELOG.md` for the authoritative version and unreleased changes.
+> - Current unreleased work includes the in-app update flow and refreshed repository automation for `.claude/` configuration.
+> - v0.52.0 added shared SSH connections, project and tab shortcuts, custom keybindings, the fresh-terminal tool chooser, and the live Home dashboard.
 
 ## Quick Start
 
 | Goal | Start Here |
 |------|------------|
+| **Orient an AI coding agent** | [../AGENTS.md](../AGENTS.md), then [../CLAUDE.md](../CLAUDE.md) |
 | **Understand the system** | [ARCHITECTURE.md](core/ARCHITECTURE.md) |
 | **Build and run locally** | [GETTING_STARTED.md](GETTING_STARTED.md) |
 | **What PandaMUX is** | [OVERVIEW.md](OVERVIEW.md) |
@@ -30,7 +30,7 @@ Foundational architecture and per-crate documentation.
 | [TERMINAL_ENGINE.md](core/TERMINAL_ENGINE.md) | `pandamux-term`: grid, local PTY, shell lifecycle, search/links, clipboard, cwd |
 | [UI_SHELL.md](core/UI_SHELL.md) | `pandamux-ui`: Iced shell, chrome, panels, overlays, theming, read-projection |
 | [APP_RUNTIME.md](core/APP_RUNTIME.md) | `pandamux-app`: composition root, intent dispatcher, pollers, persistence, updater |
-| [CONFIGURATION.md](core/CONFIGURATION.md) | config.toml schema, settings, keymap, themes, and environment variables |
+| [CONFIGURATION.md](core/CONFIGURATION.md) | JSON settings format, keymap, themes, persistence, and environment variables |
 
 ---
 
@@ -50,7 +50,7 @@ Feature and integration documentation.
 |----------|-------------|
 | [NAMED_PIPE_IPC.md](features/NAMED_PIPE_IPC.md) | The `\\.\pipe\pandamux` control plane: V1 hooks, V2 JSON-RPC, shared dispatcher, method catalog |
 | [SSH_REMOTE.md](features/SSH_REMOTE.md) | russh remote PTYs and SFTP: connection model, per-host pool, OSC 52, image paste, launcher UI |
-| [AGENT_ORCHESTRATION.md](features/AGENT_ORCHESTRATION.md) | Agent surfaces in visible panes, agent pipe methods, orchestrator plugin, Claude context startup |
+| [AGENT_ORCHESTRATION.md](features/AGENT_ORCHESTRATION.md) | Agent surfaces in visible panes, agent pipe methods, and manual orchestrator-plugin installation |
 | [SHELL_INTEGRATION.md](features/SHELL_INTEGRATION.md) | Shell hook scripts, OSC 7 / OSC 9;9 cwd tracking, report_pwd, git and port pollers |
 
 ---
@@ -75,7 +75,7 @@ Release, packaging, and distribution procedures.
 
 ## Plans and Specs
 
-Manually maintained design and planning documents (historical; not owned by doc-sync).
+Historical design and planning records. They are useful for rationale, but do not override current code, `CLAUDE.md`, or this generated wiki.
 
 - [superpowers/plans/](superpowers/plans/) — implementation plans from the Rust rewrite
 - [superpowers/specs/](superpowers/specs/) — design specs referenced by the changelog (spec 1.x / 2.x)
@@ -84,7 +84,7 @@ Manually maintained design and planning documents (historical; not owned by doc-
 
 ## Archive
 
-Historical reference documents (superseded by the Rust rewrite).
+Historical reference documents superseded by the Rust rewrite or the current JSON settings model.
 
 - [archive/](archive/) — the prior Electron-era pages (main process, renderer, browser/CDP, AI integration)
 
@@ -96,9 +96,9 @@ Historical reference documents (superseded by the Rust rewrite).
 |----------|----------|
 | Repo README | [../README.md](../README.md) |
 | Agent Registry | [../AGENTS.md](../AGENTS.md) |
-| Claude Code Config | [../CLAUDE.md](../CLAUDE.md) |
-| config.toml note | [config.md](config.md) |
+| Developer Guide | [../CLAUDE.md](../CLAUDE.md) |
+| Historical Rewrite Plan | [../tasks/plan-repo.md](../tasks/plan-repo.md) |
 
 ---
 
-**Last Updated:** July 2026
+**Last Updated:** September 2026

@@ -1,5 +1,7 @@
 # Saved Sessions — Design Spec
 
+> **Historical design record:** This page captures earlier design or implementation work and is not current guidance. Verify behavior against the [documentation index](../../README.md), the [developer guide](../../../CLAUDE.md), and the current Rust source.
+
 > Save and restore workspace layouts with terminal CWDs, split configurations, and browser URLs.
 
 ## Problem

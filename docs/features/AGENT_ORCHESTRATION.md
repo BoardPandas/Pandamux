@@ -4,16 +4,15 @@
 
 The following files were used as evidence for this page:
 
-- [agent.rs:1-194](crates/pandamux-core/src/agent.rs#L1-L194)
-- [backend.rs:640-739](crates/pandamux-app/src/backend.rs#L640-L739)
-- [backend.rs:744-824](crates/pandamux-app/src/backend.rs#L744-L824)
-- [backend.rs:826-841](crates/pandamux-app/src/backend.rs#L826-L841)
-- [backend.rs:884-923](crates/pandamux-app/src/backend.rs#L884-L923)
-- [backend.rs:925-937](crates/pandamux-app/src/backend.rs#L925-L937)
-- [Cargo.toml:61-68](crates/pandamux-app/Cargo.toml#L61-L68)
-- [CHANGELOG.md:199-203](CHANGELOG.md#L199-L203)
-- [README.md:1-153](resources/pandamux-orchestrator/README.md#L1-L153)
-- [claude-instructions.md:1-23](resources/claude-instructions/claude-instructions.md#L1-L23)
+- [agent.rs:1-194](../../crates/pandamux-core/src/agent.rs#L1-L194)
+- [backend.rs:640-739](../../crates/pandamux-app/src/backend.rs#L640-L739)
+- [backend.rs:744-824](../../crates/pandamux-app/src/backend.rs#L744-L824)
+- [backend.rs:826-841](../../crates/pandamux-app/src/backend.rs#L826-L841)
+- [backend.rs:884-923](../../crates/pandamux-app/src/backend.rs#L884-L923)
+- [backend.rs:925-937](../../crates/pandamux-app/src/backend.rs#L925-L937)
+- [Cargo.toml:61-68](../../crates/pandamux-app/Cargo.toml#L61-L68)
+- [CHANGELOG.md:222-226](../../CHANGELOG.md#L222-L226)
+- [README.md:1-153](../../resources/pandamux-orchestrator/README.md#L1-L153)
 
 </details>
 
@@ -30,7 +29,7 @@ An *agent* in PandaMUX is a terminal surface running a specific command (typical
 
 Agents run as ordinary, fully visible terminal surfaces: spawning an agent creates (or splits) a pane the same way any other terminal surface is created, then starts a PTY in it with the agent's command, so the user can watch and type into any agent mid-flight (agent.rs:3-8). The pandamux-orchestrator plugin builds on top of this primitive to decompose a large task into dependency-aware waves of parallel Claude Code agents, each confined to a strict file zone, coordinated through a JSON state file in a temp directory rather than a daemon (README.md:7, README.md:42, README.md:103). There is no MCP integration anywhere in this path: Claude Code talks to PandaMUX exclusively through the `pandamux` CLI over the named pipe, and the orchestrator's hooks and scripts are themselves just CLI callers (README.md:76, README.md:101).
 
-Sources: [agent.rs:1-8](crates/pandamux-core/src/agent.rs#L1-L8), [README.md:1-103](resources/pandamux-orchestrator/README.md#L1-L103)
+Sources: [agent.rs:1-8](../../crates/pandamux-core/src/agent.rs#L1-L8), [README.md:1-103](../../resources/pandamux-orchestrator/README.md#L1-L103)
 <!-- END:AUTOGEN pandamux_12_agent-orchestration_overview -->
 
 ---
@@ -76,7 +75,7 @@ stateDiagram-v2
 
 Status is not pushed by the PTY layer; it is recomputed lazily. `refresh_agent_status` polls `PtySessionManager::is_running()` for every registered agent's surface on each `agent.status`/`agent.list` call and writes `Running` or `Exited` back into the registry (backend.rs:884-907), so `Starting` only ever appears in the brief window between `AgentInfo` construction and the first status refresh (agent.rs:812-822).
 
-Sources: [agent.rs:1-194](crates/pandamux-core/src/agent.rs#L1-L194), [backend.rs:884-907](crates/pandamux-app/src/backend.rs#L884-L907)
+Sources: [agent.rs:1-194](../../crates/pandamux-core/src/agent.rs#L1-L194), [backend.rs:884-907](../../crates/pandamux-app/src/backend.rs#L884-L907)
 <!-- END:AUTOGEN pandamux_12_agent-orchestration_model -->
 
 ---
@@ -88,29 +87,27 @@ Sources: [agent.rs:1-194](crates/pandamux-core/src/agent.rs#L1-L194), [backend.r
 
 | Method | Purpose |
 |---|---|
-| `agent.spawn` | Creates one agent surface. Requires `cmd` (or the legacy `command` alias); `label` defaults to `"agent"`; placement is `InPane(pane or paneId)`, i.e. a new tab in the given pane or, if omitted, wherever `SurfaceIntent::Create` lands it ([backend.rs:648-660](crates/pandamux-app/src/backend.rs#L648-L660)) |
-| `agent.spawn_batch` | Spawns several agents at once from a `strategy` (`distribute`/`stack`/`split`, default `distribute`) plus an `agents`/`json` array of `{cmd, label, cwd}` specs; `distribute` round-robins across the panes that exist at call time, `stack` puts every agent in the focused pane, `split` opens one new split per agent ([backend.rs:662-705](crates/pandamux-app/src/backend.rs#L662-L705)) |
-| `agent.status` | Refreshes status for every tracked agent, then returns the single requested `id`'s `AgentInfo`, erroring with a JSON-RPC `-32000` if the id is unknown ([backend.rs:707-714](crates/pandamux-app/src/backend.rs#L707-L714)) |
-| `agent.list` | Refreshes status for every tracked agent and returns the full list, mapped through `agent_json` so each entry carries both `id` and the `agentId` alias the orchestrator's scripts read ([backend.rs:716-721](crates/pandamux-app/src/backend.rs#L716-L721)) |
-| `agent.kill` | Removes the agent from the registry, kills its PTY if one is running, and closes its surface (bypassing the "keep last surface open" guard) ([backend.rs:723-737](crates/pandamux-app/src/backend.rs#L723-L737)) |
+| `agent.spawn` | Creates one agent surface. Requires `cmd` (or the legacy `command` alias); `label` defaults to `"agent"`; placement is `InPane(pane or paneId)`, i.e. a new tab in the given pane or, if omitted, wherever `SurfaceIntent::Create` lands it ([backend.rs:648-660](../../crates/pandamux-app/src/backend.rs#L648-L660)) |
+| `agent.spawn_batch` | Spawns several agents at once from a `strategy` (`distribute`/`stack`/`split`, default `distribute`) plus an `agents`/`json` array of `{cmd, label, cwd}` specs; `distribute` round-robins across the panes that exist at call time, `stack` puts every agent in the focused pane, `split` opens one new split per agent ([backend.rs:662-705](../../crates/pandamux-app/src/backend.rs#L662-L705)) |
+| `agent.status` | Refreshes status for every tracked agent, then returns the single requested `id`'s `AgentInfo`, erroring with a JSON-RPC `-32000` if the id is unknown ([backend.rs:707-714](../../crates/pandamux-app/src/backend.rs#L707-L714)) |
+| `agent.list` | Refreshes status for every tracked agent and returns the full list, mapped through `agent_json` so each entry carries both `id` and the `agentId` alias the orchestrator's scripts read ([backend.rs:716-721](../../crates/pandamux-app/src/backend.rs#L716-L721)) |
+| `agent.kill` | Removes the agent from the registry, kills its PTY if one is running, and closes its surface (bypassing the "keep last surface open" guard) ([backend.rs:723-737](../../crates/pandamux-app/src/backend.rs#L723-L737)) |
 
 `spawn_agent` is the shared implementation behind both `agent.spawn` and `agent.spawn_batch`: it creates the surface (or a new split pane) via the same `AppIntent` path any other surface mutation uses, tags it with the terminal session type for the rail/type grouping, mints the agent id *before* spawning the PTY so the child process can carry `PANDAMUX_AGENT_ID`, starts the PTY with `pandamux_env()`-injected environment, and finally registers the `AgentInfo` (backend.rs:744-824). That environment always includes `PANDAMUX=1`, `PANDAMUX_SURFACE_ID`, and `PANDAMUX_PIPE`, plus `PANDAMUX_AGENT_ID` when spawning an agent, so the orchestrator's `on-agent-stop`/`on-tool-use` hooks can key per-agent state on it (backend.rs:826-841). Every returned agent object is built by `agent_json`, which always emits both `id` and an `agentId` alias for orchestrator-script compatibility (backend.rs:925-937).
 
-Sources: [backend.rs:640-739](crates/pandamux-app/src/backend.rs#L640-L739), [backend.rs:744-841](crates/pandamux-app/src/backend.rs#L744-L841), [backend.rs:925-937](crates/pandamux-app/src/backend.rs#L925-L937)
+Sources: [backend.rs:640-739](../../crates/pandamux-app/src/backend.rs#L640-L739), [backend.rs:744-841](../../crates/pandamux-app/src/backend.rs#L744-L841), [backend.rs:925-937](../../crates/pandamux-app/src/backend.rs#L925-L937)
 <!-- END:AUTOGEN pandamux_12_agent-orchestration_methods -->
 
 ---
 
 <!-- BEGIN:AUTOGEN pandamux_12_agent-orchestration_context -->
-## Claude Context Startup Integration
+## Plugin Installation and Startup Behavior
 
-_TBD_ — no such integration exists in the current Rust codebase. A repo-wide search of `crates/pandamux-app/src/iced_runtime.rs` (and every other file under `crates/`) turns up no `claude_context` module, no plugin-cache install routine, and no code that reads `resources/claude-instructions/claude-instructions.md`; the only Rust-side hit for "orchestrator" in `iced_runtime.rs` is doc-comment prose describing the CLI/agent/orchestrator pipe-method family, not a startup hook.
+PandaMUX bundles `resources/pandamux-orchestrator/` with the installed application, but it does not install or enable the plugin in Claude Code and does not write to `~/.claude` during startup. The previous startup integration was removed in v0.35.6, and the changelog records manual use as the supported behavior ([CHANGELOG.md:222-226](../../CHANGELOG.md#L222-L226)).
 
-This is a deliberate removal, not an oversight. `CHANGELOG.md` records that PandaMUX used to inject a marker-delimited block into `~/.claude/CLAUDE.md` and auto-install/enable the pandamux-orchestrator plugin (`installed_plugins.json` + `settings.json`) on GUI launch, ported from the earlier Electron `claude-context.ts`, but that entire startup integration, including the `claude-instructions.md` payload that fed it, was removed in v0.35.6 (CHANGELOG.md:201-203). The `resources/claude-instructions/claude-instructions.md` file still exists on disk with the same marker-delimited PandaMUX block (`<!-- pandamux:start -->` / `<!-- pandamux:end -->`) it always had (claude-instructions.md:1-23), but nothing in the shipped app reads or installs it any more, and it is not in the packager's bundled resource list (only `themes`, `sounds`, `icons`, `shell-integration`, and `pandamux-orchestrator` are bundled into the installer; `claude-instructions.md` is absent) (Cargo.toml:61-68).
+Install the bundled plugin from Claude Code with `/plugin install pandamux-orchestrator`, then invoke `/pandamux:orchestrate` ([README.md:44-55](../../resources/pandamux-orchestrator/README.md#L44-L55)). The NSIS package includes the plugin source under `resources/pandamux-orchestrator`, alongside themes, sounds, icons, and shell integration ([Cargo.toml:61-68](../../crates/pandamux-app/Cargo.toml#L61-L68)). This separation keeps application startup from mutating a user's Claude Code configuration while still shipping the integration for explicit opt-in.
 
-Practically, this means the pandamux-orchestrator plugin is no longer auto-installed: a user must run `/plugin install pandamux-orchestrator` themselves (README.md:44-50) against the copy bundled on disk under `resources/pandamux-orchestrator/` (Cargo.toml:66, CHANGELOG.md:203). The project's own top-level `CLAUDE.md` still describes this as "auto-installed into the Claude plugin cache on GUI launch by `pandamux-app::claude_context`," which is stale relative to the code as of this reading and should be corrected or re-implemented, not relied upon.
-
-Sources: [CHANGELOG.md:199-203](CHANGELOG.md#L199-L203), [claude-instructions.md:1-23](resources/claude-instructions/claude-instructions.md#L1-L23), [Cargo.toml:61-68](crates/pandamux-app/Cargo.toml#L61-L68), [README.md:44-50](resources/pandamux-orchestrator/README.md#L44-L50)
+Sources: [CHANGELOG.md:222-226](../../CHANGELOG.md#L222-L226), [Cargo.toml:61-68](../../crates/pandamux-app/Cargo.toml#L61-L68), [README.md:44-55](../../resources/pandamux-orchestrator/README.md#L44-L55)
 <!-- END:AUTOGEN pandamux_12_agent-orchestration_context -->
 
 ---
@@ -130,7 +127,7 @@ The plugin has three coordination layers, all reading and writing a single JSON 
 
 Up to 5 agents run in parallel per wave, each with an explicit allowed/excluded file list to prevent cross-agent conflicts, and each wave's agents receive the previous wave's results for context continuity; an optional `--worktree` flag isolates each agent in its own git worktree (README.md:85-93). The manifest lives at `.claude-plugin/plugin.json`, the slash command entry point is `commands/orchestrate.md` (`/pandamux:orchestrate`), and the per-wave worker prompt template is `agents/pandamux-worker.md` (README.md:109-125).
 
-Sources: [README.md:1-153](resources/pandamux-orchestrator/README.md#L1-L153)
+Sources: [README.md:1-153](../../resources/pandamux-orchestrator/README.md#L1-L153)
 <!-- END:AUTOGEN pandamux_12_agent-orchestration_plugin -->
 
 ---

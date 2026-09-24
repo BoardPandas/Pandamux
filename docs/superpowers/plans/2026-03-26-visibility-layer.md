@@ -1,5 +1,7 @@
 # wmux Visibility Layer Implementation Plan
 
+> **Historical design record:** This page captures earlier design or implementation work and is not current guidance. Verify behavior against the [documentation index](../../README.md), the [developer guide](../../../CLAUDE.md), and the current Rust source.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make wmux a pure passive observer of Claude Code — CDP proxy for browser visibility, hooks for agent visibility, minimal CLAUDE.md.

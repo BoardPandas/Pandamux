@@ -14,7 +14,7 @@ Native Windows terminal multiplexer for AI agents. Rust workspace: Iced (GPU UI)
 
 ## Build & Dev
 
-Rust stable toolchain (rustup) + MSVC build tools (Windows target). No Node/pnpm anymore.
+Rust stable toolchain (rustup) + MSVC build tools (Windows target). The app has no Node/pnpm runtime or install step; Node 24 runs the repository's `.claude/` wiring guard, and site publishing uses `npx netlify`.
 
 ```bash
 # GUI app (the Iced shell needs the iced-runtime feature). With that feature the
@@ -65,13 +65,13 @@ crates/
                    markdown/diff surfaces, theming, icons. The ONLY crate that imports Iced.
   pandamux-app/    Binary (pandamux.exe): composition root + tokio runtime; owns authoritative mutable
                    state; named-pipe server, agent manager, git/port pollers, session persistence,
-                   in-app updater, Claude-context startup integration, OS clipboard bridge.
+                   in-app updater, OS clipboard bridge.
   pandamux-cli/    Binary (pandamux-cli.exe): the `pandamux` CLI, pipe client (wire-compatible with the
                    V2 JSON-RPC protocol).
 resources/         Runtime assets loaded from <exe dir>/resources: themes, sounds, shell-integration,
-                   icons, claude-instructions.md, pandamux-orchestrator plugin.
+                   icons, pandamux-orchestrator plugin.
 site/              Landing page (static HTML, Netlify) — describes the public download.
-tasks/plan-repo.md The master plan (phases, decisions, gotchas, UI design spec in Section 12).
+tasks/plan-repo.md Historical rewrite plan (phases, decisions, gotchas, UI design spec in Section 12).
 ```
 
 ### Key design decisions
@@ -117,27 +117,27 @@ The packager config is `[package.metadata.packager]` in `crates/pandamux-app/Car
 
 ## Named Pipe + CLI (parity contract)
 
-`\\.\pipe\pandamux`: V1 text protocol (shell-integration hooks, e.g. `report_pwd`) + V2 JSON-RPC (CLI/agents/orchestrator, token-authenticated). The V2 protocol is wire-compatible with the historical prototype and is preserved as-is (browser/CDP methods excepted — they reject with a "use Claude Code's browser tooling" message; `system.capabilities` reports `browser: false`).
+`\\.\pipe\pandamux`: V1 text protocol (`ping` and `report_pwd`) plus V2 JSON-RPC for the CLI, agents, and orchestrator. The request envelope has an optional `token` field, but the current server does not validate it, so the local pipe must not be described as authenticated. The non-browser V2 surface is wire-compatible with the historical prototype; browser/CDP methods reject with a "use Claude Code's browser tooling" message and `system.capabilities` reports `browser: false`.
 
-V2 methods (all route through `pandamux-app::backend::handle_line`): `system.*`, `workspace.*`, `pane.*`, `layout.grid`, `surface.*` (incl. `send_text`/`send_key`/`read_text`/`paste`/`paste_image`/`set_color_scheme`), `markdown.*`, `diff.*`, `notification.*`, `sidebar.*`, `agent.*`, `clipboard.*`, `ssh.*`, `window.*`, `config.*`, `theme.*`, `hook.event`. The authoritative CLI command list is `crates/pandamux-cli` (`pandamux <command>`); `pandamux browser *` does NOT exist.
+V2 methods (all route through `pandamux-app::backend::handle_line`): `system.*`, `workspace.*`, `pane.*`, `layout.grid`, `surface.*` (including `send_text`/`send_key`/`read_text`/`paste`/`paste_image`/`set_color_scheme`), `markdown.*`, `diff.*`, `notification.*`, `sidebar.*`, `agent.*`, `clipboard.*`, `ssh.*`, `window.*`, `config.*`, and `theme.*`. The authoritative CLI command list is `crates/pandamux-cli` (`pandamux <command>`); neither `hook.event` nor `pandamux browser *` is implemented.
 
 ---
 
 ## pandamux-orchestrator Plugin
 
-Claude Code plugin bundled in `resources/pandamux-orchestrator/`. Auto-installed into the Claude plugin cache on GUI launch by `pandamux-app::claude_context`. Decomposes complex dev tasks into parallel Claude Code agents in visible panes, coordinated through the pipe protocol (state in a JSON file in TMPDIR; no daemon). It talks the CLI/pipe only, so it works unchanged against the Rust pipe server. See `resources/pandamux-orchestrator/` for its skills/hooks/scripts.
+Claude Code plugin bundled in `resources/pandamux-orchestrator/`. Install it manually with `/plugin install pandamux-orchestrator`; PandaMUX does not write to `~/.claude` on launch. The plugin decomposes complex dev tasks into parallel Claude Code agents in visible panes, coordinated through the pipe protocol (state in a JSON file in TMPDIR; no daemon). It talks to the CLI/pipe only, so it works unchanged against the Rust pipe server. See `resources/pandamux-orchestrator/` for its skills, hooks, and scripts.
 
 ---
 
 ## Shell Integration
 
-Scripts in `resources/shell-integration/` (bash/zsh/PowerShell/cmd) report cwd, git branch/dirty, and shell state over the pipe. Env vars set by pandamux in spawned shells: `PANDAMUX=1`, `PANDAMUX_SURFACE_ID`, `PANDAMUX_PIPE`, `PANDAMUX_CLI`, `PANDAMUX_AGENT_ID` (for orchestrator hooks). Per-session cwd tracking uses OSC 9;9 / OSC 7 plus the V1 `report_pwd`.
+Scripts in `resources/shell-integration/` (bash/zsh/PowerShell/cmd) report cwd and emit shell metadata; the native backend currently handles V1 `report_pwd` while git/port state is recomputed by pollers. Env vars set by PandaMUX in spawned shells are `PANDAMUX=1`, `PANDAMUX_SURFACE_ID`, `PANDAMUX_PIPE`, and, for orchestrator-spawned surfaces, `PANDAMUX_AGENT_ID`. Per-session cwd tracking also uses OSC 9;9 / OSC 7.
 
 ---
 
 ## Website (pandamux.boardpandas.ai)
 
-Static site in `site/`, deployed to Netlify (`netlify.toml`). `site/index.html` is the landing page with i18n (en/fr/ar/ja via `site/i18n.js`, URL-hash switching). **Known stale**: the public site still describes the Electron-era download even though signed native releases have been shipping since v0.37. Updating its copy to the native app + NSIS installer is an open task (`npx netlify deploy --prod --dir site` to publish).
+Static site in `site/`, deployed to Netlify (`netlify.toml`). `site/index.html` describes the native Rust app and signed NSIS installer, with i18n via `site/i18n.js` and URL-hash switching. Publish site changes with `npx netlify deploy --prod --dir site`.
 
 ---
 

@@ -26,6 +26,8 @@ The following files were used as evidence for this page:
 
 # Renderer and State
 
+> **Historical archive:** This page documents the removed Electron/TypeScript prototype. For current behavior, use the [documentation index](../README.md), the [developer guide](../../CLAUDE.md), and the Rust source.
+
 > **Related Pages**: [Architecture](ARCHITECTURE.md), [Configuration](CONFIGURATION.md)
 
 ---

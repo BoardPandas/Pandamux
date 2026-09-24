@@ -11,8 +11,8 @@ This file is the contract every generated page must satisfy.
 
 The following files were used as evidence for this page:
 
-- [path/to/file1.ext:1-N](path/to/file1.ext#L1-LN)
-- [path/to/file2.ext:M-K](path/to/file2.ext#LM-LK)
+- [path/to/file1.ext:1-N]({page-relative-path-to-file1}#L1-LN)
+- [path/to/file2.ext:M-K]({page-relative-path-to-file2}#LM-LK)
 
 </details>
 
@@ -29,7 +29,7 @@ The following files were used as evidence for this page:
 
 {Body: prose, tables, code blocks, mermaid diagrams. Inline citations wrapped in parentheses, before the period.}
 
-Sources: [file.ext:M-K](file.ext#LM-LK), [other.ext:P](other.ext#LP)
+Sources: [file.ext:M-K]({page-relative-path-to-file}#LM-LK), [other.ext:P]({page-relative-path-to-other-file}#LP)
 <!-- END:AUTOGEN {section_id} -->
 
 ---
@@ -86,7 +86,8 @@ Do NOT add AUTOGEN markers to manual sections.
 
 - Use a `<details>` block at the top so the listing collapses by default
 - Include 8+ paths when available
-- Path format: `[path:start-end](path#Lstart-Lend)` using the relative path from the repo root and the actual line ranges Read returned
+- Display paths from the repo root, but compute each Markdown target relative to the generated page's directory. For example, `docs/core/ARCHITECTURE.md` must link to root source as `../../crates/...`, not `crates/...`.
+- Path format: `[path:start-end](page-relative-path#Lstart-Lend)` using actual line ranges returned by Read
 - For files where no specific range applies (e.g., a config file referenced as a whole), omit the line range
 
 ## Related Pages line
