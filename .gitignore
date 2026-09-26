@@ -37,6 +37,7 @@ htmlcov/
 
 # Rust (Cargo.lock is intentionally NOT ignored -- commit lockfiles)
 target/
+pandamux-node-mock
 
 # Java/Kotlin
 *.class

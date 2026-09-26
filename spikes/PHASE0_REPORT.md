@@ -1,22 +1,23 @@
 # PandaMUX Phase 0 (Spikes) Evaluation Report
 
-Status: In Progress (S1, S2, S5a, and S6 complete; S3, S4, and S5b queued)
+Status: In Progress (S1, S2, S3, S5a, and S6 complete; S4 and S5b queued)
 Date: 2026-09-26
 
 ## 1. Executive Summary
 
-Phase 0 tests architectural risks and confirms assumptions before starting Phase 1 implementation. Four critical spikes have completed successfully:
+Phase 0 tests architectural risks and confirms assumptions before starting Phase 1 implementation. Five critical spikes have completed successfully:
 
 1. **S1 (GPUI Chat Spike)**: Passed. Verifies that GPUI 0.3.6 and gpui-kit 0.6.6 provide high-performance markdown streaming, virtualized 2,000-message scrolling, multi-line composition with attachment chips, collapsible tool calls, and inline diffs on Windows MSVC.
 2. **S2 (Codex and Claude Drivers)**: Passed. Verifies zero-session auth detection, stream-json protocol with permission prompt tools, sub-agent tree parsing, Codex JSON-RPC schema contracts, developer instructions injection, and rate-limit parsing.
-3. **S5a (Antigravity Integration)**: Passed. Verifies managed bundle validation, two-entry hardened extraction, replaced environment with isolated `GEMINI_HOME`, OAuth URL parsing and remote redirect relay, ACP session flow, prompt injection warning detection, and zero-spawn reliability rules.
-4. **S6 (Pins and License Audit)**: Passed. Verifies that all gpui-pre and gpui-kit crates are Apache-2.0, with zero GPL contamination in the desktop graph, satisfying the license gate for zed#55470.
+3. **S3 (Remote Bootstrap)**: Passed. Verifies remote detection without PTY on Galahad (Linux x86_64), static Linux musl binary packaging and delivery via SSH, remote SHA-256 bit-for-bit hash verification, `setsid` background daemon lifecycle and `server.json` discovery, SSH exec proxy tunnel architecture (avoiding sshd streamlocal restrictions), mid-turn connection severing with daemon survival, and `sinceSeq` reconnection replaying missed events and background timer heartbeats.
+4. **S5a (Antigravity Integration)**: Passed. Verifies managed bundle validation, two-entry hardened extraction, replaced environment with isolated `GEMINI_HOME`, OAuth URL parsing and remote redirect relay, ACP session flow, prompt injection warning detection, and zero-spawn reliability rules.
+5. **S6 (Pins and License Audit)**: Passed. Verifies that all gpui-pre and gpui-kit crates are Apache-2.0, with zero GPL contamination in the desktop graph, satisfying the license gate for zed#55470.
 
 | Spike | Title | Gate Status | Verdict | Notes |
 | :--- | :--- | :--- | :--- | :--- |
 | **S1** | GPUI Chat Spike | Gating | **PASS** | 2,000 items in 1.09ms, ~50 tok/s stream, Direct3D rendering verified |
 | **S2** | Codex and Claude Drivers | Gating | **PASS** | Zero-session auth probe, stream-json, sub-agents, developer instructions |
-| **S3** | Remote Bootstrap | Non-gating | Queued | SSH exec, daemon lifecycle, reconnect |
+| **S3** | Remote Bootstrap | Non-gating | **PASS** | Exec without PTY, musl binary delivery, remote SHA-256, setsid daemon, exec proxy tunnel, mid-turn disconnect and replay |
 | **S4** | Packaging | Non-gating | Queued | NSIS multi-binary installer |
 | **S5a** | Antigravity Integration | Gating | **PASS** | Managed bundle, isolated env, OAuth relay, ACP permissions, reliability rules |
 | **S5b** | Best-effort ACP | Non-gating | Queued | Cursor, Grok, OpenCode ACP probes |
@@ -123,8 +124,39 @@ The test harness and fixtures are implemented in `spikes/phase0-antigravity/`.
 - **Payload Sanitization**: Capped tool payload text at 64 KB with truncation notice.
 - **Field Normalization**: Handled alternate command casing variations (`CommandLine`, `command_line`, `cmd`).
 
-## 6. Next Phase 0 Milestones
+## 6. S3 Remote Bootstrap Detailed Findings
 
-1. **S3**: Validate remote bootstrap against Galahad over SSH exec and SFTP.
-2. **S4**: Validate cargo-packager NSIS installer generation on Windows.
-3. **S5b**: Best-effort ACP probes for Cursor, Grok, and OpenCode.
+The test harness and fixtures are implemented in `spikes/phase0-remote-bootstrap/`. The tests executed live against Galahad (`10.55.88.48`).
+
+### 6.1 Remote Detection & Exec without PTY
+- Verified target identification on Galahad: `uname -sm` reports `Linux x86_64` and resolved `$HOME` to `/home/brandon`.
+- Confirmed that commands run cleanly over SSH channel exec without pseudo-terminal allocation (`-T`), avoiding PTY escape character contamination.
+
+### 6.2 Linux musl Cross-Compilation & SHA-256 Integrity
+- Verified compilation of static Linux musl binary using local Windows toolchain: `rustc -C linker-flavor=ld.lld -C linker=rust-lld --target x86_64-unknown-linux-musl`.
+- Delivered binary to Galahad at `~/.pandamux-spike/versions/<sha256>/pandamux-node-mock` via SSH exec streaming.
+- Computed remote SHA-256 via `sha256sum` on Galahad; confirmed exact match with local digest (`36f76227...`).
+
+### 6.3 setsid Daemon Lifecycle & Discovery
+- Launched background node daemon using `setsid nohup ~/.pandamux-spike/.../pandamux-node-mock daemon --run-dir ~/.pandamux-spike/run > /dev/null 2>&1 &`.
+- Verified daemon created UNIX domain socket `~/.pandamux-spike/run/server.sock` and wrote discovery record `server.json` (pid `2778246`, socket path, start timestamp).
+
+### 6.4 Tunneling Architecture: Proxy vs direct-streamlocal Decision
+- Tested exec proxy tunnel: client connects via SSH exec channel running `pandamux-node-mock proxy --socket ~/.pandamux-spike/run/server.sock`.
+- Confirmed bidirectional ping/pong roundtrip over the proxy channel (`{"status":"pong","version":"0.1.0"}`).
+- Architectural verdict: **Exec proxy is the selected architecture**. OpenSSH `direct-streamlocal` forwarding requires `AllowStreamLocalForwarding yes` and `StreamLocalBindUnlink` in `/etc/ssh/sshd_config`, which is frequently prohibited or restricted on remote bastions, whereas SSH exec proxy uses standard stdio with zero host configuration requirements and zero open TCP ports.
+
+### 6.5 Mid-Turn Disconnect, Daemon Survival, and sinceSeq Replay
+- Initiated a 5-step turn on the remote daemon over the proxy tunnel.
+- Received initial progress event (`step 1`).
+- Abruptly severed the SSH connection mid-turn to simulate a network outage or laptop sleep.
+- Verified daemon process (`pid 2778246`) continued executing autonomously on Galahad.
+- Waited 3.5 seconds while offline: daemon completed steps 2 through 5 and recorded background heartbeat ticks.
+- Re-established SSH proxy connection and subscribed with `since_seq: 1`.
+- Verified clean recovery and replay of all missed progress steps (steps 2 through 5) plus background timer ticks that fired while disconnected.
+- Cleanly terminated daemon with `shutdown` command and removed temporary remote directory.
+
+## 7. Next Phase 0 Milestones
+
+1. **S4**: Validate cargo-packager NSIS installer generation on Windows.
+2. **S5b**: Best-effort ACP probes for Cursor, Grok, and OpenCode.

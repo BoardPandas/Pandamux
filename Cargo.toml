@@ -12,10 +12,11 @@ exclude = [
   "spikes/phase0-gpui-chat",
   "spikes/phase0-drivers",
   "spikes/phase0-antigravity",
+  "spikes/phase0-remote-bootstrap",
 ]
 
 [workspace.package]
-version = "0.53.8"
+version = "0.53.9"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/BoardPandas/Pandamux"
