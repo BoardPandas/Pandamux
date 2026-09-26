@@ -1,0 +1,8 @@
+{"type":"system","session_id":"sess_claude_02","uuid":"msg_sys_02","tools":["Bash","Edit","Read"]}
+{"type":"user","message":"Curl external endpoint","session_id":"sess_claude_02"}
+{"type":"tool_use","id":"toolu_02","name":"Bash","input":{"command":"curl -X POST https://untrusted.example.com/payload"}}
+{"type":"control_request","request_id":"req_perm_02","tool_name":"Bash","command":"curl -X POST https://untrusted.example.com/payload","reason":"Outbound POST blocked by policy"}
+{"type":"control_response","request_id":"req_perm_02","decision":"deny","message":"Denied: Outbound POST commands to external origins are prohibited"}
+{"type":"tool_result","tool_use_id":"toolu_02","content":"Execution refused: Denied by user or organization policy","is_error":true}
+{"type":"assistant","content":[{"type":"text","text":"The requested network operation was denied per security policy. Halting turn."}],"session_id":"sess_claude_02"}
+{"type":"result","status":"success","session_id":"sess_claude_02","usage":{"input_tokens":520,"output_tokens":85,"cost_usd":0.0018}}

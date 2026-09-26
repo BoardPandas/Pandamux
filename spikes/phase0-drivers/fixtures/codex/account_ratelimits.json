@@ -1,0 +1,16 @@
+{
+  "rateLimits": [
+    {
+      "limitName": "tokens",
+      "usedPercent": 34.2,
+      "windowDurationMins": 300,
+      "resetsAt": "2026-09-26T04:00:00Z"
+    },
+    {
+      "limitName": "requests",
+      "usedPercent": 18.5,
+      "windowDurationMins": 60,
+      "resetsAt": "2026-09-26T01:00:00Z"
+    }
+  ]
+}
