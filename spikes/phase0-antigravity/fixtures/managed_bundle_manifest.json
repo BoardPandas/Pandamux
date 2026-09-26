@@ -1,0 +1,12 @@
+{
+  "version": "1.1.1",
+  "platform": "windows",
+  "arch": "x86_64",
+  "url": "https://dl.google.com/antigravity/acp/v1.1.1/antigravity-acp-windows-x64.zip",
+  "size": 48234400,
+  "sha256": "a3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "entries": [
+    "agy_acp_server.exe",
+    "localharness_external.exe"
+  ]
+}

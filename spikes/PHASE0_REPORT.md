@@ -1,15 +1,16 @@
 # PandaMUX Phase 0 (Spikes) Evaluation Report
 
-Status: In Progress (S1, S2, and S6 complete; S3 through S5 queued)
+Status: In Progress (S1, S2, S5a, and S6 complete; S3, S4, and S5b queued)
 Date: 2026-09-26
 
 ## 1. Executive Summary
 
-Phase 0 tests architectural risks and confirms assumptions before starting Phase 1 implementation. Three critical spikes have completed successfully:
+Phase 0 tests architectural risks and confirms assumptions before starting Phase 1 implementation. Four critical spikes have completed successfully:
 
 1. **S1 (GPUI Chat Spike)**: Passed. Verifies that GPUI 0.3.6 and gpui-kit 0.6.6 provide high-performance markdown streaming, virtualized 2,000-message scrolling, multi-line composition with attachment chips, collapsible tool calls, and inline diffs on Windows MSVC.
 2. **S2 (Codex and Claude Drivers)**: Passed. Verifies zero-session auth detection, stream-json protocol with permission prompt tools, sub-agent tree parsing, Codex JSON-RPC schema contracts, developer instructions injection, and rate-limit parsing.
-3. **S6 (Pins and License Audit)**: Passed. Verifies that all gpui-pre and gpui-kit crates are Apache-2.0, with zero GPL contamination in the desktop graph, satisfying the license gate for zed#55470.
+3. **S5a (Antigravity Integration)**: Passed. Verifies managed bundle validation, two-entry hardened extraction, replaced environment with isolated `GEMINI_HOME`, OAuth URL parsing and remote redirect relay, ACP session flow, prompt injection warning detection, and zero-spawn reliability rules.
+4. **S6 (Pins and License Audit)**: Passed. Verifies that all gpui-pre and gpui-kit crates are Apache-2.0, with zero GPL contamination in the desktop graph, satisfying the license gate for zed#55470.
 
 | Spike | Title | Gate Status | Verdict | Notes |
 | :--- | :--- | :--- | :--- | :--- |
@@ -17,7 +18,7 @@ Phase 0 tests architectural risks and confirms assumptions before starting Phase
 | **S2** | Codex and Claude Drivers | Gating | **PASS** | Zero-session auth probe, stream-json, sub-agents, developer instructions |
 | **S3** | Remote Bootstrap | Non-gating | Queued | SSH exec, daemon lifecycle, reconnect |
 | **S4** | Packaging | Non-gating | Queued | NSIS multi-binary installer |
-| **S5a** | Antigravity Integration | Gating | Queued | Managed bundle, OAuth relay, permissions |
+| **S5a** | Antigravity Integration | Gating | **PASS** | Managed bundle, isolated env, OAuth relay, ACP permissions, reliability rules |
 | **S5b** | Best-effort ACP | Non-gating | Queued | Cursor, Grok, OpenCode ACP probes |
 | **S6** | Pins and Licenses | Gating | **PASS** | Apache-2.0 confirmed, zero GPL contamination |
 
@@ -85,9 +86,45 @@ The test harness and fixtures are implemented in `spikes/phase0-drivers/`.
 - **Turn Lifecycle & Approvals**: Replayed full turn lifecycle fixture verifying `turn/approvalRequest` and `turn/approvalResponse` roundtrips with turn token accounting.
 - **Rate-Limit Ingestion**: Validated parsing of `account/rateLimits/read` responses, extracting `usedPercent`, `windowDurationMins`, and ISO-8601 reset timestamps.
 
-## 5. Next Phase 0 Milestones
+## 5. S5a Antigravity Integration Detailed Findings
+
+The test harness and fixtures are implemented in `spikes/phase0-antigravity/`.
+
+### 5.1 Managed Bundle Manifest & Hardened Extraction
+- **Pinned Verification**: Verified bundle manifest size and SHA-256 validation.
+- **Two-Entry Hardened Extraction**: Enforced that the bundle contains exactly two entries (`agy_acp_server` and `localharness_external`).
+- **Hardened Rejection**: Proved rejection of size mismatches, hash mismatches, unexpected extra entries, and path traversal attempts (such as `../` prefixes or absolute roots).
+- **Resolution Order**: Verified the 3-step resolution order: explicit setting, then managed active release (`active.json` pointer), then system `PATH`.
+
+### 5.2 Isolated Environment & Sibling Temp Directories
+- **Replaced Environment**: Built isolated process environment replacing inherited variables, setting `GEMINI_HOME` to a private per-instance profile (`profiles/antigravity/<instance>`), `ANTIGRAVITY_HARNESS_PATH`, `AGY_ACP_FORCE_FILE_STORAGE=1`, `PYTHONUNBUFFERED=1`, and `BROWSER` helper.
+- **Sibling Scratch Directory**: Verified `TEMP`/`TMP`/`TMPDIR` points to an app-owned sibling scratch directory rather than a child of `GEMINI_HOME`, avoiding Windows `MAX_PATH` overflow from deep unpack paths.
+- **Sanitization**: Verified that inherited API keys and tokens (`GOOGLE_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_APPLICATION_CREDENTIALS`, `AGY_ACP_*`) are strictly scrubbed.
+
+### 5.3 ACP Protocol, Sessions & Security Warnings
+- **Handshake Validation**: Validated `initialize` response, requiring `agentInfo.name == "antigravity-acp"`, `protocolVersion == 1`, session loading/resuming, and `oauth-personal` auth method.
+- **Client Capabilities**: Constructed `session/new` requests setting `terminal: false`, `fs.readTextFile: true`, and `fs.writeTextFile: true` to route file operations through host approval cards.
+- **Model Selection**: Extracted model configurations from `configOptions` for safe switching via `session/set_config_option`, avoiding the unstable `session/set_model` API.
+- **Prompt Injection Warnings**: Extracted `_meta["agy.security.warning"]` security alerts on permission requests to surface in user approval dialogs.
+- **Interactive Prompts**: Correctly classified tool calls with prefix `interaction_` as native user prompts.
+- **Completion Detection**: Detected turn completion from session events rather than process exit codes.
+- **Error Mapping**: Mapped ACP error codes `-32000` (AuthRequired) and `-32603` (InternalSessionFailure).
+
+### 5.4 OAuth Sign-in & Remote Redirect Relay
+- **Marker Extraction**: Extracted Google OAuth URL from stdout markers and `[BROWSER]` stderr markers.
+- **Strict Validation**: Validated `accounts.google.com` origin, loopback redirect targeting `http://127.0.0.1:<port>/`, and presence of state parameter.
+- **Callback Verification**: Validated query parameter matching of `code` and expected `state`.
+- **Remote Relay**: Demonstrated local loopback listener capturing browser callback and relaying code forward to the loopback server.
+
+### 5.5 Reliability Rules & Resource Constraints
+- **Zero-Spawn Health Checks**: Offline health verification inspects on-disk binary resolution and cached configuration without spawning PyInstaller processes (~1 GB unpack avoided).
+- **Orphan Sweeper**: Successfully swept orphaned `_MEI*` and `agy_tmp_*` temporary unpack directories from the scratch volume.
+- **Concurrency Limiting**: Enforced strict per-environment concurrency cap (maximum 2 active processes).
+- **Payload Sanitization**: Capped tool payload text at 64 KB with truncation notice.
+- **Field Normalization**: Handled alternate command casing variations (`CommandLine`, `command_line`, `cmd`).
+
+## 6. Next Phase 0 Milestones
 
 1. **S3**: Validate remote bootstrap against Galahad over SSH exec and SFTP.
 2. **S4**: Validate cargo-packager NSIS installer generation on Windows.
-3. **S5a**: Validate Antigravity managed install, OAuth sign-in relay, and ACP session flow.
-4. **S5b**: Best-effort ACP probes for Cursor, Grok, and OpenCode.
+3. **S5b**: Best-effort ACP probes for Cursor, Grok, and OpenCode.

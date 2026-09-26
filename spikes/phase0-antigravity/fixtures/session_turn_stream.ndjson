@@ -1,0 +1,5 @@
+{"jsonrpc":"2.0","method":"session/event","params":{"sessionId":"sess_agy_4242","event":{"type":"textDelta","text":"Analyzing codebase and applying changes."}}}
+{"jsonrpc":"2.0","id":10,"method":"fs/writeTextFile","params":{"path":"src/main.rs","content":"fn main() { println!(\"Antigravity running\"); }\n"}}
+{"jsonrpc":"2.0","id":11,"method":"session/requestPermission","params":{"sessionId":"sess_agy_4242","permissionType":"file_write","resource":"src/main.rs","options":["allow_once","allow_always","reject_once"],"_meta":{"agy.security.warning":"Prompt injection risk detected in source comment"}}}
+{"jsonrpc":"2.0","method":"session/event","params":{"sessionId":"sess_agy_4242","event":{"type":"toolCall","toolId":"interaction_confirm_deployment","toolName":"interaction_confirm_deployment","parameters":{"prompt":"Do you want to proceed with staging rollout?"}}}}
+{"jsonrpc":"2.0","method":"session/completed","params":{"sessionId":"sess_agy_4242","status":"success","usage":{"totalTokens":2450}}}

@@ -1,0 +1,7 @@
+{
+  "stdoutMarker": "Open the following link to authenticate the ACP server: https://accounts.google.com/o/oauth2/v2/auth?client_id=123456789.apps.googleusercontent.com&redirect_uri=http%3A%2F%2F127.0.0.1%3A8085%2F&response_type=code&scope=openid+email+profile&state=sec_state_9876",
+  "expectedAuthUrl": "https://accounts.google.com/o/oauth2/v2/auth?client_id=123456789.apps.googleusercontent.com&redirect_uri=http%3A%2F%2F127.0.0.1%3A8085%2F&response_type=code&scope=openid+email+profile&state=sec_state_9876",
+  "expectedPort": 8085,
+  "expectedState": "sec_state_9876",
+  "simulatedCallbackQuery": "?code=4/0AQ_TEST_TOKEN&state=sec_state_9876"
+}

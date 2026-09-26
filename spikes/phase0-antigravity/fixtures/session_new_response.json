@@ -1,0 +1,18 @@
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "sessionId": "sess_agy_4242",
+    "configOptions": [
+      {
+        "configId": "model",
+        "displayName": "Model",
+        "currentValue": "gemini-2.5-pro",
+        "options": [
+          { "value": "gemini-2.5-pro", "displayName": "Gemini 2.5 Pro (Deep)" },
+          { "value": "gemini-2.5-flash", "displayName": "Gemini 2.5 Flash (Fast)" }
+        ]
+      }
+    ]
+  }
+}
