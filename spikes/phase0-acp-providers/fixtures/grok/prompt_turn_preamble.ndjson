@@ -1,0 +1,3 @@
+{"jsonrpc":"2.0","method":"session/event","params":{"sessionId":"grok-sess-88a2ef11-09bc-4311-a890-7cde9120ba34","event":{"type":"turn_started","turnId":"turn-g1"}}}
+{"jsonrpc":"2.0","method":"session/event","params":{"sessionId":"grok-sess-88a2ef11-09bc-4311-a890-7cde9120ba34","event":{"type":"content","delta":{"text":"Grok agent ready. Processing architecture task."}}}}
+{"jsonrpc":"2.0","method":"session/event","params":{"sessionId":"grok-sess-88a2ef11-09bc-4311-a890-7cde9120ba34","event":{"type":"turn_completed","turnId":"turn-g1","status":"success"}}}

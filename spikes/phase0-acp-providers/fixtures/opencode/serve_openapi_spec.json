@@ -1,0 +1,51 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "OpenCode Serve HTTP API",
+    "version": "1.0.0",
+    "description": "Local server interface for OpenCode with native system prompt and SSE event stream"
+  },
+  "paths": {
+    "/session": {
+      "post": {
+        "summary": "Create session with native system prompt and tool policy",
+        "operationId": "createSession",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "cwd": { "type": "string" },
+                  "model": { "type": "string" },
+                  "system_prompt": { "type": "string" },
+                  "tool_policy": {
+                    "type": "object",
+                    "properties": {
+                      "allowed_tools": { "type": "array", "items": { "type": "string" } },
+                      "disallowed_tools": { "type": "array", "items": { "type": "string" } }
+                    }
+                  }
+                },
+                "required": ["cwd", "model"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/event": {
+      "get": {
+        "summary": "Subscribe to real-time session events via Server-Sent Events",
+        "operationId": "subscribeEvents"
+      }
+    },
+    "/session/{sessionId}/turn": {
+      "post": {
+        "summary": "Submit turn to session",
+        "operationId": "submitTurn"
+      }
+    }
+  }
+}

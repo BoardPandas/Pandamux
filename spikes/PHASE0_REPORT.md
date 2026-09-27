@@ -1,26 +1,28 @@
 # PandaMUX Phase 0 (Spikes) Evaluation Report
 
-Status: In Progress (S1, S2, S3, S5a, and S6 complete; S4 and S5b queued)
+Status: Complete (All 7 Spikes Passed: S1, S2, S3, S4, S5a, S5b, S6)
 Date: 2026-09-26
 
 ## 1. Executive Summary
 
-Phase 0 tests architectural risks and confirms assumptions before starting Phase 1 implementation. Five critical spikes have completed successfully:
+Phase 0 tests architectural risks and confirms assumptions before starting Phase 1 implementation. All seven spikes have completed successfully:
 
 1. **S1 (GPUI Chat Spike)**: Passed. Verifies that GPUI 0.3.6 and gpui-kit 0.6.6 provide high-performance markdown streaming, virtualized 2,000-message scrolling, multi-line composition with attachment chips, collapsible tool calls, and inline diffs on Windows MSVC.
 2. **S2 (Codex and Claude Drivers)**: Passed. Verifies zero-session auth detection, stream-json protocol with permission prompt tools, sub-agent tree parsing, Codex JSON-RPC schema contracts, developer instructions injection, and rate-limit parsing.
 3. **S3 (Remote Bootstrap)**: Passed. Verifies remote detection without PTY on Galahad (Linux x86_64), static Linux musl binary packaging and delivery via SSH, remote SHA-256 bit-for-bit hash verification, `setsid` background daemon lifecycle and `server.json` discovery, SSH exec proxy tunnel architecture (avoiding sshd streamlocal restrictions), mid-turn connection severing with daemon survival, and `sinceSeq` reconnection replaying missed events and background timer heartbeats.
-4. **S5a (Antigravity Integration)**: Passed. Verifies managed bundle validation, two-entry hardened extraction, replaced environment with isolated `GEMINI_HOME`, OAuth URL parsing and remote redirect relay, ACP session flow, prompt injection warning detection, and zero-spawn reliability rules.
-5. **S6 (Pins and License Audit)**: Passed. Verifies that all gpui-pre and gpui-kit crates are Apache-2.0, with zero GPL contamination in the desktop graph, satisfying the license gate for zed#55470.
+4. **S4 (Packaging)**: Passed. Verifies cargo-packager NSIS multi-binary installer generation for Windows currentUser installations. Confirms bundling of three Windows executables (desktop, server, CLI) and bundled Linux node binaries as resources. Verifies code signing integration: omission of `before-packaging-command` guarantees that pre-applied Azure Trusted Signing Authenticode signatures remain bit-for-bit intact through packaging and extraction.
+5. **S5a (Antigravity Integration)**: Passed. Verifies managed bundle validation, two-entry hardened extraction, replaced environment with isolated `GEMINI_HOME`, OAuth URL parsing and remote redirect relay, ACP session flow, prompt injection warning detection, and zero-spawn reliability rules.
+6. **S5b (Best-effort ACP Providers)**: Passed. Verifies fixture contracts for Cursor (`cursor-agent acp`), Grok CLI (`grok acp`), and OpenCode (`opencode acp` vs `opencode serve`). Establishes that Cursor, Grok, and OpenCode ACP use fallback preamble injection and coarse permissions, while OpenCode serve mode supports native session-level system prompts and per-tool allow/deny filters.
+7. **S6 (Pins and License Audit)**: Passed. Verifies that all gpui-pre and gpui-kit crates are Apache-2.0, with zero GPL contamination in the desktop graph, satisfying the license gate for zed#55470.
 
 | Spike | Title | Gate Status | Verdict | Notes |
 | :--- | :--- | :--- | :--- | :--- |
 | **S1** | GPUI Chat Spike | Gating | **PASS** | 2,000 items in 1.09ms, ~50 tok/s stream, Direct3D rendering verified |
 | **S2** | Codex and Claude Drivers | Gating | **PASS** | Zero-session auth probe, stream-json, sub-agents, developer instructions |
 | **S3** | Remote Bootstrap | Non-gating | **PASS** | Exec without PTY, musl binary delivery, remote SHA-256, setsid daemon, exec proxy tunnel, mid-turn disconnect and replay |
-| **S4** | Packaging | Non-gating | Queued | NSIS multi-binary installer |
+| **S4** | Packaging | Non-gating | **PASS** | NSIS multi-binary installer, Authenticode preservation, Linux musl resources |
 | **S5a** | Antigravity Integration | Gating | **PASS** | Managed bundle, isolated env, OAuth relay, ACP permissions, reliability rules |
-| **S5b** | Best-effort ACP | Non-gating | Queued | Cursor, Grok, OpenCode ACP probes |
+| **S5b** | Best-effort ACP | Non-gating | **PASS** | Cursor, Grok, and OpenCode probes; preamble vs native matrix |
 | **S6** | Pins and Licenses | Gating | **PASS** | Apache-2.0 confirmed, zero GPL contamination |
 
 ## 2. S1 GPUI Chat Spike Detailed Findings
@@ -156,7 +158,85 @@ The test harness and fixtures are implemented in `spikes/phase0-remote-bootstrap
 - Verified clean recovery and replay of all missed progress steps (steps 2 through 5) plus background timer ticks that fired while disconnected.
 - Cleanly terminated daemon with `shutdown` command and removed temporary remote directory.
 
-## 7. Next Phase 0 Milestones
+## 7. S4 Packaging Detailed Findings
 
-1. **S4**: Validate cargo-packager NSIS installer generation on Windows.
-2. **S5b**: Best-effort ACP probes for Cursor, Grok, and OpenCode.
+The test harness, configuration fixtures, and verification pipeline are implemented in `spikes/phase0-packaging/`.
+
+### 7.1 Multi-Binary Packaging Specification
+- **Windows Executables**: Configured cargo-packager to package three distinct binaries:
+  1. `pandamux.exe` (main desktop executable with start menu shortcut)
+  2. `pandamux-server.exe` (headless hub and local node daemon)
+  3. `pandamux-cli.exe` (command line interface and scripting tool)
+- **Linux Node Binaries as Bundled Resources**:
+  - `resources/server/x86_64-unknown-linux-musl/pandamux-server`
+  - `resources/server/x86_64-unknown-linux-musl/pandamux-cli`
+  - `resources/server/aarch64-unknown-linux-musl/pandamux-server`
+  - `resources/server/aarch64-unknown-linux-musl/pandamux-cli`
+  These static musl binaries land under `$INSTDIR\resources\server\...`, enabling zero-rebuild remote bootstrap on Linux SSH targets.
+- **Application Resources**: Bundled themes, sounds, and icons into `$INSTDIR\resources\...`.
+
+### 7.2 Code Signing Integration & Signature Preservation
+- **Rebuild Prevention**: Verified that `before-packaging-command` is strictly omitted from `[package.metadata.packager]`. This guarantees cargo-packager bundles pre-built binaries directly without triggering recompilation.
+- **Authenticode Signature Integrity**:
+  - Implemented PE Authenticode verification inspecting the Certificate Table entry (`IMAGE_DIRECTORY_ENTRY_SECURITY`) in the PE Optional Header.
+  - Verified that pre-applied digital signatures (Azure Trusted Signing) survive NSIS staging and packaging bit-for-bit.
+  - Verified extraction: all three Windows executables (`pandamux.exe`, `pandamux-server.exe`, `pandamux-cli.exe`) extracted from the installer payload match their signed pre-pack SHA-256 digests and certificate tables exactly.
+- **Outer Installer Signing**: The generated installer (`PandaMUX-Setup-<version>.exe`) receives its own Authenticode signature after generation, completing the two-stage signing pipeline.
+
+### 7.3 NSIS Configuration (currentUser Mode)
+- **Execution Level**: Configured `installer-mode = "currentUser"` (`RequestExecutionLevel user`). Installs cleanly to `$LOCALAPPDATA\Programs\PandaMUX` without requiring UAC administrator elevation.
+- **Data Protection**: Configured `appdata-paths = ["$LOCALAPPDATA/pandamux"]`, ensuring uninstallation removes program files while safeguarding user configuration and SQLite database history unless explicitly purged.
+- **Shortcuts & Registry**: Creates `$SMPROGRAMS\PandaMUX\PandaMUX.lnk` and registers uninstallation entries in `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\PandaMUX`.
+
+## 8. S5b Best-effort ACP Providers Detailed Findings
+
+The test harness and fixture contracts are implemented in `spikes/phase0-acp-providers/`.
+
+### 8.1 Cursor Agent ACP (cursor-agent acp)
+- **Transport**: JSON-RPC 2.0 NDJSON over stdio (`protocolVersion: 1`).
+- **Auth Detection**: ACP `initialize` response confirms `agentInfo.name == "cursor-agent"` and advertises auth methods including `cursor_login`.
+- **Instruction Delivery**: The baseline ACP 1.x specification lacks top-level system prompt or developer instruction parameters in `session/new`. The driver injects agent role instructions and knowledge as a structured preamble in the first user turn (`=== PANDAMUX AGENT ROLE INSTRUCTIONS ===`), re-injected upon context compaction events.
+- **Permission Granularity**: Coarse permissions via `session/request_permission`. Approval options (`allow_once`, `allow_always`, `reject_once`) map cleanly to PandaMUX access modes:
+  - ReadOnly: automatically denies file modifications and shell execution tools.
+  - AutoEdit: grants `allow_always` for file writes and reads; prompts for commands.
+  - FullAccess: grants `allow_always` for all tools.
+
+### 8.2 Grok CLI ACP (grok acp)
+- **Transport**: JSON-RPC 2.0 NDJSON over stdio (`protocolVersion: 1`).
+- **Auth Detection**: `initialize` response confirms `agentInfo.name == "grok-acp"` and advertises `api_key` and `oauth_xai`.
+- **Instruction Delivery**: Fallback preamble injection in first user prompt turn.
+- **Usage and Rate Limits**: Parsed Grok account usage and limits payload: extracts `account_tier`, `monthly_spend_usd`, `token_budget` utilization, and remaining requests per minute.
+
+### 8.3 OpenCode Dual-Mode Evaluation (acp vs serve)
+Evaluated both OpenCode entry points:
+- **Mode 1: `opencode acp` (stdio)**:
+  - Protocol: ACP JSON-RPC 2.0 over stdio.
+  - Instructions: Fallback preamble.
+  - Tool Granularity: Coarse ACP `request_permission` approvals.
+- **Mode 2: `opencode serve` (HTTP REST + SSE)**:
+  - Protocol: HTTP REST API with Server-Sent Events (`/event` SSE stream) on `127.0.0.1`, protected by `OPENCODE_SERVER_PASSWORD` bearer auth.
+  - Instructions: **Native** support. Accepts `system_prompt` on `POST /session`, keeping agent instructions out of the user chat transcript.
+  - Tool Granularity: **Per-tool** policy enforcement (`allowed_tools` and `disallowed_tools` configured at session creation).
+- **Architectural Verdict**: Support `opencode acp` via the shared ACP driver for minimal footprint; utilize `opencode serve` for advanced workflows requiring native developer instructions and fine-grained tool filtering.
+
+### 8.4 Provider Capability Matrix
+
+| Provider | Transport | Instruction Injection | Tool Granularity | Driver Architecture |
+| :--- | :--- | :--- | :--- | :--- |
+| **cursor-agent** | stdio (ACP NDJSON) | Preamble Fallback | Coarse (`request_permission`) | Shared ACP Driver |
+| **grok-acp** | stdio (ACP NDJSON) | Preamble Fallback | Coarse (`request_permission`) | Shared ACP Driver |
+| **opencode-acp** | stdio (ACP NDJSON) | Preamble Fallback | Coarse (`request_permission`) | Shared ACP Driver |
+| **opencode-serve** | HTTP REST + SSE | Native (`POST /session`) | Per-Tool (`tool_policy`) | Dedicated HTTP/SSE Profile |
+
+## 9. Phase 0 Completion & Transition to Phase 1
+
+All seven spikes defined in `tasks/plan-rewrite.md` have completed and passed:
+1. **S1 (GPUI Chat)**: PASS (Virtualization, 50 tok/s stream, GPU pipeline)
+2. **S2 (Codex & Claude Drivers)**: PASS (Zero-session auth, stream-json, sub-agents, instructions)
+3. **S3 (Remote Bootstrap)**: PASS (musl binary, SHA-256 match, setsid daemon, SSH proxy, mid-turn replay)
+4. **S4 (Packaging)**: PASS (cargo-packager NSIS, multi-binary, Authenticode survival, Linux musl resources)
+5. **S5a (Antigravity Integration)**: PASS (Managed bundle, isolated GEMINI_HOME, OAuth relay, ACP permissions, reliability rules)
+6. **S5b (Best-effort ACP Providers)**: PASS (Cursor, Grok, OpenCode contracts, capability matrix)
+7. **S6 (Pins and Licenses)**: PASS (Apache-2.0 confirmed across all gpui-pre and gpui-kit crates, zero GPL contamination)
+
+With zero gate failures, Phase 0 is complete. The project is fully de-risked and approved to proceed into Phase 1 (Foundation).

@@ -14,6 +14,7 @@
 | **Build and run locally** | [GETTING_STARTED.md](GETTING_STARTED.md) |
 | **What PandaMUX is** | [OVERVIEW.md](OVERVIEW.md) |
 | **Drive it from the CLI** | [CLI_REFERENCE.md](api/CLI_REFERENCE.md) |
+| **Compare PandaMUX with T3 Code** | [T3_CODE_COMPARISON.md](research/T3_CODE_COMPARISON.md) |
 | **Cut a release** | [RELEASE.md](operations/RELEASE.md) |
 | **Look up a term** | [GLOSSARY.md](GLOSSARY.md) |
 
@@ -62,6 +63,17 @@ Release, packaging, and distribution procedures.
 | Document | Description |
 |----------|-------------|
 | [RELEASE.md](operations/RELEASE.md) | Tag-driven GitHub Actions release: build, Azure Trusted Signing, NSIS installer, updater, winget |
+
+---
+
+## Product Research
+
+Decision-oriented comparisons and product-expansion research. These pages are maintained manually
+and pin external sources to reviewed commits.
+
+| Document | Description |
+|----------|-------------|
+| [T3_CODE_COMPARISON.md](research/T3_CODE_COMPARISON.md) | T3 Code versus PandaMUX: verified capabilities, architectural differences, adopt or adapt or skip recommendations, and a meeting guide |
 
 ---
 

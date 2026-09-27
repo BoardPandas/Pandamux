@@ -1,0 +1,21 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "protocolVersion": 1,
+    "agentInfo": {
+      "name": "opencode-acp",
+      "version": "0.18.2",
+      "capabilities": {
+        "loadSession": true,
+        "sessionResume": true,
+        "streaming": true,
+        "tools": true
+      }
+    },
+    "authMethods": [
+      "local_config",
+      "api_key"
+    ]
+  }
+}

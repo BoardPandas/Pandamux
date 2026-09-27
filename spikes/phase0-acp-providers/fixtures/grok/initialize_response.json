@@ -1,0 +1,21 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "protocolVersion": 1,
+    "agentInfo": {
+      "name": "grok-acp",
+      "version": "1.0.4",
+      "capabilities": {
+        "loadSession": false,
+        "sessionResume": true,
+        "streaming": true,
+        "tools": true
+      }
+    },
+    "authMethods": [
+      "api_key",
+      "oauth_xai"
+    ]
+  }
+}

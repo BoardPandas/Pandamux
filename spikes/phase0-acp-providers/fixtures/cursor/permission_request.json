@@ -1,0 +1,32 @@
+{
+  "jsonrpc": "2.0",
+  "id": 105,
+  "method": "session/request_permission",
+  "params": {
+    "sessionId": "cursor-sess-9b1c7a82-f4d1-4e1b-87cf-135eef631a02",
+    "permissionId": "perm-c-901",
+    "toolCall": {
+      "id": "tc-write-88",
+      "tool": "edit_file",
+      "parameters": {
+        "path": "src/main.rs",
+        "action": "replace_content"
+      }
+    },
+    "reason": "Modify main application entry point to wire new router",
+    "options": [
+      {
+        "id": "allow_once",
+        "label": "Allow Once"
+      },
+      {
+        "id": "allow_always",
+        "label": "Allow Always for Session"
+      },
+      {
+        "id": "reject_once",
+        "label": "Reject"
+      }
+    ]
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "sessionId": "opencode-srv-7719ab23-1102-45e0-9cc1-291845bb0012",
+  "status": "active",
+  "model": "claude-3-7-sonnet",
+  "native_system_prompt_applied": true,
+  "enforced_tool_policy": {
+    "allowed_tools": [
+      "read_file",
+      "edit_file",
+      "run_command",
+      "grep_search"
+    ],
+    "disallowed_tools": [
+      "network_connect",
+      "delete_repository"
+    ]
+  }
+}

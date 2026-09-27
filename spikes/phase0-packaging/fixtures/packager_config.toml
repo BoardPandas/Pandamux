@@ -1,0 +1,33 @@
+[package.metadata.packager]
+product-name = "PandaMUX"
+identifier = "com.pandamux.app"
+description = "Native Windows agent client and orchestrator."
+authors = ["BoardPandas"]
+publisher = "BoardPandas"
+homepage = "https://pandamux.boardpandas.ai"
+license-file = "LICENSE"
+icons = ["resources/icons/icon.ico", "resources/icons/icon.png"]
+formats = ["nsis"]
+
+binaries = [
+  { path = "target/release/pandamux.exe", main = true },
+  { path = "target/release/pandamux-server.exe", main = false },
+  { path = "target/release/pandamux-cli.exe", main = false },
+]
+
+resources = [
+  { src = "resources/themes", target = "resources/themes" },
+  { src = "resources/sounds", target = "resources/sounds" },
+  { src = "resources/icons", target = "resources/icons" },
+  { src = "resources/server/x86_64-unknown-linux-musl/pandamux-server", target = "resources/server/x86_64-unknown-linux-musl/pandamux-server" },
+  { src = "resources/server/aarch64-unknown-linux-musl/pandamux-server", target = "resources/server/aarch64-unknown-linux-musl/pandamux-server" },
+  { src = "resources/server/x86_64-unknown-linux-musl/pandamux-cli", target = "resources/server/x86_64-unknown-linux-musl/pandamux-cli" },
+  { src = "resources/server/aarch64-unknown-linux-musl/pandamux-cli", target = "resources/server/aarch64-unknown-linux-musl/pandamux-cli" },
+]
+
+[package.metadata.packager.nsis]
+installer-mode = "currentUser"
+appdata-paths = ["$LOCALAPPDATA/pandamux"]
+languages = ["en-US"]
+display-name = "PandaMUX"
+compression = "lzma"

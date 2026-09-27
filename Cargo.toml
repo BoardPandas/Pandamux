@@ -13,10 +13,12 @@ exclude = [
   "spikes/phase0-drivers",
   "spikes/phase0-antigravity",
   "spikes/phase0-remote-bootstrap",
+  "spikes/phase0-packaging",
+  "spikes/phase0-acp-providers",
 ]
 
 [workspace.package]
-version = "0.53.9"
+version = "0.53.10"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/BoardPandas/Pandamux"

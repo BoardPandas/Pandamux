@@ -1,0 +1,72 @@
+{
+  "version": "0.53.10",
+  "installer_mode": "currentUser",
+  "install_dir": "$LOCALAPPDATA\\Programs\\PandaMUX",
+  "binaries": [
+    {
+      "name": "pandamux.exe",
+      "target": "pandamux.exe",
+      "is_main": true,
+      "signed": true,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "pandamux-server.exe",
+      "target": "pandamux-server.exe",
+      "is_main": false,
+      "signed": true,
+      "sha256": "4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a"
+    },
+    {
+      "name": "pandamux-cli.exe",
+      "target": "pandamux-cli.exe",
+      "is_main": false,
+      "signed": true,
+      "sha256": "ef2d127de37b942baad06145e54b0c619a1f22327b2ebbcfbec78f5564afe39d"
+    }
+  ],
+  "bundled_resources": [
+    {
+      "src": "resources/server/x86_64-unknown-linux-musl/pandamux-server",
+      "target": "resources/server/x86_64-unknown-linux-musl/pandamux-server",
+      "platform": "linux-x86_64",
+      "executable": true
+    },
+    {
+      "src": "resources/server/x86_64-unknown-linux-musl/pandamux-cli",
+      "target": "resources/server/x86_64-unknown-linux-musl/pandamux-cli",
+      "platform": "linux-x86_64",
+      "executable": true
+    },
+    {
+      "src": "resources/server/aarch64-unknown-linux-musl/pandamux-server",
+      "target": "resources/server/aarch64-unknown-linux-musl/pandamux-server",
+      "platform": "linux-aarch64",
+      "executable": true
+    },
+    {
+      "src": "resources/server/aarch64-unknown-linux-musl/pandamux-cli",
+      "target": "resources/server/aarch64-unknown-linux-musl/pandamux-cli",
+      "platform": "linux-aarch64",
+      "executable": true
+    },
+    {
+      "src": "resources/themes",
+      "target": "resources/themes",
+      "platform": "all",
+      "executable": false
+    },
+    {
+      "src": "resources/sounds",
+      "target": "resources/sounds",
+      "platform": "all",
+      "executable": false
+    },
+    {
+      "src": "resources/icons",
+      "target": "resources/icons",
+      "platform": "all",
+      "executable": false
+    }
+  ]
+}

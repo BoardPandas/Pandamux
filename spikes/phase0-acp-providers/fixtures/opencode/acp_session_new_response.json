@@ -1,0 +1,19 @@
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "sessionId": "opencode-acp-sess-41ef0021-d72b-42ab-b198-98e10034a021",
+    "configOptions": [
+      {
+        "id": "model",
+        "name": "Model",
+        "currentValue": "claude-3-7-sonnet",
+        "options": [
+          "claude-3-7-sonnet",
+          "claude-3-5-sonnet",
+          "deepseek-r1"
+        ]
+      }
+    ]
+  }
+}

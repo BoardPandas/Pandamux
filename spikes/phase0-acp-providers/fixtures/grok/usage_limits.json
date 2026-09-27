@@ -1,0 +1,16 @@
+{
+  "account_tier": "grok_developer_tier_2",
+  "monthly_spend_usd": 14.85,
+  "monthly_limit_usd": 100.0,
+  "token_budget": {
+    "used_tokens": 148200,
+    "limit_tokens": 1000000,
+    "used_percent": 14.82
+  },
+  "rate_limits": {
+    "requests_per_minute_limit": 60,
+    "requests_remaining": 58,
+    "window_duration_seconds": 60,
+    "resets_at": "2026-09-26T21:05:00Z"
+  }
+}

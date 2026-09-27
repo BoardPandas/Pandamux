@@ -1,0 +1,11 @@
+event: turn_started
+data: {"turnId":"turn-op1","sessionId":"opencode-srv-7719ab23-1102-45e0-9cc1-291845bb0012"}
+
+event: content_delta
+data: {"text":"System prompt loaded natively. Running requested task."}
+
+event: tool_invoked
+data: {"tool":"read_file","input":{"path":"Cargo.toml"}}
+
+event: turn_completed
+data: {"turnId":"turn-op1","status":"success","usage":{"tokens":1420}}

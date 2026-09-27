@@ -1,0 +1,21 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "protocolVersion": 1,
+    "agentInfo": {
+      "name": "cursor-agent",
+      "version": "0.45.11",
+      "capabilities": {
+        "loadSession": true,
+        "sessionResume": true,
+        "streaming": true,
+        "tools": true
+      }
+    },
+    "authMethods": [
+      "cursor_login",
+      "api_key"
+    ]
+  }
+}

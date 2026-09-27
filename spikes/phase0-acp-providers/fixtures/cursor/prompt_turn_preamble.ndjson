@@ -1,0 +1,4 @@
+{"jsonrpc":"2.0","method":"session/event","params":{"sessionId":"cursor-sess-9b1c7a82-f4d1-4e1b-87cf-135eef631a02","event":{"type":"turn_started","turnId":"turn-c1"}}}
+{"jsonrpc":"2.0","method":"session/event","params":{"sessionId":"cursor-sess-9b1c7a82-f4d1-4e1b-87cf-135eef631a02","event":{"type":"content","delta":{"text":"Acknowledged agent role. Inspecting codebase."}}}}
+{"jsonrpc":"2.0","method":"session/event","params":{"sessionId":"cursor-sess-9b1c7a82-f4d1-4e1b-87cf-135eef631a02","event":{"type":"tool_call","toolCallId":"call-c1","tool":"list_dir","input":{"path":"src"}}}}
+{"jsonrpc":"2.0","method":"session/event","params":{"sessionId":"cursor-sess-9b1c7a82-f4d1-4e1b-87cf-135eef631a02","event":{"type":"turn_completed","turnId":"turn-c1","status":"success"}}}

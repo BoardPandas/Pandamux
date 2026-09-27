@@ -1,0 +1,17 @@
+{
+  "cwd": "/home/brandon/Repos/Pandamux",
+  "model": "claude-3-7-sonnet",
+  "system_prompt": "You are the PandaMUX Builder agent. Implement clean, robust Rust components.",
+  "tool_policy": {
+    "allowed_tools": [
+      "read_file",
+      "edit_file",
+      "run_command",
+      "grep_search"
+    ],
+    "disallowed_tools": [
+      "network_connect",
+      "delete_repository"
+    ]
+  }
+}

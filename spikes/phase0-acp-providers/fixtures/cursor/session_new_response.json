@@ -1,0 +1,19 @@
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "sessionId": "cursor-sess-9b1c7a82-f4d1-4e1b-87cf-135eef631a02",
+    "configOptions": [
+      {
+        "id": "model",
+        "name": "Model Selection",
+        "currentValue": "claude-3-5-sonnet",
+        "options": [
+          "claude-3-5-sonnet",
+          "gpt-4o",
+          "cursor-small"
+        ]
+      }
+    ]
+  }
+}
