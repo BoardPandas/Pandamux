@@ -97,5 +97,23 @@ pub fn apply_migrations(conn: &mut Connection) -> Result<()> {
         tx.commit()?;
     }
 
+    if current < 2 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS thread_resumes (
+                thread_id TEXT PRIMARY KEY REFERENCES threads(id),
+                resume_token TEXT NOT NULL,
+                updated_at_ms INTEGER NOT NULL
+            );"
+        )?;
+
+        tx.execute(
+            "INSERT INTO _migrations (version, applied_at_ms) VALUES (2, ?1)",
+            [now_ms() as i64],
+        )?;
+
+        tx.commit()?;
+    }
+
     Ok(())
 }

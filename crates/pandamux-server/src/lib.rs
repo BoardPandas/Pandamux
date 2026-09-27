@@ -1,22 +1,27 @@
+pub mod driver_registry;
 pub mod mcp_server;
 pub mod router;
 pub mod runtime;
 pub mod server;
 pub mod store;
+pub mod thread_manager;
+pub mod worktree;
 
+pub use driver_registry::DriverRegistry;
 pub use mcp_server::McpServer;
 pub use router::Router;
 pub use runtime::{RUNTIME_FILENAME, RuntimeInfo};
 pub use server::{Server, ServerConfig};
 pub use store::{Store, StoreError};
+pub use thread_manager::ThreadManager;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use pandamux_protocol::ServerRole;
 
-    #[test]
-    fn server_lifecycle_and_graceful_drain() {
+    #[tokio::test]
+    async fn server_lifecycle_and_graceful_drain() {
         let temp_dir = std::env::temp_dir().join(format!("pandamux_test_{}", uuid::Uuid::new_v4()));
         let config = ServerConfig {
             role: ServerRole::Hub,
@@ -29,7 +34,7 @@ mod tests {
 
         // Test request processing
         let ping_line = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"system.ping\"}\n";
-        let res_line = server.process_line(ping_line).expect("process ping");
+        let res_line = server.process_line(ping_line).await.expect("process ping");
         assert!(res_line.contains("\"result\":{\"pong\":true"));
 
         // Register runtime file

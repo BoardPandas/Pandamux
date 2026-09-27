@@ -136,7 +136,7 @@ async fn run_ipc_listener(
             let (reader, mut writer) = tokio::io::split(connected_client);
             let mut lines = BufReader::new(reader).lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                if let Some(res) = server.process_line(&line) {
+                if let Some(res) = server.process_line(&line).await {
                     if writer.write_all(res.as_bytes()).await.is_err() {
                         break;
                     }
@@ -168,7 +168,7 @@ async fn run_ipc_listener(
             let (reader, mut writer) = tokio::io::split(stream);
             let mut lines = BufReader::new(reader).lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                if let Some(res) = server.process_line(&line) {
+                if let Some(res) = server.process_line(&line).await {
                     if writer.write_all(res.as_bytes()).await.is_err() {
                         break;
                     }

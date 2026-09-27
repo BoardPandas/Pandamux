@@ -48,6 +48,11 @@ pub trait ProviderSession: Send {
     /// Returns the receiver for streamed provider events.
     fn events(&mut self) -> &mut mpsc::Receiver<ProviderEvent>;
 
+    /// Takes the receiver for streamed provider events to allow lock-free background ingestion.
+    fn take_event_receiver(&mut self) -> Option<mpsc::Receiver<ProviderEvent>> {
+        None
+    }
+
     /// Answers a pending approval request (e.g. bash execution, file write).
     fn respond_approval<'a>(
         &'a mut self,

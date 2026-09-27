@@ -3,6 +3,7 @@ pub mod antigravity;
 pub mod claude;
 pub mod codex;
 pub mod error;
+pub mod mock;
 pub mod models;
 pub mod profiles;
 pub mod shim_resolver;
@@ -23,6 +24,7 @@ pub use antigravity::{
 pub use claude::{build_claude_launch_args, ClaudeDriver, ClaudeSession};
 pub use codex::{CodexDriver, CodexSession};
 pub use error::ProviderError;
+pub use mock::{MockProviderDriver, MockProviderSession};
 pub use models::{
     InjectedInstructions, ModelInfo, ProviderAuthStatus, ProviderEvent, ProviderHealth,
     ProviderMetadata, ProviderSnapshot, RateLimitEntry, SessionSpec, ToolPolicy, UsageLimits,

@@ -89,7 +89,7 @@ impl Server {
     }
 
     /// Process a single incoming line and return an optional serialized response line.
-    pub fn process_line(&self, line: &str) -> Option<String> {
+    pub async fn process_line(&self, line: &str) -> Option<String> {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             return None;
@@ -106,7 +106,8 @@ impl Server {
             }
         };
 
-        let res = self.router.handle_request(req)?;
+        let res = self.router.handle_request(req).await?;
         Some(serde_json::to_string(&res).unwrap() + "\n")
     }
 }
+

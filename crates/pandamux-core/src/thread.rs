@@ -53,6 +53,17 @@ pub struct ThreadWorkspace {
     pub worktree: Option<WorktreeRef>,
 }
 
+impl ThreadWorkspace {
+    /// Returns the active worktree path if present, otherwise the standard cwd.
+    pub fn effective_path(&self) -> &str {
+        if let Some(ref wt) = self.worktree {
+            &wt.path
+        } else {
+            &self.cwd
+        }
+    }
+}
+
 /// A dedicated git worktree backing a thread.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

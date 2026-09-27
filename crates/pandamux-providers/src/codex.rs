@@ -491,7 +491,7 @@ impl ProviderDriver for CodexDriver {
             Ok(Box::new(CodexSession {
                 child,
                 stdin,
-                events_rx: rx,
+                events_rx: Some(rx),
                 next_id: Arc::new(AtomicU64::new(2)),
                 thread_id: "thread-codex".to_string(),
             }) as Box<dyn ProviderSession>)
@@ -503,7 +503,7 @@ impl ProviderDriver for CodexDriver {
 pub struct CodexSession {
     child: SupervisedChild,
     stdin: tokio::process::ChildStdin,
-    events_rx: mpsc::Receiver<ProviderEvent>,
+    events_rx: Option<mpsc::Receiver<ProviderEvent>>,
     next_id: Arc<AtomicU64>,
     thread_id: String,
 }
@@ -522,7 +522,11 @@ impl ProviderSession for CodexSession {
     }
 
     fn events(&mut self) -> &mut mpsc::Receiver<ProviderEvent> {
-        &mut self.events_rx
+        self.events_rx.as_mut().expect("events receiver already taken")
+    }
+
+    fn take_event_receiver(&mut self) -> Option<mpsc::Receiver<ProviderEvent>> {
+        self.events_rx.take()
     }
 
     fn respond_approval<'a>(

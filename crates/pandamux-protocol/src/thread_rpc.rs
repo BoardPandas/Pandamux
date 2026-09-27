@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use pandamux_core::{
     AccessMode, AgentId, ApprovalDecision, EnvironmentId, ProjectId, ProviderInstanceId, Thread,
-    ThreadId, ThreadStatus, Turn, TurnId,
+    ThreadId, ThreadStatus, Turn, TurnId, WorktreeRef,
 };
 
 /// Parameters for `thread.create`.
@@ -24,6 +24,10 @@ pub struct ThreadCreateParams {
     pub access_mode: Option<AccessMode>,
     #[serde(default)]
     pub agent_id: Option<AgentId>,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub worktree: Option<WorktreeRef>,
 }
 
 /// Parameters for `thread.list`.
@@ -95,3 +99,19 @@ pub struct ThreadRespondApprovalParams {
     pub request_id: String,
     pub decision: ApprovalDecision,
 }
+
+/// Parameters for `thread.resume`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadResumeParams {
+    pub thread_id: ThreadId,
+}
+
+/// Result of `thread.resume`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadResumeResult {
+    pub thread_id: ThreadId,
+    pub resume_token: Option<String>,
+}
+

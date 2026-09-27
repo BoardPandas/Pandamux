@@ -13,7 +13,8 @@ pub use system::{
 };
 pub use thread_rpc::{
     ThreadCancelTurnParams, ThreadCreateParams, ThreadGetParams, ThreadGetResult,
-    ThreadListParams, ThreadRespondApprovalParams, ThreadSendTurnParams, ThreadSendTurnResult,
+    ThreadListParams, ThreadRespondApprovalParams, ThreadResumeParams, ThreadResumeResult,
+    ThreadSendTurnParams, ThreadSendTurnResult,
 };
 
 #[cfg(test)]

@@ -577,7 +577,7 @@ impl ProviderDriver for ClaudeDriver {
             Ok(Box::new(ClaudeSession {
                 child,
                 stdin,
-                events_rx: rx,
+                events_rx: Some(rx),
                 session_token: spec.resume,
             }) as Box<dyn ProviderSession>)
         })
@@ -588,7 +588,7 @@ impl ProviderDriver for ClaudeDriver {
 pub struct ClaudeSession {
     child: SupervisedChild,
     stdin: tokio::process::ChildStdin,
-    events_rx: mpsc::Receiver<ProviderEvent>,
+    events_rx: Option<mpsc::Receiver<ProviderEvent>>,
     session_token: Option<String>,
 }
 
@@ -608,7 +608,11 @@ impl ProviderSession for ClaudeSession {
     }
 
     fn events(&mut self) -> &mut mpsc::Receiver<ProviderEvent> {
-        &mut self.events_rx
+        self.events_rx.as_mut().expect("events receiver already taken")
+    }
+
+    fn take_event_receiver(&mut self) -> Option<mpsc::Receiver<ProviderEvent>> {
+        self.events_rx.take()
     }
 
     fn respond_approval<'a>(

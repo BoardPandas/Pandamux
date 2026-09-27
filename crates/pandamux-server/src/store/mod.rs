@@ -4,7 +4,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use rusqlite::{Connection, OptionalExtension, params};
 use pandamux_core::{
-    ScheduleRecord, Thread, ThreadEvent, ThreadEventKind, ThreadId, UserSettings,
+    ScheduleRecord, Thread, ThreadEvent, ThreadEventKind, ThreadId, Turn, TurnId, TurnStatus,
+    UserSettings,
 };
 
 #[derive(Debug)]
@@ -268,6 +269,216 @@ impl Store {
         Ok(result)
     }
 
+    // ── Turns ─────────────────────────────────────────────────────────────
+
+    pub fn save_turn(&self, turn: &Turn) -> Result<(), StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let input_json = serde_json::to_string(&turn.input)?;
+        let status_str = serde_json::to_string(&turn.status)?;
+        let usage_json = turn.usage.as_ref().map(serde_json::to_string).transpose()?;
+
+        conn.execute(
+            "INSERT INTO turns (
+                id, thread_id, seq, input_json, status,
+                started_at_ms, ended_at_ms, usage_json,
+                checkpoint_before, checkpoint_after
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            ON CONFLICT(id) DO UPDATE SET
+                status = excluded.status,
+                ended_at_ms = excluded.ended_at_ms,
+                usage_json = excluded.usage_json,
+                checkpoint_before = excluded.checkpoint_before,
+                checkpoint_after = excluded.checkpoint_after;",
+            params![
+                turn.id.as_str(),
+                turn.thread_id.as_str(),
+                turn.seq as i64,
+                input_json,
+                status_str,
+                turn.started_at_ms as i64,
+                turn.ended_at_ms.map(|t| t as i64),
+                usage_json,
+                turn.checkpoint_before,
+                turn.checkpoint_after,
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    pub fn get_turn(&self, id: &TurnId) -> Result<Option<Turn>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, thread_id, seq, input_json, status,
+                    started_at_ms, ended_at_ms, usage_json,
+                    checkpoint_before, checkpoint_after
+             FROM turns WHERE id = ?1",
+        )?;
+
+        let row = stmt
+            .query_row(params![id.as_str()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, Option<i64>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                ))
+            })
+            .optional()?;
+
+        let Some((
+            id_str,
+            thread_id_str,
+            seq,
+            input_json,
+            status_str,
+            started_ms,
+            ended_ms,
+            usage_json,
+            cp_before,
+            cp_after,
+        )) = row else {
+            return Ok(None);
+        };
+
+        Ok(Some(Turn {
+            id: TurnId::from(id_str),
+            thread_id: ThreadId::from(thread_id_str),
+            seq: seq as u64,
+            input: serde_json::from_str(&input_json)?,
+            status: serde_json::from_str(&status_str)?,
+            started_at_ms: started_ms as u64,
+            ended_at_ms: ended_ms.map(|t| t as u64),
+            usage: usage_json.as_deref().map(serde_json::from_str).transpose()?,
+            checkpoint_before: cp_before,
+            checkpoint_after: cp_after,
+        }))
+    }
+
+    pub fn list_turns(&self, thread_id: &ThreadId) -> Result<Vec<Turn>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, thread_id, seq, input_json, status,
+                    started_at_ms, ended_at_ms, usage_json,
+                    checkpoint_before, checkpoint_after
+             FROM turns WHERE thread_id = ?1 ORDER BY seq ASC",
+        )?;
+
+        let rows = stmt.query_map(params![thread_id.as_str()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, Option<i64>>(6)?,
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<String>>(9)?,
+            ))
+        })?;
+
+        let mut result = Vec::new();
+        for r in rows {
+            let (
+                id_str,
+                thread_id_str,
+                seq,
+                input_json,
+                status_str,
+                started_ms,
+                ended_ms,
+                usage_json,
+                cp_before,
+                cp_after,
+            ) = r?;
+            result.push(Turn {
+                id: TurnId::from(id_str),
+                thread_id: ThreadId::from(thread_id_str),
+                seq: seq as u64,
+                input: serde_json::from_str(&input_json)?,
+                status: serde_json::from_str(&status_str)?,
+                started_at_ms: started_ms as u64,
+                ended_at_ms: ended_ms.map(|t| t as u64),
+                usage: usage_json.as_deref().map(serde_json::from_str).transpose()?,
+                checkpoint_before: cp_before,
+                checkpoint_after: cp_after,
+            });
+        }
+
+        Ok(result)
+    }
+
+    pub fn get_latest_seq(&self, thread_id: &ThreadId) -> Result<u64, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let seq: Option<i64> = conn
+            .query_row(
+                "SELECT MAX(seq) FROM events WHERE thread_id = ?1",
+                params![thread_id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten();
+
+        Ok(seq.unwrap_or(0) as u64)
+    }
+
+    // ── Resumes ───────────────────────────────────────────────────────────
+
+    pub fn save_resume_token(&self, thread_id: &ThreadId, token: &str) -> Result<(), StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+
+        conn.execute(
+            "INSERT INTO thread_resumes (thread_id, resume_token, updated_at_ms)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(thread_id) DO UPDATE SET
+                resume_token = excluded.resume_token,
+                updated_at_ms = excluded.updated_at_ms;",
+            params![thread_id.as_str(), token, now],
+        )?;
+
+        Ok(())
+    }
+
+    pub fn get_resume_token(&self, thread_id: &ThreadId) -> Result<Option<String>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT resume_token FROM thread_resumes WHERE thread_id = ?1")?;
+        let token: Option<String> = stmt
+            .query_row(params![thread_id.as_str()], |row| row.get(0))
+            .optional()?;
+
+        Ok(token)
+    }
+
+    pub fn reconcile_active_turns(&self) -> Result<usize, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let interrupted_status = serde_json::to_string(&TurnStatus::Interrupted)?;
+        let idle_status = serde_json::to_string(&pandamux_core::ThreadStatus::Idle)?;
+
+        let count = conn.execute(
+            "UPDATE turns SET status = ?1 WHERE status IN ('\"running\"', '\"awaiting_approval\"', '\"requested\"')",
+            params![interrupted_status],
+        )?;
+
+        conn.execute(
+            "UPDATE threads SET status = ?1 WHERE status IN ('\"working\"', '\"awaiting_approval\"')",
+            params![idle_status],
+        )?;
+
+        Ok(count)
+    }
+
     // ── Events ────────────────────────────────────────────────────────────
 
     pub fn append_event(&self, event: &ThreadEvent) -> Result<(), StoreError> {
@@ -485,4 +696,53 @@ mod tests {
         let loaded_settings = store.get_settings().expect("load settings").unwrap();
         assert_eq!(loaded_settings.ui.theme, "light");
     }
+
+    #[test]
+    fn store_turn_lifecycle_and_resumption() {
+        let store = Store::in_memory().expect("open in_memory store");
+        let thread_id = ThreadId::from("thread-turns-1");
+        let mut thread = dummy_thread("thread-turns-1");
+        thread.status = ThreadStatus::Working;
+        store.save_thread(&thread).expect("save thread");
+
+        // Save Turn
+        let turn = Turn {
+            id: TurnId::from("turn-101"),
+            thread_id: thread_id.clone(),
+            seq: 1,
+            input: TurnInput {
+                text: "Build feature".to_string(),
+                attachment_ids: vec![],
+                model: Some("fast".to_string()),
+                effort: None,
+            },
+            status: TurnStatus::Running,
+            started_at_ms: 1000,
+            ended_at_ms: None,
+            usage: None,
+            checkpoint_before: Some("ref-before".to_string()),
+            checkpoint_after: None,
+        };
+        store.save_turn(&turn).expect("save turn");
+
+        let retrieved = store.get_turn(&TurnId::from("turn-101")).expect("get turn").unwrap();
+        assert_eq!(retrieved.status, TurnStatus::Running);
+        assert_eq!(retrieved.checkpoint_before.as_deref(), Some("ref-before"));
+
+        // Save resume token
+        store.save_resume_token(&thread_id, "token-xyz-123").expect("save resume token");
+        let token = store.get_resume_token(&thread_id).expect("get resume token");
+        assert_eq!(token.as_deref(), Some("token-xyz-123"));
+
+        // Reconcile on simulated restart
+        let reconciled_count = store.reconcile_active_turns().expect("reconcile turns");
+        assert_eq!(reconciled_count, 1);
+
+        let turn_after = store.get_turn(&TurnId::from("turn-101")).expect("get turn").unwrap();
+        assert_eq!(turn_after.status, TurnStatus::Interrupted);
+
+        let thread_after = store.get_thread(&thread_id).expect("get thread").unwrap();
+        assert_eq!(thread_after.status, ThreadStatus::Idle);
+    }
 }
+
