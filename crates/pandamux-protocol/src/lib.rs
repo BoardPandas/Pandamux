@@ -1,9 +1,11 @@
+pub mod checkpoint_rpc;
 pub mod jsonrpc;
 pub mod mcp;
 pub mod subscription;
 pub mod system;
 pub mod thread_rpc;
 
+pub use checkpoint_rpc::{CheckpointDiffParams, CheckpointListParams, CheckpointRollbackParams};
 pub use jsonrpc::{JSONRPC_VERSION, RpcError, RpcId, RpcRequest, RpcResponse};
 pub use mcp::{McpCallToolParams, McpCallToolResult, McpContentItem, McpToolDefinition};
 pub use subscription::{EventEnvelope, SubscribeParams, SubscribeResult, UnsubscribeParams};

@@ -2,7 +2,9 @@ use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::gpui::*;
 use gpui_kit::prelude::FluentBuilder as _;
-use pandamux_client::projections::{TimelineItem, WorkLogEntry, WorkLogStatus, format_duration};
+use pandamux_client::projections::{
+    ChangedFileSummary, TimelineItem, WorkLogEntry, WorkLogStatus, format_duration,
+};
 use pandamux_core::{
     ApprovalDecision, ApprovalKind, FileChangeKind, PlanStep, PlanStepStatus, ThreadId,
     ToolCallStatus,
@@ -298,6 +300,12 @@ pub fn render_timeline_item<V: 'static>(
             message,
             recoverable,
         } => render_error_card(idx, class, message, *recoverable, theme),
+
+        TimelineItem::ChangedFiles {
+            files,
+            total_additions,
+            total_deletions,
+        } => render_changed_files_card(idx, files, *total_additions, *total_deletions, theme),
     }
 }
 
@@ -1220,6 +1228,169 @@ pub fn render_error_card(
                 .text_size(Typography::BODY_SIZE)
                 .text_color(theme.chrome.text_t1)
                 .child(message.to_string()),
+        )
+        .into_any_element()
+}
+
+/// Renders a dedicated changed files card summarizing modifications, additions, and deletions.
+pub fn render_changed_files_card(
+    idx: usize,
+    files: &[ChangedFileSummary],
+    total_additions: usize,
+    total_deletions: usize,
+    theme: &Theme,
+) -> AnyElement {
+    let count = files.len();
+    let file_label = if count == 1 {
+        "1 file changed"
+    } else {
+        &format!("{count} files changed")
+    };
+
+    div()
+        .id(ElementId::NamedInteger("changed-files".into(), idx as u64))
+        .p_3()
+        .rounded(Radii::ROW)
+        .bg(theme.chrome.panel2)
+        .border_1()
+        .border_color(rgba(0xffffff14))
+        .v_flex()
+        .gap_2()
+        .child(
+            div()
+                .h_flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_1p5()
+                        .child(div().text_size(Typography::TITLE_SIZE).child("📁"))
+                        .child(
+                            div()
+                                .font_weight(FontWeight::BOLD)
+                                .text_size(Typography::BODY_SIZE)
+                                .text_color(theme.chrome.text_t1)
+                                .child(format!("Changed Files ({file_label})")),
+                        ),
+                )
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_1()
+                        .when(total_additions > 0, |this| {
+                            this.child(
+                                div()
+                                    .px_1p5()
+                                    .py_0p5()
+                                    .rounded(Radii::CHIP)
+                                    .bg(rgba(0x7fd88f1a))
+                                    .text_size(Typography::META_SIZE)
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(theme.terminal.success)
+                                    .child(format!("+{total_additions}")),
+                            )
+                        })
+                        .when(total_deletions > 0, |this| {
+                            this.child(
+                                div()
+                                    .px_1p5()
+                                    .py_0p5()
+                                    .rounded(Radii::CHIP)
+                                    .bg(rgba(0xf871711a))
+                                    .text_size(Typography::META_SIZE)
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(rgb(0xf87171))
+                                    .child(format!("-{total_deletions}")),
+                            )
+                        }),
+                ),
+        )
+        .child(
+            div()
+                .v_flex()
+                .gap_1()
+                .p_2()
+                .rounded(Radii::CHIP)
+                .bg(theme.terminal.surface)
+                .border_1()
+                .border_color(rgba(0xffffff0d))
+                .children(files.iter().map(|file| {
+                    let (kind_label, kind_color, kind_bg) = match file.kind {
+                        FileChangeKind::Created => {
+                            ("Added", theme.terminal.success, rgba(0x7fd88f1a))
+                        }
+                        FileChangeKind::Modified => {
+                            ("Modified", theme.terminal.warn, rgba(0xd8b45e1a))
+                        }
+                        FileChangeKind::Deleted => ("Deleted", rgb(0xf87171), rgba(0xf871711a)),
+                    };
+
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .justify_between()
+                        .px_2()
+                        .py_1()
+                        .rounded(Radii::CHIP)
+                        .bg(rgba(0xffffff05))
+                        .child(
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .gap_2()
+                                .child(div().text_size(Typography::META_SIZE).child("📄"))
+                                .child(
+                                    div()
+                                        .text_size(Typography::META_SIZE)
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(theme.chrome.text_t1)
+                                        .child(file.path.clone()),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .gap_1p5()
+                                .when(file.additions > 0 || file.deletions > 0, |this| {
+                                    this.child(
+                                        div()
+                                            .h_flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .text_size(Typography::META_SIZE)
+                                            .when(file.additions > 0, |this| {
+                                                this.child(
+                                                    div()
+                                                        .text_color(theme.terminal.success)
+                                                        .child(format!("+{}", file.additions)),
+                                                )
+                                            })
+                                            .when(file.deletions > 0, |this| {
+                                                this.child(
+                                                    div()
+                                                        .text_color(rgb(0xf87171))
+                                                        .child(format!("-{}", file.deletions)),
+                                                )
+                                            }),
+                                    )
+                                })
+                                .child(
+                                    div()
+                                        .px_1p5()
+                                        .py_0p5()
+                                        .rounded(Radii::CHIP)
+                                        .bg(kind_bg)
+                                        .text_size(Typography::META_SIZE)
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(kind_color)
+                                        .child(kind_label),
+                                ),
+                        )
+                })),
         )
         .into_any_element()
 }

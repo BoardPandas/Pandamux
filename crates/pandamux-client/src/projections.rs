@@ -242,6 +242,19 @@ impl ThreadProjection {
             ThreadEventKind::TurnSettled { changed_files } => {
                 self.changed_files = changed_files.clone();
                 self.thread.status = ThreadStatus::Idle;
+                if !changed_files.is_empty() {
+                    let summaries: Vec<ChangedFileSummary> = changed_files
+                        .iter()
+                        .map(|s| ChangedFileSummary::parse(s))
+                        .collect();
+                    let total_adds = summaries.iter().map(|f| f.additions).sum();
+                    let total_dels = summaries.iter().map(|f| f.deletions).sum();
+                    self.items.push(TimelineItem::ChangedFiles {
+                        files: summaries,
+                        total_additions: total_adds,
+                        total_deletions: total_dels,
+                    });
+                }
             }
             ThreadEventKind::SubAgentSpawned {
                 sub_agent_id,
@@ -495,6 +508,68 @@ pub fn format_duration(duration_ms: u64) -> String {
     }
 }
 
+/// Summary of a file modified, created, or deleted during a turn.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangedFileSummary {
+    pub path: String,
+    pub kind: FileChangeKind,
+    pub additions: usize,
+    pub deletions: usize,
+}
+
+impl ChangedFileSummary {
+    pub fn parse(raw: &str) -> Self {
+        let raw = raw.trim();
+        if let Some(idx) = raw.find(" (+") {
+            let path = raw[..idx].trim().to_string();
+            let rest = &raw[idx + 3..];
+            let adds = rest
+                .split(' ')
+                .next()
+                .unwrap_or("0")
+                .parse::<usize>()
+                .unwrap_or(0);
+            let dels = if let Some(d_idx) = rest.find('-') {
+                rest[d_idx + 1..]
+                    .trim_end_matches(')')
+                    .trim()
+                    .parse::<usize>()
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+            Self {
+                path,
+                kind: FileChangeKind::Modified,
+                additions: adds,
+                deletions: dels,
+            }
+        } else if let Some(stripped) = raw.strip_prefix("A\t").or_else(|| raw.strip_prefix("A ")) {
+            Self {
+                path: stripped.trim().to_string(),
+                kind: FileChangeKind::Created,
+                additions: 0,
+                deletions: 0,
+            }
+        } else if let Some(stripped) = raw.strip_prefix("D\t").or_else(|| raw.strip_prefix("D ")) {
+            Self {
+                path: stripped.trim().to_string(),
+                kind: FileChangeKind::Deleted,
+                additions: 0,
+                deletions: 0,
+            }
+        } else {
+            Self {
+                path: raw.to_string(),
+                kind: FileChangeKind::Modified,
+                additions: 0,
+                deletions: 0,
+            }
+        }
+    }
+}
+
 /// A rendered item inside a thread's timeline.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -554,6 +629,11 @@ pub enum TimelineItem {
         entries: Vec<WorkLogEntry>,
         duration_ms: Option<u64>,
         status: WorkLogStatus,
+    },
+    ChangedFiles {
+        files: Vec<ChangedFileSummary>,
+        total_additions: usize,
+        total_deletions: usize,
     },
 }
 

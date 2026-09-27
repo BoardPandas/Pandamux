@@ -212,6 +212,15 @@ impl ThreadManager {
             effort: params.effort.clone().or_else(|| thread.effort.clone()),
         };
 
+        let effective_path = PathBuf::from(thread.workspace.effective_path());
+        let cp_before = crate::checkpoint::create_checkpoint(
+            &effective_path,
+            &params.thread_id,
+            &turn_id,
+            crate::checkpoint::CheckpointPhase::Before,
+        )
+        .unwrap_or(None);
+
         let turn = Turn {
             id: turn_id.clone(),
             thread_id: params.thread_id.clone(),
@@ -221,7 +230,7 @@ impl ThreadManager {
             started_at_ms: started_ms,
             ended_at_ms: None,
             usage: None,
-            checkpoint_before: None,
+            checkpoint_before: cp_before,
             checkpoint_after: None,
         };
 
@@ -587,14 +596,61 @@ impl ThreadManager {
                                 kind: ev.kind,
                             });
 
+                            let worktree_dir = store
+                                .get_thread(&thread_id)
+                                .ok()
+                                .flatten()
+                                .map(|th| PathBuf::from(th.workspace.effective_path()))
+                                .unwrap_or_default();
+
+                            let cp_after = crate::checkpoint::create_checkpoint(
+                                &worktree_dir,
+                                &thread_id,
+                                &turn_id,
+                                crate::checkpoint::CheckpointPhase::After,
+                            )
+                            .unwrap_or(None);
+
+                            let mut changed_files = Vec::new();
+                            if let Ok(Some(mut tr)) = store.get_turn(&turn_id) {
+                                tr.checkpoint_after = cp_after.clone();
+                                if let (Some(before), Some(after)) =
+                                    (&tr.checkpoint_before, &cp_after)
+                                    && let Ok(stats) = crate::checkpoint::compute_changed_files(
+                                        &worktree_dir,
+                                        before,
+                                        after,
+                                    )
+                                {
+                                    changed_files = stats
+                                        .iter()
+                                        .map(|s| {
+                                            if s.additions > 0 || s.deletions > 0 {
+                                                format!(
+                                                    "{} (+{} -{})",
+                                                    s.path, s.additions, s.deletions
+                                                )
+                                            } else {
+                                                s.path.clone()
+                                            }
+                                        })
+                                        .collect();
+                                }
+                                let _ = store.save_turn(&tr);
+                            }
+
+                            let _ = crate::checkpoint::prune_old_checkpoints(
+                                &worktree_dir,
+                                &thread_id,
+                                50,
+                            );
+
                             stream_seq += 1;
                             let settle = ThreadEvent {
                                 thread_id: thread_id.clone(),
                                 seq: stream_seq,
                                 at_ms: at,
-                                kind: ThreadEventKind::TurnSettled {
-                                    changed_files: vec![],
-                                },
+                                kind: ThreadEventKind::TurnSettled { changed_files },
                             };
                             let _ = store.append_event(&settle);
                             let _ = broadcaster.send(EventEnvelope {
@@ -808,5 +864,77 @@ impl ThreadManager {
             thread_id: thread.id,
             resume_token,
         })
+    }
+
+    /// Lists checkpoint refs for a thread.
+    pub fn list_checkpoints(&self, thread_id: &ThreadId) -> Result<Vec<String>, RpcError> {
+        let thread = self
+            .store
+            .get_thread(thread_id)
+            .map_err(|e| RpcError::internal_error(e.to_string()))?
+            .ok_or_else(|| RpcError::not_found(format!("Thread {thread_id} not found")))?;
+
+        let worktree_dir = PathBuf::from(thread.workspace.effective_path());
+        if !crate::checkpoint::is_git_repository(&worktree_dir) {
+            return Ok(Vec::new());
+        }
+
+        let prefix = format!("refs/pandamux/checkpoints/{}/", thread_id.as_str());
+        let list_out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&worktree_dir)
+            .arg("for-each-ref")
+            .arg("--format=%(refname)")
+            .arg(&prefix)
+            .output()
+            .map_err(|e| RpcError::internal_error(e.to_string()))?;
+
+        if !list_out.status.success() {
+            return Ok(Vec::new());
+        }
+
+        let refs_str = String::from_utf8_lossy(&list_out.stdout);
+        let refs: Vec<String> = refs_str
+            .lines()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        Ok(refs)
+    }
+
+    /// Computes diff stats between two checkpoint refs in a thread.
+    pub fn diff_checkpoints(
+        &self,
+        thread_id: &ThreadId,
+        before_ref: &str,
+        after_ref: &str,
+    ) -> Result<Vec<crate::checkpoint::ChangedFileStat>, RpcError> {
+        let thread = self
+            .store
+            .get_thread(thread_id)
+            .map_err(|e| RpcError::internal_error(e.to_string()))?
+            .ok_or_else(|| RpcError::not_found(format!("Thread {thread_id} not found")))?;
+
+        let worktree_dir = PathBuf::from(thread.workspace.effective_path());
+        crate::checkpoint::compute_changed_files(&worktree_dir, before_ref, after_ref)
+            .map_err(RpcError::internal_error)
+    }
+
+    /// Rolls back a thread's worktree to the specified checkpoint ref.
+    pub fn rollback_checkpoint(
+        &self,
+        thread_id: &ThreadId,
+        checkpoint_ref: &str,
+    ) -> Result<(), RpcError> {
+        let thread = self
+            .store
+            .get_thread(thread_id)
+            .map_err(|e| RpcError::internal_error(e.to_string()))?
+            .ok_or_else(|| RpcError::not_found(format!("Thread {thread_id} not found")))?;
+
+        let worktree_dir = PathBuf::from(thread.workspace.effective_path());
+        crate::checkpoint::rollback_to_checkpoint(&worktree_dir, checkpoint_ref)
+            .map_err(RpcError::internal_error)
     }
 }

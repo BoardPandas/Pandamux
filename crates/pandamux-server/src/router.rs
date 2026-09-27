@@ -4,10 +4,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use pandamux_core::UserSettings;
 use pandamux_protocol::{
-    HelloParams, HelloResult, IdentifyResult, McpCallToolParams, PROTOCOL_VERSION, PingResult,
-    RpcError, RpcRequest, RpcResponse, ServerCapabilities, ServerRole, ThreadCancelTurnParams,
-    ThreadCreateParams, ThreadGetParams, ThreadListParams, ThreadRespondApprovalParams,
-    ThreadResumeParams, ThreadSendTurnParams,
+    CheckpointDiffParams, CheckpointListParams, CheckpointRollbackParams, HelloParams, HelloResult,
+    IdentifyResult, McpCallToolParams, PROTOCOL_VERSION, PingResult, RpcError, RpcRequest,
+    RpcResponse, ServerCapabilities, ServerRole, ThreadCancelTurnParams, ThreadCreateParams,
+    ThreadGetParams, ThreadListParams, ThreadRespondApprovalParams, ThreadResumeParams,
+    ThreadSendTurnParams,
 };
 
 use crate::driver_registry::DriverRegistry;
@@ -91,6 +92,9 @@ impl Router {
             "notification.post" => self.handle_notification_post(params).await,
             "notification.list" => self.handle_notification_list().await,
             "notification.clear" => self.handle_notification_clear(params).await,
+            "checkpoint.list" => self.handle_checkpoint_list(params),
+            "checkpoint.diff" => self.handle_checkpoint_diff(params),
+            "checkpoint.rollback" => self.handle_checkpoint_rollback(params),
             unknown => Err(RpcError::method_not_found(unknown)),
         };
 
@@ -300,6 +304,48 @@ impl Router {
             lock.clear();
         }
         Ok(json!({ "cleared": true }))
+    }
+
+    fn handle_checkpoint_list(&self, params: Value) -> Result<Value, RpcError> {
+        let params: CheckpointListParams =
+            serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
+
+        let checkpoints = self.thread_manager.list_checkpoints(&params.thread_id)?;
+        Ok(json!({ "checkpoints": checkpoints }))
+    }
+
+    fn handle_checkpoint_diff(&self, params: Value) -> Result<Value, RpcError> {
+        let params: CheckpointDiffParams =
+            serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
+
+        let stats = self.thread_manager.diff_checkpoints(
+            &params.thread_id,
+            &params.before_ref,
+            &params.after_ref,
+        )?;
+
+        let formatted: Vec<Value> = stats
+            .into_iter()
+            .map(|s| {
+                json!({
+                    "path": s.path,
+                    "kind": format!("{:?}", s.kind).to_lowercase(),
+                    "additions": s.additions,
+                    "deletions": s.deletions,
+                })
+            })
+            .collect();
+
+        Ok(json!({ "changedFiles": formatted }))
+    }
+
+    fn handle_checkpoint_rollback(&self, params: Value) -> Result<Value, RpcError> {
+        let params: CheckpointRollbackParams =
+            serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
+
+        self.thread_manager
+            .rollback_checkpoint(&params.thread_id, &params.checkpoint_ref)?;
+        Ok(json!({ "ok": true }))
     }
 }
 

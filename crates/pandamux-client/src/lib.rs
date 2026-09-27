@@ -5,8 +5,8 @@ pub mod transport;
 
 pub use client::PandamuxClient;
 pub use projections::{
-    RunProjection, SubAgentProjection, ThreadProjection, TimelineItem, WorkLogEntry, WorkLogStatus,
-    format_duration,
+    ChangedFileSummary, RunProjection, SubAgentProjection, ThreadProjection, TimelineItem,
+    WorkLogEntry, WorkLogStatus, format_duration,
 };
 pub use token_queue::TokenSmoothingQueue;
 pub use transport::{MockTransport, MockTransportPeer, TransportError};
@@ -521,8 +521,8 @@ mod tests {
         });
 
         let completed_items = proj.grouped_items();
-        // Should be: [TurnUserPrompt, WorkLog, AssistantText]
-        assert_eq!(completed_items.len(), 3);
+        // Should be: [TurnUserPrompt, WorkLog, AssistantText, ChangedFiles]
+        assert_eq!(completed_items.len(), 4);
 
         if let TimelineItem::WorkLog {
             summary,
@@ -539,5 +539,31 @@ mod tests {
         } else {
             panic!("expected completed WorkLog");
         }
+
+        if let TimelineItem::ChangedFiles { files, .. } = &completed_items[3] {
+            assert_eq!(files.len(), 1);
+            assert_eq!(files[0].path, "src/schema.rs");
+        } else {
+            panic!("expected ChangedFiles item");
+        }
+    }
+
+    #[test]
+    fn changed_file_summary_parsing() {
+        use pandamux_core::FileChangeKind;
+
+        let stat1 = ChangedFileSummary::parse("src/main.rs (+14 -3)");
+        assert_eq!(stat1.path, "src/main.rs");
+        assert_eq!(stat1.additions, 14);
+        assert_eq!(stat1.deletions, 3);
+        assert_eq!(stat1.kind, FileChangeKind::Modified);
+
+        let stat2 = ChangedFileSummary::parse("A\tsrc/new_module.rs");
+        assert_eq!(stat2.path, "src/new_module.rs");
+        assert_eq!(stat2.kind, FileChangeKind::Created);
+
+        let stat3 = ChangedFileSummary::parse("D\tsrc/deprecated.rs");
+        assert_eq!(stat3.path, "src/deprecated.rs");
+        assert_eq!(stat3.kind, FileChangeKind::Deleted);
     }
 }
