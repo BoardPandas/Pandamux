@@ -16,6 +16,14 @@ $rules = @(
   @{
     Name = 'pandamux-remote'
     Forbidden = @('iced', 'alacritty_terminal')
+  },
+  @{
+    Name = 'pandamux-protocol'
+    Forbidden = @('iced', 'alacritty_terminal', 'pandamux-term', 'pandamux-remote')
+  },
+  @{
+    Name = 'pandamux-client'
+    Forbidden = @('iced', 'alacritty_terminal', 'pandamux-term', 'pandamux-remote')
   }
 )
 
