@@ -1,3 +1,5 @@
+pub mod acp;
+pub mod antigravity;
 pub mod claude;
 pub mod codex;
 pub mod error;
@@ -7,6 +9,17 @@ pub mod shim_resolver;
 pub mod supervision;
 pub mod traits;
 
+pub use acp::{
+    build_initialize_request, build_session_new_request, map_access_mode_to_acp,
+    validate_antigravity_initialize, AcpInitializeResult, AcpMode, AcpPermissionRequest,
+    AcpSession,
+};
+pub use antigravity::{
+    build_antigravity_env, extract_auth_url_from_output, probe_antigravity_health_offline,
+    resolve_antigravity_binary, sweep_orphan_temp_dirs, validate_callback_query,
+    validate_google_oauth_url, validate_sanitized_environment, verify_bundle_manifest,
+    AntigravityConcurrencyLimiter, AntigravityDriver, ManagedBundleManifest,
+};
 pub use claude::{build_claude_launch_args, ClaudeDriver, ClaudeSession};
 pub use codex::{CodexDriver, CodexSession};
 pub use error::ProviderError;

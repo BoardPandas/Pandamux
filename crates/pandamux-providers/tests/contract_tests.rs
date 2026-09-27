@@ -222,3 +222,225 @@ fn test_shim_resolution() {
     assert!(resolved.program.exists());
     assert!(resolved.is_direct_executable);
 }
+
+const AGY_INIT_JSON: &str =
+    include_str!("../../../spikes/phase0-antigravity/fixtures/initialize_response.json");
+const AGY_MANIFEST_JSON: &str =
+    include_str!("../../../spikes/phase0-antigravity/fixtures/managed_bundle_manifest.json");
+const AGY_OAUTH_JSON: &str =
+    include_str!("../../../spikes/phase0-antigravity/fixtures/oauth_auth_flow.json");
+const AGY_STREAM_NDJSON: &str =
+    include_str!("../../../spikes/phase0-antigravity/fixtures/session_turn_stream.ndjson");
+
+#[test]
+fn test_antigravity_initialize_contract() {
+    let init_val: serde_json::Value =
+        serde_json::from_str(AGY_INIT_JSON).expect("parse init fixture");
+    let result_obj = init_val.get("result").expect("result in init fixture");
+    let res: pandamux_providers::acp::AcpInitializeResult =
+        serde_json::from_value(result_obj.clone()).expect("deserialize AcpInitializeResult");
+
+    assert_eq!(res.protocol_version, 1);
+    assert_eq!(res.agent_info.name, "antigravity-acp");
+    assert!(res.capabilities.load_session);
+    assert!(res.capabilities.resume_session);
+    assert!(res.auth_methods.contains(&"oauth-personal".to_string()));
+
+    pandamux_providers::acp::validate_antigravity_initialize(&res)
+        .expect("validate initialize succeeds");
+}
+
+#[test]
+fn test_antigravity_session_new_and_client_capabilities() {
+    use pandamux_core::thread::AccessMode;
+    use pandamux_providers::acp::{build_session_new_request, map_access_mode_to_acp, AcpMode};
+
+    assert_eq!(map_access_mode_to_acp(AccessMode::FullAccess), AcpMode::Yolo);
+    assert_eq!(map_access_mode_to_acp(AccessMode::AutoEdit), AcpMode::AutoEdit);
+    assert_eq!(map_access_mode_to_acp(AccessMode::ReadOnly), AcpMode::Default);
+
+    let session_req = build_session_new_request(101, AcpMode::Yolo);
+    assert_eq!(session_req["method"], "session/new");
+    assert_eq!(session_req["params"]["mode"], "yolo");
+
+    let client_caps = &session_req["params"]["clientCapabilities"];
+    assert_eq!(client_caps["terminal"], false);
+    assert_eq!(client_caps["fs"]["readTextFile"], true);
+    assert_eq!(client_caps["fs"]["writeTextFile"], true);
+}
+
+#[test]
+fn test_antigravity_oauth_flow_contract() {
+    use pandamux_providers::antigravity::{
+        extract_auth_url_from_output, validate_callback_query, validate_google_oauth_url,
+    };
+
+    let oauth_fixture: serde_json::Value =
+        serde_json::from_str(AGY_OAUTH_JSON).expect("parse oauth fixture");
+
+    let stdout_marker = oauth_fixture["stdoutMarker"].as_str().expect("stdoutMarker");
+    let extracted_url =
+        extract_auth_url_from_output(stdout_marker).expect("extract auth url from marker");
+
+    let validated = validate_google_oauth_url(&extracted_url).expect("validate google oauth url");
+    assert_eq!(validated.redirect_port, 8085);
+    assert_eq!(validated.state, "sec_state_9876");
+    assert!(validated.client_id.contains("apps.googleusercontent.com"));
+
+    let callback_query = oauth_fixture["simulatedCallbackQuery"]
+        .as_str()
+        .expect("simulatedCallbackQuery");
+    let code = validate_callback_query(callback_query, "sec_state_9876")
+        .expect("validate callback query");
+    assert_eq!(code, "4/0AQ_TEST_TOKEN");
+
+    // Mismatched state must be rejected
+    assert!(validate_callback_query(callback_query, "wrong_state").is_err());
+}
+
+#[test]
+fn test_antigravity_managed_bundle_manifest_validation() {
+    use pandamux_providers::antigravity::{verify_bundle_manifest, ManagedBundleManifest};
+
+    let manifest: ManagedBundleManifest =
+        serde_json::from_str(AGY_MANIFEST_JSON).expect("parse manifest fixture");
+    assert_eq!(manifest.version, "1.1.1");
+    assert_eq!(manifest.entries.len(), 2);
+    assert!(manifest.entries.contains(&"agy_acp_server.exe".to_string()));
+    assert!(manifest.entries.contains(&"localharness_external.exe".to_string()));
+
+    // Path traversal in manifest must be rejected
+    let mut bad_manifest = manifest.clone();
+    bad_manifest.entries = vec!["../evil.exe".to_string(), "localharness_external.exe".to_string()];
+    let dummy_bytes = vec![0u8; bad_manifest.size as usize];
+    assert!(verify_bundle_manifest(&bad_manifest, &dummy_bytes).is_err());
+}
+
+#[test]
+fn test_antigravity_spawn_environment_and_credential_sanitization() {
+    use pandamux_providers::antigravity::{
+        build_antigravity_env, validate_sanitized_environment,
+    };
+    use std::collections::HashMap;
+
+    let base = Path::new("/var/pandamux");
+    let harness = Path::new("/var/pandamux/tools/localharness_external");
+    let env_config = build_antigravity_env("inst-test", base, harness, "pandamux-browser-helper");
+
+    assert_eq!(
+        env_config.gemini_home,
+        PathBuf::from("/var/pandamux/profiles/antigravity/inst-test")
+    );
+    assert_eq!(
+        env_config.scratch_dir,
+        PathBuf::from("/var/pandamux/scratch/antigravity/inst-test")
+    );
+    assert_eq!(
+        env_config.vars.get("AGY_ACP_FORCE_FILE_STORAGE").map(|s| s.as_str()),
+        Some("1")
+    );
+    assert_eq!(
+        env_config.vars.get("PYTHONUNBUFFERED").map(|s| s.as_str()),
+        Some("1")
+    );
+    assert_eq!(
+        env_config.vars.get("BROWSER").map(|s| s.as_str()),
+        Some("pandamux-browser-helper")
+    );
+
+    // Sanitized environment check
+    assert!(validate_sanitized_environment(&env_config.vars));
+
+    let mut tainted_vars = HashMap::new();
+    tainted_vars.insert("GEMINI_API_KEY".to_string(), "secret-123".to_string());
+    assert!(!validate_sanitized_environment(&tainted_vars));
+
+    let mut tainted_oauth = HashMap::new();
+    tainted_oauth.insert("AGY_ACP_TOKEN".to_string(), "tok-456".to_string());
+    assert!(!validate_sanitized_environment(&tainted_oauth));
+}
+
+#[test]
+fn test_antigravity_seven_reliability_rules() {
+    use pandamux_providers::acp::{is_interaction_prompt, AcpPermissionRequest};
+    use pandamux_providers::antigravity::{
+        probe_antigravity_health_offline, sweep_orphan_temp_dirs, AntigravityConcurrencyLimiter,
+    };
+
+    // Rule 1: Zero-spawn offline health check
+    let non_existent = Path::new("/non/existent/agy_acp_server");
+    let gemini_home = Path::new("/var/pandamux/profiles/antigravity/inst-1");
+    let health = probe_antigravity_health_offline(non_existent, gemini_home, None);
+    assert!(matches!(health, pandamux_providers::ProviderHealth::Unavailable { .. }));
+
+    // Rule 2: Temp directory sweeper
+    let scratch = std::env::temp_dir().join("pandamux_test_scratch");
+    let _ = std::fs::create_dir_all(&scratch);
+    let orphan1 = scratch.join("_MEI12345");
+    let orphan2 = scratch.join("agy_tmp_67890");
+    let keep_file = scratch.join("valid_file.txt");
+    let _ = std::fs::create_dir_all(&orphan1);
+    let _ = std::fs::create_dir_all(&orphan2);
+    let _ = std::fs::write(&keep_file, b"keep");
+
+    let swept = sweep_orphan_temp_dirs(&scratch).expect("sweep orphan dirs");
+    assert_eq!(swept, 2);
+    assert!(!orphan1.exists());
+    assert!(!orphan2.exists());
+    assert!(keep_file.exists());
+    let _ = std::fs::remove_dir_all(&scratch);
+
+    // Rule 3: Concurrency limiter (max 2 active processes)
+    let limiter = AntigravityConcurrencyLimiter::new(2);
+    let guard1 = limiter.try_acquire().expect("acquire 1");
+    let guard2 = limiter.try_acquire().expect("acquire 2");
+    assert!(limiter.try_acquire().is_err(), "Third concurrent acquire must fail");
+    drop(guard1);
+    let guard3 = limiter.try_acquire().expect("acquire 3 after drop");
+    drop(guard2);
+    drop(guard3);
+
+    // Rule 6: Interaction prompt detection
+    assert!(is_interaction_prompt("interaction_confirm_deployment"));
+    assert!(!is_interaction_prompt("fs/writeTextFile"));
+
+    // Rule 7: Permission request security warning extraction
+    let perm_json = r#"{
+        "sessionId": "sess_agy_4242",
+        "permissionType": "file_write",
+        "resource": "src/main.rs",
+        "options": ["allow_once", "allow_always", "reject_once"],
+        "_meta": {
+            "agy.security.warning": "Prompt injection risk detected in source comment"
+        }
+    }"#;
+    let perm_req: AcpPermissionRequest = serde_json::from_str(perm_json).expect("parse permission");
+    assert_eq!(
+        perm_req.security_warning().as_deref(),
+        Some("Prompt injection risk detected in source comment")
+    );
+}
+
+#[test]
+fn test_antigravity_stream_parsing() {
+    use pandamux_providers::acp::parse_acp_line;
+
+    let mut event_count = 0;
+    for line in AGY_STREAM_NDJSON.lines() {
+        if let Some(event) = parse_acp_line(line) {
+            event_count += 1;
+            match event {
+                pandamux_providers::ProviderEvent::TextDelta { delta } => {
+                    assert!(delta.contains("Analyzing codebase"));
+                }
+                pandamux_providers::ProviderEvent::TurnCompleted { usage, .. } => {
+                    assert_eq!(usage.unwrap().input_tokens, 2450);
+                }
+                _ => {}
+            }
+        }
+    }
+    assert!(event_count >= 1);
+}
+
+
