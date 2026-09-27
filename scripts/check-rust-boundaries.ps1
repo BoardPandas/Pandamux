@@ -28,6 +28,10 @@ $rules = @(
   @{
     Name = 'pandamux-server'
     Forbidden = @('iced', 'tauri', 'alacritty_terminal', 'portable-pty', 'russh')
+  },
+  @{
+    Name = 'pandamux-providers'
+    Forbidden = @('iced', 'tauri', 'alacritty_terminal', 'portable-pty', 'russh', 'rusqlite')
   }
 )
 

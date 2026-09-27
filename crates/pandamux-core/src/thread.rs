@@ -39,6 +39,8 @@ pub enum AccessMode {
     #[default]
     WorkspaceOnly,
     ReadOnly,
+    Ask,
+    AutoEdit,
     FullAccess,
 }
 

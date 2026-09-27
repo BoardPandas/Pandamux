@@ -64,4 +64,12 @@ pub struct ProviderCapabilities {
     pub supports_sub_agents: bool,
     pub supports_system_prompt: bool,
     pub supports_reasoning: bool,
+    #[serde(default)]
+    pub supports_approvals: bool,
+    #[serde(default)]
+    pub supports_rate_limits: bool,
+    #[serde(default)]
+    pub supports_resume: bool,
+    #[serde(default)]
+    pub supports_images: bool,
 }

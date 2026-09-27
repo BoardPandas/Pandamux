@@ -1185,7 +1185,7 @@ dependencies = [
 
 [[package]]
 name = "pandamux-cli"
-version = "0.53.13"
+version = "0.53.14"
 dependencies = [
  "pandamux-core",
  "serde_json",
@@ -1194,7 +1194,7 @@ dependencies = [
 
 [[package]]
 name = "pandamux-client"
-version = "0.53.13"
+version = "0.53.14"
 dependencies = [
  "pandamux-core",
  "pandamux-protocol",
@@ -1205,7 +1205,7 @@ dependencies = [
 
 [[package]]
 name = "pandamux-core"
-version = "0.53.13"
+version = "0.53.14"
 dependencies = [
  "serde",
  "serde_json",
@@ -1214,7 +1214,7 @@ dependencies = [
 
 [[package]]
 name = "pandamux-protocol"
-version = "0.53.13"
+version = "0.53.14"
 dependencies = [
  "pandamux-core",
  "serde",
@@ -1222,8 +1222,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "pandamux-providers"
+version = "0.53.14"
+dependencies = [
+ "anyhow",
+ "pandamux-core",
+ "pandamux-protocol",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "pandamux-remote"
-version = "0.53.13"
+version = "0.53.14"
 dependencies = [
  "anyhow",
  "pandamux-core",
@@ -1237,7 +1251,7 @@ dependencies = [
 
 [[package]]
 name = "pandamux-server"
-version = "0.53.13"
+version = "0.53.14"
 dependencies = [
  "pandamux-core",
  "pandamux-protocol",
@@ -1250,7 +1264,7 @@ dependencies = [
 
 [[package]]
 name = "pandamux-term"
-version = "0.53.13"
+version = "0.53.14"
 dependencies = [
  "alacritty_terminal",
  "portable-pty",
