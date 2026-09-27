@@ -1,0 +1,182 @@
+pub mod app_view;
+pub mod server_bridge;
+pub mod theme;
+pub mod titlebar;
+
+pub use app_view::AppView;
+pub use server_bridge::{
+    discover_server_runtime, spawn_server_bridge, BridgeCommand, RuntimeInfo, ServerBridgeHandle,
+    ServerStatus,
+};
+pub use theme::{AccentColor, ChromePalette, Radii, Spacing, Theme, ThemeMode, Typography};
+pub use titlebar::CustomTitlebar;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui_kit::gpui::px;
+    use pandamux_core::{
+        ApprovalDecision, ApprovalKind, EnvironmentId, ProviderInstanceId, Thread, ThreadEvent,
+        ThreadEventKind, ThreadId, ThreadStatus, ThreadWorkspace, TurnId, TurnInput, TurnOutcome,
+    };
+
+    #[test]
+    fn test_theme_section_12_tokens() {
+        let dark = Theme::dark(AccentColor::Teal);
+        assert_eq!(dark.mode, ThemeMode::Dark);
+        assert_eq!(dark.accent, AccentColor::Teal);
+
+        // Verify key Section 12 dimensions
+        assert_eq!(Spacing::TITLEBAR_HEIGHT, px(40.0));
+        assert_eq!(Spacing::STATUSBAR_HEIGHT, px(26.0));
+        assert_eq!(Spacing::WORKSPACE_PADDING, px(10.0));
+        assert_eq!(Spacing::RAIL_WIDTH, px(52.0));
+        assert_eq!(Spacing::SIDEBAR_WIDTH, px(264.0));
+        assert_eq!(Spacing::SIDEBAR_COMPACT_WIDTH, px(216.0));
+
+        // Verify Section 12 radii
+        assert_eq!(Radii::PANE, px(12.0));
+        assert_eq!(Radii::OVERLAY, px(16.0));
+        assert_eq!(Radii::ROW, px(8.0));
+        assert_eq!(Radii::CHIP, px(6.0));
+        assert_eq!(Radii::RAIL_BUTTON, px(10.0));
+
+        // Verify typography sizes
+        assert_eq!(Typography::TITLE_SIZE, px(13.0));
+        assert_eq!(Typography::BODY_SIZE, px(12.5));
+        assert_eq!(Typography::SECONDARY_SIZE, px(11.0));
+        assert_eq!(Typography::META_SIZE, px(10.0));
+
+        let light = Theme::light(AccentColor::Gold);
+        assert_eq!(light.mode, ThemeMode::Light);
+        assert_eq!(light.accent, AccentColor::Gold);
+    }
+
+    #[test]
+    fn test_runtime_info_round_trip() {
+        let json = r#"{
+            "pid": 12345,
+            "role": "hub",
+            "protocolVersion": 3,
+            "serverVersion": "0.53.16",
+            "pipePath": "/tmp/test.sock",
+            "token": "secret-token",
+            "startedAtMs": 1700000000000
+        }"#;
+
+        let info: RuntimeInfo = serde_json::from_str(json).expect("deserialize RuntimeInfo");
+        assert_eq!(info.pid, 12345);
+        assert_eq!(info.role, "hub");
+        assert_eq!(info.protocol_version, 3);
+        assert_eq!(info.server_version, "0.53.16");
+        assert_eq!(info.pipe_path, "/tmp/test.sock");
+        assert_eq!(info.token, "secret-token");
+        assert_eq!(info.started_at_ms, 1700000000000);
+    }
+
+    #[test]
+    fn test_thread_projection_event_accumulation() {
+        let thread = Thread {
+            id: ThreadId::from("thread-desktop-1"),
+            project_id: None,
+            environment_id: EnvironmentId::from("env-local"),
+            parent_thread_id: None,
+            title: "Desktop Projection Thread".to_string(),
+            provider_instance_id: ProviderInstanceId::from("claude"),
+            model: "claude-3-7-sonnet".to_string(),
+            effort: None,
+            access_mode: Default::default(),
+            workspace: ThreadWorkspace {
+                cwd: "/repo".to_string(),
+                worktree: None,
+            },
+            status: ThreadStatus::Idle,
+            agent: None,
+            origin: Default::default(),
+            created_at_ms: 1000,
+            updated_at_ms: 1000,
+        };
+
+        let mut proj = pandamux_client::projections::ThreadProjection::new(thread);
+        assert_eq!(proj.thread.status, ThreadStatus::Idle);
+
+        // TurnRequested
+        proj.apply_event(&ThreadEvent {
+            thread_id: ThreadId::from("thread-desktop-1"),
+            seq: 1,
+            at_ms: 1010,
+            kind: ThreadEventKind::TurnRequested {
+                turn_id: TurnId::from("turn-1"),
+                input: TurnInput {
+                    text: "Hello desktop agent".to_string(),
+                    attachment_ids: vec![],
+                    model: None,
+                    effort: None,
+                },
+            },
+        });
+        assert_eq!(proj.thread.status, ThreadStatus::Working);
+        assert_eq!(proj.items.len(), 1);
+
+        // AssistantText
+        proj.apply_event(&ThreadEvent {
+            thread_id: ThreadId::from("thread-desktop-1"),
+            seq: 2,
+            at_ms: 1020,
+            kind: ThreadEventKind::AssistantText {
+                item_id: "item-1".to_string(),
+                text: "Hello from Claude!".to_string(),
+            },
+        });
+        assert_eq!(proj.items.len(), 2);
+
+        // ApprovalRequested
+        proj.apply_event(&ThreadEvent {
+            thread_id: ThreadId::from("thread-desktop-1"),
+            seq: 3,
+            at_ms: 1030,
+            kind: ThreadEventKind::ApprovalRequested {
+                request_id: "req-appr-1".to_string(),
+                kind: ApprovalKind::CommandExecution,
+                detail: serde_json::json!({ "command": "cargo test" }),
+            },
+        });
+        assert_eq!(proj.thread.status, ThreadStatus::AwaitingApproval);
+        assert_eq!(proj.items.len(), 3);
+
+        // ApprovalResolved
+        proj.apply_event(&ThreadEvent {
+            thread_id: ThreadId::from("thread-desktop-1"),
+            seq: 4,
+            at_ms: 1040,
+            kind: ThreadEventKind::ApprovalResolved {
+                request_id: "req-appr-1".to_string(),
+                decision: ApprovalDecision::Approved,
+                by: "user".to_string(),
+            },
+        });
+        assert_eq!(proj.thread.status, ThreadStatus::Working);
+
+        // TurnCompleted
+        proj.apply_event(&ThreadEvent {
+            thread_id: ThreadId::from("thread-desktop-1"),
+            seq: 5,
+            at_ms: 1050,
+            kind: ThreadEventKind::TurnCompleted {
+                outcome: TurnOutcome::Success,
+            },
+        });
+
+        // TurnSettled
+        proj.apply_event(&ThreadEvent {
+            thread_id: ThreadId::from("thread-desktop-1"),
+            seq: 6,
+            at_ms: 1060,
+            kind: ThreadEventKind::TurnSettled {
+                changed_files: vec!["file1.rs".to_string()],
+            },
+        });
+        assert_eq!(proj.thread.status, ThreadStatus::Idle);
+        assert_eq!(proj.changed_files, vec!["file1.rs".to_string()]);
+    }
+}

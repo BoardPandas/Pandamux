@@ -8,6 +8,7 @@ members = [
   "crates/pandamux-term",
   "crates/pandamux-remote",
   "crates/pandamux-cli",
+  "crates/pandamux-desktop",
 ]
 resolver = "3"
 exclude = [
@@ -20,7 +21,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.53.16"
+version = "0.53.17"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/BoardPandas/Pandamux"

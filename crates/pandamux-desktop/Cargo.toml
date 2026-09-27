@@ -1,0 +1,26 @@
+[package]
+name = "pandamux-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "pandamux"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+pandamux-core = { path = "../pandamux-core" }
+pandamux-protocol = { path = "../pandamux-protocol" }
+pandamux-client = { path = "../pandamux-client" }
+gpui-kit = "=0.6.6"
+tokio = { workspace = true, features = ["process", "time"] }
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+anyhow = "=1.0.103"
+smol = "=2.0.2"
