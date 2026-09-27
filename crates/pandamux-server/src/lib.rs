@@ -1,0 +1,54 @@
+pub mod mcp_server;
+pub mod router;
+pub mod runtime;
+pub mod server;
+pub mod store;
+
+pub use mcp_server::McpServer;
+pub use router::Router;
+pub use runtime::{RUNTIME_FILENAME, RuntimeInfo};
+pub use server::{Server, ServerConfig};
+pub use store::{Store, StoreError};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pandamux_protocol::ServerRole;
+
+    #[test]
+    fn server_lifecycle_and_graceful_drain() {
+        let temp_dir = std::env::temp_dir().join(format!("pandamux_test_{}", uuid::Uuid::new_v4()));
+        let config = ServerConfig {
+            role: ServerRole::Hub,
+            environment_id: "env-local".to_string(),
+            runtime_dir: temp_dir.clone(),
+            db_path: None,
+        };
+
+        let server = Server::new(config).expect("create server");
+
+        // Test request processing
+        let ping_line = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"system.ping\"}\n";
+        let res_line = server.process_line(ping_line).expect("process ping");
+        assert!(res_line.contains("\"result\":{\"pong\":true"));
+
+        // Register runtime file
+        let runtime_path = server
+            .register_runtime("\\\\.\\pipe\\pandamux-test", "secret-token")
+            .expect("register runtime");
+        assert!(runtime_path.exists());
+
+        let read_info = RuntimeInfo::read_from_dir(&temp_dir)
+            .expect("read runtime")
+            .expect("info present");
+        assert_eq!(read_info.token, "secret-token");
+        assert_eq!(read_info.role, "hub");
+
+        // Provable graceful shutdown and cleanup
+        server.shutdown();
+        server.cleanup_runtime();
+
+        assert!(!runtime_path.exists());
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+}

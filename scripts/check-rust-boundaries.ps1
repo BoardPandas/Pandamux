@@ -7,23 +7,27 @@ $cratesRoot = Join-Path $repoRoot 'crates'
 $rules = @(
   @{
     Name = 'pandamux-core'
-    Forbidden = @('iced', 'alacritty_terminal')
+    Forbidden = @('iced', 'alacritty_terminal', 'rusqlite')
   },
   @{
     Name = 'pandamux-term'
-    Forbidden = @('iced')
+    Forbidden = @('iced', 'rusqlite')
   },
   @{
     Name = 'pandamux-remote'
-    Forbidden = @('iced', 'alacritty_terminal')
+    Forbidden = @('iced', 'alacritty_terminal', 'rusqlite')
   },
   @{
     Name = 'pandamux-protocol'
-    Forbidden = @('iced', 'alacritty_terminal', 'pandamux-term', 'pandamux-remote')
+    Forbidden = @('iced', 'alacritty_terminal', 'pandamux-term', 'pandamux-remote', 'rusqlite')
   },
   @{
     Name = 'pandamux-client'
-    Forbidden = @('iced', 'alacritty_terminal', 'pandamux-term', 'pandamux-remote')
+    Forbidden = @('iced', 'alacritty_terminal', 'pandamux-term', 'pandamux-remote', 'rusqlite')
+  },
+  @{
+    Name = 'pandamux-server'
+    Forbidden = @('iced', 'tauri', 'alacritty_terminal', 'portable-pty', 'russh')
   }
 )
 

@@ -54,4 +54,4 @@ jobs:
         run: cargo test --workspace
 
       - name: Build workspace binaries
-        run: cargo build -p pandamux-cli -p pandamux-term -p pandamux-remote
+        run: cargo build -p pandamux-cli -p pandamux-term -p pandamux-remote -p pandamux-server
