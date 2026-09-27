@@ -324,6 +324,16 @@ impl Router {
             &params.after_ref,
         )?;
 
+        let patch = self
+            .thread_manager
+            .diff_checkpoints_patch(
+                &params.thread_id,
+                &params.before_ref,
+                &params.after_ref,
+                params.file_path.as_deref(),
+            )
+            .ok();
+
         let formatted: Vec<Value> = stats
             .into_iter()
             .map(|s| {
@@ -336,7 +346,10 @@ impl Router {
             })
             .collect();
 
-        Ok(json!({ "changedFiles": formatted }))
+        Ok(json!({
+            "changedFiles": formatted,
+            "patch": patch
+        }))
     }
 
     fn handle_checkpoint_rollback(&self, params: Value) -> Result<Value, RpcError> {

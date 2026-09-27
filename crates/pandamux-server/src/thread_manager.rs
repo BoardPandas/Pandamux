@@ -921,6 +921,25 @@ impl ThreadManager {
             .map_err(RpcError::internal_error)
     }
 
+    /// Computes unified diff patch between two checkpoint refs in a thread.
+    pub fn diff_checkpoints_patch(
+        &self,
+        thread_id: &ThreadId,
+        before_ref: &str,
+        after_ref: &str,
+        file_path: Option<&str>,
+    ) -> Result<String, RpcError> {
+        let thread = self
+            .store
+            .get_thread(thread_id)
+            .map_err(|e| RpcError::internal_error(e.to_string()))?
+            .ok_or_else(|| RpcError::not_found(format!("Thread {thread_id} not found")))?;
+
+        let worktree_dir = PathBuf::from(thread.workspace.effective_path());
+        crate::checkpoint::compute_checkpoint_patch(&worktree_dir, before_ref, after_ref, file_path)
+            .map_err(RpcError::internal_error)
+    }
+
     /// Rolls back a thread's worktree to the specified checkpoint ref.
     pub fn rollback_checkpoint(
         &self,

@@ -1,5 +1,8 @@
+#![recursion_limit = "256"]
+
 pub mod app_view;
 pub mod composer;
+pub mod diff_view;
 pub mod picker;
 pub mod server_bridge;
 pub mod sidebar;
@@ -9,6 +12,10 @@ pub mod titlebar;
 
 pub use app_view::AppView;
 pub use composer::{ComposerState, render_composer};
+pub use diff_view::{
+    DiffFile, DiffHunk, DiffLine, DiffLineKind, DiffViewMode, DiffViewerState, DiffWord,
+    SplitDiffRow, parse_unified_diff, render_diff_file, render_diff_viewer,
+};
 pub use picker::{ModelChoice, PickerState, ProviderChoice};
 pub use server_bridge::{
     BridgeCommand, RuntimeInfo, ServerBridgeHandle, ServerStatus, discover_server_runtime,
@@ -28,6 +35,12 @@ mod tests {
         ThreadEventKind, ThreadId, ThreadStatus, ThreadWorkspace, TurnId, TurnInput, TurnOutcome,
     };
     use pandamux_protocol::EventEnvelope;
+
+    #[test]
+    fn test_gpui_kit_highlighter_theme() {
+        let dark_theme = gpui_kit::component::highlighter::HighlightTheme::default_dark();
+        assert_eq!(dark_theme.appearance, gpui_kit::component::ThemeMode::Dark);
+    }
 
     #[test]
     fn test_theme_section_12_tokens() {

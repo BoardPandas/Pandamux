@@ -297,6 +297,41 @@ pub fn compute_changed_files(
     Ok(result)
 }
 
+/// Computes raw unified diff patch between two checkpoint refs, optionally filtered by file path.
+pub fn compute_checkpoint_patch(
+    worktree_dir: &Path,
+    before_ref: &str,
+    after_ref: &str,
+    file_path: Option<&str>,
+) -> Result<String, String> {
+    if !is_git_repository(worktree_dir) || before_ref == after_ref {
+        return Ok(String::new());
+    }
+
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
+        .arg(worktree_dir)
+        .arg("diff")
+        .arg("-U3")
+        .arg(before_ref)
+        .arg(after_ref);
+
+    if let Some(file) = file_path {
+        cmd.arg("--").arg(file);
+    }
+
+    let out = cmd
+        .output()
+        .map_err(|e| format!("git diff patch failed: {e}"))?;
+
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(format!("git diff patch failed: {err}"));
+    }
+
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
 /// Prunes old checkpoint refs for a thread, keeping only the most recent N checkpoints.
 pub fn prune_old_checkpoints(
     worktree_dir: &Path,

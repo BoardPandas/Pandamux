@@ -10,6 +10,7 @@ use pandamux_core::{
     ToolCallStatus,
 };
 
+use crate::diff_view::{DiffViewerState, parse_unified_diff, render_diff_file};
 use crate::theme::{Radii, Theme, Typography};
 
 /// Renders a single timeline item with Section 12 styling.
@@ -617,31 +618,50 @@ fn is_destructive_command(cmd: &str) -> bool {
     patterns.iter().any(|&p| lower.contains(p))
 }
 
-fn render_diff_snippet(diff: &str, theme: &Theme) -> AnyElement {
+pub fn render_diff_snippet(diff: &str, theme: &Theme) -> AnyElement {
+    let files = parse_unified_diff(diff);
+    if files.is_empty() {
+        return div()
+            .p_2()
+            .rounded(Radii::CHIP)
+            .bg(theme.terminal.surface)
+            .border_1()
+            .border_color(rgba(0xffffff0d))
+            .v_flex()
+            .gap_0p5()
+            .children(diff.lines().take(12).map(|line| {
+                let (color, prefix_bg) = if line.starts_with('+') {
+                    (theme.terminal.success, rgba(0x7fd88f1a))
+                } else if line.starts_with('-') {
+                    (rgb(0xf87171), rgba(0xf871711a))
+                } else {
+                    (theme.terminal.text, rgba(0x00000000))
+                };
+                div()
+                    .h_flex()
+                    .px_1()
+                    .rounded(Radii::CHIP)
+                    .bg(prefix_bg)
+                    .text_size(Typography::META_SIZE)
+                    .text_color(color)
+                    .child(line.to_string())
+            }))
+            .into_any_element();
+    }
+
+    let state = DiffViewerState::new();
+    let highlight_theme = if theme.mode == crate::theme::ThemeMode::Dark {
+        gpui_kit::component::highlighter::HighlightTheme::default_dark()
+    } else {
+        gpui_kit::component::highlighter::HighlightTheme::default_light()
+    };
+
     div()
-        .p_2()
-        .rounded(Radii::CHIP)
-        .bg(theme.terminal.surface)
-        .border_1()
-        .border_color(rgba(0xffffff0d))
+        .w_full()
         .v_flex()
-        .gap_0p5()
-        .children(diff.lines().take(12).map(|line| {
-            let (color, prefix_bg) = if line.starts_with('+') {
-                (theme.terminal.success, rgba(0x7fd88f1a))
-            } else if line.starts_with('-') {
-                (rgb(0xf87171), rgba(0xf871711a))
-            } else {
-                (theme.terminal.text, rgba(0x00000000))
-            };
-            div()
-                .h_flex()
-                .px_1()
-                .rounded(Radii::CHIP)
-                .bg(prefix_bg)
-                .text_size(Typography::META_SIZE)
-                .text_color(color)
-                .child(line.to_string())
+        .gap_2()
+        .children(files.iter().map(|file| {
+            render_diff_file(file, &state, theme, &highlight_theme, || {}, |_| {}, || {})
         }))
         .into_any_element()
 }
