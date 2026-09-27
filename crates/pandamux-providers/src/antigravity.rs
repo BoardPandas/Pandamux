@@ -13,12 +13,10 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use pandamux_core::provider_config::{
-    ProviderCapabilities, ProviderInstanceConfig, ProviderKind,
-};
+use pandamux_core::provider_config::{ProviderCapabilities, ProviderInstanceConfig, ProviderKind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -26,17 +24,17 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
 use crate::acp::{
-    build_initialize_request, build_session_new_request, map_access_mode_to_acp,
-    parse_acp_line, AcpSession,
+    AcpSession, build_initialize_request, build_session_new_request, map_access_mode_to_acp,
+    parse_acp_line,
 };
 use crate::error::ProviderError;
 use crate::models::{
-    ModelInfo, ProviderAuthStatus, ProviderHealth, ProviderMetadata,
-    ProviderSnapshot, SessionSpec, UsageLimits,
+    ModelInfo, ProviderAuthStatus, ProviderHealth, ProviderMetadata, ProviderSnapshot, SessionSpec,
+    UsageLimits,
 };
 use crate::profiles::ensure_profile_dir;
 use crate::shim_resolver::resolve_command_shim;
-use crate::supervision::{create_supervised_command, SupervisedChild};
+use crate::supervision::{SupervisedChild, create_supervised_command};
 use crate::traits::{BoxFuture, ProviderDriver, ProviderSession};
 
 pub const MIN_FREE_DISK_BYTES: u64 = 2 * 1024 * 1024 * 1024; // 2 GB
@@ -140,10 +138,10 @@ pub fn resolve_antigravity_binary(
     tools_base_dir: &Path,
     platform_arch: &str,
 ) -> Option<PathBuf> {
-    if let Some(p) = explicit_path {
-        if p.is_file() {
-            return Some(p.to_path_buf());
-        }
+    if let Some(p) = explicit_path
+        && p.is_file()
+    {
+        return Some(p.to_path_buf());
     }
 
     // Check active managed release
@@ -152,25 +150,24 @@ pub fn resolve_antigravity_binary(
         .join(platform_arch)
         .join("active.json");
 
-    if active_path.is_file() {
-        if let Ok(content) = fs::read_to_string(&active_path) {
-            if let Ok(pointer) = serde_json::from_str::<ActiveReleasePointer>(&content) {
-                #[cfg(windows)]
-                let bin_name = "agy_acp_server.exe";
-                #[cfg(not(windows))]
-                let bin_name = "agy_acp_server.par";
+    if active_path.is_file()
+        && let Ok(content) = fs::read_to_string(&active_path)
+        && let Ok(pointer) = serde_json::from_str::<ActiveReleasePointer>(&content)
+    {
+        #[cfg(windows)]
+        let bin_name = "agy_acp_server.exe";
+        #[cfg(not(windows))]
+        let bin_name = "agy_acp_server.par";
 
-                let managed_bin = tools_base_dir
-                    .join("tools/antigravity-acp")
-                    .join(platform_arch)
-                    .join("versions")
-                    .join(&pointer.active_sha256)
-                    .join(bin_name);
+        let managed_bin = tools_base_dir
+            .join("tools/antigravity-acp")
+            .join(platform_arch)
+            .join("versions")
+            .join(&pointer.active_sha256)
+            .join(bin_name);
 
-                if managed_bin.is_file() {
-                    return Some(managed_bin);
-                }
-            }
+        if managed_bin.is_file() {
+            return Some(managed_bin);
         }
     }
 
@@ -190,14 +187,10 @@ pub fn build_antigravity_env(
     harness_path: &Path,
     browser_helper_cmd: &str,
 ) -> AntigravityProcessEnv {
-    let gemini_home = app_data_base
-        .join("profiles/antigravity")
-        .join(instance_id);
+    let gemini_home = app_data_base.join("profiles/antigravity").join(instance_id);
 
     // Keep scratch temp dir a SIBLING of the profile dir to stay under Windows MAX_PATH
-    let scratch_dir = app_data_base
-        .join("scratch/antigravity")
-        .join(instance_id);
+    let scratch_dir = app_data_base.join("scratch/antigravity").join(instance_id);
 
     let mut vars = HashMap::new();
 
@@ -406,14 +399,12 @@ pub fn probe_antigravity_health_offline(
     let auth_type = if gemini_home.is_dir() {
         let settings_path = gemini_home.join("settings.json");
         if let Ok(content) = fs::read_to_string(&settings_path) {
-            serde_json::from_str::<Value>(&content)
-                .ok()
-                .and_then(|v| {
-                    v.get("auth")
-                        .and_then(|a| a.get("type"))
-                        .and_then(|t| t.as_str())
-                        .map(|s| s.to_string())
-                })
+            serde_json::from_str::<Value>(&content).ok().and_then(|v| {
+                v.get("auth")
+                    .and_then(|a| a.get("type"))
+                    .and_then(|t| t.as_str())
+                    .map(|s| s.to_string())
+            })
         } else {
             None
         }
@@ -441,12 +432,16 @@ pub fn sweep_orphan_temp_dirs(scratch_dir: &Path) -> Result<usize, ProviderError
     if let Ok(entries) = fs::read_dir(scratch_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
 
-            if path.is_dir() && (name.starts_with("_MEI") || name.starts_with("agy_tmp_")) {
-                if fs::remove_dir_all(&path).is_ok() {
-                    removed_count += 1;
-                }
+            if path.is_dir()
+                && (name.starts_with("_MEI") || name.starts_with("agy_tmp_"))
+                && fs::remove_dir_all(&path).is_ok()
+            {
+                removed_count += 1;
             }
         }
     }
@@ -617,7 +612,10 @@ impl ProviderDriver for AntigravityDriver {
         Box::pin(async move { Ok(self.metadata().supported_models) })
     }
 
-    fn usage_limits<'a>(&'a self, _cfg: &'a ProviderInstanceConfig) -> BoxFuture<'a, Option<UsageLimits>> {
+    fn usage_limits<'a>(
+        &'a self,
+        _cfg: &'a ProviderInstanceConfig,
+    ) -> BoxFuture<'a, Option<UsageLimits>> {
         Box::pin(async move { None })
     }
 
@@ -629,12 +627,12 @@ impl ProviderDriver for AntigravityDriver {
         Box::pin(async move {
             let _guard = self.limiter.try_acquire()?;
 
-            let binary = self.resolve_binary(cfg).ok_or_else(|| {
-                ProviderError::ProcessFailed {
+            let binary = self
+                .resolve_binary(cfg)
+                .ok_or_else(|| ProviderError::ProcessFailed {
                     program: "agy_acp_server".to_string(),
                     message: "Executable not resolved".to_string(),
-                }
-            })?;
+                })?;
 
             let harness = binary
                 .parent()
@@ -662,12 +660,16 @@ impl ProviderDriver for AntigravityDriver {
             }
 
             let mut child = SupervisedChild::spawn(cmd)?;
-            let mut stdin = child.take_stdin().ok_or_else(|| ProviderError::SupervisionError {
-                message: "Failed to open child stdin".to_string(),
-            })?;
-            let stdout = child.take_stdout().ok_or_else(|| ProviderError::SupervisionError {
-                message: "Failed to open child stdout".to_string(),
-            })?;
+            let mut stdin = child
+                .take_stdin()
+                .ok_or_else(|| ProviderError::SupervisionError {
+                    message: "Failed to open child stdin".to_string(),
+                })?;
+            let stdout = child
+                .take_stdout()
+                .ok_or_else(|| ProviderError::SupervisionError {
+                    message: "Failed to open child stdout".to_string(),
+                })?;
 
             // Send initialize
             let init_req = build_initialize_request(1);
@@ -690,10 +692,10 @@ impl ProviderDriver for AntigravityDriver {
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stdout).lines();
                 while let Ok(Some(line)) = reader.next_line().await {
-                    if let Some(event) = parse_acp_line(&line) {
-                        if tx.send(event).await.is_err() {
-                            break;
-                        }
+                    if let Some(event) = parse_acp_line(&line)
+                        && tx.send(event).await.is_err()
+                    {
+                        break;
                     }
                 }
             });

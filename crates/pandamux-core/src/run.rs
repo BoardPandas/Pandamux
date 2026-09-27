@@ -1,7 +1,7 @@
-use std::collections::HashMap;
-use serde::{Deserialize, Serialize};
 use crate::ids::{AgentId, ProjectId, RunId, ScheduleId, ThreadId};
 use crate::thread::TurnUsage;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Multi-repo orchestrator execution run or scheduled task invocation.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -29,9 +29,7 @@ pub struct Run {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RunKind {
     Orchestrator,
-    Schedule {
-        schedule_id: ScheduleId,
-    },
+    Schedule { schedule_id: ScheduleId },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

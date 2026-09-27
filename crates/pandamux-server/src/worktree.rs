@@ -1,6 +1,6 @@
+use pandamux_core::{ThreadId, WorktreeRef};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use pandamux_core::{ThreadId, WorktreeRef};
 
 /// Creates a new git worktree for a thread at the specified target directory.
 pub fn create_git_worktree(
@@ -10,7 +10,10 @@ pub fn create_git_worktree(
     worktree_dir: &Path,
 ) -> Result<WorktreeRef, String> {
     if !repo_root.exists() {
-        return Err(format!("Repository root does not exist: {}", repo_root.display()));
+        return Err(format!(
+            "Repository root does not exist: {}",
+            repo_root.display()
+        ));
     }
 
     if let Some(parent) = worktree_dir.parent() {

@@ -1,10 +1,10 @@
-use std::path::PathBuf;
 use pandamux_core::{
     event::{ApprovalKind, TurnOutcome},
     provider_config::{ProviderCapabilities, ProviderKind},
     thread::{AccessMode, TurnUsage},
 };
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// Metadata identifying a provider driver.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -100,10 +100,10 @@ impl InjectedInstructions {
         if !self.task_prompt.trim().is_empty() {
             parts.push(format!("# Task\n{}", self.task_prompt.trim()));
         }
-        if let Some(contract) = &self.output_contract {
-            if !contract.trim().is_empty() {
-                parts.push(format!("# Output Contract\n{}", contract.trim()));
-            }
+        if let Some(contract) = &self.output_contract
+            && !contract.trim().is_empty()
+        {
+            parts.push(format!("# Output Contract\n{}", contract.trim()));
         }
         parts.join("\n\n")
     }

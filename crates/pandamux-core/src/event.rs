@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
 use crate::ids::{ThreadId, TurnId};
 use crate::thread::{TurnInput, TurnUsage};
+use serde::{Deserialize, Serialize};
 
 /// Monotonic, append-only event in a thread stream.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -33,9 +33,7 @@ pub use ids::{
     SurfaceId, ThreadId, TurnId, WindowId, WorkspaceId,
 };
 pub use notification::{NewNotification, NotificationInfo, NotificationSource, Notifications};
-pub use organization::{
-    ModelTarget, OrganizationPolicy, OrganizationSubscription, TierMapping,
-};
+pub use organization::{ModelTarget, OrganizationPolicy, OrganizationSubscription, TierMapping};
 pub use project::{
     FolderBreadcrumb, FolderEntry, FolderListing, ProjectError, ProjectErrorCategory, ProjectKey,
     ProjectLocation, ProjectSpec, local_breadcrumbs, local_parent, normalize_posix_path,
@@ -47,9 +45,7 @@ pub use project_registry::{
     normalize_folder_name, normalize_git_remote, parse_git_remote_url, record_location,
     resolve_project_id,
 };
-pub use provider_config::{
-    ProviderCapabilities, ProviderInstanceConfig, ProviderKind,
-};
+pub use provider_config::{ProviderCapabilities, ProviderInstanceConfig, ProviderKind};
 pub use run::{Run, RunEvent, RunKind, RunStatus, RunTask, RunTaskStatus};
 pub use schedule::{
     PerDayBudget, PerRunBudget, ScheduleApprovalPolicy, ScheduleBudget, ScheduleCatchUpPolicy,
@@ -67,5 +63,3 @@ pub use thread::{
     TurnInput, TurnStatus, TurnUsage, WorktreeRef,
 };
 pub use usage::{DailyBudgetLedger, TokenUsageSummary, UsageRecord};
-
-

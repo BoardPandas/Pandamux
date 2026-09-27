@@ -5,18 +5,17 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::gpui::*;
 use pandamux_client::projections::ThreadProjection;
 use pandamux_core::{
-    AgentId, ApprovalDecision, EnvironmentId, Thread, ThreadEvent, ThreadId,
-    ThreadStatus,
+    AgentId, ApprovalDecision, EnvironmentId, Thread, ThreadEvent, ThreadId, ThreadStatus,
 };
 use pandamux_protocol::{
     EventEnvelope, ThreadCancelTurnParams, ThreadCreateParams, ThreadRespondApprovalParams,
     ThreadSendTurnParams,
 };
 
-use crate::composer::{render_composer, ComposerState};
+use crate::composer::{ComposerState, render_composer};
 use crate::picker::PickerState;
-use crate::server_bridge::{spawn_server_bridge, ServerBridgeHandle, ServerStatus};
-use crate::sidebar::{render_rail, render_sidebar, RailTab};
+use crate::server_bridge::{ServerBridgeHandle, ServerStatus, spawn_server_bridge};
+use crate::sidebar::{RailTab, render_rail, render_sidebar};
 use crate::theme::{AccentColor, Radii, Spacing, Theme, Typography};
 use crate::timeline::render_timeline_item;
 use crate::titlebar::CustomTitlebar;
@@ -44,7 +43,7 @@ impl AppView {
         // Spawn async listener for server status updates
         cx.spawn(async move |this, cx| {
             while let Ok(status) = status_rx.recv().await {
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     let _ = this.update(cx, |this: &mut AppView, cx| {
                         this.server_status = status;
                         cx.notify();
@@ -57,7 +56,7 @@ impl AppView {
         // Spawn async listener for live thread events from server
         cx.spawn(async move |this, cx| {
             while let Ok(envelope) = event_rx.recv().await {
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     let _ = this.update(cx, |this: &mut AppView, cx| {
                         this.handle_event_envelope(envelope);
                         cx.notify();
@@ -82,16 +81,16 @@ impl AppView {
 
     /// Ingests incoming EventEnvelope into the corresponding client-side projection.
     pub fn handle_event_envelope(&mut self, envelope: EventEnvelope) {
-        if let Some(thread_id) = &envelope.thread_id {
-            if let Some(proj) = self.thread_projections.get_mut(thread_id) {
-                let event = ThreadEvent {
-                    thread_id: thread_id.clone(),
-                    seq: envelope.seq,
-                    at_ms: envelope.at_ms,
-                    kind: envelope.kind,
-                };
-                proj.apply_event(&event);
-            }
+        if let Some(thread_id) = &envelope.thread_id
+            && let Some(proj) = self.thread_projections.get_mut(thread_id)
+        {
+            let event = ThreadEvent {
+                thread_id: thread_id.clone(),
+                seq: envelope.seq,
+                at_ms: envelope.at_ms,
+                kind: envelope.kind,
+            };
+            proj.apply_event(&event);
         }
     }
 
@@ -151,17 +150,16 @@ impl AppView {
         if let Some(bridge) = &self.bridge {
             let rx = bridge.send_request("thread.create", serde_json::to_value(&params).ok());
             cx.spawn(async move |this, cx| {
-                if let Ok(Ok(resp)) = rx.await {
-                    if let Some(val) = resp.result {
-                        if let Ok(thread) = serde_json::from_value::<Thread>(val) {
-                            let _ = cx.update(|cx| {
-                                let _ = this.update(cx, |this: &mut AppView, cx| {
-                                    this.add_thread(thread);
-                                    cx.notify();
-                                });
-                            });
-                        }
-                    }
+                if let Ok(Ok(resp)) = rx.await
+                    && let Some(val) = resp.result
+                    && let Ok(thread) = serde_json::from_value::<Thread>(val)
+                {
+                    cx.update(|cx| {
+                        let _ = this.update(cx, |this: &mut AppView, cx| {
+                            this.add_thread(thread);
+                            cx.notify();
+                        });
+                    });
                 }
             })
             .detach();
@@ -214,8 +212,10 @@ impl AppView {
         };
 
         if let Some(bridge) = &self.bridge {
-            let rx =
-                bridge.send_request("thread.respond_approval", serde_json::to_value(&params).ok());
+            let rx = bridge.send_request(
+                "thread.respond_approval",
+                serde_json::to_value(&params).ok(),
+            );
             drop(rx);
         }
     }
@@ -362,7 +362,10 @@ impl AppView {
                                             div()
                                                 .text_size(Typography::META_SIZE)
                                                 .text_color(theme.accent.color())
-                                                .child(format!("Provider: {}", proj.thread.provider_instance_id.as_str())),
+                                                .child(format!(
+                                                    "Provider: {}",
+                                                    proj.thread.provider_instance_id.as_str()
+                                                )),
                                         )
                                         .child(
                                             div()
@@ -390,9 +393,7 @@ impl AppView {
                                     this.cancel_turn(tid.clone(), cx);
                                 }))
                         } else {
-                            Button::new("btn-ready")
-                                .ghost()
-                                .label("● Ready")
+                            Button::new("btn-ready").ghost().label("● Ready")
                         }),
                 )
                 // Timeline messages area
@@ -486,7 +487,9 @@ impl AppView {
                 format!("Server v{server_version} (PID {pid}) · {pipe_path}")
             }
             ServerStatus::Connecting => "Connecting to PandaMUX Server...".to_string(),
-            ServerStatus::Disconnected => "Server Disconnected (Reconnecting with sinceSeq...)".to_string(),
+            ServerStatus::Disconnected => {
+                "Server Disconnected (Reconnecting with sinceSeq...)".to_string()
+            }
             ServerStatus::Failed(e) => format!("Server Error: {e}"),
         };
 

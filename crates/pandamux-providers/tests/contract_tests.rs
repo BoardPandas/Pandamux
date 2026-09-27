@@ -1,22 +1,17 @@
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
-use pandamux_core::{
-    ids::ProviderInstanceId,
-    provider_config::ProviderKind,
-};
+use pandamux_core::{ids::ProviderInstanceId, provider_config::ProviderKind};
 use pandamux_providers::{
-    apply_profile_environment, build_claude_launch_args,
-    claude::{
-        parse_stream_json_lines, ClaudeAuthStatus, ControlResponse,
-    },
+    ENV_CLAUDE_CONFIG_DIR, ENV_CODEX_HOME, ENV_GEMINI_HOME, apply_profile_environment,
+    build_claude_launch_args,
+    claude::{ClaudeAuthStatus, ControlResponse, parse_stream_json_lines},
     codex::{
+        CodexApprovalPolicy, CodexNotificationEvent, CodexSandboxPolicy, JsonRpcResponse,
         build_approval_response, build_thread_start_request, build_turn_start_request,
-        parse_codex_notification, parse_rate_limits_response, CodexApprovalPolicy,
-        CodexNotificationEvent, CodexSandboxPolicy, JsonRpcResponse,
+        parse_codex_notification, parse_rate_limits_response,
     },
     resolve_command_shim, resolve_profile_dir,
-    ENV_CLAUDE_CONFIG_DIR, ENV_CODEX_HOME, ENV_GEMINI_HOME,
 };
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 const CLAUDE_AUTH_JSON: &str =
     include_str!("../../../spikes/phase0-drivers/fixtures/claude/auth_status_auth.json");
@@ -57,7 +52,10 @@ fn test_claude_stream_json_and_subagents() {
     assert_eq!(parsed.control_requests.len(), 1);
     let perm = &parsed.control_requests[0];
     assert_eq!(perm.tool_name, "Bash");
-    assert_eq!(perm.command.as_deref(), Some("curl -I https://api.anthropic.com"));
+    assert_eq!(
+        perm.command.as_deref(),
+        Some("curl -I https://api.anthropic.com")
+    );
 
     // Allow response
     let allow = ControlResponse::allow(&perm.request_id);
@@ -144,20 +142,22 @@ fn test_codex_lifecycle_and_ratelimits() {
 
     for line in CODEX_LIFECYCLE_JSONL.lines() {
         if line.contains("\"turn/approvalRequest\"") {
-            if let Ok(CodexNotificationEvent::ApprovalRequest { approval_id, command, .. }) =
-                parse_codex_notification(line)
+            if let Ok(CodexNotificationEvent::ApprovalRequest {
+                approval_id,
+                command,
+                ..
+            }) = parse_codex_notification(line)
             {
                 approval_seen = true;
                 let appr_resp = build_approval_response(20, &approval_id, true);
                 assert_eq!(appr_resp.method, "turn/approvalResponse");
                 assert_eq!(command, "cargo check --workspace");
             }
-        } else if line.contains("\"turn/completed\"") {
-            if let Ok(CodexNotificationEvent::TurnCompleted { total_tokens }) =
+        } else if line.contains("\"turn/completed\"")
+            && let Ok(CodexNotificationEvent::TurnCompleted { total_tokens }) =
                 parse_codex_notification(line)
-            {
-                turn_tokens = total_tokens;
-            }
+        {
+            turn_tokens = total_tokens;
         }
     }
 
@@ -200,11 +200,21 @@ fn test_multi_instance_profile_isolation() {
 
     let codex_dir = resolve_profile_dir(base, ProviderKind::Codex, &instance_1);
     let mut codex_cmd = tokio::process::Command::new("echo");
-    apply_profile_environment(&mut codex_cmd, ProviderKind::Codex, &codex_dir, &BTreeMap::new());
+    apply_profile_environment(
+        &mut codex_cmd,
+        ProviderKind::Codex,
+        &codex_dir,
+        &BTreeMap::new(),
+    );
 
     let gemini_dir = resolve_profile_dir(base, ProviderKind::Antigravity, &instance_1);
     let mut gemini_cmd = tokio::process::Command::new("echo");
-    apply_profile_environment(&mut gemini_cmd, ProviderKind::Antigravity, &gemini_dir, &BTreeMap::new());
+    apply_profile_environment(
+        &mut gemini_cmd,
+        ProviderKind::Antigravity,
+        &gemini_dir,
+        &BTreeMap::new(),
+    );
 
     assert_eq!(ENV_CLAUDE_CONFIG_DIR, "CLAUDE_CONFIG_DIR");
     assert_eq!(ENV_CODEX_HOME, "CODEX_HOME");
@@ -253,11 +263,20 @@ fn test_antigravity_initialize_contract() {
 #[test]
 fn test_antigravity_session_new_and_client_capabilities() {
     use pandamux_core::thread::AccessMode;
-    use pandamux_providers::acp::{build_session_new_request, map_access_mode_to_acp, AcpMode};
+    use pandamux_providers::acp::{AcpMode, build_session_new_request, map_access_mode_to_acp};
 
-    assert_eq!(map_access_mode_to_acp(AccessMode::FullAccess), AcpMode::Yolo);
-    assert_eq!(map_access_mode_to_acp(AccessMode::AutoEdit), AcpMode::AutoEdit);
-    assert_eq!(map_access_mode_to_acp(AccessMode::ReadOnly), AcpMode::Default);
+    assert_eq!(
+        map_access_mode_to_acp(AccessMode::FullAccess),
+        AcpMode::Yolo
+    );
+    assert_eq!(
+        map_access_mode_to_acp(AccessMode::AutoEdit),
+        AcpMode::AutoEdit
+    );
+    assert_eq!(
+        map_access_mode_to_acp(AccessMode::ReadOnly),
+        AcpMode::Default
+    );
 
     let session_req = build_session_new_request(101, AcpMode::Yolo);
     assert_eq!(session_req["method"], "session/new");
@@ -278,7 +297,9 @@ fn test_antigravity_oauth_flow_contract() {
     let oauth_fixture: serde_json::Value =
         serde_json::from_str(AGY_OAUTH_JSON).expect("parse oauth fixture");
 
-    let stdout_marker = oauth_fixture["stdoutMarker"].as_str().expect("stdoutMarker");
+    let stdout_marker = oauth_fixture["stdoutMarker"]
+        .as_str()
+        .expect("stdoutMarker");
     let extracted_url =
         extract_auth_url_from_output(stdout_marker).expect("extract auth url from marker");
 
@@ -290,8 +311,8 @@ fn test_antigravity_oauth_flow_contract() {
     let callback_query = oauth_fixture["simulatedCallbackQuery"]
         .as_str()
         .expect("simulatedCallbackQuery");
-    let code = validate_callback_query(callback_query, "sec_state_9876")
-        .expect("validate callback query");
+    let code =
+        validate_callback_query(callback_query, "sec_state_9876").expect("validate callback query");
     assert_eq!(code, "4/0AQ_TEST_TOKEN");
 
     // Mismatched state must be rejected
@@ -300,27 +321,32 @@ fn test_antigravity_oauth_flow_contract() {
 
 #[test]
 fn test_antigravity_managed_bundle_manifest_validation() {
-    use pandamux_providers::antigravity::{verify_bundle_manifest, ManagedBundleManifest};
+    use pandamux_providers::antigravity::{ManagedBundleManifest, verify_bundle_manifest};
 
     let manifest: ManagedBundleManifest =
         serde_json::from_str(AGY_MANIFEST_JSON).expect("parse manifest fixture");
     assert_eq!(manifest.version, "1.1.1");
     assert_eq!(manifest.entries.len(), 2);
     assert!(manifest.entries.contains(&"agy_acp_server.exe".to_string()));
-    assert!(manifest.entries.contains(&"localharness_external.exe".to_string()));
+    assert!(
+        manifest
+            .entries
+            .contains(&"localharness_external.exe".to_string())
+    );
 
     // Path traversal in manifest must be rejected
     let mut bad_manifest = manifest.clone();
-    bad_manifest.entries = vec!["../evil.exe".to_string(), "localharness_external.exe".to_string()];
+    bad_manifest.entries = vec![
+        "../evil.exe".to_string(),
+        "localharness_external.exe".to_string(),
+    ];
     let dummy_bytes = vec![0u8; bad_manifest.size as usize];
     assert!(verify_bundle_manifest(&bad_manifest, &dummy_bytes).is_err());
 }
 
 #[test]
 fn test_antigravity_spawn_environment_and_credential_sanitization() {
-    use pandamux_providers::antigravity::{
-        build_antigravity_env, validate_sanitized_environment,
-    };
+    use pandamux_providers::antigravity::{build_antigravity_env, validate_sanitized_environment};
     use std::collections::HashMap;
 
     let base = Path::new("/var/pandamux");
@@ -336,7 +362,10 @@ fn test_antigravity_spawn_environment_and_credential_sanitization() {
         PathBuf::from("/var/pandamux/scratch/antigravity/inst-test")
     );
     assert_eq!(
-        env_config.vars.get("AGY_ACP_FORCE_FILE_STORAGE").map(|s| s.as_str()),
+        env_config
+            .vars
+            .get("AGY_ACP_FORCE_FILE_STORAGE")
+            .map(|s| s.as_str()),
         Some("1")
     );
     assert_eq!(
@@ -362,16 +391,19 @@ fn test_antigravity_spawn_environment_and_credential_sanitization() {
 
 #[test]
 fn test_antigravity_seven_reliability_rules() {
-    use pandamux_providers::acp::{is_interaction_prompt, AcpPermissionRequest};
+    use pandamux_providers::acp::{AcpPermissionRequest, is_interaction_prompt};
     use pandamux_providers::antigravity::{
-        probe_antigravity_health_offline, sweep_orphan_temp_dirs, AntigravityConcurrencyLimiter,
+        AntigravityConcurrencyLimiter, probe_antigravity_health_offline, sweep_orphan_temp_dirs,
     };
 
     // Rule 1: Zero-spawn offline health check
     let non_existent = Path::new("/non/existent/agy_acp_server");
     let gemini_home = Path::new("/var/pandamux/profiles/antigravity/inst-1");
     let health = probe_antigravity_health_offline(non_existent, gemini_home, None);
-    assert!(matches!(health, pandamux_providers::ProviderHealth::Unavailable { .. }));
+    assert!(matches!(
+        health,
+        pandamux_providers::ProviderHealth::Unavailable { .. }
+    ));
 
     // Rule 2: Temp directory sweeper
     let scratch = std::env::temp_dir().join("pandamux_test_scratch");
@@ -394,7 +426,10 @@ fn test_antigravity_seven_reliability_rules() {
     let limiter = AntigravityConcurrencyLimiter::new(2);
     let guard1 = limiter.try_acquire().expect("acquire 1");
     let guard2 = limiter.try_acquire().expect("acquire 2");
-    assert!(limiter.try_acquire().is_err(), "Third concurrent acquire must fail");
+    assert!(
+        limiter.try_acquire().is_err(),
+        "Third concurrent acquire must fail"
+    );
     drop(guard1);
     let guard3 = limiter.try_acquire().expect("acquire 3 after drop");
     drop(guard2);
@@ -442,5 +477,3 @@ fn test_antigravity_stream_parsing() {
     }
     assert!(event_count >= 1);
 }
-
-

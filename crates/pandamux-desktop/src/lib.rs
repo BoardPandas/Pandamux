@@ -8,15 +8,13 @@ pub mod timeline;
 pub mod titlebar;
 
 pub use app_view::AppView;
-pub use composer::{render_composer, ComposerState};
+pub use composer::{ComposerState, render_composer};
 pub use picker::{ModelChoice, PickerState, ProviderChoice};
 pub use server_bridge::{
-    discover_server_runtime, spawn_server_bridge, BridgeCommand, RuntimeInfo, ServerBridgeHandle,
-    ServerStatus,
+    BridgeCommand, RuntimeInfo, ServerBridgeHandle, ServerStatus, discover_server_runtime,
+    spawn_server_bridge,
 };
-pub use sidebar::{
-    render_rail, render_sidebar, AgentRosterItem, RailTab, DEFAULT_AGENTS,
-};
+pub use sidebar::{AgentRosterItem, DEFAULT_AGENTS, RailTab, render_rail, render_sidebar};
 pub use theme::{AccentColor, ChromePalette, Radii, Spacing, Theme, ThemeMode, Typography};
 pub use timeline::render_timeline_item;
 pub use titlebar::CustomTitlebar;
@@ -216,7 +214,10 @@ mod tests {
         // Direct selection
         picker.select_provider("claude");
         picker.select_model("claude-3-5-haiku");
-        assert_eq!(picker.provider_instance_id(), ProviderInstanceId::from("claude"));
+        assert_eq!(
+            picker.provider_instance_id(),
+            ProviderInstanceId::from("claude")
+        );
         assert_eq!(picker.model(), "claude-3-5-haiku");
 
         // Effort cycling: high -> max -> None -> low -> medium -> high

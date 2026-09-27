@@ -1,6 +1,6 @@
-use russh::ChannelMsg;
 use crate::config::{SshConfig, SshErrorCategory, SshFailure};
 use crate::pool::SshConnectionPool;
+use russh::ChannelMsg;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecOutput {

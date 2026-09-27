@@ -1,7 +1,7 @@
 use gpui_kit::base::StyledExt as _;
-use gpui_kit::gpui::*;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::TitleBar as GpuiTitleBar;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::gpui::*;
 
 use crate::server_bridge::ServerStatus;
 use crate::theme::{Radii, Spacing, Theme, Typography};
@@ -80,13 +80,7 @@ impl CustomTitlebar {
                                 .py_0p5()
                                 .rounded(Radii::CHIP)
                                 .bg(rgba(0xffffff0d))
-                                .child(
-                                    div()
-                                        .w_2()
-                                        .h_2()
-                                        .rounded_full()
-                                        .bg(status_color),
-                                )
+                                .child(div().w_2().h_2().rounded_full().bg(status_color))
                                 .child(
                                     div()
                                         .text_size(Typography::META_SIZE)
@@ -121,13 +115,7 @@ impl CustomTitlebar {
                                 .py_0p5()
                                 .rounded(Radii::CHIP)
                                 .bg(theme.chrome.bgc_knockout)
-                                .child(
-                                    div()
-                                        .w_2()
-                                        .h_2()
-                                        .rounded_full()
-                                        .bg(status_color),
-                                )
+                                .child(div().w_2().h_2().rounded_full().bg(status_color))
                                 .child(
                                     div()
                                         .text_size(Typography::META_SIZE)

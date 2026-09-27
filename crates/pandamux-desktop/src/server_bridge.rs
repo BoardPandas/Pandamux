@@ -1,15 +1,15 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::Duration;
 
 use pandamux_protocol::{
-    EventEnvelope, HelloParams, RpcId, RpcRequest, RpcResponse, SubscribeParams, PROTOCOL_VERSION,
+    EventEnvelope, HelloParams, PROTOCOL_VERSION, RpcId, RpcRequest, RpcResponse, SubscribeParams,
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{Mutex, mpsc, oneshot};
 
 /// Represents server connection status observed by the GPUI desktop.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,6 +36,8 @@ pub struct RuntimeInfo {
     pub token: String,
     pub started_at_ms: u64,
 }
+
+pub type PendingRequests = Arc<Mutex<HashMap<i64, oneshot::Sender<Result<RpcResponse, String>>>>>;
 
 /// Commands sent from the GPUI application to the background Tokio bridge.
 pub enum BridgeCommand {
@@ -128,7 +130,7 @@ pub fn spawn_server_bridge(
         };
 
         rt.block_on(async move {
-            let pending_requests: Arc<Mutex<HashMap<i64, oneshot::Sender<Result<RpcResponse, String>>>>> =
+            let pending_requests: PendingRequests =
                 Arc::new(Mutex::new(HashMap::new()));
             let next_request_id = Arc::new(AtomicI64::new(1));
             let mut retry_backoff_ms = 250;
@@ -283,14 +285,13 @@ pub fn spawn_server_bridge(
                                     }
 
                                     // Parse RpcResponse
-                                    if let Ok(response) = serde_json::from_str::<RpcResponse>(&line) {
-                                        if let Some(RpcId::Number(id)) = response.id {
+                                    if let Ok(response) = serde_json::from_str::<RpcResponse>(&line)
+                                        && let Some(RpcId::Number(id)) = response.id {
                                             let mut pending = pending_requests.lock().await;
                                             if let Some(tx) = pending.remove(&id) {
                                                 let _ = tx.send(Ok(response));
                                             }
                                         }
-                                    }
                                 }
                                 Ok(None) => {
                                     let _ = status_tx.send(ServerStatus::Disconnected).await;
@@ -403,7 +404,11 @@ fn get_server_runtime_path() -> Option<PathBuf> {
     #[cfg(windows)]
     {
         let local_app_data = std::env::var("LOCALAPPDATA").ok()?;
-        Some(PathBuf::from(local_app_data).join("pandamux").join("server.json"))
+        Some(
+            PathBuf::from(local_app_data)
+                .join("pandamux")
+                .join("server.json"),
+        )
     }
 
     #[cfg(not(windows))]

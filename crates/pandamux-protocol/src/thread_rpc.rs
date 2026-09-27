@@ -1,8 +1,8 @@
-use serde::{Deserialize, Serialize};
 use pandamux_core::{
     AccessMode, AgentId, ApprovalDecision, EnvironmentId, ProjectId, ProviderInstanceId, Thread,
     ThreadId, ThreadStatus, Turn, TurnId, WorktreeRef,
 };
+use serde::{Deserialize, Serialize};
 
 /// Parameters for `thread.create`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,4 +114,3 @@ pub struct ThreadResumeResult {
     pub thread_id: ThreadId,
     pub resume_token: Option<String>,
 }
-

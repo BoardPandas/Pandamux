@@ -1,6 +1,6 @@
 use pandamux_cli::{
-    cmd_identify, cmd_mcp, cmd_notify, cmd_ping, cmd_thread_list, cmd_thread_send,
-    parse_cli_args, print_help, CliAction,
+    CliAction, cmd_hello, cmd_identify, cmd_mcp, cmd_notify, cmd_ping, cmd_thread_list,
+    cmd_thread_send, parse_cli_args, print_help,
 };
 
 #[tokio::main]
@@ -17,6 +17,8 @@ async fn main() {
 
     let result = match action {
         CliAction::Ping { pipe, json } => cmd_ping(pipe.as_deref(), json).await,
+
+        CliAction::Hello { pipe, json } => cmd_hello(pipe.as_deref(), json).await,
 
         CliAction::Identify { pipe, json } => cmd_identify(pipe.as_deref(), json).await,
 

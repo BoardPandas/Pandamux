@@ -1,6 +1,3 @@
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 use pandamux_core::{
     event::{ApprovalDecision, ApprovalKind, TurnOutcome},
     provider_config::{ProviderCapabilities, ProviderInstanceConfig, ProviderKind},
@@ -8,6 +5,9 @@ use pandamux_core::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
@@ -18,7 +18,7 @@ use crate::models::{
 };
 use crate::profiles::{apply_profile_environment, ensure_profile_dir, resolve_profile_dir};
 use crate::shim_resolver::resolve_command_shim;
-use crate::supervision::{create_supervised_command, SupervisedChild};
+use crate::supervision::{SupervisedChild, create_supervised_command};
 use crate::traits::{BoxFuture, ProviderDriver, ProviderSession};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -205,10 +205,7 @@ pub fn parse_codex_notification(line: &str) -> Result<CodexNotificationEvent, Pr
                     .and_then(|v| v.as_str())
                     .unwrap_or_default()
                     .to_string();
-                let exit_code = params
-                    .get("exitCode")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0) as i32;
+                let exit_code = params.get("exitCode").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
 
                 Ok(CodexNotificationEvent::CommandOutput { stdout, exit_code })
             }
@@ -232,10 +229,13 @@ pub fn parse_codex_notification(line: &str) -> Result<CodexNotificationEvent, Pr
 pub fn parse_rate_limits_response(
     resp: &JsonRpcResponse,
 ) -> Result<Vec<RateLimitEntry>, ProviderError> {
-    let result = resp.result.as_ref().ok_or_else(|| ProviderError::ProtocolError {
-        provider: "codex".into(),
-        message: "No result object in rate limits response".into(),
-    })?;
+    let result = resp
+        .result
+        .as_ref()
+        .ok_or_else(|| ProviderError::ProtocolError {
+            provider: "codex".into(),
+            message: "No result object in rate limits response".into(),
+        })?;
 
     let limits_arr = result
         .get("rateLimits")
@@ -338,7 +338,8 @@ impl ProviderDriver for CodexDriver {
         Box::pin(async move {
             let binary = self.resolve_codex_binary(cfg);
             if let Some(_bin) = binary {
-                let profile_dir = resolve_profile_dir(&self.base_data_dir, ProviderKind::Codex, &cfg.id);
+                let profile_dir =
+                    resolve_profile_dir(&self.base_data_dir, ProviderKind::Codex, &cfg.id);
                 // Check if profile directory contains auth credentials
                 let auth_file = profile_dir.join("auth.json");
                 let auth = if auth_file.exists() {
@@ -379,7 +380,10 @@ impl ProviderDriver for CodexDriver {
         Box::pin(async move { Ok(self.metadata().supported_models) })
     }
 
-    fn usage_limits<'a>(&'a self, _cfg: &'a ProviderInstanceConfig) -> BoxFuture<'a, Option<UsageLimits>> {
+    fn usage_limits<'a>(
+        &'a self,
+        _cfg: &'a ProviderInstanceConfig,
+    ) -> BoxFuture<'a, Option<UsageLimits>> {
         Box::pin(async move { None })
     }
 
@@ -389,28 +393,38 @@ impl ProviderDriver for CodexDriver {
         spec: SessionSpec,
     ) -> BoxFuture<'a, Result<Box<dyn ProviderSession>, ProviderError>> {
         Box::pin(async move {
-            let binary = self.resolve_codex_binary(cfg).ok_or_else(|| {
-                ProviderError::ProcessFailed {
-                    program: "codex".to_string(),
-                    message: "Executable not found in PATH".to_string(),
-                }
-            })?;
+            let binary =
+                self.resolve_codex_binary(cfg)
+                    .ok_or_else(|| ProviderError::ProcessFailed {
+                        program: "codex".to_string(),
+                        message: "Executable not found in PATH".to_string(),
+                    })?;
 
-            let profile_dir = resolve_profile_dir(&self.base_data_dir, ProviderKind::Codex, &cfg.id);
+            let profile_dir =
+                resolve_profile_dir(&self.base_data_dir, ProviderKind::Codex, &cfg.id);
             ensure_profile_dir(&profile_dir)?;
 
             let mut cmd = create_supervised_command(&binary);
             cmd.arg("app-server");
             cmd.current_dir(&spec.cwd);
-            apply_profile_environment(&mut cmd, ProviderKind::Codex, &profile_dir, &cfg.env_overrides);
+            apply_profile_environment(
+                &mut cmd,
+                ProviderKind::Codex,
+                &profile_dir,
+                &cfg.env_overrides,
+            );
 
             let mut child = SupervisedChild::spawn(cmd)?;
-            let mut stdin = child.take_stdin().ok_or_else(|| ProviderError::SupervisionError {
-                message: "Failed to open child stdin".to_string(),
-            })?;
-            let stdout = child.take_stdout().ok_or_else(|| ProviderError::SupervisionError {
-                message: "Failed to open child stdout".to_string(),
-            })?;
+            let mut stdin = child
+                .take_stdin()
+                .ok_or_else(|| ProviderError::SupervisionError {
+                    message: "Failed to open child stdin".to_string(),
+                })?;
+            let stdout = child
+                .take_stdout()
+                .ok_or_else(|| ProviderError::SupervisionError {
+                    message: "Failed to open child stdout".to_string(),
+                })?;
 
             let sandbox = match spec.access {
                 AccessMode::ReadOnly => CodexSandboxPolicy::ReadOnly,
@@ -479,10 +493,10 @@ impl ProviderDriver for CodexDriver {
                             _ => None,
                         };
 
-                        if let Some(pe) = provider_event {
-                            if tx.send(pe).await.is_err() {
-                                break;
-                            }
+                        if let Some(pe) = provider_event
+                            && tx.send(pe).await.is_err()
+                        {
+                            break;
                         }
                     }
                 }
@@ -522,7 +536,9 @@ impl ProviderSession for CodexSession {
     }
 
     fn events(&mut self) -> &mut mpsc::Receiver<ProviderEvent> {
-        self.events_rx.as_mut().expect("events receiver already taken")
+        self.events_rx
+            .as_mut()
+            .expect("events receiver already taken")
     }
 
     fn take_event_receiver(&mut self) -> Option<mpsc::Receiver<ProviderEvent>> {

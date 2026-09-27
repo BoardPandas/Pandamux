@@ -1,5 +1,5 @@
-use std::fmt;
 use pandamux_protocol::RpcRequest;
+use std::fmt;
 use tokio::sync::mpsc;
 
 #[derive(Debug)]

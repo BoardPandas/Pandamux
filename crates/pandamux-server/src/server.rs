@@ -1,11 +1,11 @@
+use crate::router::Router;
+use crate::runtime::RuntimeInfo;
+use crate::store::Store;
+use pandamux_protocol::{RpcRequest, ServerRole};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::broadcast;
-use pandamux_protocol::{RpcRequest, ServerRole};
-use crate::router::Router;
-use crate::runtime::RuntimeInfo;
-use crate::store::Store;
 
 pub struct ServerConfig {
     pub role: ServerRole,
@@ -110,4 +110,3 @@ impl Server {
         Some(serde_json::to_string(&res).unwrap() + "\n")
     }
 }
-

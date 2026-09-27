@@ -12,6 +12,10 @@ pub enum CliAction {
         pipe: Option<String>,
         json: bool,
     },
+    Hello {
+        pipe: Option<String>,
+        json: bool,
+    },
     Identify {
         pipe: Option<String>,
         json: bool,
@@ -85,6 +89,8 @@ pub fn parse_cli_args(args: &[String]) -> Result<CliAction, String> {
     match positional[0].as_str() {
         "ping" => Ok(CliAction::Ping { pipe, json }),
 
+        "hello" => Ok(CliAction::Hello { pipe, json }),
+
         "identify" | "id" => Ok(CliAction::Identify { pipe, json }),
 
         "thread" => {
@@ -97,9 +103,9 @@ pub fn parse_cli_args(args: &[String]) -> Result<CliAction, String> {
                     while i < positional.len() {
                         match positional[i].as_str() {
                             "--status" => {
-                                let val = positional
-                                    .get(i + 1)
-                                    .ok_or_else(|| "--status requires a status value".to_string())?;
+                                let val = positional.get(i + 1).ok_or_else(|| {
+                                    "--status requires a status value".to_string()
+                                })?;
                                 status = Some(parse_status(val)?);
                                 i += 2;
                             }
@@ -124,7 +130,9 @@ pub fn parse_cli_args(args: &[String]) -> Result<CliAction, String> {
                 "send" => {
                     let thread_id = positional
                         .get(2)
-                        .ok_or_else(|| "Usage: pandamux thread send <thread_id> <prompt>".to_string())?
+                        .ok_or_else(|| {
+                            "Usage: pandamux thread send <thread_id> <prompt>".to_string()
+                        })?
                         .clone();
 
                     let mut text_parts = Vec::new();
@@ -206,7 +214,9 @@ pub fn parse_cli_args(args: &[String]) -> Result<CliAction, String> {
 
         "mcp" => Ok(CliAction::Mcp { pipe }),
 
-        unknown => Err(format!("Unknown command: '{unknown}'. Run 'pandamux --help' for usage.")),
+        unknown => Err(format!(
+            "Unknown command: '{unknown}'. Run 'pandamux --help' for usage."
+        )),
     }
 }
 
@@ -214,9 +224,7 @@ fn parse_status(val: &str) -> Result<ThreadStatus, String> {
     match val.to_lowercase().as_str() {
         "idle" => Ok(ThreadStatus::Idle),
         "working" => Ok(ThreadStatus::Working),
-        "awaiting_approval" | "awaitingapproval" | "approval" => {
-            Ok(ThreadStatus::AwaitingApproval)
-        }
+        "awaiting_approval" | "awaitingapproval" | "approval" => Ok(ThreadStatus::AwaitingApproval),
         "errored" | "error" => Ok(ThreadStatus::Errored),
         "paused" => Ok(ThreadStatus::Paused),
         "archived" => Ok(ThreadStatus::Archived),
@@ -225,14 +233,20 @@ fn parse_status(val: &str) -> Result<ThreadStatus, String> {
 }
 
 pub fn print_help() {
-    println!("PandaMUX CLI (v{}) - Native Terminal Multiplexer & AI Agent CLI", env!("CARGO_PKG_VERSION"));
+    println!(
+        "PandaMUX CLI (v{}) - Native Terminal Multiplexer & AI Agent CLI",
+        env!("CARGO_PKG_VERSION")
+    );
     println!();
     println!("USAGE:");
     println!("  pandamux <COMMAND> [OPTIONS]");
     println!();
     println!("COMMANDS:");
     println!("  ping                       Check connectivity and latency to PandaMUX server");
-    println!("  identify                   Inspect node identification, platform, and capabilities");
+    println!("  hello                      Perform initial system handshake with PandaMUX server");
+    println!(
+        "  identify                   Inspect node identification, platform, and capabilities"
+    );
     println!("  thread list                List active threads and turns");
     println!("  thread send <ID> <PROMPT>  Send a prompt to a thread with streaming output");
     println!("  notify <TITLE>             Send a desktop notification to PandaMUX clients");
@@ -365,5 +379,18 @@ mod tests {
         let args = vec!["mcp".to_string()];
         let action = parse_cli_args(&args).expect("parse mcp");
         assert_eq!(action, CliAction::Mcp { pipe: None });
+    }
+
+    #[test]
+    fn test_parse_hello() {
+        let args = vec!["hello".to_string(), "--json".to_string()];
+        let action = parse_cli_args(&args).expect("parse hello");
+        assert_eq!(
+            action,
+            CliAction::Hello {
+                pipe: None,
+                json: true
+            }
+        );
     }
 }

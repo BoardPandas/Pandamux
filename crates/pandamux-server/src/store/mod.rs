@@ -1,12 +1,12 @@
 pub mod migrations;
 
-use std::path::Path;
-use std::sync::{Arc, Mutex};
-use rusqlite::{Connection, OptionalExtension, params};
 use pandamux_core::{
     ScheduleRecord, Thread, ThreadEvent, ThreadEventKind, ThreadId, Turn, TurnId, TurnStatus,
     UserSettings,
 };
+use rusqlite::{Connection, OptionalExtension, params};
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug)]
 pub enum StoreError {
@@ -66,7 +66,7 @@ impl Store {
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
-             PRAGMA foreign_keys = ON;"
+             PRAGMA foreign_keys = ON;",
         )?;
         migrations::apply_migrations(conn)?;
         Ok(())
@@ -84,11 +84,18 @@ impl Store {
     pub fn save_thread(&self, thread: &Thread) -> Result<(), StoreError> {
         let conn = self.conn.lock().unwrap();
         let project_id = thread.project_id.as_ref().map(|id| id.as_str().to_string());
-        let parent_id = thread.parent_thread_id.as_ref().map(|id| id.as_str().to_string());
+        let parent_id = thread
+            .parent_thread_id
+            .as_ref()
+            .map(|id| id.as_str().to_string());
         let workspace_json = serde_json::to_string(&thread.workspace)?;
         let status_str = serde_json::to_string(&thread.status)?;
         let access_str = serde_json::to_string(&thread.access_mode)?;
-        let agent_json = thread.agent.as_ref().map(serde_json::to_string).transpose()?;
+        let agent_json = thread
+            .agent
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
         let origin_json = serde_json::to_string(&thread.origin)?;
 
         conn.execute(
@@ -175,7 +182,8 @@ impl Store {
             origin_json,
             created,
             updated,
-        )) = row else {
+        )) = row
+        else {
             return Ok(None);
         };
 
@@ -191,7 +199,10 @@ impl Store {
             access_mode: serde_json::from_str(&access_str)?,
             workspace: serde_json::from_str(&ws_json)?,
             status: serde_json::from_str(&status_str)?,
-            agent: agent_json.as_deref().map(serde_json::from_str).transpose()?,
+            agent: agent_json
+                .as_deref()
+                .map(serde_json::from_str)
+                .transpose()?,
             origin: serde_json::from_str(&origin_json)?,
             created_at_ms: created as u64,
             updated_at_ms: updated as u64,
@@ -259,7 +270,10 @@ impl Store {
                 access_mode: serde_json::from_str(&access_str)?,
                 workspace: serde_json::from_str(&ws_json)?,
                 status: serde_json::from_str(&status_str)?,
-                agent: agent_json.as_deref().map(serde_json::from_str).transpose()?,
+                agent: agent_json
+                    .as_deref()
+                    .map(serde_json::from_str)
+                    .transpose()?,
                 origin: serde_json::from_str(&origin_json)?,
                 created_at_ms: created as u64,
                 updated_at_ms: updated as u64,
@@ -343,7 +357,8 @@ impl Store {
             usage_json,
             cp_before,
             cp_after,
-        )) = row else {
+        )) = row
+        else {
             return Ok(None);
         };
 
@@ -355,7 +370,10 @@ impl Store {
             status: serde_json::from_str(&status_str)?,
             started_at_ms: started_ms as u64,
             ended_at_ms: ended_ms.map(|t| t as u64),
-            usage: usage_json.as_deref().map(serde_json::from_str).transpose()?,
+            usage: usage_json
+                .as_deref()
+                .map(serde_json::from_str)
+                .transpose()?,
             checkpoint_before: cp_before,
             checkpoint_after: cp_after,
         }))
@@ -407,7 +425,10 @@ impl Store {
                 status: serde_json::from_str(&status_str)?,
                 started_at_ms: started_ms as u64,
                 ended_at_ms: ended_ms.map(|t| t as u64),
-                usage: usage_json.as_deref().map(serde_json::from_str).transpose()?,
+                usage: usage_json
+                    .as_deref()
+                    .map(serde_json::from_str)
+                    .transpose()?,
                 checkpoint_before: cp_before,
                 checkpoint_after: cp_after,
             });
@@ -453,7 +474,8 @@ impl Store {
 
     pub fn get_resume_token(&self, thread_id: &ThreadId) -> Result<Option<String>, StoreError> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT resume_token FROM thread_resumes WHERE thread_id = ?1")?;
+        let mut stmt =
+            conn.prepare("SELECT resume_token FROM thread_resumes WHERE thread_id = ?1")?;
         let token: Option<String> = stmt
             .query_row(params![thread_id.as_str()], |row| row.get(0))
             .optional()?;
@@ -584,10 +606,9 @@ impl Store {
 
     pub fn get_settings(&self) -> Result<Option<UserSettings>, StoreError> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT value_json FROM settings WHERE key = 'user_settings'")?;
-        let json: Option<String> = stmt
-            .query_row([], |row| row.get(0))
-            .optional()?;
+        let mut stmt =
+            conn.prepare("SELECT value_json FROM settings WHERE key = 'user_settings'")?;
+        let json: Option<String> = stmt.query_row([], |row| row.get(0)).optional()?;
 
         match json {
             Some(j) => Ok(Some(serde_json::from_str(&j)?)),
@@ -647,7 +668,9 @@ mod tests {
         let thread = dummy_thread("thread-101");
         store.save_thread(&thread).expect("save thread");
 
-        let retrieved = store.get_thread(&ThreadId::from("thread-101")).expect("get thread");
+        let retrieved = store
+            .get_thread(&ThreadId::from("thread-101"))
+            .expect("get thread");
         assert!(retrieved.is_some());
         assert_eq!(retrieved.unwrap().title, "Store Test");
 
@@ -678,13 +701,17 @@ mod tests {
         };
         store.append_event(&event2).expect("append event 2");
 
-        let events = store.get_events(&ThreadId::from("thread-101"), None).expect("get events");
+        let events = store
+            .get_events(&ThreadId::from("thread-101"), None)
+            .expect("get events");
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].seq, 1);
         assert_eq!(events[1].seq, 2);
 
         // Test since_seq
-        let since_1 = store.get_events(&ThreadId::from("thread-101"), Some(1)).expect("events since 1");
+        let since_1 = store
+            .get_events(&ThreadId::from("thread-101"), Some(1))
+            .expect("events since 1");
         assert_eq!(since_1.len(), 1);
         assert_eq!(since_1[0].seq, 2);
 
@@ -725,24 +752,33 @@ mod tests {
         };
         store.save_turn(&turn).expect("save turn");
 
-        let retrieved = store.get_turn(&TurnId::from("turn-101")).expect("get turn").unwrap();
+        let retrieved = store
+            .get_turn(&TurnId::from("turn-101"))
+            .expect("get turn")
+            .unwrap();
         assert_eq!(retrieved.status, TurnStatus::Running);
         assert_eq!(retrieved.checkpoint_before.as_deref(), Some("ref-before"));
 
         // Save resume token
-        store.save_resume_token(&thread_id, "token-xyz-123").expect("save resume token");
-        let token = store.get_resume_token(&thread_id).expect("get resume token");
+        store
+            .save_resume_token(&thread_id, "token-xyz-123")
+            .expect("save resume token");
+        let token = store
+            .get_resume_token(&thread_id)
+            .expect("get resume token");
         assert_eq!(token.as_deref(), Some("token-xyz-123"));
 
         // Reconcile on simulated restart
         let reconciled_count = store.reconcile_active_turns().expect("reconcile turns");
         assert_eq!(reconciled_count, 1);
 
-        let turn_after = store.get_turn(&TurnId::from("turn-101")).expect("get turn").unwrap();
+        let turn_after = store
+            .get_turn(&TurnId::from("turn-101"))
+            .expect("get turn")
+            .unwrap();
         assert_eq!(turn_after.status, TurnStatus::Interrupted);
 
         let thread_after = store.get_thread(&thread_id).expect("get thread").unwrap();
         assert_eq!(thread_after.status, ThreadStatus::Idle);
     }
 }
-

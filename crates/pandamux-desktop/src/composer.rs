@@ -14,7 +14,9 @@ pub struct ComposerState {
 
 impl ComposerState {
     pub fn new() -> Self {
-        Self { text: String::new() }
+        Self {
+            text: String::new(),
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -35,6 +37,7 @@ impl ComposerState {
 }
 
 /// Renders the Composer component with integrated picker chips and action controls.
+#[allow(clippy::too_many_arguments)]
 pub fn render_composer<V: 'static>(
     composer: &ComposerState,
     picker: &PickerState,

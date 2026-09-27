@@ -2,12 +2,12 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use russh::client;
 #[cfg(windows)]
 use russh::keys::agent::AgentIdentity;
 #[cfg(windows)]
 use russh::keys::agent::client::AgentClient;
 use russh::keys::{PrivateKeyWithHashAlg, load_secret_key};
-use russh::client;
 
 use crate::config::{SshAuth, SshConfig, SshErrorCategory, SshFailure};
 
@@ -78,10 +78,10 @@ impl SshConnectionPool {
         let mut count = 0;
         for slot in slots.values() {
             let guard = slot.lock().await;
-            if let Some(h) = guard.as_ref() {
-                if !h.is_closed() {
-                    count += 1;
-                }
+            if let Some(h) = guard.as_ref()
+                && !h.is_closed()
+            {
+                count += 1;
             }
         }
         count
@@ -177,7 +177,9 @@ impl client::Handler for ClientHandler {
     }
 }
 
-pub async fn connect_client(config: &SshConfig) -> Result<client::Handle<ClientHandler>, SshFailure> {
+pub async fn connect_client(
+    config: &SshConfig,
+) -> Result<client::Handle<ClientHandler>, SshFailure> {
     let client_config = client::Config {
         inactivity_timeout: None,
         keepalive_interval: Some(Duration::from_secs(15)),
@@ -333,7 +335,13 @@ mod tests {
 
     #[test]
     fn test_host_key_from_config() {
-        let cfg = SshConfig::new("bastion.internal", "admin", SshAuth::Password { password: "p".to_string() });
+        let cfg = SshConfig::new(
+            "bastion.internal",
+            "admin",
+            SshAuth::Password {
+                password: "p".to_string(),
+            },
+        );
         let key = HostKey::from_config(&cfg);
         assert_eq!(key.host, "bastion.internal");
         assert_eq!(key.port, 22);

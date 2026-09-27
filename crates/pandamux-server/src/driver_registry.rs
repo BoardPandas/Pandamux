@@ -1,11 +1,9 @@
+use pandamux_core::provider_config::ProviderKind;
+use pandamux_providers::traits::ProviderDriver;
+use pandamux_providers::{AntigravityDriver, ClaudeDriver, CodexDriver, MockProviderDriver};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
-use pandamux_core::provider_config::ProviderKind;
-use pandamux_providers::traits::ProviderDriver;
-use pandamux_providers::{
-    AntigravityDriver, ClaudeDriver, CodexDriver, MockProviderDriver,
-};
 
 /// Thread-safe registry mapping provider kinds to their active drivers.
 #[derive(Clone, Default)]
@@ -42,10 +40,15 @@ impl DriverRegistry {
         let codex = Arc::new(CodexDriver::new(PathBuf::from("codex")));
         registry.register(ProviderKind::Codex, codex);
 
-        let antigravity = Arc::new(AntigravityDriver::new(PathBuf::from(".pandamux/antigravity")));
+        let antigravity = Arc::new(AntigravityDriver::new(PathBuf::from(
+            ".pandamux/antigravity",
+        )));
         registry.register(ProviderKind::Antigravity, antigravity);
 
-        let mock = Arc::new(MockProviderDriver::new(ProviderKind::Custom, "Mock Provider"));
+        let mock = Arc::new(MockProviderDriver::new(
+            ProviderKind::Custom,
+            "Mock Provider",
+        ));
         registry.register(ProviderKind::Custom, mock);
 
         registry

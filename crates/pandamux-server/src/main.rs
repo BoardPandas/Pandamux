@@ -1,7 +1,7 @@
-use std::path::PathBuf;
-use std::sync::Arc;
 use pandamux_protocol::ServerRole;
 use pandamux_server::{Server, ServerConfig};
+use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 #[tokio::main]
@@ -68,10 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pipe_path = default_pipe_path();
     server.register_runtime(&pipe_path, &token)?;
 
-    println!(
-        "PandaMUX Server started ({:?}) at {}",
-        role, pipe_path
-    );
+    println!("PandaMUX Server started ({:?}) at {}", role, pipe_path);
 
     let server_clone = server.clone();
     tokio::spawn(async move {
@@ -90,19 +87,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn default_runtime_dir() -> PathBuf {
     if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-        PathBuf::from(local_app_data).join("pandamux").join("run")
+        PathBuf::from(local_app_data).join("pandamux")
     } else if let Ok(home) = std::env::var("HOME") {
-        PathBuf::from(home).join(".pandamux").join("run")
+        PathBuf::from(home).join(".pandamux")
     } else {
-        std::env::temp_dir().join("pandamux").join("run")
+        std::env::temp_dir().join("pandamux")
     }
 }
 
 fn default_pipe_path() -> String {
     #[cfg(windows)]
     {
-        std::env::var("PANDAMUX_PIPE")
-            .unwrap_or_else(|_| r"\\.\pipe\pandamux-hub".to_string())
+        std::env::var("PANDAMUX_PIPE").unwrap_or_else(|_| r"\\.\pipe\pandamux-hub".to_string())
     }
     #[cfg(not(windows))]
     {
@@ -168,10 +164,10 @@ async fn run_ipc_listener(
             let (reader, mut writer) = tokio::io::split(stream);
             let mut lines = BufReader::new(reader).lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                if let Some(res) = server.process_line(&line).await {
-                    if writer.write_all(res.as_bytes()).await.is_err() {
-                        break;
-                    }
+                if let Some(res) = server.process_line(&line).await
+                    && writer.write_all(res.as_bytes()).await.is_err()
+                {
+                    break;
                 }
             }
         });

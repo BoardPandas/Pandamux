@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use pandamux_core::{EnvironmentId, RunId, ThreadEventKind, ThreadId};
+use serde::{Deserialize, Serialize};
 
 /// Parameters for subscribing to a real-time event stream.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -189,6 +189,7 @@ pub fn render_rail<V: 'static>(
 }
 
 /// Renders the 264px sidebar corresponding to the active navigation rail tab.
+#[allow(clippy::too_many_arguments)]
 pub fn render_sidebar<V: 'static>(
     active_tab: RailTab,
     thread_order: &[ThreadId],
@@ -333,7 +334,10 @@ fn render_threads_sidebar<V: 'static>(
 
                     Some(
                         div()
-                            .id(ElementId::NamedInteger("sb-thread-row".into(), tid.as_str().len() as u64))
+                            .id(ElementId::NamedInteger(
+                                "sb-thread-row".into(),
+                                tid.as_str().len() as u64,
+                            ))
                             .h_flex()
                             .items_center()
                             .justify_between()
@@ -459,7 +463,10 @@ fn render_agents_sidebar<V: 'static>(
                 .children(DEFAULT_AGENTS.iter().map(|agent| {
                     let agent_id = agent.id;
                     div()
-                        .id(ElementId::NamedInteger("sb-agent".into(), agent.id.len() as u64))
+                        .id(ElementId::NamedInteger(
+                            "sb-agent".into(),
+                            agent.id.len() as u64,
+                        ))
                         .p_2()
                         .rounded(Radii::ROW)
                         .bg(theme.chrome.panel2)
@@ -548,11 +555,7 @@ fn render_terminal_sidebar(theme: &Theme) -> impl IntoElement {
                         .font_weight(FontWeight::BOLD)
                         .child("Terminals"),
                 )
-                .child(
-                    Button::new("btn-new-term")
-                        .primary()
-                        .label("+ Shell"),
-                ),
+                .child(Button::new("btn-new-term").primary().label("+ Shell")),
         )
         .child(
             div()

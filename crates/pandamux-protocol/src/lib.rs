@@ -8,13 +8,13 @@ pub use jsonrpc::{JSONRPC_VERSION, RpcError, RpcId, RpcRequest, RpcResponse};
 pub use mcp::{McpCallToolParams, McpCallToolResult, McpContentItem, McpToolDefinition};
 pub use subscription::{EventEnvelope, SubscribeParams, SubscribeResult, UnsubscribeParams};
 pub use system::{
-    HelloParams, HelloResult, IdentifyResult, PingResult, PROTOCOL_VERSION, ServerCapabilities,
+    HelloParams, HelloResult, IdentifyResult, PROTOCOL_VERSION, PingResult, ServerCapabilities,
     ServerRole,
 };
 pub use thread_rpc::{
-    ThreadCancelTurnParams, ThreadCreateParams, ThreadGetParams, ThreadGetResult,
-    ThreadListParams, ThreadRespondApprovalParams, ThreadResumeParams, ThreadResumeResult,
-    ThreadSendTurnParams, ThreadSendTurnResult,
+    ThreadCancelTurnParams, ThreadCreateParams, ThreadGetParams, ThreadGetResult, ThreadListParams,
+    ThreadRespondApprovalParams, ThreadResumeParams, ThreadResumeResult, ThreadSendTurnParams,
+    ThreadSendTurnResult,
 };
 
 #[cfg(test)]

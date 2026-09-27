@@ -1,4 +1,4 @@
-use gpui_kit::gpui::{px, rgb, rgba, Pixels, Rgba};
+use gpui_kit::gpui::{Pixels, Rgba, px, rgb, rgba};
 
 /// Section 12 UI Theme Specification for PandaMUX.
 ///

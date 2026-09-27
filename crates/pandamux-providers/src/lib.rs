@@ -11,17 +11,16 @@ pub mod supervision;
 pub mod traits;
 
 pub use acp::{
-    build_initialize_request, build_session_new_request, map_access_mode_to_acp,
-    validate_antigravity_initialize, AcpInitializeResult, AcpMode, AcpPermissionRequest,
-    AcpSession,
+    AcpInitializeResult, AcpMode, AcpPermissionRequest, AcpSession, build_initialize_request,
+    build_session_new_request, map_access_mode_to_acp, validate_antigravity_initialize,
 };
 pub use antigravity::{
-    build_antigravity_env, extract_auth_url_from_output, probe_antigravity_health_offline,
-    resolve_antigravity_binary, sweep_orphan_temp_dirs, validate_callback_query,
-    validate_google_oauth_url, validate_sanitized_environment, verify_bundle_manifest,
-    AntigravityConcurrencyLimiter, AntigravityDriver, ManagedBundleManifest,
+    AntigravityConcurrencyLimiter, AntigravityDriver, ManagedBundleManifest, build_antigravity_env,
+    extract_auth_url_from_output, probe_antigravity_health_offline, resolve_antigravity_binary,
+    sweep_orphan_temp_dirs, validate_callback_query, validate_google_oauth_url,
+    validate_sanitized_environment, verify_bundle_manifest,
 };
-pub use claude::{build_claude_launch_args, ClaudeDriver, ClaudeSession};
+pub use claude::{ClaudeDriver, ClaudeSession, build_claude_launch_args};
 pub use codex::{CodexDriver, CodexSession};
 pub use error::ProviderError;
 pub use mock::{MockProviderDriver, MockProviderSession};
@@ -30,9 +29,9 @@ pub use models::{
     ProviderMetadata, ProviderSnapshot, RateLimitEntry, SessionSpec, ToolPolicy, UsageLimits,
 };
 pub use profiles::{
-    apply_profile_environment, ensure_profile_dir, resolve_profile_dir, ENV_CLAUDE_CONFIG_DIR,
-    ENV_CODEX_HOME, ENV_GEMINI_HOME,
+    ENV_CLAUDE_CONFIG_DIR, ENV_CODEX_HOME, ENV_GEMINI_HOME, apply_profile_environment,
+    ensure_profile_dir, resolve_profile_dir,
 };
-pub use shim_resolver::{resolve_command_shim, ResolvedCommand, ShimType};
-pub use supervision::{create_supervised_command, SupervisedChild, CREATE_NO_WINDOW};
+pub use shim_resolver::{ResolvedCommand, ShimType, resolve_command_shim};
+pub use supervision::{CREATE_NO_WINDOW, SupervisedChild, create_supervised_command};
 pub use traits::{BoxFuture, ProviderDriver, ProviderSession};

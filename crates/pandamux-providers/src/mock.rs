@@ -1,10 +1,10 @@
-use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 use pandamux_core::{
     event::{ApprovalDecision, ApprovalKind, TurnOutcome},
     provider_config::{ProviderCapabilities, ProviderInstanceConfig, ProviderKind},
     thread::{TurnInput, TurnUsage},
 };
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 
 use crate::error::ProviderError;
@@ -169,7 +169,10 @@ impl ProviderSession for MockProviderSession {
             }
 
             if prompt.starts_with("request_approval:") {
-                let cmd = prompt.trim_start_matches("request_approval:").trim().to_string();
+                let cmd = prompt
+                    .trim_start_matches("request_approval:")
+                    .trim()
+                    .to_string();
                 let _ = tx
                     .send(ProviderEvent::ApprovalRequested {
                         request_id: "req-mock-1".to_string(),

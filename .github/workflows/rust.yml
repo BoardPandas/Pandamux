@@ -5,25 +5,36 @@ on:
     paths:
       - "Cargo.toml"
       - "Cargo.lock"
+      - "deny.toml"
       - "crates/**"
-      - "scripts/check-rust-boundaries.ps1"
+      - "scripts/**"
       - ".github/workflows/rust.yml"
   push:
     branches: ["master", "main"]
     paths:
       - "Cargo.toml"
       - "Cargo.lock"
+      - "deny.toml"
       - "crates/**"
-      - "scripts/check-rust-boundaries.ps1"
+      - "scripts/**"
       - ".github/workflows/rust.yml"
   workflow_dispatch:
+
+concurrency:
+  group: rust-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+  SCCACHE_GHA_ENABLED: "true"
+  RUST_BACKTRACE: 1
+
 jobs:
-  rust:
-    name: Rust workspace
+  windows:
+    name: Windows (MSVC)
     runs-on: windows-latest
 
     steps:
@@ -34,24 +45,69 @@ jobs:
         with:
           node-version: 24
 
-      # Catches a refactor that moves the tree out from under a rule `paths:` glob.
-      # Edits to .claude/ itself are covered by claude-wiring.yml, which this
-      # workflow's path filters deliberately do not match.
+      # Catches a refactor that moves the tree out from under a rule paths glob.
       - name: Claude wiring guard (rule scoping + hook matchers)
         run: node scripts/check-claude-wiring.mjs
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-all-crates: true
 
       - name: Check formatting
         run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Check crate boundaries
         shell: pwsh
         run: .\scripts\check-rust-boundaries.ps1
 
+      - name: Check advisories and licenses
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          command-arguments: advisories licenses
+
       - name: Test workspace
         run: cargo test --workspace
 
+      - name: Build release binaries
+        run: cargo build --release -p pandamux-cli -p pandamux-server -p pandamux-desktop
+
+      - name: Evaluate built artifacts (BP evaluate-built-artifacts-in-ci)
+        shell: pwsh
+        run: .\scripts\smoke-built-artifacts.ps1 -TargetDir target/release
+
+  macos:
+    name: macOS (Apple Silicon)
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-all-crates: true
+
+      - name: Test server, CLI, client, and desktop
+        run: cargo test -p pandamux-core -p pandamux-protocol -p pandamux-client -p pandamux-server -p pandamux-cli -p pandamux-desktop
+
       - name: Build workspace binaries
-        run: cargo build -p pandamux-cli -p pandamux-term -p pandamux-remote -p pandamux-server
+        run: cargo build --release -p pandamux-cli -p pandamux-server -p pandamux-desktop

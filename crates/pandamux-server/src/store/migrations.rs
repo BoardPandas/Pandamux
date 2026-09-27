@@ -14,15 +14,11 @@ pub fn apply_migrations(conn: &mut Connection) -> Result<()> {
         "CREATE TABLE IF NOT EXISTS _migrations (
             version INTEGER PRIMARY KEY,
             applied_at_ms INTEGER NOT NULL
-        );"
+        );",
     )?;
 
     let current_version: Option<i64> = conn
-        .query_row(
-            "SELECT MAX(version) FROM _migrations",
-            [],
-            |row| row.get(0),
-        )
+        .query_row("SELECT MAX(version) FROM _migrations", [], |row| row.get(0))
         .unwrap_or(None);
 
     let current = current_version.unwrap_or(0);
@@ -86,7 +82,7 @@ pub fn apply_migrations(conn: &mut Connection) -> Result<()> {
 
             CREATE INDEX IF NOT EXISTS idx_turns_thread_id ON turns(thread_id);
             CREATE INDEX IF NOT EXISTS idx_events_thread_seq ON events(thread_id, seq);
-            CREATE INDEX IF NOT EXISTS idx_schedules_env ON schedules(environment_id);"
+            CREATE INDEX IF NOT EXISTS idx_schedules_env ON schedules(environment_id);",
         )?;
 
         tx.execute(
@@ -104,7 +100,7 @@ pub fn apply_migrations(conn: &mut Connection) -> Result<()> {
                 thread_id TEXT PRIMARY KEY REFERENCES threads(id),
                 resume_token TEXT NOT NULL,
                 updated_at_ms INTEGER NOT NULL
-            );"
+            );",
         )?;
 
         tx.execute(

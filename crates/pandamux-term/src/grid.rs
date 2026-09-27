@@ -461,14 +461,14 @@ impl TerminalGrid {
                     {
                         continue;
                     }
-                    if let Some(range) = &selection_range {
-                        if range.contains(Point::new(line, Column(col))) {
-                            let index = cells.len();
-                            span = Some(match span {
-                                Some((start, _)) => (start, index),
-                                None => (index, index),
-                            });
-                        }
+                    if let Some(range) = &selection_range
+                        && range.contains(Point::new(line, Column(col)))
+                    {
+                        let index = cells.len();
+                        span = Some(match span {
+                            Some((start, _)) => (start, index),
+                            None => (index, index),
+                        });
                     }
                     let mut fg = resolve_color(cell.fg);
                     let mut bg = resolve_color(cell.bg);

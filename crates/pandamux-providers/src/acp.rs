@@ -1,11 +1,11 @@
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 use pandamux_core::{
     event::{ApprovalDecision, ApprovalKind, TurnOutcome},
     thread::{AccessMode, TurnInput, TurnUsage},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 
@@ -230,8 +230,16 @@ pub fn parse_acp_line(line: &str) -> Option<ProviderEvent> {
                 });
             }
             "session/toolCall" => {
-                let id = params.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-                let name = params.get("name").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                let id = params
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let name = params
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
                 let title = params.get("title").and_then(|v| v.as_str());
 
                 if is_heuristic_subagent(&name, title) {
@@ -321,7 +329,9 @@ impl ProviderSession for AcpSession {
     }
 
     fn events(&mut self) -> &mut mpsc::Receiver<ProviderEvent> {
-        self.events_rx.as_mut().expect("events receiver already taken")
+        self.events_rx
+            .as_mut()
+            .expect("events receiver already taken")
     }
 
     fn take_event_receiver(&mut self) -> Option<mpsc::Receiver<ProviderEvent>> {
@@ -334,7 +344,8 @@ impl ProviderSession for AcpSession {
         decision: ApprovalDecision,
     ) -> BoxFuture<'a, Result<(), ProviderError>> {
         Box::pin(async move {
-            let id_val: Value = serde_json::from_str(&request_id).unwrap_or(Value::String(request_id));
+            let id_val: Value =
+                serde_json::from_str(&request_id).unwrap_or(Value::String(request_id));
             let outcome = match decision {
                 ApprovalDecision::Approved => "allow_once",
                 ApprovalDecision::Denied | ApprovalDecision::TimedOut => "reject_once",

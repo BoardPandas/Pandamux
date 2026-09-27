@@ -1,5 +1,5 @@
-use std::path::Path;
 use russh_sftp::client::SftpSession;
+use std::path::Path;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::config::{SshConfig, SshErrorCategory, SshFailure};
@@ -46,9 +46,10 @@ pub async fn browse_remote_folders(
         .await
         .map_err(|error| sftp_failure(format!("start SFTP session: {error}")))?;
 
-    let canonical_path = sftp.canonicalize(path.clone()).await.map_err(|error| {
-        sftp_failure(format!("remote folder {path} is unavailable: {error}"))
-    })?;
+    let canonical_path = sftp
+        .canonicalize(path.clone())
+        .await
+        .map_err(|error| sftp_failure(format!("remote folder {path} is unavailable: {error}")))?;
 
     let metadata = sftp
         .metadata(canonical_path.clone())
@@ -137,9 +138,9 @@ pub async fn upload_file_sftp(
     local_path: &Path,
     remote_path: &str,
 ) -> Result<(), SshFailure> {
-    let bytes = tokio::fs::read(local_path)
-        .await
-        .map_err(|error| sftp_failure(format!("read local file {}: {error}", local_path.display())))?;
+    let bytes = tokio::fs::read(local_path).await.map_err(|error| {
+        sftp_failure(format!("read local file {}: {error}", local_path.display()))
+    })?;
 
     let handle = pool.acquire(&config).await?;
     let channel = handle

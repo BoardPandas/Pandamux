@@ -1,10 +1,10 @@
-use std::collections::HashMap;
-use serde::{Deserialize, Serialize};
 use pandamux_core::{
     ApprovalDecision, ApprovalKind, FileChangeKind, PlanStep, Run, RunEvent, RunStatus,
-    RunTaskStatus, Thread, ThreadEvent, ThreadEventKind, ThreadStatus, ToolCallStatus,
-    Turn, TurnOutcome, TurnStatus,
+    RunTaskStatus, Thread, ThreadEvent, ThreadEventKind, ThreadStatus, ToolCallStatus, Turn,
+    TurnOutcome, TurnStatus,
 };
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Client-side projection of a thread accumulated from an event stream.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -100,9 +100,12 @@ impl ThreadProjection {
                 output,
             } => {
                 if let Some(existing) = self.items.iter_mut().find_map(|item| match item {
-                    TimelineItem::ToolCall { id, status: s, output: o, .. } if id == item_id => {
-                        Some((s, o))
-                    }
+                    TimelineItem::ToolCall {
+                        id,
+                        status: s,
+                        output: o,
+                        ..
+                    } if id == item_id => Some((s, o)),
                     _ => None,
                 }) {
                     *existing.0 = *status;
@@ -132,7 +135,11 @@ impl ThreadProjection {
                     output_tail: output_tail.clone(),
                 });
             }
-            ThreadEventKind::FileChange { item_id, path, kind } => {
+            ThreadEventKind::FileChange {
+                item_id,
+                path,
+                kind,
+            } => {
                 self.items.push(TimelineItem::FileChange {
                     id: item_id.clone(),
                     path: path.clone(),
@@ -157,13 +164,12 @@ impl ThreadProjection {
                 decision,
                 ..
             } => {
-                if let Some(TimelineItem::Approval {
-                    decision: d,
-                    ..
-                }) = self.items.iter_mut().find(|i| match i {
-                    TimelineItem::Approval { request_id: id, .. } => id == request_id,
-                    _ => false,
-                }) {
+                if let Some(TimelineItem::Approval { decision: d, .. }) =
+                    self.items.iter_mut().find(|i| match i {
+                        TimelineItem::Approval { request_id: id, .. } => id == request_id,
+                        _ => false,
+                    })
+                {
                     *d = Some(*decision);
                 }
                 self.thread.status = ThreadStatus::Working;
@@ -371,7 +377,9 @@ impl RunProjection {
             RunEvent::ApprovalRequested { .. } => {
                 self.run.status = RunStatus::Paused;
             }
-            RunEvent::TaskDispatched { task_id, thread_id, .. } => {
+            RunEvent::TaskDispatched {
+                task_id, thread_id, ..
+            } => {
                 self.run.status = RunStatus::Running;
                 if let Some(task) = self.run.tasks.iter_mut().find(|t| &t.task_id == task_id) {
                     task.thread_id = Some(thread_id.clone());
@@ -379,7 +387,9 @@ impl RunProjection {
                 }
             }
             RunEvent::TaskRerouted { .. } => {}
-            RunEvent::TaskFinished { task_id, outcome, .. } => {
+            RunEvent::TaskFinished {
+                task_id, outcome, ..
+            } => {
                 if let Some(task) = self.run.tasks.iter_mut().find(|t| &t.task_id == task_id) {
                     task.status = RunTaskStatus::Finished;
                     task.summary = Some(outcome.clone());

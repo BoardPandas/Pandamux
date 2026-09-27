@@ -4,23 +4,21 @@ pub mod token_queue;
 pub mod transport;
 
 pub use client::PandamuxClient;
-pub use projections::{
-    RunProjection, SubAgentProjection, ThreadProjection, TimelineItem,
-};
+pub use projections::{RunProjection, SubAgentProjection, ThreadProjection, TimelineItem};
 pub use token_queue::TokenSmoothingQueue;
 pub use transport::{MockTransport, MockTransportPeer, TransportError};
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
     use pandamux_core::{
-        ApprovalDecision, ApprovalKind, EnvironmentId, ProviderInstanceId,
-        Run, RunEvent, RunKind, RunStatus, RunTask, RunTaskStatus, Thread, ThreadEvent,
-        ThreadEventKind, ThreadId, ThreadStatus, ThreadWorkspace, ToolCallStatus, TurnId,
-        TurnInput, TurnOutcome, TurnStatus, TurnUsage,
+        ApprovalDecision, ApprovalKind, EnvironmentId, ProviderInstanceId, Run, RunEvent, RunKind,
+        RunStatus, RunTask, RunTaskStatus, Thread, ThreadEvent, ThreadEventKind, ThreadId,
+        ThreadStatus, ThreadWorkspace, ToolCallStatus, TurnId, TurnInput, TurnOutcome, TurnStatus,
+        TurnUsage,
     };
     use pandamux_protocol::EventEnvelope;
+    use serde_json::json;
 
     fn mock_thread(id: &str) -> Thread {
         Thread {

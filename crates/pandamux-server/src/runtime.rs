@@ -1,7 +1,7 @@
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use serde::{Deserialize, Serialize};
 
 pub const RUNTIME_FILENAME: &str = "server.json";
 

@@ -2,14 +2,14 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::{broadcast, mpsc, Mutex};
+use tokio::sync::{Mutex, broadcast, mpsc};
 
 use pandamux_core::{
+    EnvironmentId, ProviderInstanceId,
     event::{ThreadEvent, ThreadEventKind, ToolCallStatus, TurnOutcome},
     ids::{ThreadId, TurnId},
     provider_config::{ProviderInstanceConfig, ProviderKind},
     thread::{Thread, ThreadStatus, ThreadWorkspace, Turn, TurnInput, TurnStatus},
-    EnvironmentId, ProviderInstanceId,
 };
 use pandamux_protocol::{
     EventEnvelope, RpcError, ThreadCancelTurnParams, ThreadCreateParams, ThreadGetParams,
@@ -128,7 +128,9 @@ impl ThreadManager {
             .store
             .get_thread(&params.thread_id)
             .map_err(|e| RpcError::internal_error(e.to_string()))?
-            .ok_or_else(|| RpcError::not_found(format!("Thread not found: {}", params.thread_id)))?;
+            .ok_or_else(|| {
+                RpcError::not_found(format!("Thread not found: {}", params.thread_id))
+            })?;
 
         let turns = self
             .store
@@ -148,20 +150,20 @@ impl ThreadManager {
         let filtered = threads
             .into_iter()
             .filter(|t| {
-                if let Some(ref p) = params.project_id {
-                    if t.project_id.as_ref() != Some(p) {
-                        return false;
-                    }
+                if let Some(ref p) = params.project_id
+                    && t.project_id.as_ref() != Some(p)
+                {
+                    return false;
                 }
-                if let Some(st) = params.status {
-                    if t.status != st {
-                        return false;
-                    }
+                if let Some(st) = params.status
+                    && t.status != st
+                {
+                    return false;
                 }
-                if let Some(ref parent) = params.parent_thread_id {
-                    if t.parent_thread_id.as_ref() != Some(parent) {
-                        return false;
-                    }
+                if let Some(ref parent) = params.parent_thread_id
+                    && t.parent_thread_id.as_ref() != Some(parent)
+                {
+                    return false;
                 }
                 true
             })
@@ -171,18 +173,27 @@ impl ThreadManager {
     }
 
     /// Dispatches a prompt turn to an agent provider and streams events into SQLite.
-    pub async fn send_turn(&self, params: ThreadSendTurnParams) -> Result<ThreadSendTurnResult, RpcError> {
+    pub async fn send_turn(
+        &self,
+        params: ThreadSendTurnParams,
+    ) -> Result<ThreadSendTurnResult, RpcError> {
         let mut thread = self
             .store
             .get_thread(&params.thread_id)
             .map_err(|e| RpcError::internal_error(e.to_string()))?
-            .ok_or_else(|| RpcError::not_found(format!("Thread not found: {}", params.thread_id)))?;
+            .ok_or_else(|| {
+                RpcError::not_found(format!("Thread not found: {}", params.thread_id))
+            })?;
 
         if thread.status == ThreadStatus::Working {
-            return Err(RpcError::invalid_params("Thread is currently executing another turn"));
+            return Err(RpcError::invalid_params(
+                "Thread is currently executing another turn",
+            ));
         }
         if thread.status == ThreadStatus::AwaitingApproval {
-            return Err(RpcError::invalid_params("Thread is awaiting approval response"));
+            return Err(RpcError::invalid_params(
+                "Thread is awaiting approval response",
+            ));
         }
 
         let turn_id = TurnId::generate();
@@ -284,7 +295,10 @@ impl ThreadManager {
                     .get(kind)
                     .or_else(|| self.drivers.get(ProviderKind::Custom))
                     .ok_or_else(|| {
-                        RpcError::internal_error(format!("No driver registered for provider {:?}", kind))
+                        RpcError::internal_error(format!(
+                            "No driver registered for provider {:?}",
+                            kind
+                        ))
                     })?;
 
                 let resume_token = self
@@ -363,305 +377,309 @@ impl ThreadManager {
                     stream_seq += 1;
                     let at = now_ms();
 
-                match prov_event {
-                    ProviderEvent::TextDelta { delta } => {
-                        let ev = ThreadEvent {
-                            thread_id: thread_id.clone(),
-                            seq: stream_seq,
-                            at_ms: at,
-                            kind: ThreadEventKind::AssistantText {
-                                item_id: format!("{}-text", turn_id.as_str()),
-                                text: delta,
-                            },
-                        };
-                        let _ = store.append_event(&ev);
-                        let _ = broadcaster.send(EventEnvelope {
-                            subscription_id: String::new(),
-                            environment_id: env_id.clone().into(),
-                            thread_id: Some(thread_id.clone()),
-                            run_id: None,
-                            seq: stream_seq,
-                            at_ms: at,
-                            kind: ev.kind,
-                        });
-                    }
-                    ProviderEvent::ReasoningDelta { delta } => {
-                        let ev = ThreadEvent {
-                            thread_id: thread_id.clone(),
-                            seq: stream_seq,
-                            at_ms: at,
-                            kind: ThreadEventKind::Reasoning {
-                                item_id: format!("{}-reasoning", turn_id.as_str()),
-                                text: delta,
-                            },
-                        };
-                        let _ = store.append_event(&ev);
-                        let _ = broadcaster.send(EventEnvelope {
-                            subscription_id: String::new(),
-                            environment_id: env_id.clone().into(),
-                            thread_id: Some(thread_id.clone()),
-                            run_id: None,
-                            seq: stream_seq,
-                            at_ms: at,
-                            kind: ev.kind,
-                        });
-                    }
-                    ProviderEvent::ToolCallStarted { id, name, input } => {
-                        let ev = ThreadEvent {
-                            thread_id: thread_id.clone(),
-                            seq: stream_seq,
-                            at_ms: at,
-                            kind: ThreadEventKind::ToolCall {
-                                item_id: id,
-                                name,
-                                input,
-                                status: ToolCallStatus::Executing,
-                                output: None,
-                            },
-                        };
-                        let _ = store.append_event(&ev);
-                        let _ = broadcaster.send(EventEnvelope {
-                            subscription_id: String::new(),
-                            environment_id: env_id.clone().into(),
-                            thread_id: Some(thread_id.clone()),
-                            run_id: None,
-                            seq: stream_seq,
-                            at_ms: at,
-                            kind: ev.kind,
-                        });
-                    }
-                    ProviderEvent::ToolCallFinished { id, output, error } => {
-                        let status = if error.is_some() {
-                            ToolCallStatus::Failed
-                        } else {
-                            ToolCallStatus::Success
-                        };
-                        let ev = ThreadEvent {
-                            thread_id: thread_id.clone(),
-                            seq: stream_seq,
-                            at_ms: at,
-                            kind: ThreadEventKind::ToolCall {
-                                item_id: id,
-                                name: String::new(),
-                                input: serde_json::Value::Null,
-                                status,
-                                output,
-                            },
-                        };
-                        let _ = store.append_event(&ev);
-                        let _ = broadcaster.send(EventEnvelope {
-                            subscription_id: String::new(),
-                            environment_id: env_id.clone().into(),
-                            thread_id: Some(thread_id.clone()),
-                            run_id: None,
-                            seq: stream_seq,
-                            at_ms: at,
-                            kind: ev.kind,
-                        });
-                    }
-                    ProviderEvent::ApprovalRequested {
-                        request_id,
-                        kind,
-                        detail,
-                        ..
-                    } => {
-                        if let Ok(Some(mut th)) = store.get_thread(&thread_id) {
-                            th.status = ThreadStatus::AwaitingApproval;
-                            th.updated_at_ms = at;
-                            let _ = store.save_thread(&th);
-                        }
-                        if let Ok(Some(mut tr)) = store.get_turn(&turn_id) {
-                            tr.status = TurnStatus::AwaitingApproval;
-                            let _ = store.save_turn(&tr);
-                        }
-
-                        let ev = ThreadEvent {
-                            thread_id: thread_id.clone(),
-                            seq: stream_seq,
-                            at_ms: at,
-                            kind: ThreadEventKind::ApprovalRequested {
-                                request_id,
-                                kind,
-                                detail,
-                            },
-                        };
-                        let _ = store.append_event(&ev);
-                        let _ = broadcaster.send(EventEnvelope {
-                            subscription_id: String::new(),
-                            environment_id: env_id.clone().into(),
-                            thread_id: Some(thread_id.clone()),
-                            run_id: None,
-                            seq: stream_seq,
-                            at_ms: at,
-                            kind: ev.kind,
-                        });
-                    }
-                    ProviderEvent::SubAgentSpawned {
-                        tool_use_id,
-                        parent_tool_use_id,
-                        agent_type,
-                        description,
-                        model,
-                    } => {
-                        let ev = ThreadEvent {
-                            thread_id: thread_id.clone(),
-                            seq: stream_seq,
-                            at_ms: at,
-                            kind: ThreadEventKind::SubAgentSpawned {
-                                sub_agent_id: tool_use_id,
-                                parent_sub_agent_id: parent_tool_use_id,
-                                parent_item_id: None,
-                                title: description,
-                                agent_type,
-                                model: model.unwrap_or_else(|| "default".to_string()),
-                                effort: None,
-                            },
-                        };
-                        let _ = store.append_event(&ev);
-                        let _ = broadcaster.send(EventEnvelope {
-                            subscription_id: String::new(),
-                            environment_id: env_id.clone().into(),
-                            thread_id: Some(thread_id.clone()),
-                            run_id: None,
-                            seq: stream_seq,
-                            at_ms: at,
-                            kind: ev.kind,
-                        });
-                    }
-                    ProviderEvent::TurnCompleted { outcome, usage } => {
-                        let res_tok = session_clone.lock().await.resume_token().map(|s| s.to_string());
-                        if let Some(res_tok) = res_tok {
-                            let _ = store.save_resume_token(&thread_id, &res_tok);
-                        }
-
-                        if let Ok(Some(mut tr)) = store.get_turn(&turn_id) {
-                            tr.status = match outcome {
-                                TurnOutcome::Success => TurnStatus::Completed,
-                                TurnOutcome::Cancelled => TurnStatus::Interrupted,
-                                TurnOutcome::Failed => TurnStatus::Failed,
-                                TurnOutcome::Interrupted => TurnStatus::Interrupted,
+                    match prov_event {
+                        ProviderEvent::TextDelta { delta } => {
+                            let ev = ThreadEvent {
+                                thread_id: thread_id.clone(),
+                                seq: stream_seq,
+                                at_ms: at,
+                                kind: ThreadEventKind::AssistantText {
+                                    item_id: format!("{}-text", turn_id.as_str()),
+                                    text: delta,
+                                },
                             };
-                            tr.ended_at_ms = Some(at);
-                            tr.usage = usage;
-                            let _ = store.save_turn(&tr);
+                            let _ = store.append_event(&ev);
+                            let _ = broadcaster.send(EventEnvelope {
+                                subscription_id: String::new(),
+                                environment_id: env_id.clone().into(),
+                                thread_id: Some(thread_id.clone()),
+                                run_id: None,
+                                seq: stream_seq,
+                                at_ms: at,
+                                kind: ev.kind,
+                            });
                         }
-
-                        if let Ok(Some(mut th)) = store.get_thread(&thread_id) {
-                            th.status = ThreadStatus::Idle;
-                            th.updated_at_ms = at;
-                            let _ = store.save_thread(&th);
+                        ProviderEvent::ReasoningDelta { delta } => {
+                            let ev = ThreadEvent {
+                                thread_id: thread_id.clone(),
+                                seq: stream_seq,
+                                at_ms: at,
+                                kind: ThreadEventKind::Reasoning {
+                                    item_id: format!("{}-reasoning", turn_id.as_str()),
+                                    text: delta,
+                                },
+                            };
+                            let _ = store.append_event(&ev);
+                            let _ = broadcaster.send(EventEnvelope {
+                                subscription_id: String::new(),
+                                environment_id: env_id.clone().into(),
+                                thread_id: Some(thread_id.clone()),
+                                run_id: None,
+                                seq: stream_seq,
+                                at_ms: at,
+                                kind: ev.kind,
+                            });
                         }
+                        ProviderEvent::ToolCallStarted { id, name, input } => {
+                            let ev = ThreadEvent {
+                                thread_id: thread_id.clone(),
+                                seq: stream_seq,
+                                at_ms: at,
+                                kind: ThreadEventKind::ToolCall {
+                                    item_id: id,
+                                    name,
+                                    input,
+                                    status: ToolCallStatus::Executing,
+                                    output: None,
+                                },
+                            };
+                            let _ = store.append_event(&ev);
+                            let _ = broadcaster.send(EventEnvelope {
+                                subscription_id: String::new(),
+                                environment_id: env_id.clone().into(),
+                                thread_id: Some(thread_id.clone()),
+                                run_id: None,
+                                seq: stream_seq,
+                                at_ms: at,
+                                kind: ev.kind,
+                            });
+                        }
+                        ProviderEvent::ToolCallFinished { id, output, error } => {
+                            let status = if error.is_some() {
+                                ToolCallStatus::Failed
+                            } else {
+                                ToolCallStatus::Success
+                            };
+                            let ev = ThreadEvent {
+                                thread_id: thread_id.clone(),
+                                seq: stream_seq,
+                                at_ms: at,
+                                kind: ThreadEventKind::ToolCall {
+                                    item_id: id,
+                                    name: String::new(),
+                                    input: serde_json::Value::Null,
+                                    status,
+                                    output,
+                                },
+                            };
+                            let _ = store.append_event(&ev);
+                            let _ = broadcaster.send(EventEnvelope {
+                                subscription_id: String::new(),
+                                environment_id: env_id.clone().into(),
+                                thread_id: Some(thread_id.clone()),
+                                run_id: None,
+                                seq: stream_seq,
+                                at_ms: at,
+                                kind: ev.kind,
+                            });
+                        }
+                        ProviderEvent::ApprovalRequested {
+                            request_id,
+                            kind,
+                            detail,
+                            ..
+                        } => {
+                            if let Ok(Some(mut th)) = store.get_thread(&thread_id) {
+                                th.status = ThreadStatus::AwaitingApproval;
+                                th.updated_at_ms = at;
+                                let _ = store.save_thread(&th);
+                            }
+                            if let Ok(Some(mut tr)) = store.get_turn(&turn_id) {
+                                tr.status = TurnStatus::AwaitingApproval;
+                                let _ = store.save_turn(&tr);
+                            }
 
-                        let ev = ThreadEvent {
-                            thread_id: thread_id.clone(),
-                            seq: stream_seq,
-                            at_ms: at,
-                            kind: ThreadEventKind::TurnCompleted { outcome },
-                        };
-                        let _ = store.append_event(&ev);
-                        let _ = broadcaster.send(EventEnvelope {
-                            subscription_id: String::new(),
-                            environment_id: env_id.clone().into(),
-                            thread_id: Some(thread_id.clone()),
-                            run_id: None,
-                            seq: stream_seq,
-                            at_ms: at,
-                            kind: ev.kind,
-                        });
+                            let ev = ThreadEvent {
+                                thread_id: thread_id.clone(),
+                                seq: stream_seq,
+                                at_ms: at,
+                                kind: ThreadEventKind::ApprovalRequested {
+                                    request_id,
+                                    kind,
+                                    detail,
+                                },
+                            };
+                            let _ = store.append_event(&ev);
+                            let _ = broadcaster.send(EventEnvelope {
+                                subscription_id: String::new(),
+                                environment_id: env_id.clone().into(),
+                                thread_id: Some(thread_id.clone()),
+                                run_id: None,
+                                seq: stream_seq,
+                                at_ms: at,
+                                kind: ev.kind,
+                            });
+                        }
+                        ProviderEvent::SubAgentSpawned {
+                            tool_use_id,
+                            parent_tool_use_id,
+                            agent_type,
+                            description,
+                            model,
+                        } => {
+                            let ev = ThreadEvent {
+                                thread_id: thread_id.clone(),
+                                seq: stream_seq,
+                                at_ms: at,
+                                kind: ThreadEventKind::SubAgentSpawned {
+                                    sub_agent_id: tool_use_id,
+                                    parent_sub_agent_id: parent_tool_use_id,
+                                    parent_item_id: None,
+                                    title: description,
+                                    agent_type,
+                                    model: model.unwrap_or_else(|| "default".to_string()),
+                                    effort: None,
+                                },
+                            };
+                            let _ = store.append_event(&ev);
+                            let _ = broadcaster.send(EventEnvelope {
+                                subscription_id: String::new(),
+                                environment_id: env_id.clone().into(),
+                                thread_id: Some(thread_id.clone()),
+                                run_id: None,
+                                seq: stream_seq,
+                                at_ms: at,
+                                kind: ev.kind,
+                            });
+                        }
+                        ProviderEvent::TurnCompleted { outcome, usage } => {
+                            let res_tok = session_clone
+                                .lock()
+                                .await
+                                .resume_token()
+                                .map(|s| s.to_string());
+                            if let Some(res_tok) = res_tok {
+                                let _ = store.save_resume_token(&thread_id, &res_tok);
+                            }
 
-                        stream_seq += 1;
-                        let settle = ThreadEvent {
-                            thread_id: thread_id.clone(),
-                            seq: stream_seq,
-                            at_ms: at,
-                            kind: ThreadEventKind::TurnSettled {
-                                changed_files: vec![],
-                            },
-                        };
-                        let _ = store.append_event(&settle);
-                        let _ = broadcaster.send(EventEnvelope {
-                            subscription_id: String::new(),
-                            environment_id: env_id.clone().into(),
-                            thread_id: Some(thread_id.clone()),
-                            run_id: None,
-                            seq: stream_seq,
-                            at_ms: at,
-                            kind: settle.kind,
-                        });
+                            if let Ok(Some(mut tr)) = store.get_turn(&turn_id) {
+                                tr.status = match outcome {
+                                    TurnOutcome::Success => TurnStatus::Completed,
+                                    TurnOutcome::Cancelled => TurnStatus::Interrupted,
+                                    TurnOutcome::Failed => TurnStatus::Failed,
+                                    TurnOutcome::Interrupted => TurnStatus::Interrupted,
+                                };
+                                tr.ended_at_ms = Some(at);
+                                tr.usage = usage;
+                                let _ = store.save_turn(&tr);
+                            }
 
-                        break;
-                    }
-                    ProviderEvent::Error {
-                        message,
-                        recoverable,
-                    } => {
-                        let ev = ThreadEvent {
-                            thread_id: thread_id.clone(),
-                            seq: stream_seq,
-                            at_ms: at,
-                            kind: ThreadEventKind::Error {
-                                class: "provider".to_string(),
-                                message,
-                                recoverable,
-                            },
-                        };
-                        let _ = store.append_event(&ev);
-                        let _ = broadcaster.send(EventEnvelope {
-                            subscription_id: String::new(),
-                            environment_id: env_id.clone().into(),
-                            thread_id: Some(thread_id.clone()),
-                            run_id: None,
-                            seq: stream_seq,
-                            at_ms: at,
-                            kind: ev.kind,
-                        });
-                    }
-                    ProviderEvent::RateLimitObserved { details } => {
-                        let ev = ThreadEvent {
-                            thread_id: thread_id.clone(),
-                            seq: stream_seq,
-                            at_ms: at,
-                            kind: ThreadEventKind::RateLimitObserved {
-                                provider: "agent".to_string(),
-                                details,
-                            },
-                        };
-                        let _ = store.append_event(&ev);
-                        let _ = broadcaster.send(EventEnvelope {
-                            subscription_id: String::new(),
-                            environment_id: env_id.clone().into(),
-                            thread_id: Some(thread_id.clone()),
-                            run_id: None,
-                            seq: stream_seq,
-                            at_ms: at,
-                            kind: ev.kind,
-                        });
-                    }
-                    ProviderEvent::Notice { level, message } => {
-                        let ev = ThreadEvent {
-                            thread_id: thread_id.clone(),
-                            seq: stream_seq,
-                            at_ms: at,
-                            kind: ThreadEventKind::Notice { level, message },
-                        };
-                        let _ = store.append_event(&ev);
-                        let _ = broadcaster.send(EventEnvelope {
-                            subscription_id: String::new(),
-                            environment_id: env_id.clone().into(),
-                            thread_id: Some(thread_id.clone()),
-                            run_id: None,
-                            seq: stream_seq,
-                            at_ms: at,
-                            kind: ev.kind,
-                        });
+                            if let Ok(Some(mut th)) = store.get_thread(&thread_id) {
+                                th.status = ThreadStatus::Idle;
+                                th.updated_at_ms = at;
+                                let _ = store.save_thread(&th);
+                            }
+
+                            let ev = ThreadEvent {
+                                thread_id: thread_id.clone(),
+                                seq: stream_seq,
+                                at_ms: at,
+                                kind: ThreadEventKind::TurnCompleted { outcome },
+                            };
+                            let _ = store.append_event(&ev);
+                            let _ = broadcaster.send(EventEnvelope {
+                                subscription_id: String::new(),
+                                environment_id: env_id.clone().into(),
+                                thread_id: Some(thread_id.clone()),
+                                run_id: None,
+                                seq: stream_seq,
+                                at_ms: at,
+                                kind: ev.kind,
+                            });
+
+                            stream_seq += 1;
+                            let settle = ThreadEvent {
+                                thread_id: thread_id.clone(),
+                                seq: stream_seq,
+                                at_ms: at,
+                                kind: ThreadEventKind::TurnSettled {
+                                    changed_files: vec![],
+                                },
+                            };
+                            let _ = store.append_event(&settle);
+                            let _ = broadcaster.send(EventEnvelope {
+                                subscription_id: String::new(),
+                                environment_id: env_id.clone().into(),
+                                thread_id: Some(thread_id.clone()),
+                                run_id: None,
+                                seq: stream_seq,
+                                at_ms: at,
+                                kind: settle.kind,
+                            });
+
+                            break;
+                        }
+                        ProviderEvent::Error {
+                            message,
+                            recoverable,
+                        } => {
+                            let ev = ThreadEvent {
+                                thread_id: thread_id.clone(),
+                                seq: stream_seq,
+                                at_ms: at,
+                                kind: ThreadEventKind::Error {
+                                    class: "provider".to_string(),
+                                    message,
+                                    recoverable,
+                                },
+                            };
+                            let _ = store.append_event(&ev);
+                            let _ = broadcaster.send(EventEnvelope {
+                                subscription_id: String::new(),
+                                environment_id: env_id.clone().into(),
+                                thread_id: Some(thread_id.clone()),
+                                run_id: None,
+                                seq: stream_seq,
+                                at_ms: at,
+                                kind: ev.kind,
+                            });
+                        }
+                        ProviderEvent::RateLimitObserved { details } => {
+                            let ev = ThreadEvent {
+                                thread_id: thread_id.clone(),
+                                seq: stream_seq,
+                                at_ms: at,
+                                kind: ThreadEventKind::RateLimitObserved {
+                                    provider: "agent".to_string(),
+                                    details,
+                                },
+                            };
+                            let _ = store.append_event(&ev);
+                            let _ = broadcaster.send(EventEnvelope {
+                                subscription_id: String::new(),
+                                environment_id: env_id.clone().into(),
+                                thread_id: Some(thread_id.clone()),
+                                run_id: None,
+                                seq: stream_seq,
+                                at_ms: at,
+                                kind: ev.kind,
+                            });
+                        }
+                        ProviderEvent::Notice { level, message } => {
+                            let ev = ThreadEvent {
+                                thread_id: thread_id.clone(),
+                                seq: stream_seq,
+                                at_ms: at,
+                                kind: ThreadEventKind::Notice { level, message },
+                            };
+                            let _ = store.append_event(&ev);
+                            let _ = broadcaster.send(EventEnvelope {
+                                subscription_id: String::new(),
+                                environment_id: env_id.clone().into(),
+                                thread_id: Some(thread_id.clone()),
+                                run_id: None,
+                                seq: stream_seq,
+                                at_ms: at,
+                                kind: ev.kind,
+                            });
+                        }
                     }
                 }
-            }
 
-            let mut rx_guard = events_rx_holder.lock().await;
-            *rx_guard = Some(rx);
-        }
-    });
+                let mut rx_guard = events_rx_holder.lock().await;
+                *rx_guard = Some(rx);
+            }
+        });
 
         Ok(ThreadSendTurnResult {
             turn_id,
@@ -670,14 +688,20 @@ impl ThreadManager {
     }
 
     /// Responds to a pending approval request and resumes the turn.
-    pub async fn respond_approval(&self, params: ThreadRespondApprovalParams) -> Result<(), RpcError> {
+    pub async fn respond_approval(
+        &self,
+        params: ThreadRespondApprovalParams,
+    ) -> Result<(), RpcError> {
         let session_opt = {
             let active = self.active_sessions.lock().await;
             active.get(&params.thread_id).cloned()
         };
 
         let active_sess = session_opt.ok_or_else(|| {
-            RpcError::invalid_params(format!("No active session found for thread {}", params.thread_id))
+            RpcError::invalid_params(format!(
+                "No active session found for thread {}",
+                params.thread_id
+            ))
         })?;
 
         {
@@ -763,12 +787,17 @@ impl ThreadManager {
     }
 
     /// Queries the saved resumption token for continuing a thread across restarts.
-    pub fn resume_thread(&self, params: ThreadResumeParams) -> Result<ThreadResumeResult, RpcError> {
+    pub fn resume_thread(
+        &self,
+        params: ThreadResumeParams,
+    ) -> Result<ThreadResumeResult, RpcError> {
         let thread = self
             .store
             .get_thread(&params.thread_id)
             .map_err(|e| RpcError::internal_error(e.to_string()))?
-            .ok_or_else(|| RpcError::not_found(format!("Thread not found: {}", params.thread_id)))?;
+            .ok_or_else(|| {
+                RpcError::not_found(format!("Thread not found: {}", params.thread_id))
+            })?;
 
         let resume_token = self
             .store

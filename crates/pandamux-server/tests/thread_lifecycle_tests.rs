@@ -1,6 +1,6 @@
+use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
-use serde_json::json;
 use tokio::time::timeout;
 
 use pandamux_core::event::ThreadEventKind;
@@ -14,10 +14,18 @@ use pandamux_server::{DriverRegistry, Router, Store};
 async fn test_thread_approval_flow() {
     let store = Store::in_memory().expect("open store");
     let drivers = Arc::new(DriverRegistry::new());
-    let mock = Arc::new(MockProviderDriver::new(ProviderKind::Custom, "Mock Provider"));
+    let mock = Arc::new(MockProviderDriver::new(
+        ProviderKind::Custom,
+        "Mock Provider",
+    ));
     drivers.register(ProviderKind::Custom, mock);
 
-    let router = Router::with_drivers(store.clone(), ServerRole::Hub, "env-test".to_string(), drivers);
+    let router = Router::with_drivers(
+        store.clone(),
+        ServerRole::Hub,
+        "env-test".to_string(),
+        drivers,
+    );
 
     // 1. Create thread
     let create_req = RpcRequest::new(
@@ -28,9 +36,15 @@ async fn test_thread_approval_flow() {
             "model": "mock-fast"
         })),
     );
-    let create_res = router.handle_request(create_req).await.expect("create response");
+    let create_res = router
+        .handle_request(create_req)
+        .await
+        .expect("create response");
     assert!(create_res.is_success());
-    let thread_id = create_res.result.unwrap()["id"].as_str().unwrap().to_string();
+    let thread_id = create_res.result.unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     let mut event_rx = router.thread_manager().subscribe();
 
@@ -43,7 +57,10 @@ async fn test_thread_approval_flow() {
             "text": "request_approval: rm -rf /cache"
         })),
     );
-    let send_res = router.handle_request(send_req).await.expect("send response");
+    let send_res = router
+        .handle_request(send_req)
+        .await
+        .expect("send response");
     assert!(send_res.is_success());
 
     // 3. Await ApprovalRequested event
@@ -51,24 +68,29 @@ async fn test_thread_approval_flow() {
     let mut request_id = String::new();
 
     for _ in 0..10 {
-        if let Ok(Ok(env)) = timeout(Duration::from_millis(500), event_rx.recv()).await {
-            if let ThreadEventKind::ApprovalRequested {
+        if let Ok(Ok(env)) = timeout(Duration::from_millis(500), event_rx.recv()).await
+            && let ThreadEventKind::ApprovalRequested {
                 request_id: ref req_id,
                 ..
             } = env.kind
-            {
-                got_approval_req = true;
-                request_id = req_id.clone();
-                break;
-            }
+        {
+            got_approval_req = true;
+            request_id = req_id.clone();
+            break;
         }
     }
-    assert!(got_approval_req, "Should have received ApprovalRequested event");
+    assert!(
+        got_approval_req,
+        "Should have received ApprovalRequested event"
+    );
 
     // Verify thread is now awaiting approval
     let get_req = RpcRequest::new(3, "thread.get", Some(json!({ "threadId": thread_id })));
     let get_res = router.handle_request(get_req).await.expect("get response");
-    assert_eq!(get_res.result.unwrap()["thread"]["status"], "awaiting_approval");
+    assert_eq!(
+        get_res.result.unwrap()["thread"]["status"],
+        "awaiting_approval"
+    );
 
     // 4. Respond to approval
     let resp_req = RpcRequest::new(
@@ -80,24 +102,34 @@ async fn test_thread_approval_flow() {
             "decision": "approved"
         })),
     );
-    let resp_res = router.handle_request(resp_req).await.expect("respond response");
+    let resp_res = router
+        .handle_request(resp_req)
+        .await
+        .expect("respond response");
     assert!(resp_res.is_success());
 
     // 5. Await turn settlement
     let mut turn_settled = false;
     for _ in 0..10 {
-        if let Ok(Ok(env)) = timeout(Duration::from_millis(500), event_rx.recv()).await {
-            if let ThreadEventKind::TurnSettled { .. } = env.kind {
-                turn_settled = true;
-                break;
-            }
+        if let Ok(Ok(env)) = timeout(Duration::from_millis(500), event_rx.recv()).await
+            && let ThreadEventKind::TurnSettled { .. } = env.kind
+        {
+            turn_settled = true;
+            break;
         }
     }
-    assert!(turn_settled, "Should have received TurnSettled event after approval");
+    assert!(
+        turn_settled,
+        "Should have received TurnSettled event after approval"
+    );
 
     // Verify thread status settled to Idle
     let final_get = router
-        .handle_request(RpcRequest::new(5, "thread.get", Some(json!({ "threadId": thread_id }))))
+        .handle_request(RpcRequest::new(
+            5,
+            "thread.get",
+            Some(json!({ "threadId": thread_id })),
+        ))
         .await
         .expect("get response");
     assert_eq!(final_get.result.unwrap()["thread"]["status"], "idle");
@@ -107,10 +139,18 @@ async fn test_thread_approval_flow() {
 async fn test_thread_interrupt_flow() {
     let store = Store::in_memory().expect("open store");
     let drivers = Arc::new(DriverRegistry::new());
-    let mock = Arc::new(MockProviderDriver::new(ProviderKind::Custom, "Mock Provider"));
+    let mock = Arc::new(MockProviderDriver::new(
+        ProviderKind::Custom,
+        "Mock Provider",
+    ));
     drivers.register(ProviderKind::Custom, mock);
 
-    let router = Router::with_drivers(store.clone(), ServerRole::Hub, "env-test".to_string(), drivers);
+    let router = Router::with_drivers(
+        store.clone(),
+        ServerRole::Hub,
+        "env-test".to_string(),
+        drivers,
+    );
 
     // 1. Create thread
     let create_req = RpcRequest::new(
@@ -121,8 +161,14 @@ async fn test_thread_interrupt_flow() {
             "model": "mock-fast"
         })),
     );
-    let create_res = router.handle_request(create_req).await.expect("create response");
-    let thread_id = create_res.result.unwrap()["id"].as_str().unwrap().to_string();
+    let create_res = router
+        .handle_request(create_req)
+        .await
+        .expect("create response");
+    let thread_id = create_res.result.unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     let mut event_rx = router.thread_manager().subscribe();
 
@@ -135,14 +181,17 @@ async fn test_thread_interrupt_flow() {
             "text": "request_approval: deploy_production"
         })),
     );
-    router.handle_request(send_req).await.expect("send response");
+    router
+        .handle_request(send_req)
+        .await
+        .expect("send response");
 
     // Wait for approval request event
     for _ in 0..10 {
-        if let Ok(Ok(env)) = timeout(Duration::from_millis(500), event_rx.recv()).await {
-            if let ThreadEventKind::ApprovalRequested { .. } = env.kind {
-                break;
-            }
+        if let Ok(Ok(env)) = timeout(Duration::from_millis(500), event_rx.recv()).await
+            && let ThreadEventKind::ApprovalRequested { .. } = env.kind
+        {
+            break;
         }
     }
 
@@ -152,7 +201,10 @@ async fn test_thread_interrupt_flow() {
         "thread.cancel_turn",
         Some(json!({ "threadId": thread_id })),
     );
-    let cancel_res = router.handle_request(cancel_req).await.expect("cancel response");
+    let cancel_res = router
+        .handle_request(cancel_req)
+        .await
+        .expect("cancel response");
     assert!(cancel_res.is_success());
 
     // 4. Verify thread is back to Idle and turn is Interrupted
@@ -175,7 +227,12 @@ async fn test_thread_resumption_across_restart() {
     );
     drivers1.register(ProviderKind::Custom, mock1);
 
-    let router1 = Router::with_drivers(store.clone(), ServerRole::Hub, "env-test".to_string(), drivers1);
+    let router1 = Router::with_drivers(
+        store.clone(),
+        ServerRole::Hub,
+        "env-test".to_string(),
+        drivers1,
+    );
 
     let create_req = RpcRequest::new(
         1,
@@ -185,8 +242,14 @@ async fn test_thread_resumption_across_restart() {
             "model": "mock-fast"
         })),
     );
-    let create_res = router1.handle_request(create_req).await.expect("create response");
-    let thread_id = create_res.result.unwrap()["id"].as_str().unwrap().to_string();
+    let create_res = router1
+        .handle_request(create_req)
+        .await
+        .expect("create response");
+    let thread_id = create_res.result.unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     let mut event_rx1 = router1.thread_manager().subscribe();
 
@@ -198,24 +261,26 @@ async fn test_thread_resumption_across_restart() {
             "text": "First turn query"
         })),
     );
-    router1.handle_request(send1).await.expect("send 1 response");
+    router1
+        .handle_request(send1)
+        .await
+        .expect("send 1 response");
 
     // Await first turn settle
     for _ in 0..10 {
-        if let Ok(Ok(env)) = timeout(Duration::from_millis(500), event_rx1.recv()).await {
-            if let ThreadEventKind::TurnSettled { .. } = env.kind {
-                break;
-            }
+        if let Ok(Ok(env)) = timeout(Duration::from_millis(500), event_rx1.recv()).await
+            && let ThreadEventKind::TurnSettled { .. } = env.kind
+        {
+            break;
         }
     }
 
     // Verify resume token stored in SQLite
-    let resume_req = RpcRequest::new(
-        3,
-        "thread.resume",
-        Some(json!({ "threadId": thread_id })),
-    );
-    let resume_res = router1.handle_request(resume_req).await.expect("resume response");
+    let resume_req = RpcRequest::new(3, "thread.resume", Some(json!({ "threadId": thread_id })));
+    let resume_res = router1
+        .handle_request(resume_req)
+        .await
+        .expect("resume response");
     assert_eq!(
         resume_res.result.unwrap()["resumeToken"].as_str().unwrap(),
         "res-tok-abc-123"
@@ -229,7 +294,12 @@ async fn test_thread_resumption_across_restart() {
     );
     drivers2.register(ProviderKind::Custom, mock2.clone());
 
-    let router2 = Router::with_drivers(store.clone(), ServerRole::Hub, "env-test".to_string(), drivers2);
+    let router2 = Router::with_drivers(
+        store.clone(),
+        ServerRole::Hub,
+        "env-test".to_string(),
+        drivers2,
+    );
     let mut event_rx2 = router2.thread_manager().subscribe();
 
     // Send second turn after restart
@@ -241,15 +311,18 @@ async fn test_thread_resumption_across_restart() {
             "text": "Second turn continuation"
         })),
     );
-    let send2_res = router2.handle_request(send2).await.expect("send 2 response");
+    let send2_res = router2
+        .handle_request(send2)
+        .await
+        .expect("send 2 response");
     assert!(send2_res.is_success());
 
     // Await second turn settle
     for _ in 0..10 {
-        if let Ok(Ok(env)) = timeout(Duration::from_millis(500), event_rx2.recv()).await {
-            if let ThreadEventKind::TurnSettled { .. } = env.kind {
-                break;
-            }
+        if let Ok(Ok(env)) = timeout(Duration::from_millis(500), event_rx2.recv()).await
+            && let ThreadEventKind::TurnSettled { .. } = env.kind
+        {
+            break;
         }
     }
 
@@ -278,7 +351,10 @@ async fn test_thread_optional_worktree() {
             "worktree": worktree_ref,
         })),
     );
-    let create_res = router.handle_request(create_req).await.expect("create response");
+    let create_res = router
+        .handle_request(create_req)
+        .await
+        .expect("create response");
     assert!(create_res.is_success());
 
     let thread_val = create_res.result.unwrap();
@@ -289,7 +365,10 @@ async fn test_thread_optional_worktree() {
     let thread = get_res.result.unwrap()["thread"].clone();
 
     assert_eq!(thread["workspace"]["cwd"], "/base/repo");
-    assert_eq!(thread["workspace"]["worktree"]["path"], "/custom/worktree/feat-1");
+    assert_eq!(
+        thread["workspace"]["worktree"]["path"],
+        "/custom/worktree/feat-1"
+    );
     assert_eq!(thread["workspace"]["worktree"]["branch"], "feat-1");
     assert_eq!(thread["workspace"]["worktree"]["baseRef"], "master");
 }

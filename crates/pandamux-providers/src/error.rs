@@ -3,36 +3,14 @@ use std::path::PathBuf;
 /// Structured error type for provider drivers and sessions.
 #[derive(Debug)]
 pub enum ProviderError {
-    ProcessFailed {
-        program: String,
-        message: String,
-    },
-    AuthRequired {
-        provider: String,
-        message: String,
-    },
-    ProtocolError {
-        provider: String,
-        message: String,
-    },
-    SessionError {
-        thread_id: String,
-        message: String,
-    },
-    Timeout {
-        timeout_secs: u64,
-    },
-    RateLimitExceeded {
-        provider: String,
-        details: String,
-    },
-    SupervisionError {
-        message: String,
-    },
-    ProfileError {
-        path: PathBuf,
-        message: String,
-    },
+    ProcessFailed { program: String, message: String },
+    AuthRequired { provider: String, message: String },
+    ProtocolError { provider: String, message: String },
+    SessionError { thread_id: String, message: String },
+    Timeout { timeout_secs: u64 },
+    RateLimitExceeded { provider: String, details: String },
+    SupervisionError { message: String },
+    ProfileError { path: PathBuf, message: String },
     Io(std::io::Error),
     Json(serde_json::Error),
     Other(String),
@@ -57,10 +35,16 @@ impl std::fmt::Display for ProviderError {
                 write!(f, "Process execution failed for '{program}': {message}")
             }
             Self::AuthRequired { provider, message } => {
-                write!(f, "Authentication required for provider '{provider}': {message}")
+                write!(
+                    f,
+                    "Authentication required for provider '{provider}': {message}"
+                )
             }
             Self::ProtocolError { provider, message } => {
-                write!(f, "Protocol error parsing output from '{provider}': {message}")
+                write!(
+                    f,
+                    "Protocol error parsing output from '{provider}': {message}"
+                )
             }
             Self::SessionError { thread_id, message } => {
                 write!(f, "Session error in thread '{thread_id}': {message}")
@@ -69,7 +53,10 @@ impl std::fmt::Display for ProviderError {
                 write!(f, "Operation timed out after {timeout_secs}s")
             }
             Self::RateLimitExceeded { provider, details } => {
-                write!(f, "Rate limit exceeded for provider '{provider}': {details}")
+                write!(
+                    f,
+                    "Rate limit exceeded for provider '{provider}': {details}"
+                )
             }
             Self::SupervisionError { message } => {
                 write!(f, "Supervision error: {message}")

@@ -32,8 +32,8 @@ pub fn resolve_command_shim(cmd: &str) -> Option<ResolvedCommand> {
 
     #[cfg(windows)]
     {
-        let pathext = env::var("PATHEXT")
-            .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD;.VBS;.JS;.WS;.MSC".into());
+        let pathext =
+            env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD;.VBS;.JS;.WS;.MSC".into());
         let extensions: Vec<String> = pathext
             .split(';')
             .map(|ext| ext.trim().to_lowercase())
@@ -121,7 +121,10 @@ mod tests {
         let target = "sh";
 
         let resolved = resolve_command_shim(target);
-        assert!(resolved.is_some(), "System target '{target}' should resolve");
+        assert!(
+            resolved.is_some(),
+            "System target '{target}' should resolve"
+        );
         let res = resolved.unwrap();
         assert!(res.program.exists());
         assert!(res.is_direct_executable);

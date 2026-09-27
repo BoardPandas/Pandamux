@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::ids::{EnvironmentId, SshProfileId};
+use serde::{Deserialize, Serialize};
 
 /// Target machine or execution host where threads, worktrees, and schedules run.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -18,9 +18,7 @@ pub struct Environment {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EnvironmentKind {
     Local,
-    Ssh {
-        profile_id: SshProfileId,
-    },
+    Ssh { profile_id: SshProfileId },
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

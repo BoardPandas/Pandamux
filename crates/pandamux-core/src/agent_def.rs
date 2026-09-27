@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::ids::{AgentId, ProjectId, RunId};
+use serde::{Deserialize, Serialize};
 
 /// Canonical agent definition resolved from layered configuration.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,9 +34,7 @@ pub enum AgentScope {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentAuthor {
     User,
-    Orchestrator {
-        run_id: RunId,
-    },
+    Orchestrator { run_id: RunId },
 }
 
 /// A proposed or applied modification to an agent definition.
@@ -83,8 +81,6 @@ pub struct MemoryEntry {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MemoryScope {
-    Project {
-        project_id: ProjectId,
-    },
+    Project { project_id: ProjectId },
     AgentWide,
 }

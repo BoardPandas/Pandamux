@@ -6,12 +6,17 @@ use pandamux_desktop::{AccentColor, AppView, Theme};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let is_headless = args.iter().any(|arg| arg == "--headless" || arg == "--bench");
+    let is_headless = args
+        .iter()
+        .any(|arg| arg == "--headless" || arg == "--bench");
 
     if is_headless {
         println!("Running PandaMUX Desktop in headless verification mode...");
         let theme = Theme::dark(AccentColor::Teal);
-        println!("Theme initialized: {:?} with accent {:?}", theme.mode, theme.accent);
+        println!(
+            "Theme initialized: {:?} with accent {:?}",
+            theme.mode, theme.accent
+        );
         println!("Headless check: ALL CHECKS PASSED.");
         return;
     }
@@ -41,8 +46,10 @@ fn main() {
                 if is_smoke {
                     cx.spawn(async move |cx| {
                         smol::Timer::after(Duration::from_millis(500)).await;
-                        println!("PandaMUX Desktop Smoke Test: Window initialized and rendered cleanly.");
-                        let _ = cx.update(|cx| cx.quit());
+                        println!(
+                            "PandaMUX Desktop Smoke Test: Window initialized and rendered cleanly."
+                        );
+                        cx.update(|cx| cx.quit());
                     })
                     .detach();
                 }

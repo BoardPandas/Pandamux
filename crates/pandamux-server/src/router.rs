@@ -1,13 +1,13 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use pandamux_core::UserSettings;
 use pandamux_protocol::{
-    HelloParams, HelloResult, IdentifyResult, McpCallToolParams, PingResult, RpcError, RpcRequest,
-    RpcResponse, ServerCapabilities, ServerRole, ThreadCancelTurnParams, ThreadCreateParams,
-    ThreadGetParams, ThreadListParams, ThreadRespondApprovalParams, ThreadResumeParams,
-    ThreadSendTurnParams, PROTOCOL_VERSION,
+    HelloParams, HelloResult, IdentifyResult, McpCallToolParams, PROTOCOL_VERSION, PingResult,
+    RpcError, RpcRequest, RpcResponse, ServerCapabilities, ServerRole, ThreadCancelTurnParams,
+    ThreadCreateParams, ThreadGetParams, ThreadListParams, ThreadRespondApprovalParams,
+    ThreadResumeParams, ThreadSendTurnParams,
 };
 
 use crate::driver_registry::DriverRegistry;
@@ -109,7 +109,7 @@ impl Router {
             pong: true,
             timestamp_ms: Self::now_ms(),
         };
-        Ok(serde_json::to_value(ping).map_err(|e| RpcError::internal_error(e.to_string()))?)
+        serde_json::to_value(ping).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
     fn handle_hello(&self, params: Value) -> Result<Value, RpcError> {
@@ -136,7 +136,7 @@ impl Router {
             },
         };
 
-        Ok(serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))?)
+        serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
     fn handle_identify(&self) -> Result<Value, RpcError> {
@@ -147,7 +147,7 @@ impl Router {
             platform: std::env::consts::OS.to_string(),
             environment_id: self.environment_id.clone(),
         };
-        Ok(serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))?)
+        serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
     fn handle_capabilities(&self) -> Result<Value, RpcError> {
@@ -158,21 +158,21 @@ impl Router {
             mcp: true,
             schedules: true,
         };
-        Ok(serde_json::to_value(caps).map_err(|e| RpcError::internal_error(e.to_string()))?)
+        serde_json::to_value(caps).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
     fn handle_thread_create(&self, params: Value) -> Result<Value, RpcError> {
-        let p: ThreadCreateParams = serde_json::from_value(params)
-            .map_err(|e| RpcError::invalid_params(e.to_string()))?;
+        let p: ThreadCreateParams =
+            serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
         let thread = self.thread_manager.create_thread(p)?;
-        Ok(serde_json::to_value(&thread).map_err(|e| RpcError::internal_error(e.to_string()))?)
+        serde_json::to_value(&thread).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
     fn handle_thread_get(&self, params: Value) -> Result<Value, RpcError> {
-        let p: ThreadGetParams = serde_json::from_value(params)
-            .map_err(|e| RpcError::invalid_params(e.to_string()))?;
+        let p: ThreadGetParams =
+            serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
         let result = self.thread_manager.get_thread(p)?;
-        Ok(serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))?)
+        serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
     fn handle_thread_list(&self, params: Value) -> Result<Value, RpcError> {
@@ -182,35 +182,35 @@ impl Router {
             serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?
         };
         let threads = self.thread_manager.list_threads(p)?;
-        Ok(serde_json::to_value(threads).map_err(|e| RpcError::internal_error(e.to_string()))?)
+        serde_json::to_value(threads).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
     async fn handle_thread_send_turn(&self, params: Value) -> Result<Value, RpcError> {
-        let p: ThreadSendTurnParams = serde_json::from_value(params)
-            .map_err(|e| RpcError::invalid_params(e.to_string()))?;
+        let p: ThreadSendTurnParams =
+            serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
         let result = self.thread_manager.send_turn(p).await?;
-        Ok(serde_json::to_value(&result).map_err(|e| RpcError::internal_error(e.to_string()))?)
+        serde_json::to_value(&result).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
     async fn handle_thread_cancel_turn(&self, params: Value) -> Result<Value, RpcError> {
-        let p: ThreadCancelTurnParams = serde_json::from_value(params)
-            .map_err(|e| RpcError::invalid_params(e.to_string()))?;
+        let p: ThreadCancelTurnParams =
+            serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
         self.thread_manager.interrupt_turn(p).await?;
         Ok(json!({ "interrupted": true }))
     }
 
     async fn handle_thread_respond_approval(&self, params: Value) -> Result<Value, RpcError> {
-        let p: ThreadRespondApprovalParams = serde_json::from_value(params)
-            .map_err(|e| RpcError::invalid_params(e.to_string()))?;
+        let p: ThreadRespondApprovalParams =
+            serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
         self.thread_manager.respond_approval(p).await?;
         Ok(json!({ "acknowledged": true }))
     }
 
     fn handle_thread_resume(&self, params: Value) -> Result<Value, RpcError> {
-        let p: ThreadResumeParams = serde_json::from_value(params)
-            .map_err(|e| RpcError::invalid_params(e.to_string()))?;
+        let p: ThreadResumeParams =
+            serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
         let result = self.thread_manager.resume_thread(p)?;
-        Ok(serde_json::to_value(&result).map_err(|e| RpcError::internal_error(e.to_string()))?)
+        serde_json::to_value(&result).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
     fn handle_settings_get(&self) -> Result<Value, RpcError> {
@@ -219,12 +219,12 @@ impl Router {
             .get_settings()
             .map_err(|e| RpcError::internal_error(e.to_string()))?
             .unwrap_or_default();
-        Ok(serde_json::to_value(settings).map_err(|e| RpcError::internal_error(e.to_string()))?)
+        serde_json::to_value(settings).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
     fn handle_settings_set(&self, params: Value) -> Result<Value, RpcError> {
-        let settings: UserSettings = serde_json::from_value(params)
-            .map_err(|e| RpcError::invalid_params(e.to_string()))?;
+        let settings: UserSettings =
+            serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
         self.store
             .save_settings(&settings)
             .map_err(|e| RpcError::internal_error(e.to_string()))?;
@@ -233,23 +233,34 @@ impl Router {
 
     fn handle_mcp_list_tools(&self) -> Result<Value, RpcError> {
         let tools = self.mcp.list_tools();
-        Ok(serde_json::to_value(tools).map_err(|e| RpcError::internal_error(e.to_string()))?)
+        serde_json::to_value(tools).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
     fn handle_mcp_call_tool(&self, params: Value) -> Result<Value, RpcError> {
-        let call_params: McpCallToolParams = serde_json::from_value(params)
-            .map_err(|e| RpcError::invalid_params(e.to_string()))?;
+        let call_params: McpCallToolParams =
+            serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
         let result = self.mcp.call_tool(&call_params);
-        Ok(serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))?)
+        serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
     async fn handle_notification_post(&self, params: Value) -> Result<Value, RpcError> {
-        let title = params.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let title = params
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         if title.is_empty() {
             return Err(RpcError::invalid_params("Notification title is required"));
         }
-        let body = params.get("body").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let source_str = params.get("source").and_then(|v| v.as_str()).unwrap_or("generic");
+        let body = params
+            .get("body")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let source_str = params
+            .get("source")
+            .and_then(|v| v.as_str())
+            .unwrap_or("generic");
         let source = match source_str {
             "build" => pandamux_core::notification::NotificationSource::Build,
             "agent" => pandamux_core::notification::NotificationSource::Agent,
@@ -278,7 +289,7 @@ impl Router {
 
     async fn handle_notification_list(&self) -> Result<Value, RpcError> {
         let lock = self.notifications.lock().await;
-        Ok(serde_json::to_value(&*lock).map_err(|e| RpcError::internal_error(e.to_string()))?)
+        serde_json::to_value(&*lock).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
     async fn handle_notification_clear(&self, params: Value) -> Result<Value, RpcError> {
@@ -347,7 +358,10 @@ mod tests {
                 "model": "mock-fast"
             })),
         );
-        let res = router.handle_request(create_req).await.expect("create response");
+        let res = router
+            .handle_request(create_req)
+            .await
+            .expect("create response");
         assert!(res.is_success());
         let thread_val = res.result.unwrap();
         let thread_id = thread_val["id"].as_str().unwrap().to_string();
@@ -364,7 +378,10 @@ mod tests {
                 "text": "Hello PandaMUX"
             })),
         );
-        let send_res = router.handle_request(send_req).await.expect("send response");
+        let send_res = router
+            .handle_request(send_req)
+            .await
+            .expect("send response");
         assert!(send_res.is_success());
 
         // 4. Receive streamed events

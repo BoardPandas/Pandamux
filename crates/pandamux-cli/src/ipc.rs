@@ -1,10 +1,10 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use pandamux_protocol::{RpcId, RpcRequest, RpcResponse};
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines, ReadHalf, WriteHalf};
 
@@ -62,15 +62,14 @@ impl IpcClient {
             .await
             .map_err(|e| format!("IPC read error: {e}"))?
         {
-            if let Ok(resp) = serde_json::from_str::<RpcResponse>(&line) {
-                if let Some(resp_id) = resp.id {
-                    if resp_id == RpcId::Number(id) {
-                        if let Some(err) = resp.error {
-                            return Err(format!("{}: {}", err.code, err.message));
-                        }
-                        return Ok(resp.result.unwrap_or(Value::Null));
-                    }
+            if let Ok(resp) = serde_json::from_str::<RpcResponse>(&line)
+                && let Some(resp_id) = resp.id
+                && resp_id == RpcId::Number(id)
+            {
+                if let Some(err) = resp.error {
+                    return Err(format!("{}: {}", err.code, err.message));
                 }
+                return Ok(resp.result.unwrap_or(Value::Null));
             }
         }
 
@@ -83,11 +82,10 @@ impl IpcClient {
         method: &str,
         params: &P,
     ) -> Result<R, String> {
-        let val = serde_json::to_value(params)
-            .map_err(|e| format!("Failed to serialize params: {e}"))?;
+        let val =
+            serde_json::to_value(params).map_err(|e| format!("Failed to serialize params: {e}"))?;
         let result = self.call(method, Some(val)).await?;
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse response: {e}"))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse response: {e}"))
     }
 
     /// Reads the next incoming line from the server.
@@ -117,10 +115,10 @@ impl IpcClient {
 
 /// Resolves the server pipe/socket path from env or `server.json`.
 pub fn resolve_pipe_path() -> Result<String, String> {
-    if let Ok(pipe) = std::env::var("PANDAMUX_PIPE") {
-        if !pipe.trim().is_empty() {
-            return Ok(pipe.trim().to_string());
-        }
+    if let Ok(pipe) = std::env::var("PANDAMUX_PIPE")
+        && !pipe.trim().is_empty()
+    {
+        return Ok(pipe.trim().to_string());
     }
 
     let server_json = get_server_runtime_path()
@@ -150,13 +148,37 @@ pub fn get_server_runtime_path() -> Option<PathBuf> {
     #[cfg(windows)]
     {
         let local_app_data = std::env::var("LOCALAPPDATA").ok()?;
-        Some(PathBuf::from(local_app_data).join("pandamux").join("server.json"))
+        let p1 = PathBuf::from(&local_app_data)
+            .join("pandamux")
+            .join("server.json");
+        if p1.exists() {
+            return Some(p1);
+        }
+        let p2 = PathBuf::from(&local_app_data)
+            .join("pandamux")
+            .join("run")
+            .join("server.json");
+        if p2.exists() {
+            return Some(p2);
+        }
+        Some(p1)
     }
 
     #[cfg(not(windows))]
     {
         let home = std::env::var("HOME").ok()?;
-        Some(PathBuf::from(home).join(".pandamux").join("server.json"))
+        let p1 = PathBuf::from(&home).join(".pandamux").join("server.json");
+        if p1.exists() {
+            return Some(p1);
+        }
+        let p2 = PathBuf::from(&home)
+            .join(".pandamux")
+            .join("run")
+            .join("server.json");
+        if p2.exists() {
+            return Some(p2);
+        }
+        Some(p1)
     }
 }
 

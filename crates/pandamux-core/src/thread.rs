@@ -1,5 +1,7 @@
+use crate::ids::{
+    AgentId, EnvironmentId, ProjectId, ProviderInstanceId, RunId, ScheduleId, ThreadId, TurnId,
+};
 use serde::{Deserialize, Serialize};
-use crate::ids::{AgentId, EnvironmentId, ProjectId, ProviderInstanceId, RunId, ScheduleId, ThreadId, TurnId};
 
 /// Core thread entity representing a conversation with an agent or provider.
 /// Global Orchestrator threads have `project_id: None`.

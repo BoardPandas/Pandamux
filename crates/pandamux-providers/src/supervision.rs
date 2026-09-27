@@ -1,7 +1,7 @@
+use crate::error::ProviderError;
 use std::path::Path;
 use std::process::Stdio;
 use tokio::process::{Child, Command};
-use crate::error::ProviderError;
 
 /// Windows creation flag that suppresses console window popup for child processes.
 pub const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -143,9 +143,9 @@ fn setup_windows_job_object(child: &Child) -> Result<isize, ProviderError> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
-        JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+        SetInformationJobObject,
     };
 
     unsafe {

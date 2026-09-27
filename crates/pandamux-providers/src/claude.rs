@@ -1,10 +1,10 @@
-use std::path::{Path, PathBuf};
 use pandamux_core::{
     event::{ApprovalDecision, ApprovalKind, TurnOutcome},
     provider_config::{ProviderCapabilities, ProviderInstanceConfig, ProviderKind},
     thread::{AccessMode, TurnInput, TurnUsage},
 };
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
@@ -15,7 +15,7 @@ use crate::models::{
 };
 use crate::profiles::{apply_profile_environment, ensure_profile_dir, resolve_profile_dir};
 use crate::shim_resolver::resolve_command_shim;
-use crate::supervision::{create_supervised_command, SupervisedChild};
+use crate::supervision::{SupervisedChild, create_supervised_command};
 use crate::traits::{BoxFuture, ProviderDriver, ProviderSession};
 
 /// Claude authentication status returned by `claude auth status --json`.
@@ -115,18 +115,20 @@ pub async fn probe_claude_auth(
         cmd.creation_flags(crate::supervision::CREATE_NO_WINDOW);
     }
 
-    let output = cmd.output().await.map_err(|e| ProviderError::ProcessFailed {
-        program: claude_bin.display().to_string(),
-        message: e.to_string(),
-    })?;
+    let output = cmd
+        .output()
+        .await
+        .map_err(|e| ProviderError::ProcessFailed {
+            program: claude_bin.display().to_string(),
+            message: e.to_string(),
+        })?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let status: ClaudeAuthStatus = serde_json::from_str(&stdout).map_err(|e| {
-        ProviderError::ProtocolError {
+    let status: ClaudeAuthStatus =
+        serde_json::from_str(&stdout).map_err(|e| ProviderError::ProtocolError {
             provider: "claude".into(),
             message: format!("Failed to parse auth status JSON: {e} (stdout: {stdout})"),
-        }
-    })?;
+        })?;
 
     Ok(status)
 }
@@ -209,7 +211,11 @@ pub fn parse_stream_json_lines(ndjson: &str) -> Result<ParsedClaudeStream, Provi
             "tool_use" => {
                 let name = val.get("name").and_then(|v| v.as_str()).unwrap_or_default();
                 if name == "Task" {
-                    let tool_use_id = val.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                    let tool_use_id = val
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
                     let parent_tool_use_id = val
                         .get("parent_tool_use_id")
                         .and_then(|v| v.as_str())
@@ -225,7 +231,10 @@ pub fn parse_stream_json_lines(ndjson: &str) -> Result<ParsedClaudeStream, Provi
                         .and_then(|v| v.as_str())
                         .unwrap_or_default()
                         .to_string();
-                    let model = input.get("model").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let model = input
+                        .get("model")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
 
                     parsed.subagents.push(SubAgentSpawn {
                         tool_use_id,
@@ -239,10 +248,10 @@ pub fn parse_stream_json_lines(ndjson: &str) -> Result<ParsedClaudeStream, Provi
             "assistant" => {
                 if let Some(content_arr) = val.get("content").and_then(|v| v.as_array()) {
                     for item in content_arr {
-                        if item.get("type").and_then(|v| v.as_str()) == Some("text") {
-                            if let Some(txt) = item.get("text").and_then(|v| v.as_str()) {
-                                parsed.assistant_text.push_str(txt);
-                            }
+                        if item.get("type").and_then(|v| v.as_str()) == Some("text")
+                            && let Some(txt) = item.get("text").and_then(|v| v.as_str())
+                        {
+                            parsed.assistant_text.push_str(txt);
                         }
                     }
                 }
@@ -286,8 +295,14 @@ pub fn parse_stream_json_line(line: &str) -> Option<ProviderEvent> {
     match event_type {
         "control_request" => {
             let req_id = val.get("request_id")?.as_str()?.to_string();
-            let tool_name = val.get("tool_name").and_then(|v| v.as_str()).unwrap_or("unknown");
-            let command = val.get("command").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let tool_name = val
+                .get("tool_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let command = val
+                .get("command")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
 
             let kind = match tool_name {
                 "Bash" => ApprovalKind::CommandExecution,
@@ -322,7 +337,10 @@ pub fn parse_stream_json_line(line: &str) -> Option<ProviderEvent> {
                     .and_then(|v| v.as_str())
                     .unwrap_or_default()
                     .to_string();
-                let model = input.get("model").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let model = input
+                    .get("model")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
 
                 Some(ProviderEvent::SubAgentSpawned {
                     tool_use_id: id,
@@ -343,10 +361,10 @@ pub fn parse_stream_json_line(line: &str) -> Option<ProviderEvent> {
             if let Some(content_arr) = val.get("content").and_then(|v| v.as_array()) {
                 let mut text = String::new();
                 for item in content_arr {
-                    if item.get("type").and_then(|v| v.as_str()) == Some("text") {
-                        if let Some(txt) = item.get("text").and_then(|v| v.as_str()) {
-                            text.push_str(txt);
-                        }
+                    if item.get("type").and_then(|v| v.as_str()) == Some("text")
+                        && let Some(txt) = item.get("text").and_then(|v| v.as_str())
+                    {
+                        text.push_str(txt);
                     }
                 }
                 if !text.is_empty() {
@@ -356,21 +374,26 @@ pub fn parse_stream_json_line(line: &str) -> Option<ProviderEvent> {
             None
         }
         "content_block_delta" => {
-            if let Some(delta) = val.get("delta") {
-                if delta.get("type").and_then(|v| v.as_str()) == Some("text_delta") {
-                    if let Some(txt) = delta.get("text").and_then(|v| v.as_str()) {
-                        return Some(ProviderEvent::TextDelta {
-                            delta: txt.to_string(),
-                        });
-                    }
-                }
+            if let Some(delta) = val.get("delta")
+                && delta.get("type").and_then(|v| v.as_str()) == Some("text_delta")
+                && let Some(txt) = delta.get("text").and_then(|v| v.as_str())
+            {
+                return Some(ProviderEvent::TextDelta {
+                    delta: txt.to_string(),
+                });
             }
             None
         }
         "result" => {
             let usage = val.get("usage").map(|u| TurnUsage {
-                input_tokens: u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or_default(),
-                output_tokens: u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or_default(),
+                input_tokens: u
+                    .get("input_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or_default(),
+                output_tokens: u
+                    .get("output_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or_default(),
                 cost_usd: u.get("cost_usd").and_then(|v| v.as_f64()),
                 ..Default::default()
             });
@@ -450,7 +473,8 @@ impl ProviderDriver for ClaudeDriver {
 
     fn probe<'a>(&'a self, cfg: &'a ProviderInstanceConfig) -> BoxFuture<'a, ProviderSnapshot> {
         Box::pin(async move {
-            let profile_dir = resolve_profile_dir(&self.base_data_dir, ProviderKind::Claude, &cfg.id);
+            let profile_dir =
+                resolve_profile_dir(&self.base_data_dir, ProviderKind::Claude, &cfg.id);
             let binary = self.resolve_claude_binary(cfg);
 
             if let Some(bin) = binary {
@@ -505,7 +529,10 @@ impl ProviderDriver for ClaudeDriver {
         Box::pin(async move { Ok(self.metadata().supported_models) })
     }
 
-    fn usage_limits<'a>(&'a self, _cfg: &'a ProviderInstanceConfig) -> BoxFuture<'a, Option<UsageLimits>> {
+    fn usage_limits<'a>(
+        &'a self,
+        _cfg: &'a ProviderInstanceConfig,
+    ) -> BoxFuture<'a, Option<UsageLimits>> {
         Box::pin(async move { None })
     }
 
@@ -515,14 +542,15 @@ impl ProviderDriver for ClaudeDriver {
         spec: SessionSpec,
     ) -> BoxFuture<'a, Result<Box<dyn ProviderSession>, ProviderError>> {
         Box::pin(async move {
-            let binary = self.resolve_claude_binary(cfg).ok_or_else(|| {
-                ProviderError::ProcessFailed {
-                    program: "claude".to_string(),
-                    message: "Executable not found in PATH".to_string(),
-                }
-            })?;
+            let binary =
+                self.resolve_claude_binary(cfg)
+                    .ok_or_else(|| ProviderError::ProcessFailed {
+                        program: "claude".to_string(),
+                        message: "Executable not found in PATH".to_string(),
+                    })?;
 
-            let profile_dir = resolve_profile_dir(&self.base_data_dir, ProviderKind::Claude, &cfg.id);
+            let profile_dir =
+                resolve_profile_dir(&self.base_data_dir, ProviderKind::Claude, &cfg.id);
             ensure_profile_dir(&profile_dir)?;
 
             let perm_mode = match spec.access {
@@ -550,15 +578,24 @@ impl ProviderDriver for ClaudeDriver {
             let mut cmd = create_supervised_command(&binary);
             cmd.args(&args);
             cmd.current_dir(&spec.cwd);
-            apply_profile_environment(&mut cmd, ProviderKind::Claude, &profile_dir, &cfg.env_overrides);
+            apply_profile_environment(
+                &mut cmd,
+                ProviderKind::Claude,
+                &profile_dir,
+                &cfg.env_overrides,
+            );
 
             let mut child = SupervisedChild::spawn(cmd)?;
-            let stdin = child.take_stdin().ok_or_else(|| ProviderError::SupervisionError {
-                message: "Failed to open child stdin".to_string(),
-            })?;
-            let stdout = child.take_stdout().ok_or_else(|| ProviderError::SupervisionError {
-                message: "Failed to open child stdout".to_string(),
-            })?;
+            let stdin = child
+                .take_stdin()
+                .ok_or_else(|| ProviderError::SupervisionError {
+                    message: "Failed to open child stdin".to_string(),
+                })?;
+            let stdout = child
+                .take_stdout()
+                .ok_or_else(|| ProviderError::SupervisionError {
+                    message: "Failed to open child stdout".to_string(),
+                })?;
 
             let (tx, rx) = mpsc::channel(128);
 
@@ -566,10 +603,10 @@ impl ProviderDriver for ClaudeDriver {
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stdout).lines();
                 while let Ok(Some(line)) = reader.next_line().await {
-                    if let Some(event) = parse_stream_json_line(&line) {
-                        if tx.send(event).await.is_err() {
-                            break;
-                        }
+                    if let Some(event) = parse_stream_json_line(&line)
+                        && tx.send(event).await.is_err()
+                    {
+                        break;
                     }
                 }
             });
@@ -608,7 +645,9 @@ impl ProviderSession for ClaudeSession {
     }
 
     fn events(&mut self) -> &mut mpsc::Receiver<ProviderEvent> {
-        self.events_rx.as_mut().expect("events receiver already taken")
+        self.events_rx
+            .as_mut()
+            .expect("events receiver already taken")
     }
 
     fn take_event_receiver(&mut self) -> Option<mpsc::Receiver<ProviderEvent>> {

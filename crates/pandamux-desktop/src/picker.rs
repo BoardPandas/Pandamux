@@ -155,16 +155,16 @@ impl PickerState {
 
     /// Cycles to the next available model for the active provider.
     pub fn cycle_model(&mut self) {
-        if let Some(prov) = self.providers.iter().find(|p| p.id == self.provider_id) {
-            if !prov.models.is_empty() {
-                let current_idx = prov
-                    .models
-                    .iter()
-                    .position(|m| m.id == self.model_id)
-                    .unwrap_or(0);
-                let next_idx = (current_idx + 1) % prov.models.len();
-                self.model_id = prov.models[next_idx].id.clone();
-            }
+        if let Some(prov) = self.providers.iter().find(|p| p.id == self.provider_id)
+            && !prov.models.is_empty()
+        {
+            let current_idx = prov
+                .models
+                .iter()
+                .position(|m| m.id == self.model_id)
+                .unwrap_or(0);
+            let next_idx = (current_idx + 1) % prov.models.len();
+            self.model_id = prov.models[next_idx].id.clone();
         }
     }
 
@@ -205,10 +205,10 @@ impl PickerState {
 
     /// Returns current model display name.
     pub fn current_model_name(&self) -> &str {
-        if let Some(prov) = self.providers.iter().find(|p| p.id == self.provider_id) {
-            if let Some(model) = prov.models.iter().find(|m| m.id == self.model_id) {
-                return &model.display_name;
-            }
+        if let Some(prov) = self.providers.iter().find(|p| p.id == self.provider_id)
+            && let Some(model) = prov.models.iter().find(|m| m.id == self.model_id)
+        {
+            return &model.display_name;
         }
         &self.model_id
     }

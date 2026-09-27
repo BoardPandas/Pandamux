@@ -1,10 +1,10 @@
-use std::collections::HashMap;
+use crate::projections::ThreadProjection;
+use crate::transport::{MockTransport, TransportError};
 use pandamux_core::{Thread, ThreadEvent, ThreadId};
 use pandamux_protocol::{
     EventEnvelope, HelloParams, PROTOCOL_VERSION, RpcId, RpcRequest, SubscribeParams,
 };
-use crate::projections::ThreadProjection;
-use crate::transport::{MockTransport, TransportError};
+use std::collections::HashMap;
 
 /// Client interface managing transport, request routing, and live projections.
 pub struct PandamuxClient {
@@ -51,7 +51,8 @@ impl PandamuxClient {
     /// Register or track a thread projection.
     pub fn track_thread(&mut self, thread: Thread) {
         let id = thread.id.clone();
-        self.thread_projections.insert(id, ThreadProjection::new(thread));
+        self.thread_projections
+            .insert(id, ThreadProjection::new(thread));
     }
 
     pub fn get_thread_projection(&self, id: &ThreadId) -> Option<&ThreadProjection> {

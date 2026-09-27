@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::ids::EnvironmentId;
+use serde::{Deserialize, Serialize};
 
 /// Terminal session metadata for local or remote shell surfaces.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

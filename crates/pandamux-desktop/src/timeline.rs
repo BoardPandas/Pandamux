@@ -13,7 +13,9 @@ pub fn render_timeline_item<V: 'static>(
     item: &TimelineItem,
     thread_id: &ThreadId,
     theme: &Theme,
-    on_approve: impl Fn(&mut V, ThreadId, String, ApprovalDecision, &mut Window, &mut Context<V>) + 'static + Copy,
+    on_approve: impl Fn(&mut V, ThreadId, String, ApprovalDecision, &mut Window, &mut Context<V>)
+    + 'static
+    + Copy,
     cx: &mut Context<V>,
 ) -> AnyElement {
     match item {
@@ -27,17 +29,13 @@ pub fn render_timeline_item<V: 'static>(
             .v_flex()
             .gap_1()
             .child(
-                div()
-                    .h_flex()
-                    .items_center()
-                    .gap_1p5()
-                    .child(
-                        div()
-                            .text_size(Typography::META_SIZE)
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(theme.accent.color())
-                            .child("👤 You"),
-                    ),
+                div().h_flex().items_center().gap_1p5().child(
+                    div()
+                        .text_size(Typography::META_SIZE)
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(theme.accent.color())
+                        .child("👤 You"),
+                ),
             )
             .child(
                 div()
@@ -57,17 +55,13 @@ pub fn render_timeline_item<V: 'static>(
             .v_flex()
             .gap_1()
             .child(
-                div()
-                    .h_flex()
-                    .items_center()
-                    .gap_1p5()
-                    .child(
-                        div()
-                            .text_size(Typography::META_SIZE)
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(theme.accent.color())
-                            .child("🐼 Assistant"),
-                    ),
+                div().h_flex().items_center().gap_1p5().child(
+                    div()
+                        .text_size(Typography::META_SIZE)
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(theme.accent.color())
+                        .child("🐼 Assistant"),
+                ),
             )
             .child(
                 div()
@@ -259,16 +253,8 @@ pub fn render_timeline_item<V: 'static>(
                         .h_flex()
                         .items_center()
                         .gap_2()
-                        .child(
-                            div()
-                                .text_size(Typography::BODY_SIZE)
-                                .child("📄"),
-                        )
-                        .child(
-                            div()
-                                .text_size(Typography::BODY_SIZE)
-                                .child(path.clone()),
-                        ),
+                        .child(div().text_size(Typography::BODY_SIZE).child("📄"))
+                        .child(div().text_size(Typography::BODY_SIZE).child(path.clone())),
                 )
                 .child(
                     div()
@@ -324,11 +310,7 @@ pub fn render_timeline_item<V: 'static>(
                         .text_color(theme.terminal.warn)
                         .child(format!("⚠️ Approval Requested: {kind_title}")),
                 )
-                .child(
-                    div()
-                        .text_size(Typography::BODY_SIZE)
-                        .child(detail_text),
-                )
+                .child(div().text_size(Typography::BODY_SIZE).child(detail_text))
                 .child(if let Some(dec) = decision {
                     let dec_color = match dec {
                         ApprovalDecision::Approved => theme.terminal.success,

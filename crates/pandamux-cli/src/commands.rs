@@ -2,10 +2,11 @@ use std::time::Instant;
 
 use pandamux_core::{Thread, ThreadId, ThreadStatus};
 use pandamux_protocol::{
-    IdentifyResult, McpCallToolParams, McpCallToolResult, McpToolDefinition, PingResult,
-    ThreadListParams, ThreadSendTurnParams, ThreadSendTurnResult,
+    HelloParams, HelloResult, IdentifyResult, McpCallToolParams, McpCallToolResult,
+    McpToolDefinition, PROTOCOL_VERSION, PingResult, ThreadListParams, ThreadSendTurnParams,
+    ThreadSendTurnResult,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::ipc::IpcClient;
@@ -31,6 +32,28 @@ pub async fn cmd_ping(pipe: Option<&str>, json_output: bool) -> Result<(), Strin
         println!(
             "PONG: {:.2}ms latency (server time: {})",
             latency_ms, res.timestamp_ms
+        );
+    }
+
+    Ok(())
+}
+
+/// Runs `pandamux hello` command, performing a system handshake.
+pub async fn cmd_hello(pipe: Option<&str>, json_output: bool) -> Result<(), String> {
+    let mut client = IpcClient::connect(pipe).await?;
+    let params = HelloParams {
+        protocol_version: PROTOCOL_VERSION,
+        client_kind: "pandamux-cli".to_string(),
+        client_version: env!("CARGO_PKG_VERSION").to_string(),
+    };
+    let res: HelloResult = client.call_typed("system.hello", &params).await?;
+
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
+    } else {
+        println!(
+            "Handshake OK: server_version={}, protocol_version=v{}, role={:?}",
+            res.server_version, res.protocol_version, res.role
         );
     }
 
@@ -79,13 +102,16 @@ pub async fn cmd_thread_list(
     }
 
     if json_output {
-        println!("{}", serde_json::to_string_pretty(&threads).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&threads).unwrap_or_default()
+        );
     } else if threads.is_empty() {
         println!("No active threads found.");
     } else {
         println!(
-            "{:<36}  {:<12}  {:<20}  {:<18}  {}",
-            "THREAD ID", "STATUS", "PROVIDER", "MODEL", "TITLE"
+            "{:<36}  {:<12}  {:<20}  {:<18}  TITLE",
+            "THREAD ID", "STATUS", "PROVIDER", "MODEL"
         );
         println!("{}", "-".repeat(105));
         for t in &threads {
@@ -194,10 +220,7 @@ pub async fn cmd_mcp(pipe: Option<&str>) -> Result<(), String> {
         };
 
         let id = parsed.get("id").cloned().unwrap_or(Value::Null);
-        let method = parsed
-            .get("method")
-            .and_then(|m| m.as_str())
-            .unwrap_or("");
+        let method = parsed.get("method").and_then(|m| m.as_str()).unwrap_or("");
         let params = parsed.get("params").cloned().unwrap_or(Value::Null);
 
         let response = match method {

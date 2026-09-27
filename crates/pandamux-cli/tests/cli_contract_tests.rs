@@ -11,7 +11,10 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 #[tokio::test]
 async fn test_cli_ipc_contract_ping_and_identify() {
-    let sock_path = std::env::temp_dir().join(format!("test_pandamux_{}.sock", uuid::Uuid::new_v4().simple()));
+    let sock_path = std::env::temp_dir().join(format!(
+        "test_pandamux_{}.sock",
+        uuid::Uuid::new_v4().simple()
+    ));
     let sock_str = sock_path.to_string_lossy().to_string();
     let _ = std::fs::remove_file(&sock_path);
 
@@ -37,12 +40,12 @@ async fn test_cli_ipc_contract_ping_and_identify() {
                 let (reader, mut writer) = tokio::io::split(stream);
                 let mut lines = BufReader::new(reader).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    if let Ok(req) = serde_json::from_str::<RpcRequest>(&line) {
-                        if let Some(resp) = router.handle_request(req).await {
-                            let mut out = serde_json::to_string(&resp).unwrap_or_default();
-                            out.push('\n');
-                            let _ = writer.write_all(out.as_bytes()).await;
-                        }
+                    if let Ok(req) = serde_json::from_str::<RpcRequest>(&line)
+                        && let Some(resp) = router.handle_request(req).await
+                    {
+                        let mut out = serde_json::to_string(&resp).unwrap_or_default();
+                        out.push('\n');
+                        let _ = writer.write_all(out.as_bytes()).await;
                     }
                 }
             });

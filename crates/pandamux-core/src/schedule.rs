@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::ids::{EnvironmentId, ScheduleId};
+use serde::{Deserialize, Serialize};
 
 /// Machine-local schedule definition stored on the node that executes it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -263,7 +263,6 @@ pub fn resolve_project_id(
     }))
 }
 
-
 /// Remember a location on a record (most recent first, deduped) and make sure
 /// its exact key matches next time.
 pub fn record_location(

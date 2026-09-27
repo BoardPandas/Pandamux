@@ -1,15 +1,13 @@
+use pandamux_core::{
+    event::ApprovalDecision, provider_config::ProviderInstanceConfig, thread::TurnInput,
+};
 use std::future::Future;
 use std::pin::Pin;
-use pandamux_core::{
-    event::ApprovalDecision,
-    provider_config::ProviderInstanceConfig,
-    thread::TurnInput,
-};
 use tokio::sync::mpsc;
 
 use crate::error::ProviderError;
 use crate::models::{
-    ModelInfo, ProviderMetadata, ProviderSnapshot, SessionSpec, UsageLimits, ProviderEvent,
+    ModelInfo, ProviderEvent, ProviderMetadata, ProviderSnapshot, SessionSpec, UsageLimits,
 };
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -30,7 +28,10 @@ pub trait ProviderDriver: Send + Sync {
     ) -> BoxFuture<'a, Result<Vec<ModelInfo>, ProviderError>>;
 
     /// Queries quota and rate limits if supported by the provider.
-    fn usage_limits<'a>(&'a self, cfg: &'a ProviderInstanceConfig) -> BoxFuture<'a, Option<UsageLimits>>;
+    fn usage_limits<'a>(
+        &'a self,
+        cfg: &'a ProviderInstanceConfig,
+    ) -> BoxFuture<'a, Option<UsageLimits>>;
 
     /// Starts an active supervised session for a thread.
     fn start_session<'a>(
