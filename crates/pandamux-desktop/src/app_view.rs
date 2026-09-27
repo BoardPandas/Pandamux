@@ -3,10 +3,9 @@ use std::collections::HashMap;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::gpui::*;
-use gpui_kit::prelude::FluentBuilder as _;
-use pandamux_client::projections::{ThreadProjection, TimelineItem};
+use pandamux_client::projections::ThreadProjection;
 use pandamux_core::{
-    ApprovalDecision, EnvironmentId, ProviderInstanceId, Thread, ThreadEvent, ThreadId,
+    AgentId, ApprovalDecision, EnvironmentId, Thread, ThreadEvent, ThreadId,
     ThreadStatus,
 };
 use pandamux_protocol::{
@@ -14,8 +13,12 @@ use pandamux_protocol::{
     ThreadSendTurnParams,
 };
 
+use crate::composer::{render_composer, ComposerState};
+use crate::picker::PickerState;
 use crate::server_bridge::{spawn_server_bridge, ServerBridgeHandle, ServerStatus};
+use crate::sidebar::{render_rail, render_sidebar, RailTab};
 use crate::theme::{AccentColor, Radii, Spacing, Theme, Typography};
+use crate::timeline::render_timeline_item;
 use crate::titlebar::CustomTitlebar;
 
 /// The primary application view for PandaMUX Desktop.
@@ -26,17 +29,9 @@ pub struct AppView {
     thread_projections: HashMap<ThreadId, ThreadProjection>,
     thread_order: Vec<ThreadId>,
     active_thread_id: Option<ThreadId>,
-    composer_text: String,
+    composer: ComposerState,
+    picker: PickerState,
     active_rail_tab: RailTab,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum RailTab {
-    #[default]
-    Threads,
-    Agents,
-    Terminal,
-    Settings,
 }
 
 impl AppView {
@@ -79,7 +74,8 @@ impl AppView {
             thread_projections: HashMap::new(),
             thread_order: Vec::new(),
             active_thread_id: None,
-            composer_text: String::new(),
+            composer: ComposerState::new(),
+            picker: PickerState::new(),
             active_rail_tab: RailTab::Threads,
         }
     }
@@ -112,22 +108,46 @@ impl AppView {
         }
     }
 
-    /// Dispatches create_thread intent to backend server.
+    /// Dispatches create_thread intent to backend server using active picker state.
     pub fn create_default_thread(&mut self, cx: &mut Context<Self>) {
         let title = format!("Thread #{}", self.thread_order.len() + 1);
         let params = ThreadCreateParams {
             project_id: None,
             environment_id: Some(EnvironmentId::from("env-local")),
-            title: Some(title.clone()),
-            provider_instance_id: Some(ProviderInstanceId::from("claude")),
-            model: Some("claude-3-7-sonnet".to_string()),
-            effort: None,
+            title: Some(title),
+            provider_instance_id: Some(self.picker.provider_instance_id()),
+            model: Some(self.picker.model().to_string()),
+            effort: self.picker.effort.clone(),
             access_mode: None,
             agent_id: None,
             cwd: None,
             worktree: None,
         };
 
+        self.dispatch_create_thread(params, cx);
+    }
+
+    /// Dispatches create_thread intent assigned to a specific agent.
+    pub fn create_agent_thread(&mut self, agent_id: &'static str, cx: &mut Context<Self>) {
+        let title = format!("Agent: {agent_id} #{}", self.thread_order.len() + 1);
+        let params = ThreadCreateParams {
+            project_id: None,
+            environment_id: Some(EnvironmentId::from("env-local")),
+            title: Some(title),
+            provider_instance_id: Some(self.picker.provider_instance_id()),
+            model: Some(self.picker.model().to_string()),
+            effort: self.picker.effort.clone(),
+            access_mode: None,
+            agent_id: Some(AgentId::from(agent_id)),
+            cwd: None,
+            worktree: None,
+        };
+
+        self.active_rail_tab = RailTab::Threads;
+        self.dispatch_create_thread(params, cx);
+    }
+
+    fn dispatch_create_thread(&mut self, params: ThreadCreateParams, cx: &mut Context<Self>) {
         if let Some(bridge) = &self.bridge {
             let rx = bridge.send_request("thread.create", serde_json::to_value(&params).ok());
             cx.spawn(async move |this, cx| {
@@ -148,9 +168,9 @@ impl AppView {
         }
     }
 
-    /// Dispatches send_turn intent to backend server.
+    /// Dispatches send_turn intent to backend server with current composer prompt and picker model/effort.
     pub fn send_composer_turn(&mut self, cx: &mut Context<Self>) {
-        let prompt = self.composer_text.trim().to_string();
+        let prompt = self.composer.text.trim().to_string();
         if prompt.is_empty() {
             return;
         }
@@ -164,11 +184,11 @@ impl AppView {
             thread_id: thread_id.clone(),
             text: prompt,
             attachment_ids: vec![],
-            model: None,
-            effort: None,
+            model: Some(self.picker.model().to_string()),
+            effort: self.picker.effort.clone(),
         };
 
-        self.composer_text.clear();
+        self.composer.clear();
 
         if let Some(bridge) = &self.bridge {
             let rx = bridge.send_request("thread.send_turn", serde_json::to_value(&params).ok());
@@ -212,6 +232,16 @@ impl AppView {
             drop(rx);
         }
     }
+
+    /// Sets the active thread.
+    pub fn select_thread(&mut self, thread_id: ThreadId) {
+        self.active_thread_id = Some(thread_id);
+    }
+
+    /// Sets the active navigation rail tab.
+    pub fn select_rail_tab(&mut self, tab: RailTab) {
+        self.active_rail_tab = tab;
+    }
 }
 
 impl Render for AppView {
@@ -238,17 +268,42 @@ impl Render for AppView {
                 window,
                 cx,
             ))
-            // 2. Central Layout (Rail + Sidebar + Main Surface)
+            // 2. Central Layout (52px Rail + 264px Sidebar + Main Workspace)
             .child(
                 div()
                     .flex_1()
                     .h_flex()
                     .overflow_hidden()
                     // 2a. 52px Navigation Icon Rail
-                    .child(self.render_rail(&theme, cx))
-                    // 2b. 264px Session Sidebar
-                    .child(self.render_sidebar(&theme, cx))
-                    // 2c. Main Chat & Workspace Surface
+                    .child(render_rail(
+                        self.active_rail_tab,
+                        &theme,
+                        |this, tab, _win, cx| {
+                            this.select_rail_tab(tab);
+                            cx.notify();
+                        },
+                        cx,
+                    ))
+                    // 2b. 264px Navigation Sidebar with Stubs
+                    .child(render_sidebar(
+                        self.active_rail_tab,
+                        &self.thread_order,
+                        &self.thread_projections,
+                        self.active_thread_id.as_ref(),
+                        &theme,
+                        |this, _win, cx| {
+                            this.create_default_thread(cx);
+                        },
+                        |this, tid, _win, cx| {
+                            this.select_thread(tid);
+                            cx.notify();
+                        },
+                        |this, agent_id, _win, cx| {
+                            this.create_agent_thread(agent_id, cx);
+                        },
+                        cx,
+                    ))
+                    // 2c. Main Surface (Timeline + Header + Composer)
                     .child(self.render_main_surface(&theme, cx)),
             )
             // 3. 26px Status Bar
@@ -257,211 +312,7 @@ impl Render for AppView {
 }
 
 impl AppView {
-    /// Renders the 52px icon rail.
-    fn render_rail(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .w(Spacing::RAIL_WIDTH)
-            .h_full()
-            .v_flex()
-            .items_center()
-            .py_2()
-            .gap_3()
-            .bg(theme.chrome.panel2)
-            .border_r_1()
-            .border_color(rgba(0xffffff0d))
-            // Threads tab
-            .child(
-                Button::new("rail-threads")
-                    .ghost()
-                    .label("💬")
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.active_rail_tab = RailTab::Threads;
-                        cx.notify();
-                    })),
-            )
-            // Agents tab
-            .child(
-                Button::new("rail-agents")
-                    .ghost()
-                    .label("🤖")
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.active_rail_tab = RailTab::Agents;
-                        cx.notify();
-                    })),
-            )
-            // Terminal tab
-            .child(
-                Button::new("rail-terminal")
-                    .ghost()
-                    .label("📟")
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.active_rail_tab = RailTab::Terminal;
-                        cx.notify();
-                    })),
-            )
-            // Spacer
-            .child(div().flex_1())
-            // Settings tab
-            .child(
-                Button::new("rail-settings")
-                    .ghost()
-                    .label("⚙️")
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.active_rail_tab = RailTab::Settings;
-                        cx.notify();
-                    })),
-            )
-    }
-
-    /// Renders the 264px session sidebar listing all threads.
-    fn render_sidebar(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
-        let active_id = self.active_thread_id.clone();
-        let thread_count = self.thread_order.len();
-
-        div()
-            .w(Spacing::SIDEBAR_WIDTH)
-            .h_full()
-            .v_flex()
-            .bg(theme.chrome.panel)
-            .border_r_1()
-            .border_color(rgba(0xffffff0d))
-            // Sidebar Header
-            .child(
-                div()
-                    .h_flex()
-                    .items_center()
-                    .justify_between()
-                    .p_3()
-                    .border_b_1()
-                    .border_color(rgba(0xffffff0a))
-                    .child(
-                        div()
-                            .h_flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .text_size(Typography::TITLE_SIZE)
-                                    .font_weight(FontWeight::BOLD)
-                                    .child("Threads"),
-                            )
-                            .child(
-                                div()
-                                    .px_1p5()
-                                    .py_0p5()
-                                    .rounded(Radii::CHIP)
-                                    .bg(rgba(0xffffff14))
-                                    .text_size(Typography::META_SIZE)
-                                    .text_color(theme.chrome.text_t3)
-                                    .child(format!("{thread_count}")),
-                            ),
-                    )
-                    .child(
-                        Button::new("btn-new-thread")
-                            .primary()
-                            .label("+ New")
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.create_default_thread(cx);
-                            })),
-                    ),
-            )
-            // Thread rows list
-            .child(
-                div()
-                    .flex_1()
-                    .v_flex()
-                    .p_2()
-                    .gap_1()
-                    .overflow_hidden()
-                    .children(self.thread_order.iter().filter_map(|id| {
-                        let proj = self.thread_projections.get(id)?;
-                        let is_active = Some(id) == active_id.as_ref();
-                        let thread_id_clone = id.clone();
-
-                        let status_dot_color = match proj.thread.status {
-                            ThreadStatus::Working => theme.accent.color(),
-                            ThreadStatus::AwaitingApproval => theme.terminal.warn,
-                            ThreadStatus::Idle => theme.terminal.success,
-                            ThreadStatus::Errored => rgb(0xf87171),
-                            ThreadStatus::Paused => theme.terminal.dim,
-                            ThreadStatus::Archived => rgba(0xffffff20),
-                        };
-
-                        Some(
-                            div()
-                                .id(ElementId::NamedInteger(
-                                    "thread-row".into(),
-                                    proj.thread.id.as_str().len() as u64,
-                                ))
-                                .h_flex()
-                                .items_center()
-                                .justify_between()
-                                .px_2p5()
-                                .py_2()
-                                .rounded(Radii::ROW)
-                                .bg(if is_active {
-                                    rgba(0xffffff14)
-                                } else {
-                                    rgba(0x00000000)
-                                })
-                                .border_1()
-                                .border_color(if is_active {
-                                    theme.accent.color()
-                                } else {
-                                    rgba(0x00000000)
-                                })
-                                .cursor_pointer()
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |this, _event, _window, cx| {
-                                        this.active_thread_id = Some(thread_id_clone.clone());
-                                        cx.notify();
-                                    }),
-                                )
-                                .child(
-                                    div()
-                                        .v_flex()
-                                        .gap_0p5()
-                                        .child(
-                                            div()
-                                                .text_size(Typography::BODY_SIZE)
-                                                .font_weight(if is_active {
-                                                    FontWeight::BOLD
-                                                } else {
-                                                    FontWeight::NORMAL
-                                                })
-                                                .child(proj.thread.title.clone()),
-                                        )
-                                        .child(
-                                            div()
-                                                .h_flex()
-                                                .gap_1p5()
-                                                .items_center()
-                                                .child(
-                                                    div()
-                                                        .w_1p5()
-                                                        .h_1p5()
-                                                        .rounded_full()
-                                                        .bg(status_dot_color),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .text_size(Typography::META_SIZE)
-                                                        .text_color(theme.chrome.text_t3)
-                                                        .child(format!(
-                                                            "{} · {} turns",
-                                                            proj.thread.provider_instance_id.as_str(),
-                                                            proj.turns.len()
-                                                        )),
-                                                ),
-                                        ),
-                                ),
-                        )
-                    })),
-            )
-    }
-
-    /// Renders the central workspace and timeline.
+    /// Renders the central workspace with timeline and composer.
     fn render_main_surface(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
         let active_proj = self
             .active_thread_id
@@ -481,7 +332,7 @@ impl AppView {
                 .v_flex()
                 .p_3()
                 .gap_3()
-                // Header bar
+                // Top Header Bar
                 .child(
                     div()
                         .h_flex()
@@ -510,6 +361,12 @@ impl AppView {
                                         .child(
                                             div()
                                                 .text_size(Typography::META_SIZE)
+                                                .text_color(theme.accent.color())
+                                                .child(format!("Provider: {}", proj.thread.provider_instance_id.as_str())),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(Typography::META_SIZE)
                                                 .text_color(theme.chrome.text_t3)
                                                 .child(format!("Model: {}", proj.thread.model)),
                                         )
@@ -535,7 +392,7 @@ impl AppView {
                         } else {
                             Button::new("btn-ready")
                                 .ghost()
-                                .label("Idle")
+                                .label("● Ready")
                         }),
                 )
                 // Timeline messages area
@@ -547,33 +404,44 @@ impl AppView {
                         .gap_3()
                         .overflow_hidden()
                         .children(proj.items.iter().enumerate().map(|(idx, item)| {
-                            self.render_timeline_item(idx, item, &thread_id, theme, cx)
+                            render_timeline_item(
+                                idx,
+                                item,
+                                &thread_id,
+                                theme,
+                                |this: &mut AppView, tid, req_id, dec, _win, cx| {
+                                    this.respond_approval(tid, req_id, dec, cx);
+                                },
+                                cx,
+                            )
                         })),
                 )
-                // Composer at bottom
-                .child(
-                    div()
-                        .h_flex()
-                        .gap_2()
-                        .p_2()
-                        .rounded(Radii::ROW)
-                        .bg(theme.chrome.panel)
-                        .border_1()
-                        .border_color(rgba(0xffffff14))
-                        .child(
-                            div()
-                                .flex_1()
-                                .child("Type a prompt to send to the AI agent..."),
-                        )
-                        .child(
-                            Button::new("btn-send-turn")
-                                .primary()
-                                .label("Send")
-                                .on_click(cx.listener(|this, _event, _window, cx| {
-                                    this.send_composer_turn(cx);
-                                })),
-                        ),
-                )
+                // Rich Composer
+                .child(render_composer(
+                    &self.composer,
+                    &self.picker,
+                    theme,
+                    |this, _win, cx| {
+                        this.send_composer_turn(cx);
+                    },
+                    |this, _win, cx| {
+                        this.composer.clear();
+                        cx.notify();
+                    },
+                    |this, _win, cx| {
+                        this.picker.cycle_provider();
+                        cx.notify();
+                    },
+                    |this, _win, cx| {
+                        this.picker.cycle_model();
+                        cx.notify();
+                    },
+                    |this, _win, cx| {
+                        this.picker.cycle_effort();
+                        cx.notify();
+                    },
+                    cx,
+                ))
         } else {
             // Welcome empty state
             div()
@@ -585,7 +453,7 @@ impl AppView {
                 .gap_4()
                 .child(
                     div()
-                        .text_size(px(24.0))
+                        .text_size(px(28.0))
                         .font_weight(FontWeight::BOLD)
                         .text_color(theme.accent.color())
                         .child("🐼 PandaMUX 1.0"),
@@ -607,184 +475,6 @@ impl AppView {
         }
     }
 
-    /// Renders an individual timeline item (user turn, assistant text, tool call, approval).
-    fn render_timeline_item(
-        &self,
-        idx: usize,
-        item: &TimelineItem,
-        thread_id: &ThreadId,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        match item {
-            TimelineItem::TurnUserPrompt { text, .. } => div()
-                .id(ElementId::NamedInteger("user-turn".into(), idx as u64))
-                .p_3()
-                .rounded(Radii::ROW)
-                .bg(rgba(0x43d9c91f))
-                .border_1()
-                .border_color(rgba(0x43d9c940))
-                .child(
-                    div()
-                        .text_size(Typography::BODY_SIZE)
-                        .child(text.clone()),
-                )
-                .into_any_element(),
-
-            TimelineItem::AssistantText { text, .. } => div()
-                .id(ElementId::NamedInteger("assistant-turn".into(), idx as u64))
-                .p_3()
-                .rounded(Radii::ROW)
-                .bg(theme.chrome.panel)
-                .border_1()
-                .border_color(rgba(0xffffff0d))
-                .child(
-                    div()
-                        .text_size(Typography::BODY_SIZE)
-                        .child(text.clone()),
-                )
-                .into_any_element(),
-
-            TimelineItem::ToolCall {
-                name,
-                input,
-                status,
-                output,
-                ..
-            } => div()
-                .id(ElementId::NamedInteger("tool-call".into(), idx as u64))
-                .p_2p5()
-                .rounded(Radii::ROW)
-                .bg(theme.chrome.bgc_knockout)
-                .border_1()
-                .border_color(rgba(0xffffff14))
-                .v_flex()
-                .gap_1()
-                .child(
-                    div()
-                        .h_flex()
-                        .items_center()
-                        .justify_between()
-                        .child(
-                            div()
-                                .font_weight(FontWeight::BOLD)
-                                .text_size(Typography::BODY_SIZE)
-                                .child(format!("🔧 Tool: {name}")),
-                        )
-                        .child(
-                            div()
-                                .text_size(Typography::META_SIZE)
-                                .text_color(theme.accent.color())
-                                .child(format!("{status:?}")),
-                        ),
-                )
-                .child(
-                    div()
-                        .text_size(Typography::META_SIZE)
-                        .text_color(theme.chrome.text_t3)
-                        .child(format!("Input: {input}")),
-                )
-                .when_some(output.as_ref(), |this, out| {
-                    this.child(
-                        div()
-                            .text_size(Typography::META_SIZE)
-                            .text_color(theme.terminal.text)
-                            .child(format!("Output: {out}")),
-                    )
-                })
-                .into_any_element(),
-
-            TimelineItem::Approval {
-                request_id,
-                kind,
-                detail,
-                decision,
-            } => {
-                let req_id_approve = request_id.clone();
-                let req_id_deny = request_id.clone();
-                let tid_approve = thread_id.clone();
-                let tid_deny = thread_id.clone();
-
-                div()
-                    .id(ElementId::NamedInteger("approval".into(), idx as u64))
-                    .p_3()
-                    .rounded(Radii::ROW)
-                    .bg(rgba(0xd8b45e1a))
-                    .border_1()
-                    .border_color(theme.terminal.warn)
-                    .v_flex()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_size(Typography::TITLE_SIZE)
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(theme.terminal.warn)
-                            .child(format!("⚠️ Approval Requested: {kind:?}")),
-                    )
-                    .child(
-                        div()
-                            .text_size(Typography::BODY_SIZE)
-                            .child(format!("{detail}")),
-                    )
-                    .child(if let Some(dec) = decision {
-                        div()
-                            .text_size(Typography::META_SIZE)
-                            .font_weight(FontWeight::BOLD)
-                            .child(format!("Decision: {dec:?}"))
-                    } else {
-                        div()
-                            .h_flex()
-                            .gap_2()
-                            .child(
-                                Button::new("btn-approve")
-                                    .primary()
-                                    .label("Approve")
-                                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                                        this.respond_approval(
-                                            tid_approve.clone(),
-                                            req_id_approve.clone(),
-                                            ApprovalDecision::Approved,
-                                            cx,
-                                        );
-                                    })),
-                            )
-                            .child(
-                                Button::new("btn-deny")
-                                    .ghost()
-                                    .label("Deny")
-                                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                                        this.respond_approval(
-                                            tid_deny.clone(),
-                                            req_id_deny.clone(),
-                                            ApprovalDecision::Denied,
-                                            cx,
-                                        );
-                                    })),
-                            )
-                    })
-                    .into_any_element()
-            }
-
-            TimelineItem::Notice { message, .. } => div()
-                .p_2()
-                .rounded(Radii::CHIP)
-                .bg(rgba(0xffffff0a))
-                .child(message.clone())
-                .into_any_element(),
-
-            TimelineItem::Error { message, .. } => div()
-                .p_2()
-                .rounded(Radii::CHIP)
-                .bg(rgba(0xf871711a))
-                .border_1()
-                .border_color(rgb(0xf87171))
-                .child(format!("Error: {message}"))
-                .into_any_element(),
-
-            _ => div().into_any_element(),
-        }
-    }
-
     /// Renders the 26px status bar at bottom.
     fn render_statusbar(&self, theme: &Theme) -> impl IntoElement {
         let server_desc = match &self.server_status {
@@ -796,7 +486,7 @@ impl AppView {
                 format!("Server v{server_version} (PID {pid}) · {pipe_path}")
             }
             ServerStatus::Connecting => "Connecting to PandaMUX Server...".to_string(),
-            ServerStatus::Disconnected => "Server Offline".to_string(),
+            ServerStatus::Disconnected => "Server Disconnected (Reconnecting with sinceSeq...)".to_string(),
             ServerStatus::Failed(e) => format!("Server Error: {e}"),
         };
 

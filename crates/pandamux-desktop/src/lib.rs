@@ -1,14 +1,24 @@
 pub mod app_view;
+pub mod composer;
+pub mod picker;
 pub mod server_bridge;
+pub mod sidebar;
 pub mod theme;
+pub mod timeline;
 pub mod titlebar;
 
 pub use app_view::AppView;
+pub use composer::{render_composer, ComposerState};
+pub use picker::{ModelChoice, PickerState, ProviderChoice};
 pub use server_bridge::{
     discover_server_runtime, spawn_server_bridge, BridgeCommand, RuntimeInfo, ServerBridgeHandle,
     ServerStatus,
 };
+pub use sidebar::{
+    render_rail, render_sidebar, AgentRosterItem, RailTab, DEFAULT_AGENTS,
+};
 pub use theme::{AccentColor, ChromePalette, Radii, Spacing, Theme, ThemeMode, Typography};
+pub use timeline::render_timeline_item;
 pub use titlebar::CustomTitlebar;
 
 #[cfg(test)]
@@ -19,6 +29,7 @@ mod tests {
         ApprovalDecision, ApprovalKind, EnvironmentId, ProviderInstanceId, Thread, ThreadEvent,
         ThreadEventKind, ThreadId, ThreadStatus, ThreadWorkspace, TurnId, TurnInput, TurnOutcome,
     };
+    use pandamux_protocol::EventEnvelope;
 
     #[test]
     fn test_theme_section_12_tokens() {
@@ -178,5 +189,82 @@ mod tests {
         });
         assert_eq!(proj.thread.status, ThreadStatus::Idle);
         assert_eq!(proj.changed_files, vec!["file1.rs".to_string()]);
+        assert_eq!(proj.last_seq, 6);
+    }
+
+    #[test]
+    fn test_picker_cycling_and_selection() {
+        let mut picker = PickerState::new();
+        assert_eq!(picker.provider_id, "claude");
+        assert_eq!(picker.model_id, "claude-3-7-sonnet");
+        assert_eq!(picker.effort_str(), Some("high"));
+
+        // Cycle provider: claude -> codex
+        picker.cycle_provider();
+        assert_eq!(picker.provider_id, "codex");
+        assert_eq!(picker.model_id, "o3-mini");
+
+        // Cycle model for codex: o3-mini -> gpt-4.5-preview
+        picker.cycle_model();
+        assert_eq!(picker.model_id, "gpt-4.5-preview");
+
+        // Cycle provider again: codex -> antigravity
+        picker.cycle_provider();
+        assert_eq!(picker.provider_id, "antigravity");
+        assert_eq!(picker.model_id, "gemini-2.0-flash");
+
+        // Direct selection
+        picker.select_provider("claude");
+        picker.select_model("claude-3-5-haiku");
+        assert_eq!(picker.provider_instance_id(), ProviderInstanceId::from("claude"));
+        assert_eq!(picker.model(), "claude-3-5-haiku");
+
+        // Effort cycling: high -> max -> None -> low -> medium -> high
+        picker.cycle_effort();
+        assert_eq!(picker.effort_str(), Some("max"));
+        picker.cycle_effort();
+        assert_eq!(picker.effort_str(), None);
+        picker.cycle_effort();
+        assert_eq!(picker.effort_str(), Some("low"));
+    }
+
+    #[test]
+    fn test_composer_state() {
+        let mut comp = ComposerState::new();
+        assert!(comp.is_empty());
+        assert_eq!(comp.text.len(), 0);
+
+        comp.set_text("Hello agent");
+        assert!(!comp.is_empty());
+        assert_eq!(comp.text, "Hello agent");
+
+        comp.append_char('!');
+        assert_eq!(comp.text, "Hello agent!");
+
+        comp.clear();
+        assert!(comp.is_empty());
+    }
+
+    #[test]
+    fn test_sidebar_agents_roster() {
+        assert_eq!(DEFAULT_AGENTS.len(), 8);
+        let ids: Vec<&str> = DEFAULT_AGENTS.iter().map(|a| a.id).collect();
+        assert!(ids.contains(&"orchestrator"));
+        assert!(ids.contains(&"architect"));
+        assert!(ids.contains(&"builder"));
+        assert!(ids.contains(&"reviewer"));
+        assert!(ids.contains(&"tester"));
+        assert!(ids.contains(&"security"));
+        assert!(ids.contains(&"performance"));
+        assert!(ids.contains(&"ux-reviewer"));
+    }
+
+    #[test]
+    fn test_since_seq_tracking_with_envelopes() {
+        let (event_tx, _event_rx) = smol::channel::unbounded::<EventEnvelope>();
+        let (status_tx, _status_rx) = smol::channel::unbounded::<ServerStatus>();
+
+        let bridge = spawn_server_bridge(event_tx, status_tx);
+        assert_eq!(bridge.last_seen_seq(), 0);
     }
 }

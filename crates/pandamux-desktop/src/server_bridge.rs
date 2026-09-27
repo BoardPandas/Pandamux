@@ -1,149 +1,115 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use pandamux_protocol::{
-    EventEnvelope, HelloParams, PROTOCOL_VERSION, RpcId, RpcRequest, RpcResponse,
-    SubscribeParams,
+    EventEnvelope, HelloParams, RpcId, RpcRequest, RpcResponse, SubscribeParams, PROTOCOL_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot, Mutex};
 
-pub const RUNTIME_FILENAME: &str = "server.json";
-
-/// Metadata written into `server.json` for client discovery and authentication.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RuntimeInfo {
-    pub pid: u32,
-    pub role: String,
-    pub protocol_version: u32,
-    pub server_version: String,
-    pub pipe_path: String,
-    pub token: String,
-    pub started_at_ms: u64,
-}
-
-impl RuntimeInfo {
-    /// Attempts to read the discovery record from a directory.
-    pub fn read_from_dir(dir: &Path) -> std::io::Result<Option<Self>> {
-        let path = dir.join(RUNTIME_FILENAME);
-        if !path.exists() {
-            return Ok(None);
-        }
-        let content = std::fs::read_to_string(&path)?;
-        let info = serde_json::from_str(&content)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        Ok(Some(info))
-    }
-}
-
-/// Discovers the standard runtime directory used by PandaMUX servers.
-pub fn default_runtime_dir() -> PathBuf {
-    if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-        PathBuf::from(local_app_data).join("pandamux").join("run")
-    } else if let Ok(home) = std::env::var("HOME") {
-        PathBuf::from(home).join(".pandamux").join("run")
-    } else {
-        std::env::temp_dir().join("pandamux").join("run")
-    }
-}
-
-/// Locates `server.json` across standard runtime directories.
-pub fn discover_server_runtime() -> Option<RuntimeInfo> {
-    let runtime_dir = default_runtime_dir();
-    if let Ok(Some(info)) = RuntimeInfo::read_from_dir(&runtime_dir) {
-        return Some(info);
-    }
-
-    // Fallback to temp dir
-    let temp_dir = std::env::temp_dir().join("pandamux").join("run");
-    if temp_dir != runtime_dir {
-        if let Ok(Some(info)) = RuntimeInfo::read_from_dir(&temp_dir) {
-            return Some(info);
-        }
-    }
-
-    None
-}
-
-/// Current connection status to the backend PandaMUX server.
+/// Represents server connection status observed by the GPUI desktop.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ServerStatus {
-    Disconnected,
     Connecting,
     Connected {
         pipe_path: String,
         pid: u32,
         server_version: String,
     },
+    Disconnected,
     Failed(String),
 }
 
-/// Commands dispatched from GPUI views to the background Tokio bridge.
+/// Runtime metadata read from `~/.pandamux/server.json` or `%LOCALAPPDATA%/pandamux/server.json`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeInfo {
+    pub pid: u32,
+    pub role: String,
+    pub server_version: String,
+    pub protocol_version: u32,
+    pub pipe_path: String,
+    pub token: String,
+    pub started_at_ms: u64,
+}
+
+/// Commands sent from the GPUI application to the background Tokio bridge.
 pub enum BridgeCommand {
     Request {
-        method: String,
+        method: &'static str,
         params: Option<serde_json::Value>,
         response_tx: oneshot::Sender<Result<RpcResponse, String>>,
     },
 }
 
-/// Handle owning the background Tokio bridge thread.
+/// Handle allowing the GPUI thread to interact with the Tokio server bridge.
 ///
-/// Follows LL-G `join-on-drop-sender-field-order`: channel senders are declared
-/// before join handles so channels close before the worker thread is joined.
+/// NOTE on Drop ordering: `command_tx` and `shutdown_tx` are declared BEFORE
+/// `worker_thread` so that dropping the handle drops the senders first,
+/// unblocking any Tokio `recv()` before `worker_thread.join()` runs.
+/// This prevents thread join deadlocks per LL-G `join-on-drop-sender-field-order`.
 pub struct ServerBridgeHandle {
-    // Senders declared FIRST
-    command_tx: Option<mpsc::UnboundedSender<BridgeCommand>>,
+    command_tx: Option<mpsc::Sender<BridgeCommand>>,
     shutdown_tx: Option<mpsc::Sender<()>>,
-    // Joined thread handle declared LAST
+    last_seen_seq: Arc<AtomicU64>,
     worker_thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl ServerBridgeHandle {
-    /// Dispatches an RPC request to the server and returns a oneshot receiver for the response.
+    /// Dispatches an asynchronous RPC request to the connected server.
     pub fn send_request(
         &self,
-        method: &str,
+        method: &'static str,
         params: Option<serde_json::Value>,
     ) -> oneshot::Receiver<Result<RpcResponse, String>> {
         let (tx, rx) = oneshot::channel();
         if let Some(cmd_tx) = &self.command_tx {
-            let _ = cmd_tx.send(BridgeCommand::Request {
-                method: method.to_string(),
+            let _ = cmd_tx.try_send(BridgeCommand::Request {
+                method,
                 params,
                 response_tx: tx,
             });
         } else {
-            let _ = tx.send(Err("Bridge is not running".to_string()));
+            let _ = tx.send(Err("Bridge channel closed".to_string()));
         }
         rx
+    }
+
+    /// Returns the highest sequence number processed by this bridge.
+    pub fn last_seen_seq(&self) -> u64 {
+        self.last_seen_seq.load(Ordering::SeqCst)
     }
 }
 
 impl Drop for ServerBridgeHandle {
     fn drop(&mut self) {
-        // Take and drop channel senders first to unblock worker loops
-        self.shutdown_tx.take();
+        // 1. Signal shutdown and drop sender channels explicitly
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.try_send(());
+            drop(tx);
+        }
         self.command_tx.take();
 
+        // 2. Safely join the bridge worker thread
         if let Some(handle) = self.worker_thread.take() {
             let _ = handle.join();
         }
     }
 }
 
-/// Spawns the dedicated Tokio runtime thread for server discovery and IPC streaming.
+/// Spawns the background Tokio server bridge with `sinceSeq` reconnection support.
 pub fn spawn_server_bridge(
     event_tx: smol::channel::Sender<EventEnvelope>,
     status_tx: smol::channel::Sender<ServerStatus>,
 ) -> ServerBridgeHandle {
-    let (command_tx, mut command_rx) = mpsc::unbounded_channel::<BridgeCommand>();
+    let (command_tx, mut command_rx) = mpsc::channel::<BridgeCommand>(128);
     let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
+    let last_seen_seq = Arc::new(AtomicU64::new(0));
+    let last_seen_seq_worker = Arc::clone(&last_seen_seq);
 
     let worker_thread = std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -162,147 +128,187 @@ pub fn spawn_server_bridge(
         };
 
         rt.block_on(async move {
-            let _ = status_tx.send(ServerStatus::Connecting).await;
-
-            // 1. Discover or auto-spawn server
-            let runtime_info = match ensure_server_running().await {
-                Ok(info) => info,
-                Err(err) => {
-                    let _ = status_tx.send(ServerStatus::Failed(err)).await;
-                    return;
-                }
-            };
-
-            let pipe_path = runtime_info.pipe_path.clone();
-
-            // 2. Connect over IPC
-            let stream_res = connect_ipc(&pipe_path).await;
-            let stream = match stream_res {
-                Ok(s) => s,
-                Err(e) => {
-                    let _ = status_tx
-                        .send(ServerStatus::Failed(format!("IPC connection failed: {e}")))
-                        .await;
-                    return;
-                }
-            };
-
-            let (reader, mut writer) = tokio::io::split(stream);
-            let mut lines = BufReader::new(reader).lines();
-
             let pending_requests: Arc<Mutex<HashMap<i64, oneshot::Sender<Result<RpcResponse, String>>>>> =
                 Arc::new(Mutex::new(HashMap::new()));
             let next_request_id = Arc::new(AtomicI64::new(1));
+            let mut retry_backoff_ms = 250;
 
-            // 3. Initial system.hello handshake
-            let hello_id = next_request_id.fetch_add(1, Ordering::SeqCst);
-            let hello_params = HelloParams {
-                protocol_version: PROTOCOL_VERSION,
-                client_kind: "desktop".to_string(),
-                client_version: env!("CARGO_PKG_VERSION").to_string(),
-            };
-            let hello_req = RpcRequest::new(
-                RpcId::Number(hello_id),
-                "system.hello",
-                Some(serde_json::to_value(&hello_params).unwrap_or_default()),
-            );
+            'reconnect_loop: loop {
+                if shutdown_rx.try_recv().is_ok() {
+                    break 'reconnect_loop;
+                }
 
-            let (hello_resp_tx, _hello_resp_rx) = oneshot::channel();
-            {
-                let mut pending = pending_requests.lock().await;
-                pending.insert(hello_id, hello_resp_tx);
-            }
+                let _ = status_tx.send(ServerStatus::Connecting).await;
 
-            let mut hello_line = serde_json::to_string(&hello_req).unwrap_or_default();
-            hello_line.push('\n');
-            if writer.write_all(hello_line.as_bytes()).await.is_err() {
-                let _ = status_tx
-                    .send(ServerStatus::Failed("Failed to send handshake".to_string()))
-                    .await;
-                return;
-            }
-
-            // 4. Initial system.subscribe for thread events
-            let sub_id = next_request_id.fetch_add(1, Ordering::SeqCst);
-            let sub_params = SubscribeParams {
-                topic: "thread.events".to_string(),
-                environment_id: None,
-                thread_id: None,
-                run_id: None,
-                since_seq: None,
-            };
-            let sub_req = RpcRequest::new(
-                RpcId::Number(sub_id),
-                "system.subscribe",
-                Some(serde_json::to_value(&sub_params).unwrap_or_default()),
-            );
-
-            let mut sub_line = serde_json::to_string(&sub_req).unwrap_or_default();
-            sub_line.push('\n');
-            let _ = writer.write_all(sub_line.as_bytes()).await;
-
-            let _ = status_tx
-                .send(ServerStatus::Connected {
-                    pipe_path: runtime_info.pipe_path,
-                    pid: runtime_info.pid,
-                    server_version: runtime_info.server_version,
-                })
-                .await;
-
-            // 5. Main event and request loop
-            loop {
-                tokio::select! {
-                    _ = shutdown_rx.recv() => {
-                        break;
-                    }
-
-                    cmd = command_rx.recv() => {
-                        match cmd {
-                            Some(BridgeCommand::Request { method, params, response_tx }) => {
-                                let id = next_request_id.fetch_add(1, Ordering::SeqCst);
-                                {
-                                    let mut pending = pending_requests.lock().await;
-                                    pending.insert(id, response_tx);
-                                }
-                                let req = RpcRequest::new(RpcId::Number(id), method, params);
-                                if let Ok(mut json) = serde_json::to_string(&req) {
-                                    json.push('\n');
-                                    let _ = writer.write_all(json.as_bytes()).await;
-                                }
+                // 1. Discover or auto-spawn server
+                let runtime_info = match ensure_server_running().await {
+                    Ok(info) => info,
+                    Err(err) => {
+                        let _ = status_tx.send(ServerStatus::Failed(err)).await;
+                        tokio::select! {
+                            _ = shutdown_rx.recv() => break 'reconnect_loop,
+                            _ = tokio::time::sleep(Duration::from_millis(retry_backoff_ms)) => {
+                                retry_backoff_ms = (retry_backoff_ms * 3 / 2).min(3000);
+                                continue 'reconnect_loop;
                             }
-                            None => break,
                         }
                     }
+                };
 
-                    line_res = lines.next_line() => {
-                        match line_res {
-                            Ok(Some(line)) => {
-                                // Try parsing as EventEnvelope first
-                                if let Ok(envelope) = serde_json::from_str::<EventEnvelope>(&line) {
-                                    let _ = event_tx.send(envelope).await;
-                                    continue;
-                                }
+                let pipe_path = runtime_info.pipe_path.clone();
 
-                                // Try parsing as RpcResponse
-                                if let Ok(response) = serde_json::from_str::<RpcResponse>(&line) {
-                                    if let Some(RpcId::Number(id)) = response.id {
+                // 2. Connect over IPC
+                let stream_res = connect_ipc(&pipe_path).await;
+                let stream = match stream_res {
+                    Ok(s) => {
+                        retry_backoff_ms = 250;
+                        s
+                    }
+                    Err(e) => {
+                        let _ = status_tx
+                            .send(ServerStatus::Failed(format!("IPC connection failed: {e}")))
+                            .await;
+                        tokio::select! {
+                            _ = shutdown_rx.recv() => break 'reconnect_loop,
+                            _ = tokio::time::sleep(Duration::from_millis(retry_backoff_ms)) => {
+                                retry_backoff_ms = (retry_backoff_ms * 3 / 2).min(3000);
+                                continue 'reconnect_loop;
+                            }
+                        }
+                    }
+                };
+
+                let (reader, mut writer) = tokio::io::split(stream);
+                let mut lines = BufReader::new(reader).lines();
+
+                // 3. Handshake system.hello
+                let hello_id = next_request_id.fetch_add(1, Ordering::SeqCst);
+                let hello_params = HelloParams {
+                    protocol_version: PROTOCOL_VERSION,
+                    client_kind: "desktop".to_string(),
+                    client_version: env!("CARGO_PKG_VERSION").to_string(),
+                };
+                let hello_req = RpcRequest::new(
+                    RpcId::Number(hello_id),
+                    "system.hello",
+                    Some(serde_json::to_value(&hello_params).unwrap_or_default()),
+                );
+
+                let mut hello_line = serde_json::to_string(&hello_req).unwrap_or_default();
+                hello_line.push('\n');
+                if writer.write_all(hello_line.as_bytes()).await.is_err() {
+                    let _ = status_tx.send(ServerStatus::Disconnected).await;
+                    tokio::select! {
+                        _ = shutdown_rx.recv() => break 'reconnect_loop,
+                        _ = tokio::time::sleep(Duration::from_millis(500)) => continue 'reconnect_loop,
+                    }
+                }
+
+                // 4. system.subscribe with since_seq from tracked sequence!
+                let current_seq = last_seen_seq_worker.load(Ordering::SeqCst);
+                let since_seq = if current_seq > 0 {
+                    Some(current_seq)
+                } else {
+                    None
+                };
+
+                let sub_id = next_request_id.fetch_add(1, Ordering::SeqCst);
+                let sub_params = SubscribeParams {
+                    topic: "thread.events".to_string(),
+                    environment_id: None,
+                    thread_id: None,
+                    run_id: None,
+                    since_seq,
+                };
+                let sub_req = RpcRequest::new(
+                    RpcId::Number(sub_id),
+                    "system.subscribe",
+                    Some(serde_json::to_value(&sub_params).unwrap_or_default()),
+                );
+
+                let mut sub_line = serde_json::to_string(&sub_req).unwrap_or_default();
+                sub_line.push('\n');
+                if writer.write_all(sub_line.as_bytes()).await.is_err() {
+                    let _ = status_tx.send(ServerStatus::Disconnected).await;
+                    tokio::select! {
+                        _ = shutdown_rx.recv() => break 'reconnect_loop,
+                        _ = tokio::time::sleep(Duration::from_millis(500)) => continue 'reconnect_loop,
+                    }
+                }
+
+                let _ = status_tx
+                    .send(ServerStatus::Connected {
+                        pipe_path: runtime_info.pipe_path,
+                        pid: runtime_info.pid,
+                        server_version: runtime_info.server_version,
+                    })
+                    .await;
+
+                // 5. Main event and request loop
+                'event_loop: loop {
+                    tokio::select! {
+                        _ = shutdown_rx.recv() => {
+                            break 'reconnect_loop;
+                        }
+
+                        cmd = command_rx.recv() => {
+                            match cmd {
+                                Some(BridgeCommand::Request { method, params, response_tx }) => {
+                                    let id = next_request_id.fetch_add(1, Ordering::SeqCst);
+                                    {
                                         let mut pending = pending_requests.lock().await;
-                                        if let Some(tx) = pending.remove(&id) {
-                                            let _ = tx.send(Ok(response));
+                                        pending.insert(id, response_tx);
+                                    }
+                                    let req = RpcRequest::new(RpcId::Number(id), method, params);
+                                    if let Ok(mut json) = serde_json::to_string(&req) {
+                                        json.push('\n');
+                                        if writer.write_all(json.as_bytes()).await.is_err() {
+                                            let _ = status_tx.send(ServerStatus::Disconnected).await;
+                                            break 'event_loop;
                                         }
                                     }
                                 }
+                                None => break 'reconnect_loop,
                             }
-                            Ok(None) => {
-                                let _ = status_tx.send(ServerStatus::Disconnected).await;
-                                break;
-                            }
-                            Err(_) => {
-                                let _ = status_tx.send(ServerStatus::Disconnected).await;
-                                break;
+                        }
+
+                        line_res = lines.next_line() => {
+                            match line_res {
+                                Ok(Some(line)) => {
+                                    // Parse EventEnvelope and track highest sequence number
+                                    if let Ok(envelope) = serde_json::from_str::<EventEnvelope>(&line) {
+                                        last_seen_seq_worker.fetch_max(envelope.seq, Ordering::SeqCst);
+                                        let _ = event_tx.send(envelope).await;
+                                        continue;
+                                    }
+
+                                    // Parse RpcResponse
+                                    if let Ok(response) = serde_json::from_str::<RpcResponse>(&line) {
+                                        if let Some(RpcId::Number(id)) = response.id {
+                                            let mut pending = pending_requests.lock().await;
+                                            if let Some(tx) = pending.remove(&id) {
+                                                let _ = tx.send(Ok(response));
+                                            }
+                                        }
+                                    }
+                                }
+                                Ok(None) => {
+                                    let _ = status_tx.send(ServerStatus::Disconnected).await;
+                                    break 'event_loop;
+                                }
+                                Err(_) => {
+                                    let _ = status_tx.send(ServerStatus::Disconnected).await;
+                                    break 'event_loop;
+                                }
                             }
                         }
                     }
+                }
+
+                // Pause briefly before attempting reconnection
+                tokio::select! {
+                    _ = shutdown_rx.recv() => break 'reconnect_loop,
+                    _ = tokio::time::sleep(Duration::from_millis(500)) => {}
                 }
             }
         });
@@ -311,6 +317,7 @@ pub fn spawn_server_bridge(
     ServerBridgeHandle {
         command_tx: Some(command_tx),
         shutdown_tx: Some(shutdown_tx),
+        last_seen_seq,
         worker_thread: Some(worker_thread),
     }
 }
@@ -349,44 +356,80 @@ async fn ensure_server_running() -> Result<RuntimeInfo, String> {
     Err("PandaMUX server discovery timed out".to_string())
 }
 
-/// Locates the `pandamux-server` binary in the current path, next to the executable, or in target directory.
+/// Locates the `pandamux-server` binary in debug/release target directories or PATH.
 fn locate_server_binary() -> Option<PathBuf> {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let candidate = dir.join(if cfg!(windows) {
-                "pandamux-server.exe"
-            } else {
-                "pandamux-server"
-            });
-            if candidate.exists() {
-                return Some(candidate);
-            }
-        }
-    }
+    let mut candidate = std::env::current_exe().ok()?;
+    candidate.pop(); // directory of current executable
 
-    // Check cargo build target dirs
-    let target_debug = PathBuf::from("target/debug").join(if cfg!(windows) {
+    let exe_name = if cfg!(windows) {
         "pandamux-server.exe"
     } else {
         "pandamux-server"
-    });
-    if target_debug.exists() {
-        return Some(target_debug);
+    };
+
+    let local_path = candidate.join(exe_name);
+    if local_path.exists() {
+        return Some(local_path);
+    }
+
+    // Search up to workspace target directory
+    candidate.pop(); // target/
+    let debug_path = candidate.join("debug").join(exe_name);
+    if debug_path.exists() {
+        return Some(debug_path);
+    }
+
+    let release_path = candidate.join("release").join(exe_name);
+    if release_path.exists() {
+        return Some(release_path);
     }
 
     None
 }
 
-/// Connects to the local IPC pipe or domain socket.
-#[cfg(windows)]
-async fn connect_ipc(
-    pipe_path: &str,
-) -> std::io::Result<tokio::net::windows::named_pipe::NamedPipeClient> {
-    tokio::net::windows::named_pipe::ClientOptions::new().open(pipe_path)
+/// Reads and parses `server.json` if it exists.
+pub fn discover_server_runtime() -> Option<RuntimeInfo> {
+    let server_json_path = get_server_runtime_path()?;
+    if !server_json_path.exists() {
+        return None;
+    }
+
+    let content = std::fs::read_to_string(server_json_path).ok()?;
+    serde_json::from_str::<RuntimeInfo>(&content).ok()
 }
 
-/// Connects to the local Unix domain socket.
-#[cfg(not(windows))]
-async fn connect_ipc(socket_path: &str) -> std::io::Result<tokio::net::UnixStream> {
-    tokio::net::UnixStream::connect(socket_path).await
+/// Resolves standard location for `server.json`.
+fn get_server_runtime_path() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        let local_app_data = std::env::var("LOCALAPPDATA").ok()?;
+        Some(PathBuf::from(local_app_data).join("pandamux").join("server.json"))
+    }
+
+    #[cfg(not(windows))]
+    {
+        let home = std::env::var("HOME").ok()?;
+        Some(PathBuf::from(home).join(".pandamux").join("server.json"))
+    }
 }
+
+/// Connects to server IPC (Windows Named Pipe or Unix Domain Socket).
+async fn connect_ipc(pipe_path: &str) -> Result<Box<dyn AsyncReadWrite + Send>, std::io::Error> {
+    #[cfg(windows)]
+    {
+        use tokio::net::windows::named_pipe::ClientOptions;
+        let client = ClientOptions::new().open(pipe_path)?;
+        Ok(Box::new(client))
+    }
+
+    #[cfg(not(windows))]
+    {
+        use tokio::net::UnixStream;
+        let stream = UnixStream::connect(pipe_path).await?;
+        Ok(Box::new(stream))
+    }
+}
+
+/// Helper trait combining Tokio's `AsyncRead`, `AsyncWrite`, and `Unpin`.
+pub trait AsyncReadWrite: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin {}
+impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin> AsyncReadWrite for T {}
