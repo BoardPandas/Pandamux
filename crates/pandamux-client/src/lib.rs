@@ -63,6 +63,7 @@ mod tests {
                 input: TurnInput {
                     text: "Calculate 2+2 and run tests".to_string(),
                     attachment_ids: vec![],
+                    attachments: vec![],
                     model: None,
                     effort: None,
                 },
@@ -357,6 +358,7 @@ mod tests {
                 input: TurnInput {
                     text: "Verify since_seq replay".to_string(),
                     attachment_ids: vec![],
+                    attachments: vec![],
                     model: None,
                     effort: None,
                 },
@@ -399,6 +401,7 @@ mod tests {
                 input: TurnInput {
                     text: "Refactor database queries and test".to_string(),
                     attachment_ids: vec![],
+                    attachments: vec![],
                     model: None,
                     effort: None,
                 },

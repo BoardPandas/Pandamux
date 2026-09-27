@@ -205,9 +205,34 @@ impl ThreadManager {
         let turn_seq = base_seq + 1;
         let started_ms = now_ms();
 
+        // Resolve and validate attachments if provided
+        let resolved_attachments = if !params.attachment_ids.is_empty() {
+            let records = self
+                .store
+                .get_attachments_by_ids(&params.thread_id, &params.attachment_ids)
+                .map_err(|e| RpcError::internal_error(e.to_string()))?;
+
+            for id in &params.attachment_ids {
+                if !records.iter().any(|r| &r.id == id) {
+                    return Err(RpcError::invalid_params(format!(
+                        "Attachment '{id}' not found for thread '{}'",
+                        params.thread_id.as_str()
+                    )));
+                }
+            }
+
+            pandamux_core::validate_total_attachments_size(&records)
+                .map_err(|e| RpcError::invalid_params(e.to_string()))?;
+
+            records
+        } else {
+            Vec::new()
+        };
+
         let turn_input = TurnInput {
             text: params.text.clone(),
             attachment_ids: params.attachment_ids.clone(),
+            attachments: resolved_attachments,
             model: params.model.clone().or_else(|| Some(thread.model.clone())),
             effort: params.effort.clone().or_else(|| thread.effort.clone()),
         };

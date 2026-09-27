@@ -1,16 +1,19 @@
 use serde_json::{Value, json};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use pandamux_core::UserSettings;
 use pandamux_protocol::{
-    CheckpointDiffParams, CheckpointListParams, CheckpointRollbackParams, HelloParams, HelloResult,
-    IdentifyResult, McpCallToolParams, PROTOCOL_VERSION, PingResult, RpcError, RpcRequest,
-    RpcResponse, ServerCapabilities, ServerRole, ThreadCancelTurnParams, ThreadCreateParams,
-    ThreadGetParams, ThreadListParams, ThreadRespondApprovalParams, ThreadResumeParams,
-    ThreadSendTurnParams,
+    AttachmentGetParams, AttachmentImportPathParams, AttachmentListParams,
+    AttachmentPutChunkParams, CheckpointDiffParams, CheckpointListParams, CheckpointRollbackParams,
+    HelloParams, HelloResult, IdentifyResult, McpCallToolParams, PROTOCOL_VERSION, PingResult,
+    RpcError, RpcRequest, RpcResponse, ServerCapabilities, ServerRole, ThreadCancelTurnParams,
+    ThreadCreateParams, ThreadGetParams, ThreadListParams, ThreadRespondApprovalParams,
+    ThreadResumeParams, ThreadSendTurnParams,
 };
 
+use crate::attachment::AttachmentManager;
 use crate::driver_registry::DriverRegistry;
 use crate::mcp_server::McpServer;
 use crate::store::Store;
@@ -20,10 +23,28 @@ pub struct Router {
     store: Store,
     mcp: McpServer,
     thread_manager: ThreadManager,
+    attachments: AttachmentManager,
     notifications: Arc<tokio::sync::Mutex<Vec<pandamux_core::notification::NotificationInfo>>>,
     role: ServerRole,
     environment_id: String,
     server_version: String,
+}
+
+fn default_attachments_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("PANDAMUX_ATTACHMENTS_DIR") {
+        PathBuf::from(dir)
+    } else if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+        PathBuf::from(local_app_data)
+            .join("pandamux")
+            .join("attachments")
+    } else if let Ok(home) = std::env::var("HOME") {
+        PathBuf::from(home)
+            .join(".pandamux")
+            .join("data")
+            .join("attachments")
+    } else {
+        std::env::temp_dir().join("pandamux").join("attachments")
+    }
 }
 
 impl Router {
@@ -40,15 +61,26 @@ impl Router {
     ) -> Self {
         let mcp = McpServer::new(store.clone());
         let thread_manager = ThreadManager::new(store.clone(), drivers, environment_id.clone());
+        let attachments = AttachmentManager::new(default_attachments_dir());
         Self {
             store,
             mcp,
             thread_manager,
+            attachments,
             notifications: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             role,
             environment_id,
             server_version: env!("CARGO_PKG_VERSION").to_string(),
         }
+    }
+
+    pub fn with_attachments(mut self, attachments: AttachmentManager) -> Self {
+        self.attachments = attachments;
+        self
+    }
+
+    pub fn attachments(&self) -> &AttachmentManager {
+        &self.attachments
     }
 
     pub fn thread_manager(&self) -> &ThreadManager {
@@ -95,6 +127,12 @@ impl Router {
             "checkpoint.list" => self.handle_checkpoint_list(params),
             "checkpoint.diff" => self.handle_checkpoint_diff(params),
             "checkpoint.rollback" => self.handle_checkpoint_rollback(params),
+            "attachment.import_path" | "attachment.importPath" => {
+                self.handle_attachment_import_path(params)
+            }
+            "attachment.put" => self.handle_attachment_put(params).await,
+            "attachment.list" => self.handle_attachment_list(params),
+            "attachment.get" => self.handle_attachment_get(params),
             unknown => Err(RpcError::method_not_found(unknown)),
         };
 
@@ -360,6 +398,36 @@ impl Router {
             .rollback_checkpoint(&params.thread_id, &params.checkpoint_ref)?;
         Ok(json!({ "ok": true }))
     }
+
+    fn handle_attachment_import_path(&self, params: Value) -> Result<Value, RpcError> {
+        let p: AttachmentImportPathParams =
+            serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
+        let result = self
+            .attachments
+            .import_path(&self.store, &p.thread_id, &p.path)?;
+        serde_json::to_value(&result).map_err(|e| RpcError::internal_error(e.to_string()))
+    }
+
+    async fn handle_attachment_put(&self, params: Value) -> Result<Value, RpcError> {
+        let p: AttachmentPutChunkParams =
+            serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
+        let result = self.attachments.put_chunk(&self.store, p).await?;
+        serde_json::to_value(&result).map_err(|e| RpcError::internal_error(e.to_string()))
+    }
+
+    fn handle_attachment_list(&self, params: Value) -> Result<Value, RpcError> {
+        let p: AttachmentListParams =
+            serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
+        let result = self.attachments.list(&self.store, &p.thread_id)?;
+        serde_json::to_value(&result).map_err(|e| RpcError::internal_error(e.to_string()))
+    }
+
+    fn handle_attachment_get(&self, params: Value) -> Result<Value, RpcError> {
+        let p: AttachmentGetParams =
+            serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
+        let result = self.attachments.get(&self.store, &p.thread_id, &p.id)?;
+        serde_json::to_value(&result).map_err(|e| RpcError::internal_error(e.to_string()))
+    }
 }
 
 #[cfg(test)]
@@ -481,5 +549,81 @@ mod tests {
         let get_val = get_res.result.unwrap();
         assert_eq!(get_val["thread"]["id"], thread_id);
         assert_eq!(get_val["turns"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn router_handles_attachment_methods() {
+        let store = Store::in_memory().unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let att_dir = temp_dir.path().join("attachments");
+        let attachment_manager = AttachmentManager::new(att_dir);
+        let router = Router::new(store, ServerRole::Hub, "env-test".to_string())
+            .with_attachments(attachment_manager);
+
+        // Create thread first
+        let create_req = RpcRequest::new(
+            1,
+            "thread.create",
+            Some(json!({
+                "title": "Attachment Test",
+                "cwd": "/tmp"
+            })),
+        );
+        let create_res = router.handle_request(create_req).await.unwrap();
+        assert!(create_res.is_success());
+        let thread_val = create_res.result.unwrap();
+        let thread_id = thread_val["id"].as_str().unwrap().to_string();
+
+        // Create a local sample file to import
+        let sample_file = temp_dir.path().join("code.rs");
+        std::fs::write(&sample_file, b"fn main() { println!(\"Hello!\"); }").unwrap();
+
+        // 1. Call attachment.import_path
+        let import_req = RpcRequest::new(
+            2,
+            "attachment.import_path",
+            Some(json!({
+                "threadId": thread_id,
+                "path": sample_file.to_str().unwrap()
+            })),
+        );
+        let import_res = router.handle_request(import_req).await.unwrap();
+        assert!(import_res.is_success());
+        let att_val = import_res.result.unwrap();
+        let att_id = att_val["attachment"]["id"].as_str().unwrap().to_string();
+        assert_eq!(att_val["attachment"]["fileName"], "code.rs");
+        assert_eq!(att_val["attachment"]["mimeType"], "text/x-rust");
+
+        // 2. Call attachment.list
+        let list_req =
+            RpcRequest::new(3, "attachment.list", Some(json!({ "threadId": thread_id })));
+        let list_res = router.handle_request(list_req).await.unwrap();
+        assert!(list_res.is_success());
+        let list_val = list_res.result.unwrap();
+        assert_eq!(list_val["attachments"].as_array().unwrap().len(), 1);
+
+        // 3. Call attachment.get
+        let get_req = RpcRequest::new(
+            4,
+            "attachment.get",
+            Some(json!({ "threadId": thread_id, "id": att_id })),
+        );
+        let get_res = router.handle_request(get_req).await.unwrap();
+        assert!(get_res.is_success());
+        let get_val = get_res.result.unwrap();
+        assert_eq!(get_val["attachment"]["id"], att_id);
+
+        // 4. Send turn referencing attachment
+        let send_req = RpcRequest::new(
+            5,
+            "thread.send_turn",
+            Some(json!({
+                "threadId": thread_id,
+                "text": "Review this code",
+                "attachmentIds": [att_id]
+            })),
+        );
+        let send_res = router.handle_request(send_req).await.unwrap();
+        assert!(send_res.is_success());
     }
 }

@@ -111,5 +111,28 @@ pub fn apply_migrations(conn: &mut Connection) -> Result<()> {
         tx.commit()?;
     }
 
+    if current < 3 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS attachments (
+                id TEXT PRIMARY KEY,
+                thread_id TEXT NOT NULL REFERENCES threads(id),
+                file_name TEXT NOT NULL,
+                mime_type TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                file_path TEXT NOT NULL,
+                created_at_ms INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_attachments_thread ON attachments(thread_id);",
+        )?;
+
+        tx.execute(
+            "INSERT INTO _migrations (version, applied_at_ms) VALUES (3, ?1)",
+            [now_ms() as i64],
+        )?;
+
+        tx.commit()?;
+    }
+
     Ok(())
 }

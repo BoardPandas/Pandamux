@@ -1,4 +1,5 @@
 pub mod agent_def;
+pub mod attachment;
 pub mod environment;
 pub mod event;
 pub mod home;
@@ -20,6 +21,12 @@ pub mod usage;
 pub use agent_def::{
     AgentAuthor, AgentChange, AgentChangeStatus, AgentDefinition, AgentScope, MemoryEntry,
     MemoryScope,
+};
+pub use attachment::{
+    ATTACHMENT_CHUNK_SIZE_BYTES, AttachmentRecord, AttachmentSizeError, MAX_FILE_SIZE_BYTES,
+    MAX_IMAGE_SIZE_BYTES, MAX_TOTAL_ATTACHMENTS_PER_TURN_BYTES, detect_mime_type,
+    format_attachments_summary, format_file_size, is_image_mime, validate_attachment_size,
+    validate_total_attachments_size,
 };
 pub use environment::{Environment, EnvironmentKind, EnvironmentStatus};
 pub use event::{

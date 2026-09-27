@@ -132,6 +132,7 @@ mod tests {
                 input: TurnInput {
                     text: "Hello desktop agent".to_string(),
                     attachment_ids: vec![],
+                    attachments: vec![],
                     model: None,
                     effort: None,
                 },
@@ -256,6 +257,43 @@ mod tests {
         assert_eq!(comp.text, "Hello agent!");
 
         comp.clear();
+        assert!(comp.is_empty());
+
+        // Test attachment management in composer
+        let att1 = pandamux_core::AttachmentRecord {
+            id: "att-1".to_string(),
+            thread_id: ThreadId::from("t-1"),
+            file_name: "test.png".to_string(),
+            mime_type: "image/png".to_string(),
+            size_bytes: 50000,
+            file_path: "/path/to/test.png".to_string(),
+            created_at_ms: 1000,
+        };
+        comp.add_attachment(att1.clone());
+        assert!(!comp.is_empty());
+        assert_eq!(comp.attachments.len(), 1);
+        assert_eq!(comp.total_attachment_bytes(), 50000);
+
+        let att2 = pandamux_core::AttachmentRecord {
+            id: "att-2".to_string(),
+            thread_id: ThreadId::from("t-1"),
+            file_name: "test.txt".to_string(),
+            mime_type: "text/plain".to_string(),
+            size_bytes: 1000,
+            file_path: "/path/to/test.txt".to_string(),
+            created_at_ms: 1005,
+        };
+        comp.add_attachment(att2);
+        assert_eq!(comp.attachments.len(), 2);
+        assert_eq!(comp.total_attachment_bytes(), 51000);
+
+        // Remove attachment
+        comp.remove_attachment("att-1");
+        assert_eq!(comp.attachments.len(), 1);
+        assert_eq!(comp.attachments[0].id, "att-2");
+
+        // Clear attachments
+        comp.clear_attachments();
         assert!(comp.is_empty());
     }
 

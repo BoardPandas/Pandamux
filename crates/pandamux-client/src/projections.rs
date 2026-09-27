@@ -65,6 +65,7 @@ impl ThreadProjection {
                 self.items.push(TimelineItem::TurnUserPrompt {
                     turn_id: turn_id.as_str().to_string(),
                     text: input.text.clone(),
+                    attachments: input.attachments.clone(),
                 });
             }
             ThreadEventKind::TurnStarted { turn_id } => {
@@ -577,6 +578,8 @@ pub enum TimelineItem {
     TurnUserPrompt {
         turn_id: String,
         text: String,
+        #[serde(default)]
+        attachments: Vec<pandamux_core::AttachmentRecord>,
     },
     AssistantText {
         id: String,

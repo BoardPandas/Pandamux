@@ -122,15 +122,43 @@ pub fn build_thread_start_request(
 
 /// Builds a `turn/start` request with prompt text.
 pub fn build_turn_start_request(id: u64, thread_id: &str, text: &str) -> JsonRpcRequest {
+    build_turn_start_request_with_attachments(id, thread_id, text, &[])
+}
+
+/// Builds a `turn/start` request with prompt text and optional attachments.
+pub fn build_turn_start_request_with_attachments(
+    id: u64,
+    thread_id: &str,
+    text: &str,
+    attachments: &[pandamux_core::AttachmentRecord],
+) -> JsonRpcRequest {
+    let mut effective_text = text.to_string();
+    if !attachments.is_empty() {
+        effective_text.push_str(&pandamux_core::format_attachments_summary(attachments));
+    }
+
     let mut params_map = serde_json::Map::new();
     params_map.insert("threadId".into(), Value::String(thread_id.into()));
     params_map.insert(
         "input".into(),
         serde_json::json!({
             "type": "text",
-            "content": text
+            "content": effective_text
         }),
     );
+    if !attachments.is_empty() {
+        let att_list: Vec<Value> = attachments
+            .iter()
+            .map(|a| {
+                serde_json::json!({
+                    "type": "file",
+                    "path": a.file_path,
+                    "displayName": a.file_name
+                })
+            })
+            .collect();
+        params_map.insert("attachments".into(), Value::Array(att_list));
+    }
 
     JsonRpcRequest {
         jsonrpc: "2.0".into(),
@@ -526,7 +554,12 @@ impl ProviderSession for CodexSession {
     fn send_turn<'a>(&'a mut self, input: TurnInput) -> BoxFuture<'a, Result<(), ProviderError>> {
         Box::pin(async move {
             let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-            let req = build_turn_start_request(id, &self.thread_id, &input.text);
+            let req = build_turn_start_request_with_attachments(
+                id,
+                &self.thread_id,
+                &input.text,
+                &input.attachments,
+            );
             let mut line = serde_json::to_string(&req)?;
             line.push('\n');
             self.stdin.write_all(line.as_bytes()).await?;

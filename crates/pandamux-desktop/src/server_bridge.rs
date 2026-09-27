@@ -81,10 +81,34 @@ impl ServerBridgeHandle {
         rx
     }
 
+    /// Returns a cloned command sender allowing background tasks to send requests.
+    pub fn request_sender(&self) -> Option<mpsc::Sender<BridgeCommand>> {
+        self.command_tx.clone()
+    }
+
     /// Returns the highest sequence number processed by this bridge.
     pub fn last_seen_seq(&self) -> u64 {
         self.last_seen_seq.load(Ordering::SeqCst)
     }
+}
+
+/// Dispatches an RPC request over an optional BridgeCommand sender channel.
+pub fn send_request_channel(
+    cmd_tx: &Option<mpsc::Sender<BridgeCommand>>,
+    method: &'static str,
+    params: Option<serde_json::Value>,
+) -> oneshot::Receiver<Result<RpcResponse, String>> {
+    let (tx, rx) = oneshot::channel();
+    if let Some(chan) = cmd_tx {
+        let _ = chan.try_send(BridgeCommand::Request {
+            method,
+            params,
+            response_tx: tx,
+        });
+    } else {
+        let _ = tx.send(Err("Bridge channel closed".to_string()));
+    }
+    rx
 }
 
 impl Drop for ServerBridgeHandle {

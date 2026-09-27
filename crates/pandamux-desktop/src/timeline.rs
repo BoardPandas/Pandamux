@@ -25,7 +25,9 @@ pub fn render_timeline_item<V: 'static>(
     cx: &mut Context<V>,
 ) -> AnyElement {
     match item {
-        TimelineItem::TurnUserPrompt { text, .. } => div()
+        TimelineItem::TurnUserPrompt {
+            text, attachments, ..
+        } => div()
             .id(ElementId::NamedInteger("user-turn".into(), idx as u64))
             .p_3()
             .rounded(Radii::ROW)
@@ -49,6 +51,45 @@ pub fn render_timeline_item<V: 'static>(
                     .text_color(theme.chrome.text_t1)
                     .child(text.clone()),
             )
+            .when(!attachments.is_empty(), |this| {
+                this.child(
+                    div()
+                        .h_flex()
+                        .flex_wrap()
+                        .gap_1p5()
+                        .items_center()
+                        .pt_1()
+                        .children(attachments.iter().map(|att| {
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .gap_1()
+                                .py_0p5()
+                                .px_2()
+                                .rounded(Radii::CHIP)
+                                .bg(rgba(0x00000040))
+                                .border_1()
+                                .border_color(rgba(0xffffff1a))
+                                .child(
+                                    div()
+                                        .text_size(Typography::META_SIZE)
+                                        .child(if att.is_image() { "🖼️" } else { "📎" }),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(Typography::META_SIZE)
+                                        .text_color(theme.chrome.text_t1)
+                                        .child(att.file_name.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(Typography::META_SIZE)
+                                        .text_color(theme.chrome.text_t3)
+                                        .child(format!("({})", att.human_size())),
+                                )
+                        })),
+                )
+            })
             .into_any_element(),
 
         TimelineItem::AssistantText { text, .. } => div()

@@ -142,6 +142,8 @@ pub struct TurnInput {
     #[serde(default)]
     pub attachment_ids: Vec<String>,
     #[serde(default)]
+    pub attachments: Vec<crate::attachment::AttachmentRecord>,
+    #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
     pub effort: Option<String>,

@@ -632,11 +632,38 @@ pub struct ClaudeSession {
 impl ProviderSession for ClaudeSession {
     fn send_turn<'a>(&'a mut self, input: TurnInput) -> BoxFuture<'a, Result<(), ProviderError>> {
         Box::pin(async move {
-            let msg = serde_json::json!({
-                "type": "user_input",
-                "text": input.text,
-            });
-            let mut line = serde_json::to_string(&msg)?;
+            let mut prompt_text = input.text.clone();
+            if !input.attachments.is_empty() {
+                prompt_text.push_str(&pandamux_core::format_attachments_summary(
+                    &input.attachments,
+                ));
+            }
+
+            let mut msg_map = serde_json::Map::new();
+            msg_map.insert(
+                "type".into(),
+                serde_json::Value::String("user_input".into()),
+            );
+            msg_map.insert("text".into(), serde_json::Value::String(prompt_text));
+
+            if !input.attachments.is_empty() {
+                let att_list: Vec<serde_json::Value> = input
+                    .attachments
+                    .iter()
+                    .map(|att| {
+                        serde_json::json!({
+                            "id": att.id,
+                            "fileName": att.file_name,
+                            "mimeType": att.mime_type,
+                            "size": att.size_bytes,
+                            "path": att.file_path,
+                        })
+                    })
+                    .collect();
+                msg_map.insert("attachments".into(), serde_json::Value::Array(att_list));
+            }
+
+            let mut line = serde_json::to_string(&serde_json::Value::Object(msg_map))?;
             line.push('\n');
             self.stdin.write_all(line.as_bytes()).await?;
             self.stdin.flush().await?;

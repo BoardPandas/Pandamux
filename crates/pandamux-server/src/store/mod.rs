@@ -1,8 +1,8 @@
 pub mod migrations;
 
 use pandamux_core::{
-    ScheduleRecord, Thread, ThreadEvent, ThreadEventKind, ThreadId, Turn, TurnId, TurnStatus,
-    UserSettings,
+    AttachmentRecord, ScheduleRecord, Thread, ThreadEvent, ThreadEventKind, ThreadId, Turn, TurnId,
+    TurnStatus, UserSettings,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
@@ -628,6 +628,121 @@ impl Store {
 
         Ok(())
     }
+
+    // ── Attachments ───────────────────────────────────────────────────────
+
+    pub fn save_attachment(&self, record: &AttachmentRecord) -> Result<(), StoreError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO attachments (id, thread_id, file_name, mime_type, size_bytes, file_path, created_at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(id) DO UPDATE SET
+                file_name = excluded.file_name,
+                mime_type = excluded.mime_type,
+                size_bytes = excluded.size_bytes,
+                file_path = excluded.file_path,
+                created_at_ms = excluded.created_at_ms;",
+            params![
+                record.id,
+                record.thread_id.as_str(),
+                record.file_name,
+                record.mime_type,
+                record.size_bytes as i64,
+                record.file_path,
+                record.created_at_ms as i64,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_attachment(
+        &self,
+        thread_id: &ThreadId,
+        id: &str,
+    ) -> Result<Option<AttachmentRecord>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, thread_id, file_name, mime_type, size_bytes, file_path, created_at_ms
+             FROM attachments WHERE thread_id = ?1 AND id = ?2",
+        )?;
+        let row = stmt
+            .query_row(params![thread_id.as_str(), id], |row| {
+                Ok(AttachmentRecord {
+                    id: row.get(0)?,
+                    thread_id: ThreadId::from(row.get::<_, String>(1)?),
+                    file_name: row.get(2)?,
+                    mime_type: row.get(3)?,
+                    size_bytes: row.get::<_, i64>(4)? as u64,
+                    file_path: row.get(5)?,
+                    created_at_ms: row.get::<_, i64>(6)? as u64,
+                })
+            })
+            .optional()?;
+        Ok(row)
+    }
+
+    pub fn list_attachments(
+        &self,
+        thread_id: &ThreadId,
+    ) -> Result<Vec<AttachmentRecord>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, thread_id, file_name, mime_type, size_bytes, file_path, created_at_ms
+             FROM attachments WHERE thread_id = ?1 ORDER BY created_at_ms ASC",
+        )?;
+        let rows = stmt.query_map(params![thread_id.as_str()], |row| {
+            Ok(AttachmentRecord {
+                id: row.get(0)?,
+                thread_id: ThreadId::from(row.get::<_, String>(1)?),
+                file_name: row.get(2)?,
+                mime_type: row.get(3)?,
+                size_bytes: row.get::<_, i64>(4)? as u64,
+                file_path: row.get(5)?,
+                created_at_ms: row.get::<_, i64>(6)? as u64,
+            })
+        })?;
+
+        let mut result = Vec::new();
+        for r in rows {
+            result.push(r?);
+        }
+        Ok(result)
+    }
+
+    pub fn get_attachments_by_ids(
+        &self,
+        thread_id: &ThreadId,
+        ids: &[String],
+    ) -> Result<Vec<AttachmentRecord>, StoreError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn.lock().unwrap();
+        let mut result = Vec::new();
+        for id in ids {
+            let mut stmt = conn.prepare(
+                "SELECT id, thread_id, file_name, mime_type, size_bytes, file_path, created_at_ms
+                 FROM attachments WHERE thread_id = ?1 AND id = ?2",
+            )?;
+            let row = stmt
+                .query_row(params![thread_id.as_str(), id.as_str()], |row| {
+                    Ok(AttachmentRecord {
+                        id: row.get(0)?,
+                        thread_id: ThreadId::from(row.get::<_, String>(1)?),
+                        file_name: row.get(2)?,
+                        mime_type: row.get(3)?,
+                        size_bytes: row.get::<_, i64>(4)? as u64,
+                        file_path: row.get(5)?,
+                        created_at_ms: row.get::<_, i64>(6)? as u64,
+                    })
+                })
+                .optional()?;
+            if let Some(record) = row {
+                result.push(record);
+            }
+        }
+        Ok(result)
+    }
 }
 
 #[cfg(test)]
@@ -684,6 +799,7 @@ mod tests {
                 input: TurnInput {
                     text: "Hello SQLite".to_string(),
                     attachment_ids: vec![],
+                    attachments: vec![],
                     model: None,
                     effort: None,
                 },
@@ -740,6 +856,7 @@ mod tests {
             input: TurnInput {
                 text: "Build feature".to_string(),
                 attachment_ids: vec![],
+                attachments: vec![],
                 model: Some("fast".to_string()),
                 effort: None,
             },
@@ -780,5 +897,56 @@ mod tests {
 
         let thread_after = store.get_thread(&thread_id).expect("get thread").unwrap();
         assert_eq!(thread_after.status, ThreadStatus::Idle);
+    }
+
+    #[test]
+    fn attachment_crud_round_trip() {
+        let store = Store::in_memory().expect("open in_memory store");
+        let thread_id = ThreadId::from("thread-att-1");
+        let thread = dummy_thread("thread-att-1");
+        store.save_thread(&thread).expect("save thread");
+
+        let att1 = AttachmentRecord {
+            id: "att-1".to_string(),
+            thread_id: thread_id.clone(),
+            file_name: "screenshot.png".to_string(),
+            mime_type: "image/png".to_string(),
+            size_bytes: 102400,
+            file_path: "/data/attachments/thread-att-1/att-1".to_string(),
+            created_at_ms: 1000,
+        };
+
+        let att2 = AttachmentRecord {
+            id: "att-2".to_string(),
+            thread_id: thread_id.clone(),
+            file_name: "log.txt".to_string(),
+            mime_type: "text/plain".to_string(),
+            size_bytes: 2048,
+            file_path: "/data/attachments/thread-att-1/att-2".to_string(),
+            created_at_ms: 1005,
+        };
+
+        store.save_attachment(&att1).expect("save att1");
+        store.save_attachment(&att2).expect("save att2");
+
+        let retrieved1 = store
+            .get_attachment(&thread_id, "att-1")
+            .expect("get att1")
+            .expect("att1 exists");
+        assert_eq!(retrieved1.file_name, "screenshot.png");
+        assert_eq!(retrieved1.size_bytes, 102400);
+
+        let list = store
+            .list_attachments(&thread_id)
+            .expect("list attachments");
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].id, "att-1");
+        assert_eq!(list[1].id, "att-2");
+
+        let by_ids = store
+            .get_attachments_by_ids(&thread_id, &["att-2".to_string()])
+            .expect("get by ids");
+        assert_eq!(by_ids.len(), 1);
+        assert_eq!(by_ids[0].id, "att-2");
     }
 }

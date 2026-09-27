@@ -1,3 +1,4 @@
+pub mod attachment_rpc;
 pub mod checkpoint_rpc;
 pub mod jsonrpc;
 pub mod mcp;
@@ -5,6 +6,10 @@ pub mod subscription;
 pub mod system;
 pub mod thread_rpc;
 
+pub use attachment_rpc::{
+    AttachmentGetParams, AttachmentGetResult, AttachmentImportPathParams, AttachmentImportResult,
+    AttachmentListParams, AttachmentListResult, AttachmentPutChunkParams, AttachmentPutResult,
+};
 pub use checkpoint_rpc::{CheckpointDiffParams, CheckpointListParams, CheckpointRollbackParams};
 pub use jsonrpc::{JSONRPC_VERSION, RpcError, RpcId, RpcRequest, RpcResponse};
 pub use mcp::{McpCallToolParams, McpCallToolResult, McpContentItem, McpToolDefinition};
@@ -65,6 +70,7 @@ mod tests {
                 input: TurnInput {
                     text: "Hello".to_string(),
                     attachment_ids: vec![],
+                    attachments: vec![],
                     model: None,
                     effort: None,
                 },

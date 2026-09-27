@@ -311,14 +311,42 @@ impl ProviderSession for AcpSession {
     fn send_turn<'a>(&'a mut self, input: TurnInput) -> BoxFuture<'a, Result<(), ProviderError>> {
         Box::pin(async move {
             let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+            let mut prompt_text = input.text.clone();
+            if !input.attachments.is_empty() {
+                prompt_text.push_str(&pandamux_core::format_attachments_summary(
+                    &input.attachments,
+                ));
+            }
+
+            let mut params_map = serde_json::Map::new();
+            params_map.insert(
+                "sessionId".into(),
+                serde_json::Value::String(self.session_id.clone()),
+            );
+            params_map.insert("prompt".into(), serde_json::Value::String(prompt_text));
+
+            if !input.attachments.is_empty() {
+                let att_list: Vec<serde_json::Value> = input
+                    .attachments
+                    .iter()
+                    .map(|a| {
+                        serde_json::json!({
+                            "id": a.id,
+                            "name": a.file_name,
+                            "mimeType": a.mime_type,
+                            "size": a.size_bytes,
+                            "path": a.file_path,
+                        })
+                    })
+                    .collect();
+                params_map.insert("attachments".into(), serde_json::Value::Array(att_list));
+            }
+
             let req = serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": id,
                 "method": "session/prompt",
-                "params": {
-                    "sessionId": self.session_id,
-                    "prompt": input.text
-                }
+                "params": serde_json::Value::Object(params_map)
             });
             let mut line = serde_json::to_string(&req)?;
             line.push('\n');

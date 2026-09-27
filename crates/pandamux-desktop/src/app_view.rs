@@ -8,8 +8,9 @@ use pandamux_core::{
     AgentId, ApprovalDecision, EnvironmentId, Thread, ThreadEvent, ThreadId, ThreadStatus,
 };
 use pandamux_protocol::{
-    EventEnvelope, ThreadCancelTurnParams, ThreadCreateParams, ThreadRespondApprovalParams,
-    ThreadSendTurnParams,
+    AttachmentImportPathParams, AttachmentImportResult, AttachmentPutChunkParams,
+    AttachmentPutResult, EventEnvelope, ThreadCancelTurnParams, ThreadCreateParams,
+    ThreadRespondApprovalParams, ThreadSendTurnParams,
 };
 
 use crate::composer::{ComposerState, render_composer};
@@ -167,9 +168,11 @@ impl AppView {
     }
 
     /// Dispatches send_turn intent to backend server with current composer prompt and picker model/effort.
+    /// Dispatches send_turn intent to backend server with current composer prompt and picker model/effort.
     pub fn send_composer_turn(&mut self, cx: &mut Context<Self>) {
         let prompt = self.composer.text.trim().to_string();
-        if prompt.is_empty() {
+        let attachments = self.composer.attachments.clone();
+        if prompt.is_empty() && attachments.is_empty() {
             return;
         }
 
@@ -178,10 +181,18 @@ impl AppView {
             None => return,
         };
 
+        let attachment_ids: Vec<String> = attachments.into_iter().map(|a| a.id).collect();
+
+        let effective_text = if prompt.is_empty() {
+            "Please inspect the attached files.".to_string()
+        } else {
+            prompt
+        };
+
         let params = ThreadSendTurnParams {
             thread_id: thread_id.clone(),
-            text: prompt,
-            attachment_ids: vec![],
+            text: effective_text,
+            attachment_ids,
             model: Some(self.picker.model().to_string()),
             effort: self.picker.effort.clone(),
         };
@@ -194,6 +205,163 @@ impl AppView {
                 let _ = rx.await;
             })
             .detach();
+        }
+    }
+
+    /// Imports a file from a local filesystem path as an attachment for the active thread.
+    pub fn import_attachment_path(&mut self, path: String, cx: &mut Context<Self>) {
+        let thread_id = match &self.active_thread_id {
+            Some(id) => id.clone(),
+            None => return,
+        };
+
+        let params = AttachmentImportPathParams { thread_id, path };
+
+        if let Some(bridge) = &self.bridge {
+            let rx =
+                bridge.send_request("attachment.import_path", serde_json::to_value(&params).ok());
+            cx.spawn(async move |this, cx| {
+                if let Ok(Ok(resp)) = rx.await
+                    && let Some(val) = resp.result
+                    && let Ok(import_res) = serde_json::from_value::<AttachmentImportResult>(val)
+                {
+                    let _ = this.update(cx, |app, cx| {
+                        app.composer.add_attachment(import_res.attachment);
+                        cx.notify();
+                    });
+                }
+            })
+            .detach();
+        }
+    }
+
+    /// Uploads raw bytes as an attachment in 256 KiB chunks (e.g., from clipboard images).
+    pub fn upload_attachment_chunked(
+        &mut self,
+        file_name: String,
+        mime_type: String,
+        data: Vec<u8>,
+        cx: &mut Context<Self>,
+    ) {
+        let thread_id = match &self.active_thread_id {
+            Some(id) => id.clone(),
+            None => return,
+        };
+
+        let cmd_tx = match &self.bridge {
+            Some(b) => b.request_sender(),
+            None => return,
+        };
+
+        let id = format!("att-clip-{}", uuid::Uuid::new_v4().simple());
+        let chunk_size = pandamux_core::ATTACHMENT_CHUNK_SIZE_BYTES;
+        let total_chunks = if data.is_empty() {
+            1
+        } else {
+            data.len().div_ceil(chunk_size) as u32
+        };
+
+        use base64::Engine;
+        use base64::engine::general_purpose::STANDARD as BASE64;
+
+        cx.spawn(async move |this, cx| {
+            for chunk_idx in 0..total_chunks {
+                let start = (chunk_idx as usize) * chunk_size;
+                let end = ((chunk_idx as usize + 1) * chunk_size).min(data.len());
+                let slice = &data[start..end];
+                let b64 = BASE64.encode(slice);
+
+                let params = AttachmentPutChunkParams {
+                    thread_id: thread_id.clone(),
+                    id: id.clone(),
+                    chunk_index: chunk_idx,
+                    total_chunks,
+                    data_base64: b64,
+                    mime_type: mime_type.clone(),
+                    file_name: file_name.clone(),
+                };
+
+                let rx = crate::server_bridge::send_request_channel(
+                    &cmd_tx,
+                    "attachment.put",
+                    serde_json::to_value(&params).ok(),
+                );
+                if let Ok(Ok(resp)) = rx.await
+                    && let Some(val) = resp.result
+                    && let Ok(put_res) = serde_json::from_value::<AttachmentPutResult>(val)
+                    && put_res.is_complete
+                    && let Some(record) = put_res.attachment
+                {
+                    let _ = this.update(cx, |app, cx| {
+                        app.composer.add_attachment(record);
+                        cx.notify();
+                    });
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Invokes native file dialog or path prompt to pick attachments.
+    pub fn pick_attachment(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: None,
+        });
+
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = receiver.await {
+                for path in paths {
+                    let path_str = path.to_string_lossy().to_string();
+                    let _ = this.update(cx, |app, cx| {
+                        app.import_attachment_path(path_str, cx);
+                    });
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Checks the system clipboard for file paths or image data URLs to attach.
+    pub fn paste_clipboard_attachment(&mut self, cx: &mut Context<Self>) {
+        if let Some(item) = cx.read_from_clipboard()
+            && let Some(text) = item.text()
+        {
+            let trimmed = text.trim();
+
+            // 1. Support data:image/...;base64,... images from clipboard
+            if trimmed.starts_with("data:image/")
+                && let Some((mime, rest)) = trimmed
+                    .strip_prefix("data:")
+                    .and_then(|s| s.split_once(";base64,"))
+            {
+                use base64::Engine;
+                use base64::engine::general_purpose::STANDARD as BASE64;
+                if let Ok(bytes) = BASE64.decode(rest.trim()) {
+                    let ext = match mime {
+                        "image/png" => "png",
+                        "image/jpeg" => "jpg",
+                        "image/gif" => "gif",
+                        "image/webp" => "webp",
+                        _ => "img",
+                    };
+                    self.upload_attachment_chunked(
+                        format!("pasted_image.{ext}"),
+                        mime.to_string(),
+                        bytes,
+                        cx,
+                    );
+                    return;
+                }
+            }
+
+            // 2. Support local filesystem paths
+            let path = std::path::Path::new(trimmed);
+            if path.is_file() {
+                self.import_attachment_path(trimmed.to_string(), cx);
+            }
         }
     }
 
@@ -417,32 +585,51 @@ impl AppView {
                             )
                         })),
                 )
-                // Rich Composer
-                .child(render_composer(
-                    &self.composer,
-                    &self.picker,
-                    theme,
-                    |this, _win, cx| {
-                        this.send_composer_turn(cx);
-                    },
-                    |this, _win, cx| {
-                        this.composer.clear();
-                        cx.notify();
-                    },
-                    |this, _win, cx| {
-                        this.picker.cycle_provider();
-                        cx.notify();
-                    },
-                    |this, _win, cx| {
-                        this.picker.cycle_model();
-                        cx.notify();
-                    },
-                    |this, _win, cx| {
-                        this.picker.cycle_effort();
-                        cx.notify();
-                    },
-                    cx,
-                ))
+                // Rich Composer with Drag & Drop file attachment support
+                .child(
+                    div()
+                        .w_full()
+                        .on_drop(cx.listener(
+                            |this: &mut AppView, paths: &ExternalPaths, _window, cx| {
+                                for path in paths.paths() {
+                                    let path_str = path.to_string_lossy().to_string();
+                                    this.import_attachment_path(path_str, cx);
+                                }
+                            },
+                        ))
+                        .child(render_composer(
+                            &self.composer,
+                            &self.picker,
+                            theme,
+                            |this, _win, cx| {
+                                this.send_composer_turn(cx);
+                            },
+                            |this, _win, cx| {
+                                this.composer.clear();
+                                cx.notify();
+                            },
+                            |this, _win, cx| {
+                                this.picker.cycle_provider();
+                                cx.notify();
+                            },
+                            |this, _win, cx| {
+                                this.picker.cycle_model();
+                                cx.notify();
+                            },
+                            |this, _win, cx| {
+                                this.picker.cycle_effort();
+                                cx.notify();
+                            },
+                            |this, win, cx| {
+                                this.pick_attachment(win, cx);
+                            },
+                            |this, att_id, _win, cx| {
+                                this.composer.remove_attachment(&att_id);
+                                cx.notify();
+                            },
+                            cx,
+                        )),
+                )
         } else {
             // Welcome empty state
             div()

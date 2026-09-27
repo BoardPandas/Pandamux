@@ -1,3 +1,4 @@
+pub mod attachment;
 pub mod checkpoint;
 pub mod driver_registry;
 pub mod mcp_server;
@@ -8,6 +9,7 @@ pub mod store;
 pub mod thread_manager;
 pub mod worktree;
 
+pub use attachment::AttachmentManager;
 pub use checkpoint::{
     ChangedFileStat, CheckpointPhase, compute_changed_files, create_checkpoint, is_git_repository,
     prune_old_checkpoints, prune_thread_checkpoints, rollback_to_checkpoint,

@@ -11,6 +11,7 @@ name = "pandamux-server"
 path = "src/main.rs"
 
 [dependencies]
+base64.workspace = true
 pandamux-core = { path = "../pandamux-core" }
 pandamux-protocol = { path = "../pandamux-protocol" }
 pandamux-providers = { path = "../pandamux-providers" }
@@ -19,4 +20,7 @@ serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["signal"] }
 uuid.workspace = true
+
+[dev-dependencies]
+tempfile = "=3.27.0"
 
