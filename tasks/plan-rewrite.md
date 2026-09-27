@@ -936,7 +936,7 @@ Exit criteria: the old crates and resources are gone and the workspace builds; o
 
 1. [x] **Work log grouping and timing; approval variants; plan updates; error and notice cards.** (Completed in commit `741badd`, v0.53.22)
 2. [x] **Checkpoints (hidden refs via temporary index, `write-tree`, `commit-tree`, `update-ref`); changed-files card; ref GC; non-git fallback.** (Completed in commit `2a8b0df`, v0.53.23)
-3. **Custom diff viewer** on gpui-kit `highlighter` and read-only editor pieces.
+3. [x] **Custom diff viewer on gpui-kit `highlighter` and read-only editor pieces.** (Completed in commit `cdb0023`, v0.53.24)
 4. Attachments (local): paste, drag, pick; size caps; provider mapping.
 5. Settings: Providers (scoped, tier mapping), Terminal, General, Advanced; health checks that never trigger auth.
 6. Git actions: status, commit (drafted message), push, PR via `gh` or compare URL.
