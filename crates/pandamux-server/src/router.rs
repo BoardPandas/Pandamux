@@ -19,6 +19,7 @@ pub struct Router {
     store: Store,
     mcp: McpServer,
     thread_manager: ThreadManager,
+    notifications: Arc<tokio::sync::Mutex<Vec<pandamux_core::notification::NotificationInfo>>>,
     role: ServerRole,
     environment_id: String,
     server_version: String,
@@ -42,6 +43,7 @@ impl Router {
             store,
             mcp,
             thread_manager,
+            notifications: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             role,
             environment_id,
             server_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -86,6 +88,9 @@ impl Router {
             "settings.set" => self.handle_settings_set(params),
             "mcp.list_tools" => self.handle_mcp_list_tools(),
             "mcp.call_tool" => self.handle_mcp_call_tool(params),
+            "notification.post" => self.handle_notification_post(params).await,
+            "notification.list" => self.handle_notification_list().await,
+            "notification.clear" => self.handle_notification_clear(params).await,
             unknown => Err(RpcError::method_not_found(unknown)),
         };
 
@@ -236,6 +241,54 @@ impl Router {
             .map_err(|e| RpcError::invalid_params(e.to_string()))?;
         let result = self.mcp.call_tool(&call_params);
         Ok(serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))?)
+    }
+
+    async fn handle_notification_post(&self, params: Value) -> Result<Value, RpcError> {
+        let title = params.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if title.is_empty() {
+            return Err(RpcError::invalid_params("Notification title is required"));
+        }
+        let body = params.get("body").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let source_str = params.get("source").and_then(|v| v.as_str()).unwrap_or("generic");
+        let source = match source_str {
+            "build" => pandamux_core::notification::NotificationSource::Build,
+            "agent" => pandamux_core::notification::NotificationSource::Agent,
+            "deploy" => pandamux_core::notification::NotificationSource::Deploy,
+            "port" => pandamux_core::notification::NotificationSource::Port,
+            _ => pandamux_core::notification::NotificationSource::Generic,
+        };
+
+        let id = format!("notif-{}", uuid::Uuid::new_v4().simple());
+        let info = pandamux_core::notification::NotificationInfo {
+            id: id.clone(),
+            workspace_id: None,
+            surface_id: None,
+            title,
+            body,
+            source,
+            timestamp_ms: Self::now_ms(),
+            read: false,
+        };
+
+        let mut lock = self.notifications.lock().await;
+        lock.push(info);
+
+        Ok(json!({ "id": id, "posted": true }))
+    }
+
+    async fn handle_notification_list(&self) -> Result<Value, RpcError> {
+        let lock = self.notifications.lock().await;
+        Ok(serde_json::to_value(&*lock).map_err(|e| RpcError::internal_error(e.to_string()))?)
+    }
+
+    async fn handle_notification_clear(&self, params: Value) -> Result<Value, RpcError> {
+        let mut lock = self.notifications.lock().await;
+        if let Some(id) = params.get("id").and_then(|v| v.as_str()) {
+            lock.retain(|n| n.id != id);
+        } else {
+            lock.clear();
+        }
+        Ok(json!({ "cleared": true }))
     }
 }
 
