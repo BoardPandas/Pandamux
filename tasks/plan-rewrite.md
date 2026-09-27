@@ -928,7 +928,7 @@ Exit criteria: `spikes/PHASE0_REPORT.md` records pass/fail per spike with number
 8. [x] **Views**: sidebar with nav stubs, timeline, composer (text), provider/model picker, reconnect with `sinceSeq`. (Completed in commit `6484398`, v0.53.18)
 9. [x] **`pandamux-cli` v3 skeleton** (`ping`, `identify`, `thread list`, `thread send`, `notify`, `mcp`). (Completed in commit `384bfcd`, v0.53.19)
 10. [x] **Reference or vendor gpui-kit's agent skills and design guides.** (Completed in commit `cd9800d`, v0.53.20)
-11. [ ] **CI `rust.yml` (rewritten, required)**: Windows job (fmt, clippy, graph-based boundary check, `cargo deny` advisories and licenses, cargo tests including GPUI view tests, built-artifact smoke calling `system.hello` per BP `evaluate-built-artifacts-in-ci`) and a **macOS job** (build and test server, CLI, client, desktop). sccache and rust-cache.
+11. [x] **CI `rust.yml` (rewritten, required)** (Completed in commit `7e97368`, v0.53.21): Windows job (fmt, clippy, graph-based boundary check, `cargo deny` advisories and licenses, cargo tests including GPUI view tests, built-artifact smoke calling `system.hello` per BP `evaluate-built-artifacts-in-ci`) and a **macOS job** (build and test server, CLI, client, desktop). sccache and rust-cache.
 
 Exit criteria: the old crates and resources are gone and the workspace builds; on Windows, chat with Codex, Claude, and Antigravity in one project, approve and deny, interrupt, close and reopen with full history; killing the desktop leaves turns running; killing the server leaves no orphaned providers; an accidental `v*` tag does not publish (the `RELEASES_ENABLED` guard fails the run); both CI jobs green. Ships: internal CI artifacts only.
 
