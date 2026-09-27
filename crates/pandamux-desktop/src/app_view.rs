@@ -404,7 +404,7 @@ impl AppView {
                         .p_2()
                         .gap_3()
                         .overflow_hidden()
-                        .children(proj.items.iter().enumerate().map(|(idx, item)| {
+                        .children(proj.grouped_items().iter().enumerate().map(|(idx, item)| {
                             render_timeline_item(
                                 idx,
                                 item,

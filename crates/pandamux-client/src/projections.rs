@@ -21,6 +21,8 @@ pub struct ThreadProjection {
     pub changed_files: Vec<String>,
     #[serde(default)]
     pub last_seq: u64,
+    #[serde(default)]
+    pub item_timestamps_ms: HashMap<String, u64>,
 }
 
 impl ThreadProjection {
@@ -32,6 +34,7 @@ impl ThreadProjection {
             sub_agents: HashMap::new(),
             changed_files: Vec::new(),
             last_seq: 0,
+            item_timestamps_ms: HashMap::new(),
         }
     }
 
@@ -44,6 +47,8 @@ impl ThreadProjection {
         match &event.kind {
             ThreadEventKind::TurnRequested { turn_id, input } => {
                 self.thread.status = ThreadStatus::Working;
+                self.item_timestamps_ms
+                    .insert(turn_id.as_str().to_string(), event.at_ms);
                 let turn = Turn {
                     id: turn_id.clone(),
                     thread_id: self.thread.id.clone(),
@@ -69,6 +74,7 @@ impl ThreadProjection {
                 self.thread.status = ThreadStatus::Working;
             }
             ThreadEventKind::AssistantText { item_id, text } => {
+                self.item_timestamps_ms.insert(item_id.clone(), event.at_ms);
                 if let Some(TimelineItem::AssistantText { id, text: prev }) = self.items.last_mut()
                     && id == item_id
                 {
@@ -81,6 +87,7 @@ impl ThreadProjection {
                 });
             }
             ThreadEventKind::Reasoning { item_id, text } => {
+                self.item_timestamps_ms.insert(item_id.clone(), event.at_ms);
                 if let Some(TimelineItem::Reasoning { id, text: prev }) = self.items.last_mut()
                     && id == item_id
                 {
@@ -99,6 +106,7 @@ impl ThreadProjection {
                 status,
                 output,
             } => {
+                self.item_timestamps_ms.insert(item_id.clone(), event.at_ms);
                 if let Some(existing) = self.items.iter_mut().find_map(|item| match item {
                     TimelineItem::ToolCall {
                         id,
@@ -127,6 +135,7 @@ impl ThreadProjection {
                 exit_code,
                 output_tail,
             } => {
+                self.item_timestamps_ms.insert(item_id.clone(), event.at_ms);
                 self.items.push(TimelineItem::CommandRun {
                     id: item_id.clone(),
                     command: command.clone(),
@@ -140,6 +149,7 @@ impl ThreadProjection {
                 path,
                 kind,
             } => {
+                self.item_timestamps_ms.insert(item_id.clone(), event.at_ms);
                 self.items.push(TimelineItem::FileChange {
                     id: item_id.clone(),
                     path: path.clone(),
@@ -151,6 +161,8 @@ impl ThreadProjection {
                 kind,
                 detail,
             } => {
+                self.item_timestamps_ms
+                    .insert(request_id.clone(), event.at_ms);
                 self.thread.status = ThreadStatus::AwaitingApproval;
                 self.items.push(TimelineItem::Approval {
                     request_id: request_id.clone(),
@@ -283,6 +295,204 @@ impl ThreadProjection {
             }
         }
     }
+
+    /// Returns the timeline items with consecutive intermediate reasoning, tool calls,
+    /// command runs, and file changes aggregated into unified collapsible WorkLog items.
+    pub fn grouped_items(&self) -> Vec<TimelineItem> {
+        let mut result = Vec::new();
+        let mut current_group: Vec<WorkLogEntry> = Vec::new();
+        let mut group_item_ids: Vec<String> = Vec::new();
+
+        let flush_group =
+            |group: &mut Vec<WorkLogEntry>, ids: &mut Vec<String>, res: &mut Vec<TimelineItem>| {
+                if group.is_empty() {
+                    return;
+                }
+                let entries = std::mem::take(group);
+                let item_ids = std::mem::take(ids);
+                let first_id = match entries.first() {
+                    Some(WorkLogEntry::Reasoning { id, .. }) => id.clone(),
+                    Some(WorkLogEntry::ToolCall { id, .. }) => id.clone(),
+                    Some(WorkLogEntry::CommandRun { id, .. }) => id.clone(),
+                    Some(WorkLogEntry::FileChange { id, .. }) => id.clone(),
+                    None => "work-log".to_string(),
+                };
+
+                // Calculate timing based on item timestamps or turn elapsed
+                let mut min_ts: Option<u64> = None;
+                let mut max_ts: Option<u64> = None;
+                for id in &item_ids {
+                    if let Some(&ts) = self.item_timestamps_ms.get(id) {
+                        min_ts = Some(min_ts.map_or(ts, |m| m.min(ts)));
+                        max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));
+                    }
+                }
+
+                // Determine status
+                let is_any_failed = entries.iter().any(|e| match e {
+                    WorkLogEntry::ToolCall { status, .. } => *status == ToolCallStatus::Failed,
+                    WorkLogEntry::CommandRun { exit_code, .. } => *exit_code != Some(0),
+                    _ => false,
+                });
+                let is_any_running = entries.iter().any(|e| match e {
+                    WorkLogEntry::ToolCall { status, .. } => {
+                        *status == ToolCallStatus::Executing || *status == ToolCallStatus::Pending
+                    }
+                    _ => false,
+                });
+
+                let status = if is_any_failed {
+                    WorkLogStatus::Failed
+                } else if is_any_running || self.thread.status == ThreadStatus::Working {
+                    WorkLogStatus::Running
+                } else {
+                    WorkLogStatus::Completed
+                };
+
+                let duration_ms = match (min_ts, max_ts) {
+                    (Some(s), Some(e)) if e >= s => Some(e - s),
+                    (Some(s), None) => {
+                        let now_ms = self.turns.last().and_then(|t| t.ended_at_ms).unwrap_or(s);
+                        Some(now_ms.saturating_sub(s))
+                    }
+                    _ => {
+                        if let Some(turn) = self.turns.last() {
+                            turn.ended_at_ms
+                                .map(|e| e.saturating_sub(turn.started_at_ms))
+                        } else {
+                            None
+                        }
+                    }
+                };
+
+                let summary = match status {
+                    WorkLogStatus::Running => {
+                        if let Some(dur) = duration_ms {
+                            format!("Thinking and executing tools ({})", format_duration(dur))
+                        } else {
+                            "Thinking and executing tools...".to_string()
+                        }
+                    }
+                    WorkLogStatus::Completed => {
+                        let count = entries.len();
+                        let items_label = if count == 1 {
+                            "1 item"
+                        } else {
+                            &format!("{count} items")
+                        };
+                        let only_reasoning = entries
+                            .iter()
+                            .all(|e| matches!(e, WorkLogEntry::Reasoning { .. }));
+                        if only_reasoning {
+                            if let Some(dur) = duration_ms {
+                                format!("Thought for {}", format_duration(dur))
+                            } else {
+                                "Thought process completed".to_string()
+                            }
+                        } else if let Some(dur) = duration_ms {
+                            format!("Worked for {} ({items_label})", format_duration(dur))
+                        } else {
+                            format!("Worked on {items_label}")
+                        }
+                    }
+                    WorkLogStatus::Failed => {
+                        let count = entries.len();
+                        if let Some(dur) = duration_ms {
+                            format!("Failed after {} ({count} items)", format_duration(dur))
+                        } else {
+                            format!("Failed during work ({count} items)")
+                        }
+                    }
+                };
+
+                res.push(TimelineItem::WorkLog {
+                    id: format!("wl-{first_id}"),
+                    summary,
+                    entries,
+                    duration_ms,
+                    status,
+                });
+            };
+
+        for item in &self.items {
+            if let Some(entry) = item.as_work_log_entry() {
+                let id = match item {
+                    TimelineItem::Reasoning { id, .. } => id.clone(),
+                    TimelineItem::ToolCall { id, .. } => id.clone(),
+                    TimelineItem::CommandRun { id, .. } => id.clone(),
+                    TimelineItem::FileChange { id, .. } => id.clone(),
+                    _ => String::new(),
+                };
+                group_item_ids.push(id);
+                current_group.push(entry);
+            } else {
+                flush_group(&mut current_group, &mut group_item_ids, &mut result);
+                result.push(item.clone());
+            }
+        }
+
+        flush_group(&mut current_group, &mut group_item_ids, &mut result);
+        result
+    }
+}
+
+/// Status of an aggregated work log.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkLogStatus {
+    Running,
+    Completed,
+    Failed,
+}
+
+impl WorkLogStatus {
+    pub fn is_running(&self) -> bool {
+        matches!(self, Self::Running)
+    }
+}
+
+/// An entry within a grouped work log.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "entry_type", rename_all = "snake_case")]
+pub enum WorkLogEntry {
+    Reasoning {
+        id: String,
+        text: String,
+    },
+    ToolCall {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+        status: ToolCallStatus,
+        output: Option<String>,
+    },
+    CommandRun {
+        id: String,
+        command: String,
+        cwd: String,
+        exit_code: Option<i32>,
+        output_tail: Option<String>,
+    },
+    FileChange {
+        id: String,
+        path: String,
+        kind: FileChangeKind,
+    },
+}
+
+/// Formats duration in milliseconds to a concise human-readable string.
+/// E.g. 680_000 -> "11m 20s", 12_000 -> "12s", 500 -> "<1s".
+pub fn format_duration(duration_ms: u64) -> String {
+    let total_secs = duration_ms / 1000;
+    let mins = total_secs / 60;
+    let secs = total_secs % 60;
+    if mins > 0 {
+        format!("{mins}m {secs}s")
+    } else if secs > 0 {
+        format!("{secs}s")
+    } else {
+        "<1s".to_string()
+    }
 }
 
 /// A rendered item inside a thread's timeline.
@@ -338,6 +548,56 @@ pub enum TimelineItem {
         message: String,
         recoverable: bool,
     },
+    WorkLog {
+        id: String,
+        summary: String,
+        entries: Vec<WorkLogEntry>,
+        duration_ms: Option<u64>,
+        status: WorkLogStatus,
+    },
+}
+
+impl TimelineItem {
+    pub fn as_work_log_entry(&self) -> Option<WorkLogEntry> {
+        match self {
+            TimelineItem::Reasoning { id, text } => Some(WorkLogEntry::Reasoning {
+                id: id.clone(),
+                text: text.clone(),
+            }),
+            TimelineItem::ToolCall {
+                id,
+                name,
+                input,
+                status,
+                output,
+            } => Some(WorkLogEntry::ToolCall {
+                id: id.clone(),
+                name: name.clone(),
+                input: input.clone(),
+                status: *status,
+                output: output.clone(),
+            }),
+            TimelineItem::CommandRun {
+                id,
+                command,
+                cwd,
+                exit_code,
+                output_tail,
+            } => Some(WorkLogEntry::CommandRun {
+                id: id.clone(),
+                command: command.clone(),
+                cwd: cwd.clone(),
+                exit_code: *exit_code,
+                output_tail: output_tail.clone(),
+            }),
+            TimelineItem::FileChange { id, path, kind } => Some(WorkLogEntry::FileChange {
+                id: id.clone(),
+                path: path.clone(),
+                kind: *kind,
+            }),
+            _ => None,
+        }
+    }
 }
 
 /// Status and activity projection of a provider sub-agent.

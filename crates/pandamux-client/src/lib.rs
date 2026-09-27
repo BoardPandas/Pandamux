@@ -4,7 +4,10 @@ pub mod token_queue;
 pub mod transport;
 
 pub use client::PandamuxClient;
-pub use projections::{RunProjection, SubAgentProjection, ThreadProjection, TimelineItem};
+pub use projections::{
+    RunProjection, SubAgentProjection, ThreadProjection, TimelineItem, WorkLogEntry, WorkLogStatus,
+    format_duration,
+};
 pub use token_queue::TokenSmoothingQueue;
 pub use transport::{MockTransport, MockTransportPeer, TransportError};
 
@@ -369,5 +372,172 @@ mod tests {
         assert_eq!(proj.thread.status, ThreadStatus::Working);
         assert_eq!(proj.turns.len(), 1);
         assert_eq!(proj.turns[0].input.text, "Verify since_seq replay");
+    }
+
+    #[test]
+    fn format_duration_formatting() {
+        assert_eq!(format_duration(500), "<1s");
+        assert_eq!(format_duration(12_000), "12s");
+        assert_eq!(format_duration(60_000), "1m 0s");
+        assert_eq!(format_duration(680_000), "11m 20s");
+    }
+
+    #[test]
+    fn work_log_grouping_and_timing() {
+        use pandamux_core::FileChangeKind;
+
+        let thread = mock_thread("thread-wl");
+        let mut proj = ThreadProjection::new(thread);
+
+        // Turn requested at 1000
+        proj.apply_event(&ThreadEvent {
+            thread_id: ThreadId::from("thread-wl"),
+            seq: 1,
+            at_ms: 1000,
+            kind: ThreadEventKind::TurnRequested {
+                turn_id: TurnId::from("turn-wl"),
+                input: TurnInput {
+                    text: "Refactor database queries and test".to_string(),
+                    attachment_ids: vec![],
+                    model: None,
+                    effort: None,
+                },
+            },
+        });
+
+        // Reasoning at 2000
+        proj.apply_event(&ThreadEvent {
+            thread_id: ThreadId::from("thread-wl"),
+            seq: 2,
+            at_ms: 2000,
+            kind: ThreadEventKind::Reasoning {
+                item_id: "reason-1".to_string(),
+                text: "Analyzing slow queries...".to_string(),
+            },
+        });
+
+        // Tool call at 3000
+        proj.apply_event(&ThreadEvent {
+            thread_id: ThreadId::from("thread-wl"),
+            seq: 3,
+            at_ms: 3000,
+            kind: ThreadEventKind::ToolCall {
+                item_id: "tool-db".to_string(),
+                name: "query_index".to_string(),
+                input: json!({"table": "users"}),
+                status: ToolCallStatus::Executing,
+                output: None,
+            },
+        });
+
+        // While thread is working and tool is executing, grouped items show Running work log
+        let running_items = proj.grouped_items();
+        assert_eq!(running_items.len(), 2); // TurnUserPrompt + WorkLog
+        if let TimelineItem::WorkLog {
+            summary,
+            entries,
+            status,
+            duration_ms,
+            ..
+        } = &running_items[1]
+        {
+            assert_eq!(*status, WorkLogStatus::Running);
+            assert_eq!(entries.len(), 2);
+            assert!(summary.starts_with("Thinking and executing tools"));
+            assert_eq!(*duration_ms, Some(1000)); // 3000 - 2000
+        } else {
+            panic!("expected WorkLog item");
+        }
+
+        // Tool finishes at 5000
+        proj.apply_event(&ThreadEvent {
+            thread_id: ThreadId::from("thread-wl"),
+            seq: 4,
+            at_ms: 5000,
+            kind: ThreadEventKind::ToolCall {
+                item_id: "tool-db".to_string(),
+                name: "query_index".to_string(),
+                input: json!({"table": "users"}),
+                status: ToolCallStatus::Success,
+                output: Some("12 indexes analyzed".to_string()),
+            },
+        });
+
+        // Command run at 7000
+        proj.apply_event(&ThreadEvent {
+            thread_id: ThreadId::from("thread-wl"),
+            seq: 5,
+            at_ms: 7000,
+            kind: ThreadEventKind::CommandRun {
+                item_id: "cmd-test".to_string(),
+                command: "cargo test --test db".to_string(),
+                cwd: "/repo".to_string(),
+                exit_code: Some(0),
+                output_tail: Some("test result: ok".to_string()),
+            },
+        });
+
+        // File change at 8000
+        proj.apply_event(&ThreadEvent {
+            thread_id: ThreadId::from("thread-wl"),
+            seq: 6,
+            at_ms: 8000,
+            kind: ThreadEventKind::FileChange {
+                item_id: "file-schema".to_string(),
+                path: "src/schema.rs".to_string(),
+                kind: FileChangeKind::Modified,
+            },
+        });
+
+        // Assistant final text at 9000
+        proj.apply_event(&ThreadEvent {
+            thread_id: ThreadId::from("thread-wl"),
+            seq: 7,
+            at_ms: 9000,
+            kind: ThreadEventKind::AssistantText {
+                item_id: "msg-ans".to_string(),
+                text: "Refactored queries and all tests pass.".to_string(),
+            },
+        });
+
+        // Turn completed
+        proj.apply_event(&ThreadEvent {
+            thread_id: ThreadId::from("thread-wl"),
+            seq: 8,
+            at_ms: 9500,
+            kind: ThreadEventKind::TurnCompleted {
+                outcome: TurnOutcome::Success,
+            },
+        });
+
+        // Settle thread to Idle
+        proj.apply_event(&ThreadEvent {
+            thread_id: ThreadId::from("thread-wl"),
+            seq: 9,
+            at_ms: 9600,
+            kind: ThreadEventKind::TurnSettled {
+                changed_files: vec!["src/schema.rs".to_string()],
+            },
+        });
+
+        let completed_items = proj.grouped_items();
+        // Should be: [TurnUserPrompt, WorkLog, AssistantText]
+        assert_eq!(completed_items.len(), 3);
+
+        if let TimelineItem::WorkLog {
+            summary,
+            entries,
+            duration_ms,
+            status,
+            ..
+        } = &completed_items[1]
+        {
+            assert_eq!(*status, WorkLogStatus::Completed);
+            assert_eq!(entries.len(), 4); // Reasoning, ToolCall, CommandRun, FileChange
+            assert_eq!(*duration_ms, Some(6000)); // 8000 - 2000
+            assert_eq!(summary, "Worked for 6s (4 items)");
+        } else {
+            panic!("expected completed WorkLog");
+        }
     }
 }
