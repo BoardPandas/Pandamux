@@ -28,6 +28,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Verify releases enabled
+        shell: bash
+        run: |
+          if [ "${{ vars.RELEASES_ENABLED }}" != "true" ]; then
+            echo "::error::Releases are disabled during the Phase 1-6 rewrite. Set repository variable RELEASES_ENABLED=true in Phase 7 to enable."
+            exit 1
+          fi
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 

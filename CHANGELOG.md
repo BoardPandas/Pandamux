@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Changed
 
+- **Cleared ground for Phase 1 GPUI rewrite (Step 1).** Extracted SSH pool, authentication, known hosts, and SFTP into new `pandamux-remote` crate. Reshaped `pandamux-term` with `grid` and `pty` feature flags, decoupling it from `russh`. Trimmed `pandamux-core` to retain domain types (`ids`, `project`, `project_registry`, `ssh`, `notification`, `i18n`, `home`, `settings`), and pruned multiplexer files (`split_tree`, `state`, `surface_content`, `keymap`, `sidebar`, old `agent`, `config`). Removed obsolete crates `pandamux-ui` and `pandamux-app`, retired resource folders, and legacy terminal spikes. Guarded `release.yml` with `RELEASES_ENABLED` check, disabled `winget.yml`, and updated CI workflows and crate boundaries.
 - **AI agents and contributors now have a faster, more reliable documentation path.**
   `AGENTS.md` defines the reading order and authority hierarchy, current behavior is
   reconciled across the generated wiki, historical plans are labeled, source citations

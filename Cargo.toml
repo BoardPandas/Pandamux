@@ -2,13 +2,11 @@
 members = [
   "crates/pandamux-core",
   "crates/pandamux-term",
-  "crates/pandamux-ui",
-  "crates/pandamux-app",
+  "crates/pandamux-remote",
   "crates/pandamux-cli",
 ]
 resolver = "3"
 exclude = [
-  "spikes/phase2-native-terminal",
   "spikes/phase0-gpui-chat",
   "spikes/phase0-drivers",
   "spikes/phase0-antigravity",
@@ -18,7 +16,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.53.10"
+version = "0.53.11"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/BoardPandas/Pandamux"

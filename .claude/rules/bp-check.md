@@ -11,7 +11,6 @@ paths:
   - "crates/*/Cargo.toml"
   - "docs/_toc.yaml"
   - "netlify.toml"
-  - "resources/pandamux-orchestrator/**"
   - "winget/**"
 ---
 

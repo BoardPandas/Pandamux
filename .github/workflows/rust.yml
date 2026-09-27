@@ -53,14 +53,5 @@ jobs:
       - name: Test workspace
         run: cargo test --workspace
 
-      - name: Test Iced UI feature
-        run: cargo test -p pandamux-ui --features iced-runtime --lib
-
-      - name: Test Iced app runtime feature
-        run: cargo test -p pandamux-app --features iced-runtime --bin pandamux
-
-      - name: Smoke Iced app shell view
-        run: cargo run -p pandamux-app --features iced-runtime -- --iced-shell-smoke
-
-      - name: Build native binaries
-        run: cargo build -p pandamux-app -p pandamux-cli -p pandamux-term
+      - name: Build workspace binaries
+        run: cargo build -p pandamux-cli -p pandamux-term -p pandamux-remote

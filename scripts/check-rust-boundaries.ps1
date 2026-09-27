@@ -12,6 +12,10 @@ $rules = @(
   @{
     Name = 'pandamux-term'
     Forbidden = @('iced')
+  },
+  @{
+    Name = 'pandamux-remote'
+    Forbidden = @('iced', 'alacritty_terminal')
   }
 )
 

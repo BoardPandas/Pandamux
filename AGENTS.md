@@ -1,8 +1,16 @@
-# PandaMUX — Agent Guide
+# PandaMUX: Agent Guide
 
 PandaMUX is a native Windows terminal multiplexer for AI agents, built as a Rust workspace (Iced + alacritty_terminal + portable-pty + russh). The Electron/TypeScript prototype this repo started from has been removed.
 
 **The authoritative development guide is [`CLAUDE.md`](CLAUDE.md).** Read it for build/dev/test commands, the crate architecture, the release process, and the repo conventions. This file is a routing page so agent tooling that looks for `AGENTS.md` lands on the right sources without duplicating them.
+
+## Command execution and interaction rules
+
+Before running any command that may cause silence or run in the background (such as `cargo test`, `cargo build`, test harnesses, or package scripts):
+1. **Explain first in chat**: Describe what command will run and what it does.
+2. **Estimate duration**: Provide a rough time estimate (for example: ~10 to 30 seconds).
+3. **Interrupt safety guidance**: Explicitly state whether it is safe to interrupt or cancel early if the run appears stuck (for example: "Safe to cancel early: read-only test suite with no workspace side effects").
+4. **Never execute silently**: Always communicate in chat before triggering long commands.
 
 ## AI fast path
 

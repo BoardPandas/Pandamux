@@ -12,8 +12,42 @@
 
 use crate::ids::ProjectId;
 use crate::project::{ProjectKey, ProjectLocation, project_title};
-use crate::state::AppState;
 use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum SessionType {
+    #[default]
+    Terminal,
+    /// A specific PowerShell flavor ("pwsh", "powershell") or another shell.
+    PowerShell {
+        program: String,
+    },
+    Claude,
+    Codex,
+    Gemini,
+    Custom {
+        command: String,
+    },
+}
+
+impl SessionType {
+    /// Short badge label for rail entries and tabs.
+    pub fn label(&self) -> &str {
+        match self {
+            Self::Terminal => "Terminal",
+            Self::PowerShell { .. } => "PowerShell",
+            Self::Claude => "Claude",
+            Self::Codex => "Codex",
+            Self::Gemini => "Gemini",
+            Self::Custom { .. } => "Custom",
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,7 +97,7 @@ pub enum ProjectResolution {
 pub struct LaunchConfig {
     pub project_id: ProjectId,
     #[serde(default)]
-    pub session: crate::split_tree::SessionType,
+    pub session: SessionType,
 }
 
 /// Normalize a git remote URL so the same repository matches across schemes
@@ -229,82 +263,6 @@ pub fn resolve_project_id(
     }))
 }
 
-/// Assign a `project_id` to every workspace that lacks one, creating or
-/// reusing registry records. Folder-name matching collapses the historical
-/// per-host duplicates (the 1.4 migration). Legacy workspaces (no folder)
-/// keep `project_id: None` and group per-workspace as before. Returns true
-/// when anything changed.
-pub fn ensure_project_registry(app: &mut AppState, now_ms: u64) -> bool {
-    let mut changed = false;
-    for index in 0..app.workspaces.len() {
-        if app.workspaces[index].project_id.is_some() {
-            continue;
-        }
-        let location = app.workspaces[index].project.location.clone();
-        match resolve_project_id(&app.projects, &location, None, now_ms) {
-            Some(ProjectResolution::Existing(project_id)) => {
-                record_location(&mut app.projects, &project_id, &location);
-                app.workspaces[index].project_id = Some(project_id);
-                changed = true;
-            }
-            Some(ProjectResolution::New(record)) => {
-                let project_id = record.id.clone();
-                app.projects.push(record);
-                app.workspaces[index].project_id = Some(project_id);
-                changed = true;
-            }
-            None => {}
-        }
-    }
-    // Drop records no workspace references anymore (keeps the registry from
-    // accumulating ghosts as projects close; favorites/recents validate their
-    // ids against this registry at load).
-    let referenced: Vec<ProjectId> = app
-        .workspaces
-        .iter()
-        .filter_map(|workspace| workspace.project_id.clone())
-        .collect();
-    let before = app.projects.len();
-    app.projects
-        .retain(|record| referenced.contains(&record.id) || record.manual);
-    changed |= app.projects.len() != before;
-    changed
-}
-
-/// Resolve-or-create the registry record for one workspace's location and
-/// assign it (the per-launch path; [`ensure_project_registry`] is the bulk
-/// load-time path). Returns the assigned id.
-pub fn assign_workspace_project(
-    app: &mut AppState,
-    workspace_id: &crate::ids::WorkspaceId,
-    now_ms: u64,
-) -> Option<ProjectId> {
-    let workspace = app
-        .workspaces
-        .iter()
-        .find(|workspace| &workspace.id == workspace_id)?;
-    let location = workspace.project.location.clone();
-    let project_id = match workspace.project_id.clone() {
-        Some(project_id) => project_id,
-        None => match resolve_project_id(&app.projects, &location, None, now_ms)? {
-            ProjectResolution::Existing(project_id) => project_id,
-            ProjectResolution::New(record) => {
-                let project_id = record.id.clone();
-                app.projects.push(record);
-                project_id
-            }
-        },
-    };
-    record_location(&mut app.projects, &project_id, &location);
-    if let Some(workspace) = app
-        .workspaces
-        .iter_mut()
-        .find(|workspace| &workspace.id == workspace_id)
-    {
-        workspace.project_id = Some(project_id.clone());
-    }
-    Some(project_id)
-}
 
 /// Remember a location on a record (most recent first, deduped) and make sure
 /// its exact key matches next time.

@@ -25,8 +25,8 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    # Skip silently if the token hasn't been configured yet (no noisy failures).
-    if: ${{ github.repository == 'BoardPandas/Pandamux' }}
+    # Disabled during the Phase 1-6 rewrite until the new GPUI app ships in Phase 7.
+    if: false
     steps:
       - name: Publish to winget
         if: ${{ env.WINGET_TOKEN != '' }}

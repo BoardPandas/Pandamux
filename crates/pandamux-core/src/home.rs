@@ -136,7 +136,7 @@ impl HomeLayout {
 mod tests {
     use super::*;
     use crate::ids::ProjectId;
-    use crate::split_tree::SessionType;
+    use crate::project_registry::SessionType;
 
     fn config() -> LaunchConfig {
         LaunchConfig {
