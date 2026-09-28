@@ -12,9 +12,11 @@ use pandamux_core::{
     thread::{Thread, ThreadStatus, ThreadWorkspace, Turn, TurnInput, TurnStatus},
 };
 use pandamux_protocol::{
-    EventEnvelope, RpcError, ThreadCancelTurnParams, ThreadCreateParams, ThreadGetParams,
-    ThreadGetResult, ThreadListParams, ThreadRespondApprovalParams, ThreadResumeParams,
-    ThreadResumeResult, ThreadSendTurnParams, ThreadSendTurnResult,
+    EventEnvelope, GitCommitParams, GitCommitResult, GitCreatePrParams, GitCreatePrResult,
+    GitPushParams, GitPushResult, GitStatusParams, GitStatusResult, RpcError,
+    ThreadCancelTurnParams, ThreadCreateParams, ThreadGetParams, ThreadGetResult, ThreadListParams,
+    ThreadRespondApprovalParams, ThreadResumeParams, ThreadResumeResult, ThreadSendTurnParams,
+    ThreadSendTurnResult,
 };
 use pandamux_providers::traits::ProviderSession;
 use pandamux_providers::{ProviderEvent, SessionSpec};
@@ -980,5 +982,63 @@ impl ThreadManager {
         let worktree_dir = PathBuf::from(thread.workspace.effective_path());
         crate::checkpoint::rollback_to_checkpoint(&worktree_dir, checkpoint_ref)
             .map_err(RpcError::internal_error)
+    }
+
+    /// Queries the Git status and file modifications for a thread's worktree.
+    pub fn git_status(&self, params: GitStatusParams) -> Result<GitStatusResult, RpcError> {
+        let thread = self
+            .store
+            .get_thread(&params.thread_id)
+            .map_err(|e| RpcError::internal_error(e.to_string()))?
+            .ok_or_else(|| RpcError::not_found(format!("Thread {} not found", params.thread_id)))?;
+
+        let worktree_dir = PathBuf::from(thread.workspace.effective_path());
+        crate::git::get_git_status(&worktree_dir).map_err(RpcError::internal_error)
+    }
+
+    /// Stages all changes and creates a Git commit in the thread's worktree.
+    pub fn git_commit(&self, params: GitCommitParams) -> Result<GitCommitResult, RpcError> {
+        let thread = self
+            .store
+            .get_thread(&params.thread_id)
+            .map_err(|e| RpcError::internal_error(e.to_string()))?
+            .ok_or_else(|| RpcError::not_found(format!("Thread {} not found", params.thread_id)))?;
+
+        let worktree_dir = PathBuf::from(thread.workspace.effective_path());
+        crate::git::git_commit(&worktree_dir, params.message).map_err(RpcError::internal_error)
+    }
+
+    /// Pushes committed changes in the thread's worktree to the remote repository.
+    pub fn git_push(&self, params: GitPushParams) -> Result<GitPushResult, RpcError> {
+        let thread = self
+            .store
+            .get_thread(&params.thread_id)
+            .map_err(|e| RpcError::internal_error(e.to_string()))?
+            .ok_or_else(|| RpcError::not_found(format!("Thread {} not found", params.thread_id)))?;
+
+        let worktree_dir = PathBuf::from(thread.workspace.effective_path());
+        crate::git::git_push(
+            &worktree_dir,
+            params.remote.as_deref(),
+            params.branch.as_deref(),
+        )
+        .map_err(RpcError::internal_error)
+    }
+
+    /// Creates a Pull Request using gh CLI if installed, or generates a compare URL.
+    pub fn git_create_pr(&self, params: GitCreatePrParams) -> Result<GitCreatePrResult, RpcError> {
+        let thread = self
+            .store
+            .get_thread(&params.thread_id)
+            .map_err(|e| RpcError::internal_error(e.to_string()))?
+            .ok_or_else(|| RpcError::not_found(format!("Thread {} not found", params.thread_id)))?;
+
+        let worktree_dir = PathBuf::from(thread.workspace.effective_path());
+        crate::git::git_create_pr(
+            &worktree_dir,
+            params.title.as_deref(),
+            params.body.as_deref(),
+        )
+        .map_err(RpcError::internal_error)
     }
 }

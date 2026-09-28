@@ -1,5 +1,6 @@
 pub mod attachment_rpc;
 pub mod checkpoint_rpc;
+pub mod git_rpc;
 pub mod jsonrpc;
 pub mod mcp;
 pub mod settings_rpc;
@@ -12,6 +13,10 @@ pub use attachment_rpc::{
     AttachmentListParams, AttachmentListResult, AttachmentPutChunkParams, AttachmentPutResult,
 };
 pub use checkpoint_rpc::{CheckpointDiffParams, CheckpointListParams, CheckpointRollbackParams};
+pub use git_rpc::{
+    GitCommitParams, GitCommitResult, GitCreatePrParams, GitCreatePrResult, GitFileStatus,
+    GitPushParams, GitPushResult, GitStatusParams, GitStatusResult,
+};
 pub use jsonrpc::{JSONRPC_VERSION, RpcError, RpcId, RpcRequest, RpcResponse};
 pub use mcp::{McpCallToolParams, McpCallToolResult, McpContentItem, McpToolDefinition};
 pub use settings_rpc::{

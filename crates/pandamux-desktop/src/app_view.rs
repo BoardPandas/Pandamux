@@ -3,14 +3,17 @@ use std::collections::HashMap;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::gpui::*;
+use gpui_kit::prelude::FluentBuilder as _;
 use pandamux_client::projections::ThreadProjection;
 use pandamux_core::{
     AgentId, ApprovalDecision, EnvironmentId, Thread, ThreadEvent, ThreadId, ThreadStatus,
 };
 use pandamux_protocol::{
     AttachmentImportPathParams, AttachmentImportResult, AttachmentPutChunkParams,
-    AttachmentPutResult, EventEnvelope, ProviderHealthResult, SettingsGetResult, SettingsSetParams,
-    ThreadCancelTurnParams, ThreadCreateParams, ThreadRespondApprovalParams, ThreadSendTurnParams,
+    AttachmentPutResult, EventEnvelope, GitCommitParams, GitCommitResult, GitCreatePrParams,
+    GitCreatePrResult, GitPushParams, GitPushResult, GitStatusParams, GitStatusResult,
+    ProviderHealthResult, SettingsGetResult, SettingsSetParams, ThreadCancelTurnParams,
+    ThreadCreateParams, ThreadRespondApprovalParams, ThreadSendTurnParams,
 };
 
 use crate::composer::{ComposerState, render_composer};
@@ -34,6 +37,9 @@ pub struct AppView {
     picker: PickerState,
     active_rail_tab: RailTab,
     pub settings_view: SettingsViewState,
+    pub git_status: Option<GitStatusResult>,
+    pub git_action_msg: Option<String>,
+    pub is_git_busy: bool,
 }
 
 impl AppView {
@@ -80,6 +86,9 @@ impl AppView {
             picker: PickerState::new(),
             active_rail_tab: RailTab::Threads,
             settings_view: SettingsViewState::new(),
+            git_status: None,
+            git_action_msg: None,
+            is_git_busy: false,
         };
 
         app.load_settings(cx);
@@ -408,9 +417,10 @@ impl AppView {
         }
     }
 
-    /// Sets the active thread.
-    pub fn select_thread(&mut self, thread_id: ThreadId) {
+    /// Sets the active thread and queries Git status.
+    pub fn select_thread(&mut self, thread_id: ThreadId, cx: &mut Context<Self>) {
         self.active_thread_id = Some(thread_id);
+        self.refresh_git_status(cx);
     }
 
     /// Sets the active navigation rail tab.
@@ -540,6 +550,282 @@ impl AppView {
             cx,
         )
     }
+
+    /// Queries current Git status for the active thread worktree.
+    pub fn refresh_git_status(&mut self, cx: &mut Context<Self>) {
+        if let Some(thread_id) = &self.active_thread_id
+            && let Some(bridge) = &self.bridge
+        {
+            let params = GitStatusParams {
+                thread_id: thread_id.clone(),
+            };
+            let rx = bridge.send_request("git.status", serde_json::to_value(&params).ok());
+            cx.spawn(async move |this, cx| {
+                if let Ok(Ok(resp)) = rx.await
+                    && let Some(val) = resp.result
+                    && let Ok(res) = serde_json::from_value::<GitStatusResult>(val)
+                {
+                    let _ = this.update(cx, |app, cx| {
+                        app.git_status = Some(res);
+                        cx.notify();
+                    });
+                }
+            })
+            .detach();
+        }
+    }
+
+    /// Stages all changes and creates a Git commit in the thread worktree.
+    pub fn commit_git(&mut self, message: Option<String>, cx: &mut Context<Self>) {
+        if let Some(thread_id) = &self.active_thread_id
+            && let Some(bridge) = &self.bridge
+        {
+            self.is_git_busy = true;
+            let params = GitCommitParams {
+                thread_id: thread_id.clone(),
+                message,
+            };
+            let rx = bridge.send_request("git.commit", serde_json::to_value(&params).ok());
+            cx.spawn(async move |this, cx| {
+                let res = rx.await;
+                let _ = this.update(cx, |app, cx| {
+                    app.is_git_busy = false;
+                    if let Ok(Ok(resp)) = res
+                        && let Some(val) = resp.result
+                        && let Ok(commit_res) = serde_json::from_value::<GitCommitResult>(val)
+                    {
+                        let short_hash = if commit_res.commit_hash.len() >= 7 {
+                            &commit_res.commit_hash[..7]
+                        } else {
+                            &commit_res.commit_hash
+                        };
+                        app.git_action_msg =
+                            Some(format!("Committed {short_hash}: {}", commit_res.message));
+                        app.refresh_git_status(cx);
+                    } else {
+                        app.git_action_msg = Some("Git commit failed or no changes".to_string());
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+    }
+
+    /// Pushes committed changes in the thread worktree to remote origin.
+    pub fn push_git(&mut self, cx: &mut Context<Self>) {
+        if let Some(thread_id) = &self.active_thread_id
+            && let Some(bridge) = &self.bridge
+        {
+            self.is_git_busy = true;
+            let params = GitPushParams {
+                thread_id: thread_id.clone(),
+                remote: None,
+                branch: None,
+            };
+            let rx = bridge.send_request("git.push", serde_json::to_value(&params).ok());
+            cx.spawn(async move |this, cx| {
+                let res = rx.await;
+                let _ = this.update(cx, |app, cx| {
+                    app.is_git_busy = false;
+                    if let Ok(Ok(resp)) = res
+                        && let Some(val) = resp.result
+                        && let Ok(push_res) = serde_json::from_value::<GitPushResult>(val)
+                    {
+                        app.git_action_msg = Some(push_res.message);
+                        app.refresh_git_status(cx);
+                    } else {
+                        app.git_action_msg = Some("Git push failed".to_string());
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+    }
+
+    /// Creates a Pull Request using gh CLI if available, or generates a compare URL.
+    pub fn create_pr_git(&mut self, cx: &mut Context<Self>) {
+        if let Some(thread_id) = &self.active_thread_id
+            && let Some(bridge) = &self.bridge
+        {
+            self.is_git_busy = true;
+            let params = GitCreatePrParams {
+                thread_id: thread_id.clone(),
+                title: None,
+                body: None,
+            };
+            let rx = bridge.send_request("git.create_pr", serde_json::to_value(&params).ok());
+            cx.spawn(async move |this, cx| {
+                let res = rx.await;
+                let _ = this.update(cx, |app, cx| {
+                    app.is_git_busy = false;
+                    if let Ok(Ok(resp)) = res
+                        && let Some(val) = resp.result
+                        && let Ok(pr_res) = serde_json::from_value::<GitCreatePrResult>(val)
+                    {
+                        app.git_action_msg = Some(format!("PR: {}", pr_res.url));
+                        app.refresh_git_status(cx);
+                    } else {
+                        app.git_action_msg = Some("Create PR failed".to_string());
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+    }
+
+    /// Renders the Git Actions bar showing branch, ahead/behind, changes, and quick actions.
+    fn render_git_actions_bar(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+        let git_status = self.git_status.as_ref();
+        let is_repo = git_status.map(|s| s.is_repo).unwrap_or(false);
+        let branch = git_status.map(|s| s.branch.as_str()).unwrap_or("none");
+        let ahead = git_status.map(|s| s.ahead).unwrap_or(0);
+        let behind = git_status.map(|s| s.behind).unwrap_or(0);
+        let file_count = git_status.map(|s| s.files.len()).unwrap_or(0);
+        let drafted_msg = git_status
+            .map(|s| s.drafted_commit_message.as_str())
+            .unwrap_or("");
+        let is_busy = self.is_git_busy;
+
+        div()
+            .w_full()
+            .p_2()
+            .rounded(Radii::ROW)
+            .bg(theme.chrome.panel2)
+            .border_1()
+            .border_color(rgba(0xffffff0d))
+            .v_flex()
+            .gap_1p5()
+            .child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_2()
+                            // Branch indicator
+                            .child(
+                                div()
+                                    .h_flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .px_2()
+                                    .py_0p5()
+                                    .rounded(Radii::CHIP)
+                                    .bg(rgba(0xffffff0a))
+                                    .text_size(Typography::META_SIZE)
+                                    .text_color(theme.chrome.text_t1)
+                                    .child(if is_repo {
+                                        format!("🌱 {branch}")
+                                    } else {
+                                        "Non-Git Workspace".to_string()
+                                    }),
+                            )
+                            // Ahead / Behind pills
+                            .when(ahead > 0 || behind > 0, |this| {
+                                this.child(
+                                    div()
+                                        .text_size(Typography::META_SIZE)
+                                        .text_color(theme.accent.color())
+                                        .child(format!("↑{ahead} ↓{behind}")),
+                                )
+                            })
+                            // Change count badge
+                            .when(is_repo, |this| {
+                                this.child(
+                                    div()
+                                        .px_2()
+                                        .py_0p5()
+                                        .rounded(Radii::CHIP)
+                                        .bg(if file_count > 0 {
+                                            rgba(0xd8b45e22)
+                                        } else {
+                                            rgba(0x7fd88f22)
+                                        })
+                                        .text_size(Typography::META_SIZE)
+                                        .text_color(if file_count > 0 {
+                                            rgb(0xd8b45e)
+                                        } else {
+                                            rgb(0x7fd88f)
+                                        })
+                                        .child(if file_count > 0 {
+                                            format!("● {file_count} changed")
+                                        } else {
+                                            "✓ Clean".to_string()
+                                        }),
+                                )
+                            })
+                            // Feedback toast
+                            .when_some(self.git_action_msg.as_ref(), |this, msg| {
+                                this.child(
+                                    div()
+                                        .text_size(Typography::META_SIZE)
+                                        .text_color(theme.accent.color())
+                                        .child(msg.clone()),
+                                )
+                            }),
+                    )
+                    // Action buttons
+                    .when(is_repo, |this| {
+                        this.child(
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .gap_1p5()
+                                .child(Button::new("btn-git-refresh").ghost().label("🔄").on_click(
+                                    cx.listener(|this, _event, _window, cx| {
+                                        this.refresh_git_status(cx);
+                                    }),
+                                ))
+                                .child(
+                                    Button::new("btn-git-commit")
+                                        .ghost()
+                                        .label(if is_busy { "Committing..." } else { "Commit" })
+                                        .on_click(cx.listener(|this, _event, _window, cx| {
+                                            this.commit_git(None, cx);
+                                        })),
+                                )
+                                .child(Button::new("btn-git-push").ghost().label("Push").on_click(
+                                    cx.listener(|this, _event, _window, cx| {
+                                        this.push_git(cx);
+                                    }),
+                                ))
+                                .child(
+                                    Button::new("btn-git-pr")
+                                        .ghost()
+                                        .label("Create PR")
+                                        .on_click(cx.listener(|this, _event, _window, cx| {
+                                            this.create_pr_git(cx);
+                                        })),
+                                ),
+                        )
+                    }),
+            )
+            // Draft message preview when changes exist
+            .when(file_count > 0 && !drafted_msg.is_empty(), |this| {
+                this.child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_1p5()
+                        .px_1()
+                        .text_size(Typography::SECONDARY_SIZE)
+                        .text_color(theme.chrome.text_t3)
+                        .child("Draft:")
+                        .child(
+                            div()
+                                .text_color(theme.chrome.text_t2)
+                                .font_family(Typography::MONO_FAMILY)
+                                .child(drafted_msg.to_string()),
+                        ),
+                )
+            })
+    }
 }
 
 impl Render for AppView {
@@ -593,7 +879,7 @@ impl Render for AppView {
                             this.create_default_thread(cx);
                         },
                         |this, tid, _win, cx| {
-                            this.select_thread(tid);
+                            this.select_thread(tid, cx);
                             cx.notify();
                         },
                         |this, agent_id, _win, cx| {
@@ -769,6 +1055,8 @@ impl AppView {
                             cx,
                         )),
                 )
+                // Git actions bar
+                .child(self.render_git_actions_bar(theme, cx))
         } else {
             // Welcome empty state
             div()
@@ -819,6 +1107,23 @@ impl AppView {
             ServerStatus::Failed(e) => format!("Server Error: {e}"),
         };
 
+        let git_info = self
+            .git_status
+            .as_ref()
+            .map(|s| {
+                if s.is_repo {
+                    let clean_dirty = if s.files.is_empty() {
+                        "✓ Clean"
+                    } else {
+                        "● Modified"
+                    };
+                    format!("🌱 {} · {}", s.branch, clean_dirty)
+                } else {
+                    "Local Workspace".to_string()
+                }
+            })
+            .unwrap_or_else(|| "PandaMUX 1.0".to_string());
+
         div()
             .h(Spacing::STATUSBAR_HEIGHT)
             .w_full()
@@ -832,6 +1137,6 @@ impl AppView {
             .text_size(Typography::STATUS_SIZE)
             .text_color(theme.chrome.text_t3)
             .child(div().child(server_desc))
-            .child(div().child("PandaMUX 1.0 · Protocol v3"))
+            .child(div().child(git_info))
     }
 }

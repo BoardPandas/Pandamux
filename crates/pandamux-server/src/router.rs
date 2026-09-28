@@ -7,11 +7,12 @@ use pandamux_core::UserSettings;
 use pandamux_protocol::{
     AttachmentGetParams, AttachmentImportPathParams, AttachmentListParams,
     AttachmentPutChunkParams, CheckpointDiffParams, CheckpointListParams, CheckpointRollbackParams,
-    HelloParams, HelloResult, IdentifyResult, McpCallToolParams, PROTOCOL_VERSION, PingResult,
-    ProviderHealthParams, ProviderHealthReport, ProviderHealthResult, RpcError, RpcRequest,
-    RpcResponse, ServerCapabilities, ServerRole, SettingsGetParams, SettingsGetResult,
-    SettingsSetParams, ThreadCancelTurnParams, ThreadCreateParams, ThreadGetParams,
-    ThreadListParams, ThreadRespondApprovalParams, ThreadResumeParams, ThreadSendTurnParams,
+    GitCommitParams, GitCreatePrParams, GitPushParams, GitStatusParams, HelloParams, HelloResult,
+    IdentifyResult, McpCallToolParams, PROTOCOL_VERSION, PingResult, ProviderHealthParams,
+    ProviderHealthReport, ProviderHealthResult, RpcError, RpcRequest, RpcResponse,
+    ServerCapabilities, ServerRole, SettingsGetParams, SettingsGetResult, SettingsSetParams,
+    ThreadCancelTurnParams, ThreadCreateParams, ThreadGetParams, ThreadListParams,
+    ThreadRespondApprovalParams, ThreadResumeParams, ThreadSendTurnParams,
 };
 
 use crate::attachment::AttachmentManager;
@@ -147,6 +148,10 @@ impl Router {
             "checkpoint.list" => self.handle_checkpoint_list(params),
             "checkpoint.diff" => self.handle_checkpoint_diff(params),
             "checkpoint.rollback" => self.handle_checkpoint_rollback(params),
+            "git.status" => self.handle_git_status(params),
+            "git.commit" => self.handle_git_commit(params),
+            "git.push" => self.handle_git_push(params),
+            "git.create_pr" | "git.createPr" => self.handle_git_create_pr(params),
             "attachment.import_path" | "attachment.importPath" => {
                 self.handle_attachment_import_path(params)
             }
@@ -273,6 +278,34 @@ impl Router {
             serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
         let result = self.thread_manager.resume_thread(p)?;
         serde_json::to_value(&result).map_err(|e| RpcError::internal_error(e.to_string()))
+    }
+
+    fn handle_git_status(&self, params: Value) -> Result<Value, RpcError> {
+        let p: GitStatusParams =
+            serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
+        let res = self.thread_manager.git_status(p)?;
+        serde_json::to_value(&res).map_err(|e| RpcError::internal_error(e.to_string()))
+    }
+
+    fn handle_git_commit(&self, params: Value) -> Result<Value, RpcError> {
+        let p: GitCommitParams =
+            serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
+        let res = self.thread_manager.git_commit(p)?;
+        serde_json::to_value(&res).map_err(|e| RpcError::internal_error(e.to_string()))
+    }
+
+    fn handle_git_push(&self, params: Value) -> Result<Value, RpcError> {
+        let p: GitPushParams =
+            serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
+        let res = self.thread_manager.git_push(p)?;
+        serde_json::to_value(&res).map_err(|e| RpcError::internal_error(e.to_string()))
+    }
+
+    fn handle_git_create_pr(&self, params: Value) -> Result<Value, RpcError> {
+        let p: GitCreatePrParams =
+            serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
+        let res = self.thread_manager.git_create_pr(p)?;
+        serde_json::to_value(&res).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
     fn handle_settings_get(&self, params: Value) -> Result<Value, RpcError> {
@@ -828,5 +861,140 @@ mod tests {
             assert!(report.get("provider").is_some());
             assert!(report.get("status").is_some());
         }
+    }
+
+    #[tokio::test]
+    async fn router_handles_git_actions() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo_path = temp.path();
+
+        let _ = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo_path)
+            .arg("init")
+            .output();
+        let _ = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo_path)
+            .arg("config")
+            .arg("user.name")
+            .arg("Test")
+            .output();
+        let _ = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo_path)
+            .arg("config")
+            .arg("user.email")
+            .arg("test@local")
+            .output();
+        let _ = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo_path)
+            .arg("config")
+            .arg("remote.origin.url")
+            .arg("https://github.com/BoardPandas/Pandamux.git")
+            .output();
+
+        std::fs::write(repo_path.join("README.md"), "# Initial\n").unwrap();
+        let _ = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo_path)
+            .arg("add")
+            .arg(".")
+            .output();
+        let _ = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo_path)
+            .arg("commit")
+            .arg("-m")
+            .arg("initial commit")
+            .output();
+
+        let store = Store::in_memory().unwrap();
+        let drivers = Arc::new(DriverRegistry::default_local());
+        let router = Router::with_drivers(store, ServerRole::Hub, "env-test".to_string(), drivers);
+
+        // 1. Create a thread pointing to this repo
+        let create_req = RpcRequest::new(
+            1,
+            "thread.create",
+            Some(json!({
+                "agentId": "claude",
+                "cwd": repo_path.to_str().unwrap()
+            })),
+        );
+        let create_res = router.handle_request(create_req).await.unwrap();
+        let thread_val = create_res.result.unwrap();
+        let thread_id = thread_val["id"].as_str().unwrap().to_string();
+
+        // 2. Query git status on clean repo
+        let status_req = RpcRequest::new(
+            2,
+            "git.status",
+            Some(json!({
+                "threadId": thread_id
+            })),
+        );
+        let status_res = router.handle_request(status_req).await.unwrap();
+        assert!(status_res.is_success());
+        let status_val = status_res.result.unwrap();
+        assert_eq!(status_val["isRepo"], true);
+        assert_eq!(status_val["files"].as_array().unwrap().len(), 0);
+
+        // 3. Create a new file to modify repository state
+        std::fs::write(repo_path.join("test_file.rs"), "fn hello() {}\n").unwrap();
+
+        // 4. Query status again and verify untracked file + drafted commit message
+        let status_req2 = RpcRequest::new(
+            3,
+            "git.status",
+            Some(json!({
+                "threadId": thread_id
+            })),
+        );
+        let status_res2 = router.handle_request(status_req2).await.unwrap();
+        assert!(status_res2.is_success());
+        let status_val2 = status_res2.result.unwrap();
+        let files = status_val2["files"].as_array().unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0]["status"], "untracked");
+        assert_eq!(
+            status_val2["draftedCommitMessage"],
+            "feat: add test_file.rs"
+        );
+
+        // 5. Commit using git.commit
+        let commit_req = RpcRequest::new(
+            4,
+            "git.commit",
+            Some(json!({
+                "threadId": thread_id
+            })),
+        );
+        let commit_res = router.handle_request(commit_req).await.unwrap();
+        assert!(commit_res.is_success());
+        let commit_val = commit_res.result.unwrap();
+        assert_eq!(commit_val["success"], true);
+        assert_eq!(commit_val["filesCommitted"], 1);
+        assert!(!commit_val["commitHash"].as_str().unwrap().is_empty());
+
+        // 6. Create PR via git.create_pr (fallback compare URL)
+        let pr_req = RpcRequest::new(
+            5,
+            "git.create_pr",
+            Some(json!({
+                "threadId": thread_id
+            })),
+        );
+        let pr_res = router.handle_request(pr_req).await.unwrap();
+        assert!(pr_res.is_success());
+        let pr_val = pr_res.result.unwrap();
+        assert_eq!(pr_val["success"], true);
+        assert!(
+            pr_val["url"]
+                .as_str()
+                .unwrap()
+                .starts_with("https://github.com/BoardPandas/Pandamux/compare/")
+        );
     }
 }
