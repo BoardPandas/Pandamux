@@ -626,8 +626,28 @@ impl AppView {
         self.surfaces_panel.set_active_tab(tid, tab);
         if tab == Some(SurfaceTab::Files) {
             self.load_surface_files(cx);
+        } else if tab == Some(SurfaceTab::Terminal) {
+            self.ensure_surface_terminal(cx);
         }
         cx.notify();
+    }
+
+    /// Ensures a local terminal session view state exists when the Terminal surface is opened.
+    pub fn ensure_surface_terminal(&mut self, cx: &mut Context<Self>) {
+        if self.surfaces_panel.terminal.is_none() {
+            let cwd = self
+                .active_thread_id
+                .as_ref()
+                .and_then(|tid| self.thread_projections.get(tid))
+                .map(|p| p.thread.workspace.effective_path().to_string())
+                .unwrap_or_else(|| ".".to_string());
+            let term_id = format!("term-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+            self.surfaces_panel
+                .set_terminal(crate::terminal_view::TerminalViewState::new(
+                    term_id, cwd, 30, 120,
+                ));
+            cx.notify();
+        }
     }
 
     /// Selects a file in the Files surface and reads its content under root confinement.

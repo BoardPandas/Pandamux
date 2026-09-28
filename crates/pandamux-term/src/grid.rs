@@ -229,8 +229,19 @@ impl TerminalGrid {
             clipboard,
         }
     }
+}
 
-    /// Change how much history the grid retains, in place (a settings change).
+impl std::fmt::Debug for TerminalGrid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TerminalGrid")
+            .field("columns", &self.term.columns())
+            .field("lines", &self.term.screen_lines())
+            .field("history", &self.history_size())
+            .finish()
+    }
+}
+
+impl TerminalGrid {
     pub fn set_scrollback(&mut self, scrollback_lines: usize) {
         self.term.set_options(grid_config(scrollback_lines));
     }

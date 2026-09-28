@@ -25,6 +25,7 @@ struct PtySession {
     child: Box<dyn portable_pty::Child + Send + Sync>,
     rx: Receiver<Result<Vec<u8>, String>>,
     output: Vec<u8>,
+    drained_bytes: usize,
     cpr_answered: bool,
     cwd_scanner: CwdScanner,
 }
@@ -97,6 +98,7 @@ impl PtySessionManager {
                 child,
                 rx,
                 output: Vec::new(),
+                drained_bytes: 0,
                 cpr_answered: false,
                 cwd_scanner: CwdScanner::new(),
             },
@@ -198,6 +200,22 @@ impl PtySessionManager {
             .get(session_id)
             .ok_or_else(|| format!("pty session not found: {session_id}"))?;
         Ok(String::from_utf8_lossy(&session.output).to_string())
+    }
+
+    /// Drains new output bytes accumulated since the last drain call.
+    pub fn drain_new_bytes(&mut self, session_id: &str) -> PtyResult<Vec<u8>> {
+        self.poll(session_id)?;
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| format!("pty session not found: {session_id}"))?;
+        if session.drained_bytes < session.output.len() {
+            let slice = session.output[session.drained_bytes..].to_vec();
+            session.drained_bytes = session.output.len();
+            Ok(slice)
+        } else {
+            Ok(Vec::new())
+        }
     }
 
     /// Full serialization (scrollback + visible) of the session's grid, the
@@ -396,6 +414,17 @@ impl PtySessionManager {
         match self.sessions.get_mut(session_id) {
             Some(session) => matches!(session.child.try_wait(), Ok(None)),
             None => false,
+        }
+    }
+
+    /// Checks whether the child process has exited, returning `Ok(Some(exit_code))` if it has.
+    pub fn try_wait(&mut self, session_id: &str) -> PtyResult<Option<u32>> {
+        match self.sessions.get_mut(session_id) {
+            Some(session) => match session.child.try_wait()? {
+                Some(status) => Ok(Some(status.exit_code())),
+                None => Ok(None),
+            },
+            None => Err(format!("pty session not found: {session_id}").into()),
         }
     }
 }

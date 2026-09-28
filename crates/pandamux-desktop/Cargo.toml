@@ -18,6 +18,7 @@ base64.workspace = true
 pandamux-core = { path = "../pandamux-core" }
 pandamux-protocol = { path = "../pandamux-protocol" }
 pandamux-client = { path = "../pandamux-client" }
+pandamux-term = { path = "../pandamux-term", default-features = false, features = ["grid"] }
 gpui-kit = "=0.6.6"
 tokio = { workspace = true, features = ["process", "time"] }
 serde.workspace = true

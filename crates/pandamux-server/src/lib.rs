@@ -8,6 +8,7 @@ pub mod router;
 pub mod runtime;
 pub mod server;
 pub mod store;
+pub mod terminal;
 pub mod thread_manager;
 pub mod worktree;
 
@@ -23,6 +24,7 @@ pub use router::Router;
 pub use runtime::{RUNTIME_FILENAME, RuntimeInfo};
 pub use server::{Server, ServerConfig};
 pub use store::{Store, StoreError};
+pub use terminal::TerminalServerManager;
 pub use thread_manager::ThreadManager;
 
 #[cfg(test)]

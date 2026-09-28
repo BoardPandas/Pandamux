@@ -10,6 +10,7 @@ pub mod server_bridge;
 pub mod settings_view;
 pub mod sidebar;
 pub mod surfaces_panel;
+pub mod terminal_view;
 pub mod theme;
 pub mod timeline;
 pub mod titlebar;
@@ -40,6 +41,10 @@ pub use sidebar::{
 pub use surfaces_panel::{
     PandamuxAgentInstance, PullRequestSummary, SurfaceTab, SurfacesPanelState,
     render_surfaces_panel,
+};
+pub use terminal_view::{
+    TerminalSpan, TerminalViewState, batch_row_cells, render_terminal_view, resolve_cell_color,
+    resolve_indexed_color,
 };
 pub use theme::{AccentColor, ChromePalette, Radii, Spacing, Theme, ThemeMode, Typography};
 pub use timeline::{
@@ -420,5 +425,27 @@ mod tests {
             assert_eq!(dark.mode, ThemeMode::Dark);
             assert_eq!(light.mode, ThemeMode::Light);
         }
+    }
+
+    #[test]
+    fn test_terminal_surface_integration() {
+        let mut surfaces = SurfacesPanelState::new();
+        assert_eq!(surfaces.active_tab, None);
+        assert!(surfaces.terminal.is_none());
+
+        let mut term = TerminalViewState::new("term-test-ui", "/projects/pandamux", 24, 80);
+        term.feed_bytes(b"pandamux@local:~$ echo hello\r\nhello\r\n", 40, false);
+        assert_eq!(term.attached_offset, 40);
+
+        surfaces.set_terminal(term);
+        surfaces.set_active_tab(Some("thread-term-1"), Some(SurfaceTab::Terminal));
+
+        assert_eq!(surfaces.active_tab, Some(SurfaceTab::Terminal));
+        assert!(surfaces.terminal.is_some());
+        assert_eq!(
+            surfaces.terminal.as_ref().unwrap().terminal_id,
+            "term-test-ui"
+        );
+        assert_eq!(surfaces.terminal.as_ref().unwrap().attached_offset, 40);
     }
 }

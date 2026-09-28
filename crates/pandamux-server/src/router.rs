@@ -12,15 +12,17 @@ use pandamux_protocol::{
     IdentifyResult, McpCallToolParams, PROTOCOL_VERSION, PingResult, ProviderHealthParams,
     ProviderHealthReport, ProviderHealthResult, RpcError, RpcRequest, RpcResponse,
     ServerCapabilities, ServerRole, SettingsGetParams, SettingsGetResult, SettingsSetParams,
-    SubAgentTreeItem, SubAgentTreeParams, SubAgentTreeResult, ThreadCancelTurnParams,
-    ThreadCreateParams, ThreadGetParams, ThreadListParams, ThreadRespondApprovalParams,
-    ThreadResumeParams, ThreadSendTurnParams,
+    SubAgentTreeItem, SubAgentTreeParams, SubAgentTreeResult, TerminalAttachParams,
+    TerminalCloseParams, TerminalInputParams, TerminalOpenParams, TerminalResizeParams,
+    ThreadCancelTurnParams, ThreadCreateParams, ThreadGetParams, ThreadListParams,
+    ThreadRespondApprovalParams, ThreadResumeParams, ThreadSendTurnParams,
 };
 
 use crate::attachment::AttachmentManager;
 use crate::driver_registry::DriverRegistry;
 use crate::mcp_server::McpServer;
 use crate::store::Store;
+use crate::terminal::TerminalServerManager;
 use crate::thread_manager::ThreadManager;
 
 pub struct Router {
@@ -30,6 +32,7 @@ pub struct Router {
     attachments: AttachmentManager,
     notifications: Arc<tokio::sync::Mutex<Vec<pandamux_core::notification::NotificationInfo>>>,
     drivers: Arc<DriverRegistry>,
+    terminal: TerminalServerManager,
     role: ServerRole,
     environment_id: String,
     server_version: String,
@@ -79,6 +82,7 @@ impl Router {
         let thread_manager =
             ThreadManager::new(store.clone(), drivers.clone(), environment_id.clone());
         let attachments = AttachmentManager::new(default_attachments_dir());
+        let terminal = TerminalServerManager::new();
         Self {
             store,
             mcp,
@@ -86,6 +90,7 @@ impl Router {
             attachments,
             notifications: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             drivers,
+            terminal,
             role,
             environment_id,
             server_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -163,6 +168,12 @@ impl Router {
             "subagent.tree" | "subagent.list" => self.handle_subagent_tree(params),
             "fs.read" => self.handle_fs_read(params),
             "fs.list" => self.handle_fs_list(params),
+            "terminal.open" => self.handle_terminal_open(params),
+            "terminal.list" => self.handle_terminal_list(),
+            "terminal.attach" => self.handle_terminal_attach(params),
+            "terminal.input" => self.handle_terminal_input(params),
+            "terminal.resize" => self.handle_terminal_resize(params),
+            "terminal.close" => self.handle_terminal_close(params),
             unknown => Err(RpcError::method_not_found(unknown)),
         };
 
@@ -752,6 +763,60 @@ impl Router {
         let result = self.attachments.get(&self.store, &p.thread_id, &p.id)?;
         serde_json::to_value(&result).map_err(|e| RpcError::internal_error(e.to_string()))
     }
+
+    fn handle_terminal_open(&self, params: Value) -> Result<Value, RpcError> {
+        let open_params: TerminalOpenParams = serde_json::from_value(params)
+            .map_err(|e| RpcError::invalid_params(format!("Invalid terminal.open params: {e}")))?;
+        let result = self
+            .terminal
+            .open(open_params)
+            .map_err(RpcError::internal_error)?;
+        serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))
+    }
+
+    fn handle_terminal_list(&self) -> Result<Value, RpcError> {
+        let result = self.terminal.list();
+        serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))
+    }
+
+    fn handle_terminal_attach(&self, params: Value) -> Result<Value, RpcError> {
+        let attach_params: TerminalAttachParams = serde_json::from_value(params).map_err(|e| {
+            RpcError::invalid_params(format!("Invalid terminal.attach params: {e}"))
+        })?;
+        let result = self
+            .terminal
+            .attach(attach_params)
+            .map_err(RpcError::internal_error)?;
+        serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))
+    }
+
+    fn handle_terminal_input(&self, params: Value) -> Result<Value, RpcError> {
+        let input_params: TerminalInputParams = serde_json::from_value(params)
+            .map_err(|e| RpcError::invalid_params(format!("Invalid terminal.input params: {e}")))?;
+        self.terminal
+            .input(input_params)
+            .map_err(RpcError::internal_error)?;
+        Ok(json!({ "success": true }))
+    }
+
+    fn handle_terminal_resize(&self, params: Value) -> Result<Value, RpcError> {
+        let resize_params: TerminalResizeParams = serde_json::from_value(params).map_err(|e| {
+            RpcError::invalid_params(format!("Invalid terminal.resize params: {e}"))
+        })?;
+        self.terminal
+            .resize(resize_params)
+            .map_err(RpcError::internal_error)?;
+        Ok(json!({ "success": true }))
+    }
+
+    fn handle_terminal_close(&self, params: Value) -> Result<Value, RpcError> {
+        let close_params: TerminalCloseParams = serde_json::from_value(params)
+            .map_err(|e| RpcError::invalid_params(format!("Invalid terminal.close params: {e}")))?;
+        self.terminal
+            .close(close_params)
+            .map_err(RpcError::internal_error)?;
+        Ok(json!({ "success": true }))
+    }
 }
 
 #[cfg(test)]
@@ -1308,5 +1373,98 @@ mod tests {
         );
         let evil_res = router.handle_request(evil_req).await.unwrap();
         assert!(evil_res.error.is_some());
+    }
+
+    #[tokio::test]
+    async fn router_handles_terminal_lifecycle() {
+        let store = Store::in_memory().unwrap();
+        let router = Router::new(store, ServerRole::Hub, "env-test".to_string());
+
+        // 1. Open terminal
+        let open_req = RpcRequest::new(
+            1,
+            "terminal.open",
+            Some(json!({
+                "terminalId": "test-router-term",
+                "cwd": ".",
+                "rows": 24,
+                "cols": 80
+            })),
+        );
+        let open_res = router.handle_request(open_req).await.unwrap();
+        assert!(open_res.is_success());
+        let open_val = open_res.result.unwrap();
+        assert_eq!(open_val["terminalId"], "test-router-term");
+        assert_eq!(open_val["rows"], 24);
+        assert_eq!(open_val["cols"], 80);
+
+        // 2. List terminals
+        let list_req = RpcRequest::new(2, "terminal.list", None);
+        let list_res = router.handle_request(list_req).await.unwrap();
+        assert!(list_res.is_success());
+        let list_val = list_res.result.unwrap();
+        assert_eq!(list_val["terminals"].as_array().unwrap().len(), 1);
+
+        // 3. Attach
+        let attach_req = RpcRequest::new(
+            3,
+            "terminal.attach",
+            Some(json!({
+                "terminalId": "test-router-term",
+                "sinceOffset": 0
+            })),
+        );
+        let attach_res = router.handle_request(attach_req).await.unwrap();
+        assert!(attach_res.is_success());
+        let attach_val = attach_res.result.unwrap();
+        assert_eq!(attach_val["terminalId"], "test-router-term");
+
+        // 4. Input
+        let input_req = RpcRequest::new(
+            4,
+            "terminal.input",
+            Some(json!({
+                "terminalId": "test-router-term",
+                "data": "echo 1\n"
+            })),
+        );
+        let input_res = router.handle_request(input_req).await.unwrap();
+        assert!(input_res.is_success());
+
+        // 5. Resize
+        let resize_req = RpcRequest::new(
+            5,
+            "terminal.resize",
+            Some(json!({
+                "terminalId": "test-router-term",
+                "rows": 40,
+                "cols": 100
+            })),
+        );
+        let resize_res = router.handle_request(resize_req).await.unwrap();
+        assert!(resize_res.is_success());
+
+        // 6. Close
+        let close_req = RpcRequest::new(
+            6,
+            "terminal.close",
+            Some(json!({
+                "terminalId": "test-router-term"
+            })),
+        );
+        let close_res = router.handle_request(close_req).await.unwrap();
+        assert!(close_res.is_success());
+
+        let list_res2 = router
+            .handle_request(RpcRequest::new(7, "terminal.list", None))
+            .await
+            .unwrap();
+        assert_eq!(
+            list_res2.result.unwrap()["terminals"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
     }
 }

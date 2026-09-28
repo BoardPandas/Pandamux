@@ -8,6 +8,7 @@ use pandamux_client::projections::{ThreadProjection, format_duration};
 use pandamux_protocol::FsEntry;
 use serde::{Deserialize, Serialize};
 
+use crate::terminal_view::{TerminalViewState, render_terminal_view};
 use crate::theme::{Radii, Theme, Typography};
 
 /// Available surface tabs in the right-side surfaces panel.
@@ -123,6 +124,7 @@ pub struct SurfacesPanelState {
     pub pandamux_agents: Vec<PandamuxAgentInstance>,
     pub pull_request: Option<PullRequestSummary>,
     pub linked_prs: Vec<PullRequestSummary>,
+    pub terminal: Option<TerminalViewState>,
 }
 
 impl Default for SurfacesPanelState {
@@ -145,7 +147,16 @@ impl SurfacesPanelState {
             pandamux_agents: Vec::new(),
             pull_request: None,
             linked_prs: Vec::new(),
+            terminal: None,
         }
+    }
+
+    pub fn set_terminal(&mut self, terminal: TerminalViewState) {
+        self.terminal = Some(terminal);
+    }
+
+    pub fn terminal_mut(&mut self) -> Option<&mut TerminalViewState> {
+        self.terminal.as_mut()
     }
 
     pub fn toggle_open(&mut self) {
@@ -339,7 +350,9 @@ pub fn render_surfaces_panel<V: 'static>(
                     Some(SurfaceTab::LinkedPullRequests) => {
                         render_linked_prs_surface(&state.linked_prs, theme)
                     }
-                    Some(SurfaceTab::Terminal) => render_terminal_surface(theme),
+                    Some(SurfaceTab::Terminal) => {
+                        render_terminal_surface(state.terminal.as_ref(), theme)
+                    }
                     Some(SurfaceTab::FloorPlan) => render_floor_plan_surface(theme),
                     Some(SurfaceTab::Artifacts) => render_artifacts_surface(theme),
                 }),
@@ -1151,28 +1164,39 @@ fn render_linked_prs_surface(prs: &[PullRequestSummary], theme: &Theme) -> AnyEl
         .into_any_element()
 }
 
-/// Terminal placeholder surface.
-fn render_terminal_surface(theme: &Theme) -> AnyElement {
-    div()
-        .p_4()
-        .rounded(Radii::ROW)
-        .bg(theme.chrome.panel2)
-        .v_flex()
-        .gap_2()
-        .child(
-            div()
-                .text_size(Typography::BODY_SIZE)
-                .font_weight(FontWeight::BOLD)
-                .text_color(theme.chrome.text_t1)
-                .child("Local Terminal"),
-        )
-        .child(
-            div()
-                .text_size(Typography::META_SIZE)
-                .text_color(theme.chrome.text_t3)
-                .child("PTY session ready for reattach (Step 12)."),
-        )
-        .into_any_element()
+/// Local Terminal surface.
+fn render_terminal_surface(terminal: Option<&TerminalViewState>, theme: &Theme) -> AnyElement {
+    if let Some(term) = terminal {
+        render_terminal_view(term, theme)
+    } else {
+        div()
+            .p_4()
+            .rounded(Radii::ROW)
+            .bg(theme.chrome.panel2)
+            .v_flex()
+            .gap_2()
+            .child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().text_size(px(18.0)).child("💻"))
+                    .child(
+                        div()
+                            .text_size(Typography::BODY_SIZE)
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(theme.chrome.text_t1)
+                            .child("Local Terminal"),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(Typography::META_SIZE)
+                    .text_color(theme.chrome.text_t3)
+                    .child("No active terminal session attached. Launch or open a terminal from the surfaces bar."),
+            )
+            .into_any_element()
+    }
 }
 
 /// Floor Plan placeholder surface.

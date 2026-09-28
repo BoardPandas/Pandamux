@@ -15,6 +15,7 @@ base64.workspace = true
 pandamux-core = { path = "../pandamux-core" }
 pandamux-protocol = { path = "../pandamux-protocol" }
 pandamux-providers = { path = "../pandamux-providers" }
+pandamux-term = { path = "../pandamux-term" }
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true

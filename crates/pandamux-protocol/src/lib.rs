@@ -8,6 +8,7 @@ pub mod settings_rpc;
 pub mod subagent_rpc;
 pub mod subscription;
 pub mod system;
+pub mod terminal_rpc;
 pub mod thread_rpc;
 
 pub use attachment_rpc::{
@@ -31,6 +32,11 @@ pub use subscription::{EventEnvelope, SubscribeParams, SubscribeResult, Unsubscr
 pub use system::{
     HelloParams, HelloResult, IdentifyResult, PROTOCOL_VERSION, PingResult, ServerCapabilities,
     ServerRole,
+};
+pub use terminal_rpc::{
+    TerminalAttachParams, TerminalAttachResult, TerminalCloseParams, TerminalExitedEvent,
+    TerminalInfo, TerminalInputParams, TerminalListResult, TerminalOpenParams, TerminalOpenResult,
+    TerminalOutputEvent, TerminalResizeParams,
 };
 pub use thread_rpc::{
     ThreadCancelTurnParams, ThreadCreateParams, ThreadGetParams, ThreadGetResult, ThreadListParams,
@@ -151,5 +157,37 @@ mod tests {
         assert_eq!(parsed.root_agents.len(), 1);
         assert_eq!(parsed.root_agents[0].children.len(), 1);
         assert_eq!(parsed.root_agents[0].children[0].id, "sub-2");
+    }
+
+    #[test]
+    fn test_terminal_rpc_round_trip() {
+        let open_params = TerminalOpenParams {
+            terminal_id: Some("term-1".to_string()),
+            cwd: Some("/workspace".to_string()),
+            shell: Some("bash".to_string()),
+            rows: Some(30),
+            cols: Some(120),
+            env: None,
+        };
+        let open_json = serde_json::to_string(&open_params).expect("serialize open");
+        let parsed_open: TerminalOpenParams =
+            serde_json::from_str(&open_json).expect("deserialize open");
+        assert_eq!(parsed_open.terminal_id.as_deref(), Some("term-1"));
+        assert_eq!(parsed_open.rows, Some(30));
+
+        let attach_res = TerminalAttachResult {
+            terminal_id: "term-1".to_string(),
+            rows: 30,
+            cols: 120,
+            offset: 4096,
+            data: "prompt$ ".to_string(),
+            truncated: false,
+        };
+        let attach_json = serde_json::to_string(&attach_res).expect("serialize attach");
+        let parsed_attach: TerminalAttachResult =
+            serde_json::from_str(&attach_json).expect("deserialize attach");
+        assert_eq!(parsed_attach.offset, 4096);
+        assert_eq!(parsed_attach.data, "prompt$ ");
+        assert!(!parsed_attach.truncated);
     }
 }
