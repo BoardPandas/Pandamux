@@ -1,4 +1,5 @@
 pub mod agent_def;
+pub mod ast_diff;
 pub mod attachment;
 pub mod environment;
 pub mod event;
@@ -21,6 +22,10 @@ pub mod usage;
 pub use agent_def::{
     AgentAuthor, AgentChange, AgentChangeStatus, AgentDefinition, AgentScope, MemoryEntry,
     MemoryScope,
+};
+pub use ast_diff::{
+    AstChangeType, AstDiffSummary, AstFileDiff, AstNodeChange, AstNodeKind, compress_unified_diff,
+    detect_language, extract_symbol_from_line,
 };
 pub use attachment::{
     ATTACHMENT_CHUNK_SIZE_BYTES, AttachmentRecord, AttachmentSizeError, MAX_FILE_SIZE_BYTES,

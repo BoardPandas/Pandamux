@@ -24,6 +24,7 @@ use crate::notification::{
     NotificationLevel, ToastNotification, dispatch_os_notification, render_toast_overlay,
 };
 use crate::picker::PickerState;
+use crate::scratchpad::{ScratchpadState, render_scratchpad_window};
 use crate::server_bridge::{ServerBridgeHandle, ServerStatus, spawn_server_bridge};
 use crate::settings_view::{SettingsViewState, render_settings_view};
 use crate::sidebar::{RailTab, render_rail, render_sidebar};
@@ -31,6 +32,7 @@ use crate::surfaces_panel::{SurfaceTab, SurfacesPanelState, render_surfaces_pane
 use crate::theme::{AccentColor, Radii, Spacing, Theme, Typography};
 use crate::timeline::{VirtualizedTimelineState, render_virtualized_timeline};
 use crate::titlebar::CustomTitlebar;
+use crate::tray::SystemTrayState;
 
 /// The primary application view for PandaMUX Desktop.
 pub struct AppView {
@@ -51,6 +53,8 @@ pub struct AppView {
     pub notifications: Vec<ToastNotification>,
     pub timeline_state: VirtualizedTimelineState,
     pub surfaces_panel: SurfacesPanelState,
+    pub scratchpad: ScratchpadState,
+    pub system_tray: SystemTrayState,
 }
 
 impl AppView {
@@ -104,6 +108,8 @@ impl AppView {
             notifications: Vec::new(),
             timeline_state: VirtualizedTimelineState::new(),
             surfaces_panel: SurfacesPanelState::new(),
+            scratchpad: ScratchpadState::new(),
+            system_tray: SystemTrayState::new(),
         };
 
         app.load_settings(cx);
@@ -291,6 +297,9 @@ impl AppView {
             CommandAction::OpenSurface(tab) => {
                 self.surfaces_panel.is_open = true;
                 self.set_surface_tab(Some(tab), cx);
+            }
+            CommandAction::ToggleScratchpad => {
+                self.toggle_scratchpad(cx);
             }
         }
         cx.notify();
@@ -617,6 +626,12 @@ impl AppView {
     /// Toggles the visibility of the right-side surfaces panel.
     pub fn toggle_surfaces_panel(&mut self, cx: &mut Context<Self>) {
         self.surfaces_panel.toggle_open();
+        cx.notify();
+    }
+
+    /// Toggles visibility of the floating quick-summon scratchpad window.
+    pub fn toggle_scratchpad(&mut self, cx: &mut Context<Self>) {
+        self.scratchpad.toggle();
         cx.notify();
     }
 
@@ -1327,6 +1342,14 @@ impl Render for AppView {
                         this.dismiss_notification(&id, cx);
                     },
                     cx,
+                ))
+            })
+            // 6. Floating Quick-Summon Scratchpad Overlay Window
+            .when(self.scratchpad.is_open, |this| {
+                this.child(render_scratchpad_window(
+                    &self.scratchpad,
+                    &theme,
+                    self.system_tray.hotkey_display,
                 ))
             })
     }

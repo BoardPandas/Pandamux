@@ -24,6 +24,7 @@ pub enum CommandAction {
     OpenSettings,
     ToggleSurfaces,
     OpenSurface(SurfaceTab),
+    ToggleScratchpad,
 }
 
 /// An individual command entry listed in the palette.
@@ -108,6 +109,14 @@ pub fn default_commands(
         category: "Navigation",
         shortcut: Some("Ctrl+T"),
         action: CommandAction::NewThread,
+    });
+    items.push(CommandItem {
+        id: "toggle-scratchpad".to_string(),
+        icon: "🐼",
+        title: "Toggle Quick-Summon Scratchpad".to_string(),
+        category: "Navigation",
+        shortcut: Some("Win+Alt+P"),
+        action: CommandAction::ToggleScratchpad,
     });
     items.push(CommandItem {
         id: "nav-threads".to_string(),

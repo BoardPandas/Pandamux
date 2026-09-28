@@ -6,6 +6,7 @@ pub mod composer;
 pub mod diff_view;
 pub mod notification;
 pub mod picker;
+pub mod scratchpad;
 pub mod server_bridge;
 pub mod settings_view;
 pub mod sidebar;
@@ -14,6 +15,7 @@ pub mod terminal_view;
 pub mod theme;
 pub mod timeline;
 pub mod titlebar;
+pub mod tray;
 
 pub use app_view::AppView;
 pub use command_palette::{
@@ -29,6 +31,7 @@ pub use notification::{
     NotificationLevel, ToastNotification, dispatch_os_notification, render_toast_overlay,
 };
 pub use picker::{ModelChoice, PickerState, ProviderChoice};
+pub use scratchpad::{ScratchpadMessage, ScratchpadState, render_scratchpad_window};
 pub use server_bridge::{
     BridgeCommand, RuntimeInfo, ServerBridgeHandle, ServerStatus, discover_server_runtime,
     spawn_server_bridge,
@@ -52,6 +55,7 @@ pub use timeline::{
     TimelineSelection, VirtualizedTimelineState, render_timeline_item, render_virtualized_timeline,
 };
 pub use titlebar::CustomTitlebar;
+pub use tray::{SystemTrayState, TrayAction, TrayMenuItem};
 
 #[cfg(test)]
 mod tests {
@@ -447,5 +451,28 @@ mod tests {
             "term-test-ui"
         );
         assert_eq!(surfaces.terminal.as_ref().unwrap().attached_offset, 40);
+    }
+
+    #[test]
+    fn test_scratchpad_and_tray_integration() {
+        let tray = SystemTrayState::new();
+        assert!(tray.is_visible);
+        assert!(!tray.hotkey_display.is_empty());
+
+        let mut scratchpad = ScratchpadState::new();
+        assert!(!scratchpad.is_open);
+
+        scratchpad.toggle();
+        assert!(scratchpad.is_open);
+
+        scratchpad.set_input("Quick orchestrator task");
+        let prompt = scratchpad.submit_prompt();
+        assert_eq!(prompt, Some("Quick orchestrator task".to_string()));
+
+        scratchpad.add_note("Meeting notes: sync on Phase 3");
+        assert_eq!(scratchpad.notes.len(), 1);
+
+        scratchpad.toggle_voice();
+        assert!(scratchpad.is_voice_active);
     }
 }
