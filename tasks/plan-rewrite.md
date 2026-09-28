@@ -955,7 +955,7 @@ Exit criteria: single-machine T3-style feature set; nested Claude sub-agents app
 1. [x] **Extend `pandamux-remote` (moved in Phase 1): exec-without-PTY, proxy, ProxyJump.** (Completed in commit `96f20bf`, v0.53.35)
 2. [x] **Linux musl builds (x64, arm64) of `pandamux-server` and `pandamux-cli`; manifest; hashes embedded in the desktop build; the node's CLI is installed next to the server and put on `PATH` for agent processes.** (Completed in commit `2d693c3`, v0.53.36)
 3. [x] **Bootstrap, start/discover, versioning, teardown; Environments page.** (Completed in commit `ce9b10b`, v0.53.37)
-4. Hub routing of environment-scoped calls and event relay; per-environment provider settings; secrets policy.
+4. [x] **Hub routing of environment-scoped calls and event relay; per-environment provider settings; secrets policy.** (Completed in commit `1f1c938`, v0.53.38)
 5. Attachments through the tunnel.
 6. **Remote Terminal surface** with `sinceOffset` reattach.
 7. **Antigravity on nodes** (5.4): node-side managed download of the pinned Linux `.par` bundle with the hub-pushed URL, size, and SHA-256; fallback hub download, verify, cache, and SFTP push when the node has no internet; remote OAuth sign-in relay (desktop one-shot loopback listener or pasted URL, hub validation, node-side GET); per-node Antigravity concurrency cap and disk preflight.
