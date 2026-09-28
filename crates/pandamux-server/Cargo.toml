@@ -15,13 +15,22 @@ base64.workspace = true
 pandamux-core = { path = "../pandamux-core" }
 pandamux-protocol = { path = "../pandamux-protocol" }
 pandamux-providers = { path = "../pandamux-providers" }
-pandamux-term = { path = "../pandamux-term" }
+pandamux-remote = { path = "../pandamux-remote" }
+pandamux-term = { path = "../pandamux-term", default-features = false, features = ["pty"] }
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tokio = { workspace = true, features = ["signal"] }
+tokio = { workspace = true, features = ["io-std", "process", "signal", "time"] }
 uuid.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
 
 [dev-dependencies]
 tempfile = "=3.27.0"
-

@@ -4,10 +4,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use pandamux_core::{ThreadEventKind, UserSettings};
+use pandamux_core::{EnvironmentId, ProviderKind, ThreadEventKind, UserSettings};
 use pandamux_protocol::antigravity_rpc::{
-    AntigravityInstallParams, AntigravityOAuthRelayParams, AntigravityOAuthRelayResult,
-    AntigravityOAuthStartParams, AntigravityOAuthStartResult, AntigravityStatusParams,
+    AntigravityDiscardUploadParams, AntigravityInstallParams, AntigravityOAuthRelayParams,
+    AntigravityOAuthRelayResult, AntigravityOAuthStartParams, AntigravityOAuthStartResult,
+    AntigravityPrepareUploadParams, AntigravityPrepareUploadResult, AntigravityStatusParams,
     AntigravityStatusResult,
 };
 use pandamux_protocol::{
@@ -28,6 +29,8 @@ use pandamux_protocol::{
 use crate::attachment::AttachmentManager;
 use crate::driver_registry::DriverRegistry;
 use crate::mcp_server::McpServer;
+use crate::provider_resolver::ProviderResolver;
+use crate::request_context::{CapabilityAuthority, PeerRole, RequestContext};
 use crate::store::Store;
 use crate::terminal::TerminalServerManager;
 use crate::thread_manager::ThreadManager;
@@ -39,6 +42,9 @@ pub struct Router {
     attachments: AttachmentManager,
     notifications: Arc<tokio::sync::Mutex<Vec<pandamux_core::notification::NotificationInfo>>>,
     drivers: Arc<DriverRegistry>,
+    provider_resolver: Arc<ProviderResolver>,
+    antigravity_auth: Arc<pandamux_providers::antigravity::AntigravityAuthManager>,
+    capability_authority: Arc<CapabilityAuthority>,
     terminal: TerminalServerManager,
     environment_router: Arc<crate::environment_router::EnvironmentRouter>,
     remote_terminals: Arc<std::sync::Mutex<HashMap<String, pandamux_core::ids::EnvironmentId>>>,
@@ -47,6 +53,7 @@ pub struct Router {
     role: ServerRole,
     environment_id: String,
     server_version: String,
+    default_drivers: bool,
 }
 
 fn default_data_dir() -> PathBuf {
@@ -89,10 +96,62 @@ fn account_badge_label(label: Option<&str>, sub: Option<&str>) -> Option<String>
     }
 }
 
+fn provider_rpc_error(error: pandamux_providers::ProviderError) -> RpcError {
+    match error {
+        pandamux_providers::ProviderError::InstallationError {
+            operation,
+            code,
+            message,
+        } => RpcError::with_data(
+            -32020,
+            message,
+            serde_json::json!({
+                "provider": "antigravity",
+                "providerCode": code,
+                "operation": operation,
+            }),
+        ),
+        other => RpcError::with_data(
+            -32021,
+            other.to_string(),
+            serde_json::json!({
+                "provider": "antigravity",
+                "providerCode": "antigravity_operation_failed",
+            }),
+        ),
+    }
+}
+
+fn provider_rpc_error_for_target(
+    error: pandamux_providers::ProviderError,
+    instance_id: &pandamux_core::ProviderInstanceId,
+    environment_id: &EnvironmentId,
+) -> RpcError {
+    let mut error = provider_rpc_error(error);
+    let mut data = error
+        .data
+        .take()
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    data.insert(
+        "providerInstanceId".to_string(),
+        Value::String(instance_id.as_str().to_string()),
+    );
+    data.insert(
+        "environmentId".to_string(),
+        Value::String(environment_id.as_str().to_string()),
+    );
+    error.data = Some(Value::Object(data));
+    error
+}
+
 impl Router {
     pub fn new(store: Store, role: ServerRole, environment_id: String) -> Self {
-        let drivers = Arc::new(DriverRegistry::default_local());
-        Self::with_drivers(store, role, environment_id, drivers)
+        let data_dir = default_data_dir();
+        let drivers = Arc::new(DriverRegistry::default_local_at(data_dir.clone()));
+        let mut router = Self::with_drivers(store, role, environment_id, drivers);
+        router.default_drivers = true;
+        router.with_data_dir(data_dir)
     }
 
     pub fn with_drivers(
@@ -101,9 +160,23 @@ impl Router {
         environment_id: String,
         drivers: Arc<DriverRegistry>,
     ) -> Self {
+        let data_dir = default_data_dir();
+        let capability_authority = Arc::new(CapabilityAuthority::new(EnvironmentId::new(
+            environment_id.clone(),
+        )));
         let mcp = McpServer::new(store.clone());
-        let thread_manager =
-            ThreadManager::new(store.clone(), drivers.clone(), environment_id.clone());
+        let provider_resolver = Arc::new(ProviderResolver::new(
+            store.clone(),
+            drivers.clone(),
+            EnvironmentId::new(environment_id.clone()),
+            data_dir.clone(),
+        ));
+        let thread_manager = ThreadManager::new(
+            store.clone(),
+            provider_resolver.clone(),
+            environment_id.clone(),
+            capability_authority.clone(),
+        );
         let attachments = AttachmentManager::new(default_attachments_dir());
         let terminal = TerminalServerManager::new();
         let environment_router = Arc::new(crate::environment_router::EnvironmentRouter::new(
@@ -116,14 +189,20 @@ impl Router {
             attachments,
             notifications: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             drivers,
+            provider_resolver,
+            antigravity_auth: Arc::new(
+                pandamux_providers::antigravity::AntigravityAuthManager::new(),
+            ),
+            capability_authority,
             terminal,
             environment_router,
             remote_terminals: Arc::new(std::sync::Mutex::new(HashMap::new())),
             hark: Arc::new(crate::hark::HarkBridge::default()),
-            data_dir: default_data_dir(),
+            data_dir,
             role,
             environment_id,
             server_version: env!("CARGO_PKG_VERSION").to_string(),
+            default_drivers: false,
         }
     }
 
@@ -137,8 +216,39 @@ impl Router {
     }
 
     pub fn with_data_dir(mut self, dir: PathBuf) -> Self {
+        if self.default_drivers {
+            let drivers = Arc::new(DriverRegistry::default_local_at(dir.clone()));
+            let provider_resolver = Arc::new(ProviderResolver::new(
+                self.store.clone(),
+                drivers.clone(),
+                EnvironmentId::new(self.environment_id.clone()),
+                dir.clone(),
+            ));
+            self.thread_manager = ThreadManager::new(
+                self.store.clone(),
+                provider_resolver.clone(),
+                self.environment_id.clone(),
+                self.capability_authority.clone(),
+            );
+            self.drivers = drivers;
+            self.provider_resolver = provider_resolver;
+        } else {
+            self.provider_resolver.set_data_dir(dir.clone());
+        }
         self.data_dir = dir;
         self
+    }
+
+    pub fn provider_resolver(&self) -> &Arc<ProviderResolver> {
+        &self.provider_resolver
+    }
+
+    pub async fn shutdown_antigravity_auth(&self) {
+        self.antigravity_auth.shutdown().await;
+    }
+
+    pub fn capability_authority(&self) -> &Arc<CapabilityAuthority> {
+        &self.capability_authority
     }
 
     pub fn with_environment_router(
@@ -244,6 +354,128 @@ impl Router {
         Ok(())
     }
 
+    async fn forward_remote_antigravity_install(
+        &self,
+        environment_id: &EnvironmentId,
+        request: &RpcRequest,
+    ) -> Result<RpcResponse, RpcError> {
+        let params: AntigravityInstallParams = serde_json::from_value(
+            request.params.clone().unwrap_or(Value::Null),
+        )
+        .map_err(|error| {
+            RpcError::invalid_params(format!("Invalid antigravity.install params: {error}"))
+        })?;
+        if params.staged_archive_path.is_some() {
+            return Err(RpcError::unauthorized(
+                "A control client cannot choose a remote staged archive path",
+            ));
+        }
+
+        let node_download = self
+            .environment_router
+            .forward_request(environment_id, request)
+            .await?;
+        let fallback_allowed = node_download
+            .error
+            .as_ref()
+            .and_then(|error| error.data.as_ref())
+            .and_then(|data| data.get("providerCode"))
+            .and_then(Value::as_str)
+            == Some("antigravity_node_download_failed");
+        if !fallback_allowed {
+            return Ok(node_download);
+        }
+
+        let archive =
+            pandamux_providers::antigravity::cache_bundle_archive(&self.data_dir, &params.manifest)
+                .await
+                .map_err(provider_rpc_error)?;
+        let prepare_request = RpcRequest::new(
+            Self::now_ms() as i64,
+            "antigravity.prepare_upload",
+            Some(
+                serde_json::to_value(AntigravityPrepareUploadParams {
+                    environment_id: Some(environment_id.clone()),
+                    manifest: params.manifest.clone(),
+                })
+                .map_err(|error| RpcError::internal_error(error.to_string()))?,
+            ),
+        );
+        let prepare_response = self
+            .environment_router
+            .forward_request(environment_id, &prepare_request)
+            .await?;
+        if let Some(error) = prepare_response.error {
+            return Err(error);
+        }
+        let prepared: AntigravityPrepareUploadResult = serde_json::from_value(
+            prepare_response.result.unwrap_or(Value::Null),
+        )
+        .map_err(|error| {
+            RpcError::internal_error(format!(
+                "Remote Antigravity upload preparation returned invalid data: {error}"
+            ))
+        })?;
+        if let Err(upload_error) = self
+            .environment_router
+            .upload_file(environment_id, &archive, &prepared.remote_path)
+            .await
+        {
+            let discard_request = RpcRequest::new(
+                Self::now_ms() as i64,
+                "antigravity.discard_upload",
+                Some(
+                    serde_json::to_value(AntigravityDiscardUploadParams {
+                        environment_id: Some(environment_id.clone()),
+                        staged_archive_path: prepared.remote_path.clone(),
+                    })
+                    .map_err(|error| RpcError::internal_error(error.to_string()))?,
+                ),
+            );
+            let _ = self
+                .environment_router
+                .forward_request(environment_id, &discard_request)
+                .await;
+            return Err(upload_error);
+        }
+
+        let staged_path = prepared.remote_path.clone();
+        let staged_request = RpcRequest {
+            jsonrpc: request.jsonrpc.clone(),
+            id: request.id.clone(),
+            method: request.method.clone(),
+            params: Some(
+                serde_json::to_value(AntigravityInstallParams {
+                    environment_id: Some(environment_id.clone()),
+                    manifest: params.manifest,
+                    staged_archive_path: Some(staged_path.clone()),
+                    force: params.force,
+                })
+                .map_err(|error| RpcError::internal_error(error.to_string()))?,
+            ),
+        };
+        let response = self
+            .environment_router
+            .forward_request(environment_id, &staged_request)
+            .await;
+        let discard_request = RpcRequest::new(
+            Self::now_ms() as i64,
+            "antigravity.discard_upload",
+            Some(
+                serde_json::to_value(AntigravityDiscardUploadParams {
+                    environment_id: Some(environment_id.clone()),
+                    staged_archive_path: staged_path,
+                })
+                .map_err(|error| RpcError::internal_error(error.to_string()))?,
+            ),
+        );
+        let _ = self
+            .environment_router
+            .forward_request(environment_id, &discard_request)
+            .await;
+        response
+    }
+
     fn resolve_target_environment(
         &self,
         _method: &str,
@@ -287,10 +519,26 @@ impl Router {
 
     /// Handle a single parsed JSON-RPC request and return an optional response.
     pub async fn handle_request(&self, req: RpcRequest) -> Option<RpcResponse> {
+        let context = RequestContext::internal(EnvironmentId::new(self.environment_id.clone()));
+        self.handle_request_with_context(&context, req).await
+    }
+
+    pub async fn handle_request_with_context(
+        &self,
+        context: &RequestContext,
+        req: RpcRequest,
+    ) -> Option<RpcResponse> {
         let is_notification = req.is_notification();
         let id = req.id.clone();
         let method = req.method.clone();
         let params = req.params.clone().unwrap_or(Value::Null);
+
+        if let Err(error) = context.authorize(&method, &params) {
+            if is_notification {
+                return None;
+            }
+            return Some(RpcResponse::error(id, error));
+        }
 
         // Hub environment routing: if targeted to a remote environment, forward across transport
         if self.role == ServerRole::Hub
@@ -323,10 +571,14 @@ impl Router {
                 }
             }
 
-            let forwarded = self
-                .environment_router
-                .forward_request(&target_env, &req)
-                .await;
+            let forwarded = if method == "antigravity.install" {
+                self.forward_remote_antigravity_install(&target_env, &req)
+                    .await
+            } else {
+                self.environment_router
+                    .forward_request(&target_env, &req)
+                    .await
+            };
 
             if is_notification {
                 return None;
@@ -411,10 +663,16 @@ impl Router {
             "terminal.input" => self.handle_terminal_input(params),
             "terminal.resize" => self.handle_terminal_resize(params),
             "terminal.close" => self.handle_terminal_close(params),
-            "antigravity.status" => self.handle_antigravity_status(params),
-            "antigravity.install" => self.handle_antigravity_install(params).await,
+            "antigravity.status" => self.handle_antigravity_status(params).await,
+            "antigravity.install" => self.handle_antigravity_install(context, params).await,
+            "antigravity.prepare_upload" | "antigravity.prepareUpload" => {
+                self.handle_antigravity_prepare_upload(context, params)
+            }
+            "antigravity.discard_upload" | "antigravity.discardUpload" => {
+                self.handle_antigravity_discard_upload(context, params)
+            }
             "antigravity.oauth_start" | "antigravity.oauthStart" => {
-                self.handle_antigravity_oauth_start(params)
+                self.handle_antigravity_oauth_start(params).await
             }
             "antigravity.oauth_relay" | "antigravity.oauthRelay" => {
                 self.handle_antigravity_oauth_relay(params).await
@@ -644,11 +902,24 @@ impl Router {
 
     async fn handle_provider_health(&self, params: Value) -> Result<Value, RpcError> {
         let filter: ProviderHealthParams = serde_json::from_value(params).unwrap_or_default();
+        let environment_id = filter
+            .environment_id
+            .unwrap_or_else(|| EnvironmentId::new(self.environment_id.clone()));
         let settings = self
             .store
             .get_settings()
             .map_err(|e| RpcError::internal_error(e.to_string()))?
             .unwrap_or_default();
+
+        if let Some(instance_id) = filter.instance_id.as_ref()
+            && !settings
+                .providers
+                .iter()
+                .any(|config| &config.id == instance_id)
+        {
+            self.provider_resolver
+                .resolve_allow_disabled(instance_id, &environment_id)?;
+        }
 
         let mut reports = Vec::new();
 
@@ -659,68 +930,98 @@ impl Router {
                 continue;
             }
 
-            if let Some(driver) = self.drivers.get(inst.provider) {
-                let snapshot = driver.probe(inst).await;
-                let (status, reason) = match &snapshot.health {
-                    pandamux_providers::models::ProviderHealth::Healthy => match &snapshot.auth {
-                        pandamux_providers::models::ProviderAuthStatus::Authenticated {
-                            ..
-                        } => ("healthy".to_string(), None),
-                        pandamux_providers::models::ProviderAuthStatus::Unauthenticated => (
-                            "unauthenticated".to_string(),
-                            Some("Not logged in".to_string()),
-                        ),
-                        pandamux_providers::models::ProviderAuthStatus::Unknown => {
-                            ("healthy".to_string(), None)
+            match self
+                .provider_resolver
+                .resolve_allow_disabled(&inst.id, &environment_id)
+            {
+                Ok(resolved) if !resolved.config.enabled => {
+                    reports.push(ProviderHealthReport {
+                        instance_id: resolved.config.id,
+                        provider: resolved.config.provider,
+                        display_name: resolved.config.display_name,
+                        enabled: false,
+                        installed: false,
+                        version: None,
+                        status: "disabled".to_string(),
+                        account_badge: None,
+                        subscription: None,
+                        reason: Some("Provider instance is disabled".to_string()),
+                        checked_at_ms: Self::now_ms(),
+                    });
+                }
+                Ok(resolved) => {
+                    let snapshot = resolved.driver.probe(&resolved.config).await;
+                    let (status, reason) = match &snapshot.health {
+                        pandamux_providers::models::ProviderHealth::Healthy => match &snapshot.auth
+                        {
+                            pandamux_providers::models::ProviderAuthStatus::Authenticated {
+                                ..
+                            } => ("healthy".to_string(), None),
+                            pandamux_providers::models::ProviderAuthStatus::Unauthenticated => (
+                                "unauthenticated".to_string(),
+                                Some("Not logged in".to_string()),
+                            ),
+                            pandamux_providers::models::ProviderAuthStatus::Unknown => (
+                                "unknown".to_string(),
+                                Some("Authentication state is unknown".to_string()),
+                            ),
+                        },
+                        pandamux_providers::models::ProviderHealth::Degraded { reason } => {
+                            ("degraded".to_string(), Some(reason.clone()))
                         }
-                    },
-                    pandamux_providers::models::ProviderHealth::Degraded { reason } => {
-                        ("degraded".to_string(), Some(reason.clone()))
-                    }
-                    pandamux_providers::models::ProviderHealth::Unavailable { reason } => {
-                        ("unavailable".to_string(), Some(reason.clone()))
-                    }
-                };
+                        pandamux_providers::models::ProviderHealth::Unavailable { reason } => {
+                            ("unavailable".to_string(), Some(reason.clone()))
+                        }
+                    };
 
-                let (account_badge, subscription) = match &snapshot.auth {
-                    pandamux_providers::models::ProviderAuthStatus::Authenticated {
-                        account_label,
-                        email: _,
+                    let (account_badge, subscription) = match &snapshot.auth {
+                        pandamux_providers::models::ProviderAuthStatus::Authenticated {
+                            account_label,
+                            email: _,
+                            subscription,
+                        } => (
+                            account_badge_label(account_label.as_deref(), subscription.as_deref()),
+                            subscription.clone(),
+                        ),
+                        _ => (None, None),
+                    };
+
+                    reports.push(ProviderHealthReport {
+                        instance_id: resolved.config.id,
+                        provider: resolved.config.provider,
+                        display_name: resolved.config.display_name,
+                        enabled: resolved.config.enabled,
+                        installed: snapshot.installed,
+                        version: snapshot.version,
+                        status,
+                        account_badge,
                         subscription,
-                    } => (
-                        account_badge_label(account_label.as_deref(), subscription.as_deref()),
-                        subscription.clone(),
-                    ),
-                    _ => (None, None),
-                };
-
-                reports.push(ProviderHealthReport {
-                    instance_id: inst.id.clone(),
-                    provider: inst.provider,
-                    display_name: inst.display_name.clone(),
-                    enabled: inst.enabled,
-                    installed: snapshot.installed,
-                    version: snapshot.version,
-                    status,
-                    account_badge,
-                    subscription,
-                    reason,
-                    checked_at_ms: snapshot.checked_at_ms,
-                });
-            } else {
-                reports.push(ProviderHealthReport {
-                    instance_id: inst.id.clone(),
-                    provider: inst.provider,
-                    display_name: inst.display_name.clone(),
-                    enabled: inst.enabled,
-                    installed: false,
-                    version: None,
-                    status: "unavailable".to_string(),
-                    account_badge: None,
-                    subscription: None,
-                    reason: Some("No registered driver for provider".to_string()),
-                    checked_at_ms: Self::now_ms(),
-                });
+                        reason,
+                        checked_at_ms: snapshot.checked_at_ms,
+                    });
+                }
+                Err(error) => {
+                    let reason = error
+                        .data
+                        .as_ref()
+                        .and_then(|data| data.get("reason"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| error.message.clone());
+                    reports.push(ProviderHealthReport {
+                        instance_id: inst.id.clone(),
+                        provider: inst.provider,
+                        display_name: inst.display_name.clone(),
+                        enabled: inst.enabled,
+                        installed: false,
+                        version: None,
+                        status: "unavailable".to_string(),
+                        account_badge: None,
+                        subscription: None,
+                        reason: Some(reason),
+                        checked_at_ms: Self::now_ms(),
+                    });
+                }
             }
         }
 
@@ -1092,8 +1393,23 @@ impl Router {
         Ok(json!({ "success": true }))
     }
 
-    fn handle_antigravity_status(&self, params: Value) -> Result<Value, RpcError> {
-        let _p: AntigravityStatusParams = serde_json::from_value(params).unwrap_or_default();
+    async fn handle_antigravity_status(&self, params: Value) -> Result<Value, RpcError> {
+        let p: AntigravityStatusParams = if params.is_null() {
+            AntigravityStatusParams::default()
+        } else {
+            serde_json::from_value(params).map_err(|error| {
+                RpcError::invalid_params(format!("Invalid antigravity.status params: {error}"))
+            })?
+        };
+        let environment_id = p
+            .environment_id
+            .unwrap_or_else(|| EnvironmentId::new(self.environment_id.clone()));
+        let resolved = self.provider_resolver.resolve_kind(
+            p.provider_instance_id.as_ref(),
+            &environment_id,
+            ProviderKind::Antigravity,
+        )?;
+        let snapshot = resolved.driver.probe(&resolved.config).await;
 
         #[cfg(target_os = "windows")]
         let (platform, arch) = ("windows", "x64");
@@ -1105,80 +1421,144 @@ impl Router {
         let (platform, arch) = ("unsupported", "unknown");
 
         let platform_arch = format!("{platform}-{arch}");
-        let bin_path = pandamux_providers::antigravity::resolve_antigravity_binary(
-            None,
-            &self.data_dir,
-            &platform_arch,
-        );
-
-        let gemini_home = self.data_dir.join("profiles/antigravity/default");
-        let health = if let Some(ref bp) = bin_path {
-            pandamux_providers::antigravity::probe_antigravity_health_offline(
-                bp,
-                &gemini_home,
-                None,
-            )
+        let bin_path = if let Some(binary_path) = resolved.config.binary_path.as_ref() {
+            Some(PathBuf::from(binary_path))
         } else {
-            pandamux_providers::models::ProviderHealth::Unavailable {
-                reason: "Binary not installed".to_string(),
-            }
+            pandamux_providers::antigravity::resolve_antigravity_binary(
+                None,
+                &self.data_dir,
+                &platform_arch,
+            )
         };
 
-        let authenticated = matches!(health, pandamux_providers::models::ProviderHealth::Healthy);
-        let free_disk = pandamux_providers::antigravity::get_available_disk_bytes(&self.data_dir);
+        let authenticated = matches!(
+            snapshot.auth,
+            pandamux_providers::models::ProviderAuthStatus::Authenticated { .. }
+        );
+        let free_disk = pandamux_providers::antigravity::get_available_disk_bytes(&self.data_dir)
+            .map_err(provider_rpc_error)?;
 
+        let (active_processes, max_processes) =
+            pandamux_providers::antigravity::antigravity_process_counts();
         let result = AntigravityStatusResult {
-            installed: bin_path.is_some(),
-            version: if bin_path.is_some() {
-                Some("1.1.1".to_string())
-            } else {
-                None
-            },
+            provider_instance_id: resolved.config.id.clone(),
+            installed: snapshot.installed,
+            version: snapshot.version,
             binary_path: bin_path.map(|p| p.to_string_lossy().to_string()),
             authenticated,
-            active_processes: 0,
-            max_processes: 2,
+            active_processes,
+            max_processes,
             free_disk_bytes: free_disk,
         };
 
         serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
-    async fn handle_antigravity_install(&self, params: Value) -> Result<Value, RpcError> {
+    async fn handle_antigravity_install(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
         let p: AntigravityInstallParams = serde_json::from_value(params).map_err(|e| {
             RpcError::invalid_params(format!("Invalid antigravity.install params: {e}"))
         })?;
-
-        let fallback_bytes = if let Some(ref b64) = p.fallback_bytes_base64 {
-            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64).ok()
-        } else {
-            None
-        };
+        if p.staged_archive_path.is_some()
+            && !matches!(context.peer_role, PeerRole::Internal | PeerRole::NodeProxy)
+        {
+            return Err(RpcError::unauthorized(
+                "Only the authenticated Hub proxy may install a staged Antigravity archive",
+            ));
+        }
+        let staged_archive = p.staged_archive_path.as_deref().map(PathBuf::from);
 
         let result = pandamux_providers::antigravity::install_managed_bundle(
             &self.data_dir,
             &p.manifest,
-            fallback_bytes.as_deref(),
+            staged_archive.as_deref(),
+            p.force,
         )
         .await
-        .map_err(|e| RpcError::internal_error(format!("Antigravity bundle install failed: {e}")))?;
+        .map_err(provider_rpc_error)?;
 
         serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
-    fn handle_antigravity_oauth_start(&self, params: Value) -> Result<Value, RpcError> {
-        let _p: AntigravityOAuthStartParams = serde_json::from_value(params).unwrap_or_default();
+    fn handle_antigravity_prepare_upload(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        if !matches!(context.peer_role, PeerRole::Internal | PeerRole::NodeProxy) {
+            return Err(RpcError::unauthorized(
+                "Only the authenticated Hub proxy may prepare an Antigravity upload",
+            ));
+        }
+        let params: AntigravityPrepareUploadParams =
+            serde_json::from_value(params).map_err(|e| {
+                RpcError::invalid_params(format!("Invalid antigravity.prepare_upload params: {e}"))
+            })?;
+        let path = pandamux_providers::antigravity::prepare_bundle_upload(
+            &self.data_dir,
+            &params.manifest,
+        )
+        .map_err(provider_rpc_error)?;
+        serde_json::to_value(AntigravityPrepareUploadResult {
+            remote_path: path.to_string_lossy().to_string(),
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
 
-        let state = format!("agy-state-{}", &uuid::Uuid::new_v4().to_string()[..8]);
-        let redirect_port = 51123;
-        let auth_url = format!(
-            "https://accounts.google.com/o/oauth2/v2/auth?client_id=pandamux-acp.apps.googleusercontent.com&redirect_uri=http%3A%2F%2F127.0.0.1%3A{redirect_port}%2F&response_type=code&scope=openid%20profile%20email&state={state}"
-        );
+    fn handle_antigravity_discard_upload(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        if !matches!(context.peer_role, PeerRole::Internal | PeerRole::NodeProxy) {
+            return Err(RpcError::unauthorized(
+                "Only the authenticated Hub proxy may discard an Antigravity upload",
+            ));
+        }
+        let params: AntigravityDiscardUploadParams =
+            serde_json::from_value(params).map_err(|e| {
+                RpcError::invalid_params(format!("Invalid antigravity.discard_upload params: {e}"))
+            })?;
+        pandamux_providers::antigravity::discard_bundle_upload(
+            &self.data_dir,
+            std::path::Path::new(&params.staged_archive_path),
+        )
+        .map_err(provider_rpc_error)?;
+        Ok(json!({ "discarded": true }))
+    }
+
+    async fn handle_antigravity_oauth_start(&self, params: Value) -> Result<Value, RpcError> {
+        let p: AntigravityOAuthStartParams = if params.is_null() {
+            AntigravityOAuthStartParams::default()
+        } else {
+            serde_json::from_value(params).map_err(|error| {
+                RpcError::invalid_params(format!("Invalid antigravity.oauth_start params: {error}"))
+            })?
+        };
+        let environment_id = p
+            .environment_id
+            .unwrap_or_else(|| EnvironmentId::new(self.environment_id.clone()));
+        let resolved = self.provider_resolver.resolve_kind(
+            p.provider_instance_id.as_ref(),
+            &environment_id,
+            ProviderKind::Antigravity,
+        )?;
+        let instance_id = resolved.config.id.clone();
+        let started = self
+            .antigravity_auth
+            .start(&resolved.config, &self.data_dir)
+            .await
+            .map_err(|error| provider_rpc_error_for_target(error, &instance_id, &environment_id))?;
 
         let result = AntigravityOAuthStartResult {
-            auth_url,
-            redirect_port,
-            state,
+            provider_instance_id: started.provider_instance_id,
+            flow_id: started.flow_id,
+            auth_url: started.auth_url,
+            redirect_port: started.redirect_port,
+            state: started.state,
         };
 
         serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))
@@ -1188,24 +1568,25 @@ impl Router {
         let p: AntigravityOAuthRelayParams = serde_json::from_value(params).map_err(|e| {
             RpcError::invalid_params(format!("Invalid antigravity.oauth_relay params: {e}"))
         })?;
+        let environment_id = p
+            .environment_id
+            .clone()
+            .unwrap_or_else(|| EnvironmentId::new(self.environment_id.clone()));
+        let resolved = self.provider_resolver.resolve_kind(
+            p.provider_instance_id.as_ref(),
+            &environment_id,
+            ProviderKind::Antigravity,
+        )?;
+        let instance_id = resolved.config.id.clone();
 
-        let message = pandamux_providers::antigravity::execute_oauth_relay_callback(
-            &p.callback_url,
-            &p.state,
-            p.redirect_port,
-        )
-        .await
-        .map_err(|e| RpcError::internal_error(format!("OAuth relay execution failed: {e}")))?;
-
-        let profile_dir = self.data_dir.join("profiles/antigravity/default");
-        let _ = std::fs::create_dir_all(&profile_dir);
-        let settings_path = profile_dir.join("settings.json");
-        let _ = std::fs::write(
-            &settings_path,
-            serde_json::json!({ "auth": { "type": "oauth-personal" } }).to_string(),
-        );
+        let message = self
+            .antigravity_auth
+            .complete(&resolved.config.id, &p.flow_id, &p.callback_url)
+            .await
+            .map_err(|error| provider_rpc_error_for_target(error, &instance_id, &environment_id))?;
 
         let result = AntigravityOAuthRelayResult {
+            provider_instance_id: resolved.config.id,
             success: true,
             message,
         };
@@ -1386,6 +1767,34 @@ impl Router {
 mod tests {
     use super::*;
 
+    fn mock_router(store: Store) -> Router {
+        let settings = UserSettings {
+            providers: vec![pandamux_core::ProviderInstanceConfig {
+                id: pandamux_core::ProviderInstanceId::new("mock-default"),
+                provider: ProviderKind::Custom,
+                display_name: "Mock Provider".to_string(),
+                profile_dir: "profiles/custom/mock-default".to_string(),
+                environment_id: None,
+                binary_path: Some("/mock/bin/provider".to_string()),
+                concurrency_limit: 2,
+                env_overrides: Default::default(),
+                settings: json!({ "fixture": true }),
+                enabled: true,
+            }],
+            ..UserSettings::default()
+        };
+        store.save_settings(&settings).expect("save mock settings");
+        let drivers = Arc::new(DriverRegistry::new());
+        drivers.register(
+            ProviderKind::Custom,
+            Arc::new(pandamux_providers::MockProviderDriver::new(
+                ProviderKind::Custom,
+                "Mock Provider",
+            )),
+        );
+        Router::with_drivers(store, ServerRole::Hub, "env-test".to_string(), drivers)
+    }
+
     #[tokio::test]
     async fn router_handles_ping_and_capabilities() {
         let store = Store::in_memory().unwrap();
@@ -1425,8 +1834,7 @@ mod tests {
     #[tokio::test]
     async fn router_handles_thread_lifecycle_and_turn_streaming() {
         let store = Store::in_memory().unwrap();
-        let drivers = Arc::new(DriverRegistry::default_local());
-        let router = Router::with_drivers(store, ServerRole::Hub, "env-test".to_string(), drivers);
+        let router = mock_router(store);
 
         // 1. Create thread
         let create_req = RpcRequest::new(
@@ -1434,6 +1842,7 @@ mod tests {
             "thread.create",
             Some(json!({
                 "title": "Test Chat",
+                "providerInstanceId": "mock-default",
                 "model": "mock-fast"
             })),
         );
@@ -1509,8 +1918,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let att_dir = temp_dir.path().join("attachments");
         let attachment_manager = AttachmentManager::new(att_dir);
-        let router = Router::new(store, ServerRole::Hub, "env-test".to_string())
-            .with_attachments(attachment_manager);
+        let router = mock_router(store).with_attachments(attachment_manager);
 
         // Create thread first
         let create_req = RpcRequest::new(
@@ -1518,6 +1926,7 @@ mod tests {
             "thread.create",
             Some(json!({
                 "title": "Attachment Test",
+                "providerInstanceId": "mock-default",
                 "cwd": "/tmp"
             })),
         );
@@ -2431,13 +2840,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn router_handles_antigravity_node_install_and_oauth_relay() {
+    async fn router_rejects_unpinned_antigravity_installs_without_fabricating_auth() {
         let temp_dir = tempfile::tempdir().unwrap();
         let store = Store::in_memory().unwrap();
         let router = Router::new(store, ServerRole::Node, "env_node".to_string())
             .with_data_dir(temp_dir.path().to_path_buf());
 
-        // 1. Initial status: uninstalled
         let status_req = RpcRequest::new(1, "antigravity.status", None);
         let status_res = router.handle_request(status_req).await.unwrap();
         assert!(status_res.is_success());
@@ -2447,91 +2855,37 @@ mod tests {
         assert!(!status.authenticated);
         assert_eq!(status.max_processes, 2);
 
-        let payload = b"sample-binary-payload-for-testing";
-        let sha256_hash =
-            "92207cde24114feb016121530c70b5c3de6d8e021bfbc9412c328a778147f78a".to_string();
-
-        #[cfg(windows)]
-        let (platform, arch, bin_entry) = ("windows", "x64", "agy_acp_server.exe");
-        #[cfg(not(windows))]
-        let (platform, arch, bin_entry) = ("linux", "x64", "agy_acp_server.par");
-
-        use pandamux_protocol::antigravity_rpc::{AntigravityInstallResult, ManagedBundleManifest};
-        let manifest = ManagedBundleManifest {
-            version: "1.1.1".to_string(),
-            platform: platform.to_string(),
-            arch: arch.to_string(),
-            url: format!(
-                "https://dl.google.com/antigravity/releases/{platform}-{arch}/agy_acp_server_1.1.1.zip"
-            ),
-            size: payload.len() as u64,
-            sha256: sha256_hash,
-            entries: vec![bin_entry.to_string(), "localharness_external".to_string()],
-        };
-
-        let b64_payload =
-            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, payload);
-        let install_req = RpcRequest::new(
+        let manifest = pandamux_providers::antigravity::current_bundle_manifest()
+            .expect("test target has an Antigravity pin");
+        let prepare_req = RpcRequest::new(
             2,
+            "antigravity.prepare_upload",
+            Some(json!({ "manifest": manifest.clone() })),
+        );
+        let prepare_res = router.handle_request(prepare_req).await.unwrap();
+        assert!(prepare_res.is_success());
+        let prepared: AntigravityPrepareUploadResult =
+            serde_json::from_value(prepare_res.result.unwrap()).unwrap();
+        assert!(prepared.remote_path.contains("cache/antigravity/.upload-"));
+
+        let mut unpinned = manifest;
+        unpinned.url = "https://example.invalid/not-the-pinned-runtime.zip".to_string();
+        let install_req = RpcRequest::new(
+            3,
             "antigravity.install",
-            Some(json!({
-                "manifest": manifest,
-                "fallbackBytesBase64": b64_payload
-            })),
+            Some(json!({ "manifest": unpinned })),
         );
         let install_res = router.handle_request(install_req).await.unwrap();
-        assert!(install_res.is_success());
-        let install_out: AntigravityInstallResult =
-            serde_json::from_value(install_res.result.unwrap()).unwrap();
-        assert!(install_out.installed);
-        assert_eq!(install_out.version, "1.1.1");
+        let install_error = install_res.error.expect("unpinned install error");
+        assert_eq!(
+            install_error.data.unwrap()["providerCode"],
+            "antigravity_manifest_not_pinned"
+        );
 
-        // 3. Status after installation: installed, but unauthenticated
-        let status_req_2 = RpcRequest::new(3, "antigravity.status", None);
-        let status_res_2 = router.handle_request(status_req_2).await.unwrap();
-        assert!(status_res_2.is_success());
-        let status_2: AntigravityStatusResult =
-            serde_json::from_value(status_res_2.result.unwrap()).unwrap();
-        assert!(status_2.installed);
-        assert!(!status_2.authenticated);
-
-        // 4. OAuth start generates valid auth URL
         let oauth_start_req = RpcRequest::new(4, "antigravity.oauth_start", None);
         let oauth_start_res = router.handle_request(oauth_start_req).await.unwrap();
-        assert!(oauth_start_res.is_success());
-        let oauth_start: AntigravityOAuthStartResult =
-            serde_json::from_value(oauth_start_res.result.unwrap()).unwrap();
-        assert!(
-            oauth_start
-                .auth_url
-                .starts_with("https://accounts.google.com/")
-        );
-        assert_eq!(oauth_start.redirect_port, 51123);
-
-        // 5. OAuth relay callback completes authentication
-        let callback_url = format!(
-            "http://127.0.0.1:51123/?code=4/sample_code&state={}",
-            oauth_start.state
-        );
-        let relay_req = RpcRequest::new(
-            5,
-            "antigravity.oauth_relay",
-            Some(json!({
-                "callbackUrl": callback_url,
-                "state": oauth_start.state,
-                "redirectPort": oauth_start.redirect_port
-            })),
-        );
-        let relay_res = router.handle_request(relay_req).await.unwrap();
-        assert!(relay_res.is_success());
-
-        // 6. Final status: installed AND authenticated!
-        let status_req_3 = RpcRequest::new(6, "antigravity.status", None);
-        let status_res_3 = router.handle_request(status_req_3).await.unwrap();
-        let status_3: AntigravityStatusResult =
-            serde_json::from_value(status_res_3.result.unwrap()).unwrap();
-        assert!(status_3.installed);
-        assert!(status_3.authenticated);
+        assert!(oauth_start_res.error.is_some());
+        assert!(oauth_start_res.result.is_none());
     }
 
     #[tokio::test]
@@ -2557,7 +2911,7 @@ mod tests {
                         req.id.clone().unwrap_or(1.into()),
                         json!({
                             "installed": true,
-                            "version": "1.1.1",
+                            "version": "agy_acp_server_1.1.1",
                             "binaryPath": "/remote/tools/agy_acp_server.par",
                             "source": "hub_push",
                             "freeDiskBytes": 10737418240u64
@@ -2593,13 +2947,14 @@ mod tests {
             Some(json!({
                 "environmentId": "env_galahad",
                 "manifest": {
-                    "version": "1.1.1",
+                    "version": "agy_acp_server_1.1.1",
                     "platform": "linux",
                     "arch": "x64",
                     "url": "https://dl.google.com/test.zip",
                     "size": 100,
-                    "sha256": "0123456789abcdef",
-                    "entries": ["agy_acp_server.par", "localharness_external"]
+                    "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                    "executable": { "name": "agy_acp_server.par", "size": 80 },
+                    "harness": { "name": "localharness_external", "size": 20 }
                 }
             })),
         );
@@ -2613,9 +2968,8 @@ mod tests {
             "antigravity.oauth_relay",
             Some(json!({
                 "environmentId": "env_galahad",
+                "flowId": "flow-1",
                 "callbackUrl": "http://127.0.0.1:51123/?code=123&state=state-1",
-                "state": "state-1",
-                "redirectPort": 51123
             })),
         );
         let relay_res = hub_router.handle_request(relay_req).await.unwrap();

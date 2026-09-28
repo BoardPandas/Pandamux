@@ -5,10 +5,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, broadcast, mpsc};
 
 use pandamux_core::{
-    EnvironmentId, ProviderInstanceId,
+    EnvironmentId,
     event::{ThreadEvent, ThreadEventKind, ToolCallStatus, TurnOutcome},
     ids::{ThreadId, TurnId},
-    provider_config::{ProviderInstanceConfig, ProviderKind},
     thread::{Thread, ThreadStatus, ThreadWorkspace, Turn, TurnInput, TurnStatus},
 };
 use pandamux_protocol::{
@@ -21,8 +20,9 @@ use pandamux_protocol::{
 use pandamux_providers::traits::ProviderSession;
 use pandamux_providers::{ProviderEvent, SessionSpec};
 
-use crate::driver_registry::DriverRegistry;
-use crate::store::Store;
+use crate::provider_resolver::{ProviderResolver, ResolvedProviderExecution};
+use crate::request_context::CapabilityAuthority;
+use crate::store::{ProviderExecutionAudit, Store};
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -31,43 +31,66 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-fn resolve_provider_kind(instance_id: &ProviderInstanceId) -> ProviderKind {
-    let s = instance_id.as_str().to_lowercase();
-    if s.starts_with("claude") {
-        ProviderKind::Claude
-    } else if s.starts_with("codex") {
-        ProviderKind::Codex
-    } else if s.starts_with("antigravity") || s.starts_with("gemini") {
-        ProviderKind::Antigravity
-    } else if s.starts_with("cursor") {
-        ProviderKind::Cursor
-    } else if s.starts_with("grok") {
-        ProviderKind::Grok
-    } else if s.starts_with("opencode") {
-        ProviderKind::OpenCode
-    } else {
-        ProviderKind::Custom
-    }
-}
-
 /// An active supervised session paired with its event channel receiver.
 #[derive(Clone)]
 pub struct ActiveThreadSession {
-    pub session: Arc<Mutex<Box<dyn ProviderSession>>>,
+    pub session: Arc<Mutex<Option<Box<dyn ProviderSession>>>>,
     pub events_rx: Arc<Mutex<Option<mpsc::Receiver<ProviderEvent>>>>,
+    pub execution: Arc<ResolvedProviderExecution>,
+    pub generation: uuid::Uuid,
+    pub child_capability_token: String,
+    pub capability_authority: Arc<CapabilityAuthority>,
+}
+
+async fn shutdown_active_session(active: ActiveThreadSession, interrupt: bool) {
+    let session = {
+        let mut session = active.session.lock().await;
+        session.take()
+    };
+    if let Some(mut session) = session {
+        if interrupt {
+            let _ = session.interrupt().await;
+        }
+        session.shutdown().await;
+    }
+    active
+        .capability_authority
+        .revoke(&active.child_capability_token);
+}
+
+async fn remove_active_generation(
+    active_sessions: &Arc<Mutex<HashMap<ThreadId, ActiveThreadSession>>>,
+    thread_id: &ThreadId,
+    generation: uuid::Uuid,
+) -> Option<ActiveThreadSession> {
+    let mut active = active_sessions.lock().await;
+    if active
+        .get(thread_id)
+        .is_some_and(|session| session.generation == generation)
+    {
+        active.remove(thread_id)
+    } else {
+        None
+    }
 }
 
 /// Central manager orchestrating thread execution, streaming, and state persistence.
 pub struct ThreadManager {
     store: Store,
-    drivers: Arc<DriverRegistry>,
+    provider_resolver: Arc<ProviderResolver>,
+    capability_authority: Arc<CapabilityAuthority>,
     environment_id: String,
     active_sessions: Arc<Mutex<HashMap<ThreadId, ActiveThreadSession>>>,
     broadcaster: broadcast::Sender<EventEnvelope>,
 }
 
 impl ThreadManager {
-    pub fn new(store: Store, drivers: Arc<DriverRegistry>, environment_id: String) -> Self {
+    pub fn new(
+        store: Store,
+        provider_resolver: Arc<ProviderResolver>,
+        environment_id: String,
+        capability_authority: Arc<CapabilityAuthority>,
+    ) -> Self {
         // Reconcile any in-flight turns left unfinalized from a prior server run
         let _ = store.reconcile_active_turns();
 
@@ -75,7 +98,8 @@ impl ThreadManager {
 
         Self {
             store,
-            drivers,
+            provider_resolver,
+            capability_authority,
             environment_id,
             active_sessions: Arc::new(Mutex::new(HashMap::new())),
             broadcaster,
@@ -92,6 +116,121 @@ impl ThreadManager {
         &self.broadcaster
     }
 
+    pub async fn shutdown_all(&self) {
+        let sessions = {
+            let mut active = self.active_sessions.lock().await;
+            active
+                .drain()
+                .map(|(_, session)| session)
+                .collect::<Vec<_>>()
+        };
+        for session in sessions {
+            shutdown_active_session(session, true).await;
+        }
+    }
+
+    async fn get_or_start_session(&self, thread: &Thread) -> Result<ActiveThreadSession, RpcError> {
+        let resolved = self
+            .provider_resolver
+            .resolve(&thread.provider_instance_id, &thread.environment_id)?;
+        let existing = {
+            let active = self.active_sessions.lock().await;
+            active.get(&thread.id).cloned()
+        };
+        if let Some(existing) = existing {
+            if existing.execution.instance.config == resolved.config {
+                return Ok(existing);
+            }
+            if let Some(stale) =
+                remove_active_generation(&self.active_sessions, &thread.id, existing.generation)
+                    .await
+            {
+                shutdown_active_session(stale, false).await;
+            }
+        }
+
+        let execution = Arc::new(
+            self.provider_resolver
+                .acquire_execution(&thread.provider_instance_id, &thread.environment_id)
+                .await?,
+        );
+        let resume_token = self
+            .store
+            .get_resume_token(&thread.id)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        let spec = SessionSpec {
+            cwd: PathBuf::from(thread.workspace.effective_path()),
+            model: thread.model.clone(),
+            effort: thread.effort.clone(),
+            access: thread.access_mode,
+            instructions: None,
+            tool_policy: None,
+            resume: resume_token,
+        };
+        let child_capability_token = self.capability_authority.issue_provider_child(
+            thread.id.clone(),
+            [
+                "notification.post".to_string(),
+                "memory.list".to_string(),
+                "memory.search".to_string(),
+                "memory.add".to_string(),
+                "memory.update".to_string(),
+            ],
+            24 * 60 * 60 * 1000,
+        );
+        let mut launch_config = execution.instance.config.clone();
+        launch_config.env_overrides.insert(
+            "PANDAMUX_CAPABILITY".to_string(),
+            child_capability_token.clone(),
+        );
+        launch_config.env_overrides.insert(
+            "PANDAMUX_THREAD_ID".to_string(),
+            thread.id.as_str().to_string(),
+        );
+        if let Some(endpoint) = self.capability_authority.endpoint() {
+            launch_config
+                .env_overrides
+                .insert("PANDAMUX_PIPE".to_string(), endpoint);
+        }
+        let start_result = execution
+            .instance
+            .driver
+            .start_session(&launch_config, spec)
+            .await;
+        let mut session = match start_result {
+            Ok(session) => session,
+            Err(error) => {
+                self.capability_authority.revoke(&child_capability_token);
+                return Err(RpcError::internal_error(error.to_string()));
+            }
+        };
+        let events_rx = session.take_event_receiver();
+        let candidate = ActiveThreadSession {
+            session: Arc::new(Mutex::new(Some(session))),
+            events_rx: Arc::new(Mutex::new(events_rx)),
+            execution,
+            generation: uuid::Uuid::new_v4(),
+            child_capability_token,
+            capability_authority: self.capability_authority.clone(),
+        };
+
+        let raced = {
+            let mut active = self.active_sessions.lock().await;
+            if let Some(existing) = active.get(&thread.id) {
+                Some(existing.clone())
+            } else {
+                active.insert(thread.id.clone(), candidate.clone());
+                None
+            }
+        };
+        if let Some(existing) = raced {
+            shutdown_active_session(candidate, false).await;
+            Ok(existing)
+        } else {
+            Ok(candidate)
+        }
+    }
+
     /// Creates and persists a new thread with optional git worktree.
     pub fn create_thread(&self, params: ThreadCreateParams) -> Result<Thread, RpcError> {
         let now = now_ms();
@@ -106,17 +245,25 @@ impl ThreadManager {
             worktree: params.worktree,
         };
 
+        let environment_id = params
+            .environment_id
+            .unwrap_or_else(|| EnvironmentId::from(self.environment_id.as_str()));
+        let provider_instance_id = match params.provider_instance_id {
+            Some(instance_id) => instance_id,
+            None => self
+                .provider_resolver
+                .default_instance_id(&environment_id)?,
+        };
+        self.provider_resolver
+            .resolve(&provider_instance_id, &environment_id)?;
+
         let thread = Thread {
             id: ThreadId::generate(),
             project_id: params.project_id,
-            environment_id: params
-                .environment_id
-                .unwrap_or_else(|| EnvironmentId::from(self.environment_id.as_str())),
+            environment_id,
             parent_thread_id: None,
             title: params.title.unwrap_or_else(|| "New Thread".to_string()),
-            provider_instance_id: params
-                .provider_instance_id
-                .unwrap_or_else(|| ProviderInstanceId::from("prov-default")),
+            provider_instance_id,
             model: params.model.unwrap_or_else(|| "default".to_string()),
             effort: params.effort,
             access_mode: params.access_mode.unwrap_or_default(),
@@ -259,9 +406,13 @@ impl ThreadManager {
         )
         .unwrap_or(None);
 
+        let active_sess = self.get_or_start_session(&thread).await?;
+
         let turn = Turn {
             id: turn_id.clone(),
             thread_id: params.thread_id.clone(),
+            environment_id: thread.environment_id.clone(),
+            provider_instance_id: thread.provider_instance_id.clone(),
             seq: turn_seq,
             input: turn_input.clone(),
             status: TurnStatus::Running,
@@ -274,6 +425,24 @@ impl ThreadManager {
 
         self.store
             .save_turn(&turn)
+            .map_err(|e| RpcError::internal_error(e.to_string()))?;
+        let execution_config = &active_sess.execution.instance.config;
+        self.store
+            .record_provider_execution(&ProviderExecutionAudit {
+                turn_id: turn_id.clone(),
+                thread_id: params.thread_id.clone(),
+                environment_id: thread.environment_id.clone(),
+                provider_instance_id: execution_config.id.clone(),
+                provider_kind: execution_config.provider,
+                profile_dir: execution_config.profile_dir.clone(),
+                binary_path: execution_config.binary_path.clone(),
+                capabilities: active_sess.execution.instance.capabilities,
+                model: turn_input
+                    .model
+                    .clone()
+                    .unwrap_or_else(|| thread.model.clone()),
+                created_at_ms: started_ms,
+            })
             .map_err(|e| RpcError::internal_error(e.to_string()))?;
 
         thread.status = ThreadStatus::Working;
@@ -330,84 +499,43 @@ impl ThreadManager {
             kind: start_event.kind,
         });
 
-        // Resolve or spawn provider session
-        let active_sess = {
-            let mut active = self.active_sessions.lock().await;
-            if let Some(existing) = active.get(&params.thread_id) {
-                existing.clone()
-            } else {
-                let kind = resolve_provider_kind(&thread.provider_instance_id);
-                let driver = self
-                    .drivers
-                    .get(kind)
-                    .or_else(|| self.drivers.get(ProviderKind::Custom))
-                    .ok_or_else(|| {
-                        RpcError::internal_error(format!(
-                            "No driver registered for provider {:?}",
-                            kind
-                        ))
-                    })?;
-
-                let resume_token = self
-                    .store
-                    .get_resume_token(&params.thread_id)
-                    .map_err(|e| RpcError::internal_error(e.to_string()))?;
-
-                let spec = SessionSpec {
-                    cwd: PathBuf::from(thread.workspace.effective_path()),
-                    model: thread.model.clone(),
-                    effort: thread.effort.clone(),
-                    access: thread.access_mode,
-                    instructions: None,
-                    tool_policy: None,
-                    resume: resume_token,
-                };
-
-                let cfg = ProviderInstanceConfig {
-                    id: thread.provider_instance_id.clone(),
-                    provider: kind,
-                    display_name: thread.provider_instance_id.to_string(),
-                    profile_dir: format!(
-                        "profiles/{}/{}",
-                        kind.as_str(),
-                        thread.provider_instance_id.as_str()
-                    ),
-                    environment_id: Some(thread.environment_id.clone()),
-                    binary_path: None,
-                    concurrency_limit: 2,
-                    env_overrides: Default::default(),
-                    settings: serde_json::Value::Null,
-                    enabled: true,
-                };
-
-                let mut session = driver
-                    .start_session(&cfg, spec)
-                    .await
-                    .map_err(|e| RpcError::internal_error(e.to_string()))?;
-
-                let rx = session.take_event_receiver();
-                let entry = ActiveThreadSession {
-                    session: Arc::new(Mutex::new(session)),
-                    events_rx: Arc::new(Mutex::new(rx)),
-                };
-                active.insert(params.thread_id.clone(), entry.clone());
-                entry
-            }
-        };
-
         // Send turn prompt into provider session
-        {
+        let send_result = {
             let mut sess = active_sess.session.lock().await;
-            sess.send_turn(turn_input)
+            sess.as_mut()
+                .ok_or_else(|| RpcError::internal_error("Provider session is closed"))?
+                .send_turn(turn_input)
                 .await
-                .map_err(|e| RpcError::internal_error(e.to_string()))?;
+                .map_err(|e| RpcError::internal_error(e.to_string()))
+        };
+        if let Err(error) = send_result {
+            if let Some(active) = remove_active_generation(
+                &self.active_sessions,
+                &params.thread_id,
+                active_sess.generation,
+            )
+            .await
+            {
+                shutdown_active_session(active, false).await;
+            }
+            let failed_at = now_ms();
+            if let Ok(Some(mut failed_turn)) = self.store.get_turn(&turn_id) {
+                failed_turn.status = TurnStatus::Failed;
+                failed_turn.ended_at_ms = Some(failed_at);
+                let _ = self.store.save_turn(&failed_turn);
+            }
+            thread.status = ThreadStatus::Errored;
+            thread.updated_at_ms = failed_at;
+            let _ = self.store.save_thread(&thread);
+            return Err(error);
         }
 
         // Take receiver for lock-free streaming in background task
-        let rx_opt = {
+        let rx = {
             let mut rx_guard = active_sess.events_rx.lock().await;
             rx_guard.take()
-        };
+        }
+        .ok_or_else(|| RpcError::internal_error("Provider event stream is already active"))?;
 
         // Spawn background task to stream events into SQLite and broadcast
         let store = self.store.clone();
@@ -416,364 +544,438 @@ impl ThreadManager {
         let env_id = self.environment_id.clone();
         let session_clone = active_sess.session.clone();
         let events_rx_holder = active_sess.events_rx.clone();
+        let active_sessions = self.active_sessions.clone();
+        let generation = active_sess.generation;
         let turn_id_for_task = turn_id.clone();
         let mut stream_seq = started_seq;
 
         tokio::spawn(async move {
             let turn_id = turn_id_for_task;
-            if let Some(mut rx) = rx_opt {
-                while let Some(prov_event) = rx.recv().await {
-                    stream_seq += 1;
-                    let at = now_ms();
+            let mut rx = rx;
+            let mut terminal_outcome = None;
+            while let Some(prov_event) = rx.recv().await {
+                stream_seq += 1;
+                let at = now_ms();
 
-                    match prov_event {
-                        ProviderEvent::TextDelta { delta } => {
-                            let ev = ThreadEvent {
-                                thread_id: thread_id.clone(),
-                                seq: stream_seq,
-                                at_ms: at,
-                                kind: ThreadEventKind::AssistantText {
-                                    item_id: format!("{}-text", turn_id.as_str()),
-                                    text: delta,
-                                },
-                            };
-                            let _ = store.append_event(&ev);
-                            let _ = broadcaster.send(EventEnvelope {
-                                subscription_id: String::new(),
-                                environment_id: env_id.clone().into(),
-                                thread_id: Some(thread_id.clone()),
-                                run_id: None,
-                                seq: stream_seq,
-                                at_ms: at,
-                                kind: ev.kind,
-                            });
+                match prov_event {
+                    ProviderEvent::TextDelta { delta } => {
+                        let ev = ThreadEvent {
+                            thread_id: thread_id.clone(),
+                            seq: stream_seq,
+                            at_ms: at,
+                            kind: ThreadEventKind::AssistantText {
+                                item_id: format!("{}-text", turn_id.as_str()),
+                                text: delta,
+                            },
+                        };
+                        let _ = store.append_event(&ev);
+                        let _ = broadcaster.send(EventEnvelope {
+                            subscription_id: String::new(),
+                            environment_id: env_id.clone().into(),
+                            thread_id: Some(thread_id.clone()),
+                            run_id: None,
+                            seq: stream_seq,
+                            at_ms: at,
+                            kind: ev.kind,
+                        });
+                    }
+                    ProviderEvent::ReasoningDelta { delta } => {
+                        let ev = ThreadEvent {
+                            thread_id: thread_id.clone(),
+                            seq: stream_seq,
+                            at_ms: at,
+                            kind: ThreadEventKind::Reasoning {
+                                item_id: format!("{}-reasoning", turn_id.as_str()),
+                                text: delta,
+                            },
+                        };
+                        let _ = store.append_event(&ev);
+                        let _ = broadcaster.send(EventEnvelope {
+                            subscription_id: String::new(),
+                            environment_id: env_id.clone().into(),
+                            thread_id: Some(thread_id.clone()),
+                            run_id: None,
+                            seq: stream_seq,
+                            at_ms: at,
+                            kind: ev.kind,
+                        });
+                    }
+                    ProviderEvent::ToolCallStarted { id, name, input } => {
+                        let ev = ThreadEvent {
+                            thread_id: thread_id.clone(),
+                            seq: stream_seq,
+                            at_ms: at,
+                            kind: ThreadEventKind::ToolCall {
+                                item_id: id,
+                                name,
+                                input,
+                                status: ToolCallStatus::Executing,
+                                output: None,
+                            },
+                        };
+                        let _ = store.append_event(&ev);
+                        let _ = broadcaster.send(EventEnvelope {
+                            subscription_id: String::new(),
+                            environment_id: env_id.clone().into(),
+                            thread_id: Some(thread_id.clone()),
+                            run_id: None,
+                            seq: stream_seq,
+                            at_ms: at,
+                            kind: ev.kind,
+                        });
+                    }
+                    ProviderEvent::ToolCallFinished { id, output, error } => {
+                        let status = if error.is_some() {
+                            ToolCallStatus::Failed
+                        } else {
+                            ToolCallStatus::Success
+                        };
+                        let ev = ThreadEvent {
+                            thread_id: thread_id.clone(),
+                            seq: stream_seq,
+                            at_ms: at,
+                            kind: ThreadEventKind::ToolCall {
+                                item_id: id,
+                                name: String::new(),
+                                input: serde_json::Value::Null,
+                                status,
+                                output,
+                            },
+                        };
+                        let _ = store.append_event(&ev);
+                        let _ = broadcaster.send(EventEnvelope {
+                            subscription_id: String::new(),
+                            environment_id: env_id.clone().into(),
+                            thread_id: Some(thread_id.clone()),
+                            run_id: None,
+                            seq: stream_seq,
+                            at_ms: at,
+                            kind: ev.kind,
+                        });
+                    }
+                    ProviderEvent::ApprovalRequested {
+                        request_id,
+                        kind,
+                        detail,
+                        ..
+                    } => {
+                        if let Ok(Some(mut th)) = store.get_thread(&thread_id) {
+                            th.status = ThreadStatus::AwaitingApproval;
+                            th.updated_at_ms = at;
+                            let _ = store.save_thread(&th);
                         }
-                        ProviderEvent::ReasoningDelta { delta } => {
-                            let ev = ThreadEvent {
-                                thread_id: thread_id.clone(),
-                                seq: stream_seq,
-                                at_ms: at,
-                                kind: ThreadEventKind::Reasoning {
-                                    item_id: format!("{}-reasoning", turn_id.as_str()),
-                                    text: delta,
-                                },
-                            };
-                            let _ = store.append_event(&ev);
-                            let _ = broadcaster.send(EventEnvelope {
-                                subscription_id: String::new(),
-                                environment_id: env_id.clone().into(),
-                                thread_id: Some(thread_id.clone()),
-                                run_id: None,
-                                seq: stream_seq,
-                                at_ms: at,
-                                kind: ev.kind,
-                            });
+                        if let Ok(Some(mut tr)) = store.get_turn(&turn_id) {
+                            tr.status = TurnStatus::AwaitingApproval;
+                            let _ = store.save_turn(&tr);
                         }
-                        ProviderEvent::ToolCallStarted { id, name, input } => {
-                            let ev = ThreadEvent {
-                                thread_id: thread_id.clone(),
-                                seq: stream_seq,
-                                at_ms: at,
-                                kind: ThreadEventKind::ToolCall {
-                                    item_id: id,
-                                    name,
-                                    input,
-                                    status: ToolCallStatus::Executing,
-                                    output: None,
-                                },
-                            };
-                            let _ = store.append_event(&ev);
-                            let _ = broadcaster.send(EventEnvelope {
-                                subscription_id: String::new(),
-                                environment_id: env_id.clone().into(),
-                                thread_id: Some(thread_id.clone()),
-                                run_id: None,
-                                seq: stream_seq,
-                                at_ms: at,
-                                kind: ev.kind,
-                            });
+
+                        let ev = ThreadEvent {
+                            thread_id: thread_id.clone(),
+                            seq: stream_seq,
+                            at_ms: at,
+                            kind: ThreadEventKind::ApprovalRequested {
+                                request_id,
+                                kind,
+                                detail,
+                            },
+                        };
+                        let _ = store.append_event(&ev);
+                        let _ = broadcaster.send(EventEnvelope {
+                            subscription_id: String::new(),
+                            environment_id: env_id.clone().into(),
+                            thread_id: Some(thread_id.clone()),
+                            run_id: None,
+                            seq: stream_seq,
+                            at_ms: at,
+                            kind: ev.kind,
+                        });
+                    }
+                    ProviderEvent::SubAgentSpawned {
+                        tool_use_id,
+                        parent_tool_use_id,
+                        agent_type,
+                        description,
+                        model,
+                    } => {
+                        let ev = ThreadEvent {
+                            thread_id: thread_id.clone(),
+                            seq: stream_seq,
+                            at_ms: at,
+                            kind: ThreadEventKind::SubAgentSpawned {
+                                sub_agent_id: tool_use_id,
+                                parent_sub_agent_id: parent_tool_use_id,
+                                parent_item_id: None,
+                                title: description,
+                                agent_type,
+                                model: model.unwrap_or_else(|| "default".to_string()),
+                                effort: None,
+                            },
+                        };
+                        let _ = store.append_event(&ev);
+                        let _ = broadcaster.send(EventEnvelope {
+                            subscription_id: String::new(),
+                            environment_id: env_id.clone().into(),
+                            thread_id: Some(thread_id.clone()),
+                            run_id: None,
+                            seq: stream_seq,
+                            at_ms: at,
+                            kind: ev.kind,
+                        });
+                    }
+                    ProviderEvent::TurnCompleted { outcome, usage } => {
+                        let res_tok = session_clone
+                            .lock()
+                            .await
+                            .as_ref()
+                            .and_then(|session| session.resume_token());
+                        if let Some(res_tok) = res_tok {
+                            let _ = store.save_resume_token(&thread_id, &res_tok);
                         }
-                        ProviderEvent::ToolCallFinished { id, output, error } => {
-                            let status = if error.is_some() {
-                                ToolCallStatus::Failed
-                            } else {
-                                ToolCallStatus::Success
+
+                        if let Ok(Some(mut tr)) = store.get_turn(&turn_id) {
+                            tr.status = match outcome {
+                                TurnOutcome::Success => TurnStatus::Completed,
+                                TurnOutcome::Cancelled => TurnStatus::Interrupted,
+                                TurnOutcome::Failed => TurnStatus::Failed,
+                                TurnOutcome::Interrupted => TurnStatus::Interrupted,
                             };
-                            let ev = ThreadEvent {
-                                thread_id: thread_id.clone(),
-                                seq: stream_seq,
-                                at_ms: at,
-                                kind: ThreadEventKind::ToolCall {
-                                    item_id: id,
-                                    name: String::new(),
-                                    input: serde_json::Value::Null,
-                                    status,
-                                    output,
-                                },
-                            };
-                            let _ = store.append_event(&ev);
-                            let _ = broadcaster.send(EventEnvelope {
-                                subscription_id: String::new(),
-                                environment_id: env_id.clone().into(),
-                                thread_id: Some(thread_id.clone()),
-                                run_id: None,
-                                seq: stream_seq,
-                                at_ms: at,
-                                kind: ev.kind,
-                            });
+                            tr.ended_at_ms = Some(at);
+                            tr.usage = usage;
+                            let _ = store.save_turn(&tr);
                         }
-                        ProviderEvent::ApprovalRequested {
-                            request_id,
-                            kind,
-                            detail,
-                            ..
-                        } => {
-                            if let Ok(Some(mut th)) = store.get_thread(&thread_id) {
-                                th.status = ThreadStatus::AwaitingApproval;
-                                th.updated_at_ms = at;
-                                let _ = store.save_thread(&th);
+
+                        let ev = ThreadEvent {
+                            thread_id: thread_id.clone(),
+                            seq: stream_seq,
+                            at_ms: at,
+                            kind: ThreadEventKind::TurnCompleted { outcome },
+                        };
+                        let _ = store.append_event(&ev);
+                        let _ = broadcaster.send(EventEnvelope {
+                            subscription_id: String::new(),
+                            environment_id: env_id.clone().into(),
+                            thread_id: Some(thread_id.clone()),
+                            run_id: None,
+                            seq: stream_seq,
+                            at_ms: at,
+                            kind: ev.kind,
+                        });
+
+                        let worktree_dir = store
+                            .get_thread(&thread_id)
+                            .ok()
+                            .flatten()
+                            .map(|th| PathBuf::from(th.workspace.effective_path()))
+                            .unwrap_or_default();
+
+                        let cp_after = crate::checkpoint::create_checkpoint(
+                            &worktree_dir,
+                            &thread_id,
+                            &turn_id,
+                            crate::checkpoint::CheckpointPhase::After,
+                        )
+                        .unwrap_or(None);
+
+                        let mut changed_files = Vec::new();
+                        if let Ok(Some(mut tr)) = store.get_turn(&turn_id) {
+                            tr.checkpoint_after = cp_after.clone();
+                            if let (Some(before), Some(after)) = (&tr.checkpoint_before, &cp_after)
+                                && let Ok(stats) = crate::checkpoint::compute_changed_files(
+                                    &worktree_dir,
+                                    before,
+                                    after,
+                                )
+                            {
+                                changed_files = stats
+                                    .iter()
+                                    .map(|s| {
+                                        if s.additions > 0 || s.deletions > 0 {
+                                            format!(
+                                                "{} (+{} -{})",
+                                                s.path, s.additions, s.deletions
+                                            )
+                                        } else {
+                                            s.path.clone()
+                                        }
+                                    })
+                                    .collect();
                             }
-                            if let Ok(Some(mut tr)) = store.get_turn(&turn_id) {
-                                tr.status = TurnStatus::AwaitingApproval;
-                                let _ = store.save_turn(&tr);
-                            }
-
-                            let ev = ThreadEvent {
-                                thread_id: thread_id.clone(),
-                                seq: stream_seq,
-                                at_ms: at,
-                                kind: ThreadEventKind::ApprovalRequested {
-                                    request_id,
-                                    kind,
-                                    detail,
-                                },
-                            };
-                            let _ = store.append_event(&ev);
-                            let _ = broadcaster.send(EventEnvelope {
-                                subscription_id: String::new(),
-                                environment_id: env_id.clone().into(),
-                                thread_id: Some(thread_id.clone()),
-                                run_id: None,
-                                seq: stream_seq,
-                                at_ms: at,
-                                kind: ev.kind,
-                            });
+                            let _ = store.save_turn(&tr);
                         }
-                        ProviderEvent::SubAgentSpawned {
-                            tool_use_id,
-                            parent_tool_use_id,
-                            agent_type,
-                            description,
-                            model,
-                        } => {
-                            let ev = ThreadEvent {
-                                thread_id: thread_id.clone(),
-                                seq: stream_seq,
-                                at_ms: at,
-                                kind: ThreadEventKind::SubAgentSpawned {
-                                    sub_agent_id: tool_use_id,
-                                    parent_sub_agent_id: parent_tool_use_id,
-                                    parent_item_id: None,
-                                    title: description,
-                                    agent_type,
-                                    model: model.unwrap_or_else(|| "default".to_string()),
-                                    effort: None,
-                                },
-                            };
-                            let _ = store.append_event(&ev);
-                            let _ = broadcaster.send(EventEnvelope {
-                                subscription_id: String::new(),
-                                environment_id: env_id.clone().into(),
-                                thread_id: Some(thread_id.clone()),
-                                run_id: None,
-                                seq: stream_seq,
-                                at_ms: at,
-                                kind: ev.kind,
-                            });
-                        }
-                        ProviderEvent::TurnCompleted { outcome, usage } => {
-                            let res_tok = session_clone
-                                .lock()
-                                .await
-                                .resume_token()
-                                .map(|s| s.to_string());
-                            if let Some(res_tok) = res_tok {
-                                let _ = store.save_resume_token(&thread_id, &res_tok);
-                            }
 
-                            if let Ok(Some(mut tr)) = store.get_turn(&turn_id) {
-                                tr.status = match outcome {
-                                    TurnOutcome::Success => TurnStatus::Completed,
-                                    TurnOutcome::Cancelled => TurnStatus::Interrupted,
-                                    TurnOutcome::Failed => TurnStatus::Failed,
-                                    TurnOutcome::Interrupted => TurnStatus::Interrupted,
-                                };
-                                tr.ended_at_ms = Some(at);
-                                tr.usage = usage;
-                                let _ = store.save_turn(&tr);
-                            }
+                        let _ =
+                            crate::checkpoint::prune_old_checkpoints(&worktree_dir, &thread_id, 50);
 
-                            if let Ok(Some(mut th)) = store.get_thread(&thread_id) {
-                                th.status = ThreadStatus::Idle;
-                                th.updated_at_ms = at;
-                                let _ = store.save_thread(&th);
-                            }
+                        stream_seq += 1;
+                        let settle = ThreadEvent {
+                            thread_id: thread_id.clone(),
+                            seq: stream_seq,
+                            at_ms: at,
+                            kind: ThreadEventKind::TurnSettled { changed_files },
+                        };
+                        let _ = store.append_event(&settle);
+                        let _ = broadcaster.send(EventEnvelope {
+                            subscription_id: String::new(),
+                            environment_id: env_id.clone().into(),
+                            thread_id: Some(thread_id.clone()),
+                            run_id: None,
+                            seq: stream_seq,
+                            at_ms: at,
+                            kind: settle.kind,
+                        });
 
-                            let ev = ThreadEvent {
-                                thread_id: thread_id.clone(),
-                                seq: stream_seq,
-                                at_ms: at,
-                                kind: ThreadEventKind::TurnCompleted { outcome },
-                            };
-                            let _ = store.append_event(&ev);
-                            let _ = broadcaster.send(EventEnvelope {
-                                subscription_id: String::new(),
-                                environment_id: env_id.clone().into(),
-                                thread_id: Some(thread_id.clone()),
-                                run_id: None,
-                                seq: stream_seq,
-                                at_ms: at,
-                                kind: ev.kind,
-                            });
-
-                            let worktree_dir = store
-                                .get_thread(&thread_id)
-                                .ok()
-                                .flatten()
-                                .map(|th| PathBuf::from(th.workspace.effective_path()))
-                                .unwrap_or_default();
-
-                            let cp_after = crate::checkpoint::create_checkpoint(
-                                &worktree_dir,
-                                &thread_id,
-                                &turn_id,
-                                crate::checkpoint::CheckpointPhase::After,
-                            )
-                            .unwrap_or(None);
-
-                            let mut changed_files = Vec::new();
-                            if let Ok(Some(mut tr)) = store.get_turn(&turn_id) {
-                                tr.checkpoint_after = cp_after.clone();
-                                if let (Some(before), Some(after)) =
-                                    (&tr.checkpoint_before, &cp_after)
-                                    && let Ok(stats) = crate::checkpoint::compute_changed_files(
-                                        &worktree_dir,
-                                        before,
-                                        after,
-                                    )
-                                {
-                                    changed_files = stats
-                                        .iter()
-                                        .map(|s| {
-                                            if s.additions > 0 || s.deletions > 0 {
-                                                format!(
-                                                    "{} (+{} -{})",
-                                                    s.path, s.additions, s.deletions
-                                                )
-                                            } else {
-                                                s.path.clone()
-                                            }
-                                        })
-                                        .collect();
-                                }
-                                let _ = store.save_turn(&tr);
-                            }
-
-                            let _ = crate::checkpoint::prune_old_checkpoints(
-                                &worktree_dir,
-                                &thread_id,
-                                50,
-                            );
-
-                            stream_seq += 1;
-                            let settle = ThreadEvent {
-                                thread_id: thread_id.clone(),
-                                seq: stream_seq,
-                                at_ms: at,
-                                kind: ThreadEventKind::TurnSettled { changed_files },
-                            };
-                            let _ = store.append_event(&settle);
-                            let _ = broadcaster.send(EventEnvelope {
-                                subscription_id: String::new(),
-                                environment_id: env_id.clone().into(),
-                                thread_id: Some(thread_id.clone()),
-                                run_id: None,
-                                seq: stream_seq,
-                                at_ms: at,
-                                kind: settle.kind,
-                            });
-
-                            break;
-                        }
-                        ProviderEvent::Error {
-                            message,
-                            recoverable,
-                        } => {
-                            let ev = ThreadEvent {
-                                thread_id: thread_id.clone(),
-                                seq: stream_seq,
-                                at_ms: at,
-                                kind: ThreadEventKind::Error {
-                                    class: "provider".to_string(),
-                                    message,
-                                    recoverable,
-                                },
-                            };
-                            let _ = store.append_event(&ev);
-                            let _ = broadcaster.send(EventEnvelope {
-                                subscription_id: String::new(),
-                                environment_id: env_id.clone().into(),
-                                thread_id: Some(thread_id.clone()),
-                                run_id: None,
-                                seq: stream_seq,
-                                at_ms: at,
-                                kind: ev.kind,
-                            });
-                        }
-                        ProviderEvent::RateLimitObserved { details } => {
-                            let ev = ThreadEvent {
-                                thread_id: thread_id.clone(),
-                                seq: stream_seq,
-                                at_ms: at,
-                                kind: ThreadEventKind::RateLimitObserved {
-                                    provider: "agent".to_string(),
-                                    details,
-                                },
-                            };
-                            let _ = store.append_event(&ev);
-                            let _ = broadcaster.send(EventEnvelope {
-                                subscription_id: String::new(),
-                                environment_id: env_id.clone().into(),
-                                thread_id: Some(thread_id.clone()),
-                                run_id: None,
-                                seq: stream_seq,
-                                at_ms: at,
-                                kind: ev.kind,
-                            });
-                        }
-                        ProviderEvent::Notice { level, message } => {
-                            let ev = ThreadEvent {
-                                thread_id: thread_id.clone(),
-                                seq: stream_seq,
-                                at_ms: at,
-                                kind: ThreadEventKind::Notice { level, message },
-                            };
-                            let _ = store.append_event(&ev);
-                            let _ = broadcaster.send(EventEnvelope {
-                                subscription_id: String::new(),
-                                environment_id: env_id.clone().into(),
-                                thread_id: Some(thread_id.clone()),
-                                run_id: None,
-                                seq: stream_seq,
-                                at_ms: at,
-                                kind: ev.kind,
-                            });
-                        }
+                        terminal_outcome = Some(outcome);
+                        break;
+                    }
+                    ProviderEvent::Error {
+                        message,
+                        recoverable,
+                    } => {
+                        let ev = ThreadEvent {
+                            thread_id: thread_id.clone(),
+                            seq: stream_seq,
+                            at_ms: at,
+                            kind: ThreadEventKind::Error {
+                                class: "provider".to_string(),
+                                message,
+                                recoverable,
+                            },
+                        };
+                        let _ = store.append_event(&ev);
+                        let _ = broadcaster.send(EventEnvelope {
+                            subscription_id: String::new(),
+                            environment_id: env_id.clone().into(),
+                            thread_id: Some(thread_id.clone()),
+                            run_id: None,
+                            seq: stream_seq,
+                            at_ms: at,
+                            kind: ev.kind,
+                        });
+                    }
+                    ProviderEvent::RateLimitObserved { details } => {
+                        let ev = ThreadEvent {
+                            thread_id: thread_id.clone(),
+                            seq: stream_seq,
+                            at_ms: at,
+                            kind: ThreadEventKind::RateLimitObserved {
+                                provider: "agent".to_string(),
+                                details,
+                            },
+                        };
+                        let _ = store.append_event(&ev);
+                        let _ = broadcaster.send(EventEnvelope {
+                            subscription_id: String::new(),
+                            environment_id: env_id.clone().into(),
+                            thread_id: Some(thread_id.clone()),
+                            run_id: None,
+                            seq: stream_seq,
+                            at_ms: at,
+                            kind: ev.kind,
+                        });
+                    }
+                    ProviderEvent::Notice { level, message } => {
+                        let ev = ThreadEvent {
+                            thread_id: thread_id.clone(),
+                            seq: stream_seq,
+                            at_ms: at,
+                            kind: ThreadEventKind::Notice { level, message },
+                        };
+                        let _ = store.append_event(&ev);
+                        let _ = broadcaster.send(EventEnvelope {
+                            subscription_id: String::new(),
+                            environment_id: env_id.clone().into(),
+                            thread_id: Some(thread_id.clone()),
+                            run_id: None,
+                            seq: stream_seq,
+                            at_ms: at,
+                            kind: ev.kind,
+                        });
                     }
                 }
+            }
 
-                let mut rx_guard = events_rx_holder.lock().await;
-                *rx_guard = Some(rx);
+            let finished_at = now_ms();
+            match terminal_outcome {
+                Some(TurnOutcome::Success) => {
+                    let still_active = {
+                        let active = active_sessions.lock().await;
+                        active
+                            .get(&thread_id)
+                            .is_some_and(|session| session.generation == generation)
+                    };
+                    if still_active {
+                        let mut rx_guard = events_rx_holder.lock().await;
+                        *rx_guard = Some(rx);
+                    }
+                    if let Ok(Some(mut thread)) = store.get_thread(&thread_id) {
+                        thread.status = ThreadStatus::Idle;
+                        thread.updated_at_ms = finished_at;
+                        let _ = store.save_thread(&thread);
+                    }
+                }
+                Some(TurnOutcome::Cancelled | TurnOutcome::Interrupted) => {
+                    if let Some(active) =
+                        remove_active_generation(&active_sessions, &thread_id, generation).await
+                    {
+                        shutdown_active_session(active, false).await;
+                    }
+                    if let Ok(Some(mut thread)) = store.get_thread(&thread_id) {
+                        thread.status = ThreadStatus::Idle;
+                        thread.updated_at_ms = finished_at;
+                        let _ = store.save_thread(&thread);
+                    }
+                }
+                Some(TurnOutcome::Failed) => {
+                    if let Some(active) =
+                        remove_active_generation(&active_sessions, &thread_id, generation).await
+                    {
+                        shutdown_active_session(active, false).await;
+                    }
+                    if let Ok(Some(mut thread)) = store.get_thread(&thread_id) {
+                        thread.status = ThreadStatus::Errored;
+                        thread.updated_at_ms = finished_at;
+                        let _ = store.save_thread(&thread);
+                    }
+                }
+                None => {
+                    if let Ok(Some(mut turn)) = store.get_turn(&turn_id) {
+                        turn.status = TurnStatus::Failed;
+                        turn.ended_at_ms = Some(finished_at);
+                        let _ = store.save_turn(&turn);
+                    }
+                    if let Ok(Some(mut thread)) = store.get_thread(&thread_id) {
+                        thread.status = ThreadStatus::Errored;
+                        thread.updated_at_ms = finished_at;
+                        let _ = store.save_thread(&thread);
+                    }
+                    stream_seq += 1;
+                    let event = ThreadEvent {
+                        thread_id: thread_id.clone(),
+                        seq: stream_seq,
+                        at_ms: finished_at,
+                        kind: ThreadEventKind::Error {
+                            class: "provider_process".to_string(),
+                            message: "Provider event stream closed before turn completion"
+                                .to_string(),
+                            recoverable: false,
+                        },
+                    };
+                    let _ = store.append_event(&event);
+                    let _ = broadcaster.send(EventEnvelope {
+                        subscription_id: String::new(),
+                        environment_id: env_id.into(),
+                        thread_id: Some(thread_id.clone()),
+                        run_id: None,
+                        seq: stream_seq,
+                        at_ms: finished_at,
+                        kind: event.kind,
+                    });
+                    if let Some(active) =
+                        remove_active_generation(&active_sessions, &thread_id, generation).await
+                    {
+                        shutdown_active_session(active, false).await;
+                    }
+                }
             }
         });
 
@@ -802,7 +1004,9 @@ impl ThreadManager {
 
         {
             let mut sess = active_sess.session.lock().await;
-            sess.respond_approval(params.request_id.clone(), params.decision)
+            sess.as_mut()
+                .ok_or_else(|| RpcError::internal_error("Provider session is closed"))?
+                .respond_approval(params.request_id.clone(), params.decision)
                 .await
                 .map_err(|e| RpcError::internal_error(e.to_string()))?;
         }
@@ -849,14 +1053,13 @@ impl ThreadManager {
 
     /// Interrupts the active turn on a thread.
     pub async fn interrupt_turn(&self, params: ThreadCancelTurnParams) -> Result<(), RpcError> {
-        let session_opt = {
-            let active = self.active_sessions.lock().await;
-            active.get(&params.thread_id).cloned()
+        let session = {
+            let mut active = self.active_sessions.lock().await;
+            active.remove(&params.thread_id)
         };
 
-        if let Some(active_sess) = session_opt {
-            let mut sess = active_sess.session.lock().await;
-            let _ = sess.interrupt().await;
+        if let Some(active_session) = session {
+            shutdown_active_session(active_session, true).await;
         }
 
         let now = now_ms();

@@ -16,7 +16,9 @@ use crate::models::{
     ModelInfo, ProviderAuthStatus, ProviderEvent, ProviderHealth, ProviderMetadata,
     ProviderSnapshot, RateLimitEntry, SessionSpec, UsageLimits,
 };
-use crate::profiles::{apply_profile_environment, ensure_profile_dir, resolve_profile_dir};
+use crate::profiles::{
+    apply_profile_environment, ensure_profile_dir, resolve_instance_profile_dir,
+};
 use crate::shim_resolver::resolve_command_shim;
 use crate::supervision::{SupervisedChild, create_supervised_command};
 use crate::traits::{BoxFuture, ProviderDriver, ProviderSession};
@@ -316,6 +318,12 @@ impl CodexDriver {
     }
 
     fn resolve_codex_binary(&self, cfg: &ProviderInstanceConfig) -> Option<PathBuf> {
+        if let Some(explicit_path) = cfg.binary_path.as_ref() {
+            let path = PathBuf::from(explicit_path);
+            if path.is_file() {
+                return Some(path);
+            }
+        }
         if let Some(explicit_path) = cfg.settings.get("binaryPath").and_then(|v| v.as_str()) {
             let p = PathBuf::from(explicit_path);
             if p.is_file() {
@@ -366,8 +374,7 @@ impl ProviderDriver for CodexDriver {
         Box::pin(async move {
             let binary = self.resolve_codex_binary(cfg);
             if let Some(_bin) = binary {
-                let profile_dir =
-                    resolve_profile_dir(&self.base_data_dir, ProviderKind::Codex, &cfg.id);
+                let profile_dir = resolve_instance_profile_dir(&self.base_data_dir, cfg);
                 // Check if profile directory contains auth credentials
                 let auth_file = profile_dir.join("auth.json");
                 let auth = if auth_file.exists() {
@@ -428,8 +435,7 @@ impl ProviderDriver for CodexDriver {
                         message: "Executable not found in PATH".to_string(),
                     })?;
 
-            let profile_dir =
-                resolve_profile_dir(&self.base_data_dir, ProviderKind::Codex, &cfg.id);
+            let profile_dir = resolve_instance_profile_dir(&self.base_data_dir, cfg);
             ensure_profile_dir(&profile_dir)?;
 
             let mut cmd = create_supervised_command(&binary);

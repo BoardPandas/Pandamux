@@ -1,5 +1,7 @@
 pub mod acp;
 pub mod antigravity;
+mod antigravity_auth;
+mod antigravity_release;
 pub mod claude;
 pub mod codex;
 pub mod cursor;
@@ -18,10 +20,11 @@ pub use acp::{
     build_session_new_request, map_access_mode_to_acp, validate_antigravity_initialize,
 };
 pub use antigravity::{
-    AntigravityConcurrencyLimiter, AntigravityDriver, ManagedBundleManifest, build_antigravity_env,
-    extract_auth_url_from_output, probe_antigravity_health_offline, resolve_antigravity_binary,
-    sweep_orphan_temp_dirs, validate_callback_query, validate_google_oauth_url,
-    validate_sanitized_environment, verify_bundle_manifest,
+    AntigravityAuthManager, AntigravityConcurrencyLimiter, AntigravityDriver,
+    ManagedBundleManifest, build_antigravity_env, extract_auth_url_from_output,
+    probe_antigravity_health_offline, resolve_antigravity_binary, sweep_orphan_temp_dirs,
+    validate_callback_query, validate_google_oauth_url, validate_sanitized_environment,
+    verify_bundle_archive_file,
 };
 pub use claude::{ClaudeDriver, ClaudeSession, build_claude_launch_args};
 pub use codex::{CodexDriver, CodexSession};
@@ -46,7 +49,8 @@ pub use opencode::{
 };
 pub use profiles::{
     ENV_CLAUDE_CONFIG_DIR, ENV_CODEX_HOME, ENV_CURSOR_CONFIG_DIR, ENV_GEMINI_HOME, ENV_GROK_HOME,
-    ENV_OPENCODE_CONFIG_DIR, apply_profile_environment, ensure_profile_dir, resolve_profile_dir,
+    ENV_OPENCODE_CONFIG_DIR, apply_profile_environment, ensure_profile_dir,
+    resolve_instance_profile_dir, resolve_profile_dir,
 };
 pub use shim_resolver::{ResolvedCommand, ShimType, resolve_command_shim};
 pub use supervision::{CREATE_NO_WINDOW, SupervisedChild, create_supervised_command};

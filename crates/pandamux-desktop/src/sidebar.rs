@@ -1097,6 +1097,8 @@ mod tests {
         proj.turns.push(Turn {
             id: TurnId::new("turn-1"),
             thread_id: ThreadId::new("t1"),
+            environment_id: EnvironmentId::new("env-local"),
+            provider_instance_id: ProviderInstanceId::new("claude-main"),
             seq: 1,
             input: TurnInput {
                 text: "test".to_string(),

@@ -1,9 +1,11 @@
 pub mod migrations;
 
 use pandamux_core::{
-    AttachmentRecord, ScheduleRecord, Thread, ThreadEvent, ThreadEventKind, ThreadId, Turn, TurnId,
-    TurnStatus, UserSettings,
+    AttachmentRecord, EnvironmentId, ProviderCapabilities, ProviderInstanceId, ProviderKind,
+    ScheduleRecord, Thread, ThreadEvent, ThreadEventKind, ThreadId, Turn, TurnId, TurnStatus,
+    UserSettings,
 };
+use pandamux_protocol::EventEnvelope;
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -12,6 +14,7 @@ use std::sync::{Arc, Mutex};
 pub enum StoreError {
     Sql(rusqlite::Error),
     Json(serde_json::Error),
+    Data(String),
 }
 
 impl std::fmt::Display for StoreError {
@@ -19,6 +22,7 @@ impl std::fmt::Display for StoreError {
         match self {
             Self::Sql(err) => write!(f, "Store SQL error: {err}"),
             Self::Json(err) => write!(f, "Store JSON error: {err}"),
+            Self::Data(err) => write!(f, "Store data error: {err}"),
         }
     }
 }
@@ -35,6 +39,21 @@ impl From<serde_json::Error> for StoreError {
     fn from(err: serde_json::Error) -> Self {
         Self::Json(err)
     }
+}
+
+/// Durable evidence of the exact provider configuration selected for a turn.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProviderExecutionAudit {
+    pub turn_id: TurnId,
+    pub thread_id: ThreadId,
+    pub environment_id: EnvironmentId,
+    pub provider_instance_id: ProviderInstanceId,
+    pub provider_kind: ProviderKind,
+    pub profile_dir: String,
+    pub binary_path: Option<String>,
+    pub capabilities: ProviderCapabilities,
+    pub model: String,
+    pub created_at_ms: u64,
 }
 
 /// A thread-safe, single-writer SQLite store wrapper.
@@ -293,10 +312,11 @@ impl Store {
 
         conn.execute(
             "INSERT INTO turns (
-                id, thread_id, seq, input_json, status,
+                id, thread_id, environment_id, provider_instance_id,
+                seq, input_json, status,
                 started_at_ms, ended_at_ms, usage_json,
                 checkpoint_before, checkpoint_after
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
             ON CONFLICT(id) DO UPDATE SET
                 status = excluded.status,
                 ended_at_ms = excluded.ended_at_ms,
@@ -306,6 +326,8 @@ impl Store {
             params![
                 turn.id.as_str(),
                 turn.thread_id.as_str(),
+                turn.environment_id.as_str(),
+                turn.provider_instance_id.as_str(),
                 turn.seq as i64,
                 input_json,
                 status_str,
@@ -323,7 +345,8 @@ impl Store {
     pub fn get_turn(&self, id: &TurnId) -> Result<Option<Turn>, StoreError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, thread_id, seq, input_json, status,
+            "SELECT id, thread_id, environment_id, provider_instance_id,
+                    seq, input_json, status,
                     started_at_ms, ended_at_ms, usage_json,
                     checkpoint_before, checkpoint_after
              FROM turns WHERE id = ?1",
@@ -334,14 +357,16 @@ impl Store {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, i64>(5)?,
-                    row.get::<_, Option<i64>>(6)?,
-                    row.get::<_, Option<String>>(7)?,
-                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, Option<i64>>(8)?,
                     row.get::<_, Option<String>>(9)?,
+                    row.get::<_, Option<String>>(10)?,
+                    row.get::<_, Option<String>>(11)?,
                 ))
             })
             .optional()?;
@@ -349,6 +374,8 @@ impl Store {
         let Some((
             id_str,
             thread_id_str,
+            environment_id_str,
+            provider_instance_id_str,
             seq,
             input_json,
             status_str,
@@ -365,6 +392,8 @@ impl Store {
         Ok(Some(Turn {
             id: TurnId::from(id_str),
             thread_id: ThreadId::from(thread_id_str),
+            environment_id: EnvironmentId::from(environment_id_str),
+            provider_instance_id: ProviderInstanceId::from(provider_instance_id_str),
             seq: seq as u64,
             input: serde_json::from_str(&input_json)?,
             status: serde_json::from_str(&status_str)?,
@@ -382,7 +411,8 @@ impl Store {
     pub fn list_turns(&self, thread_id: &ThreadId) -> Result<Vec<Turn>, StoreError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, thread_id, seq, input_json, status,
+            "SELECT id, thread_id, environment_id, provider_instance_id,
+                    seq, input_json, status,
                     started_at_ms, ended_at_ms, usage_json,
                     checkpoint_before, checkpoint_after
              FROM turns WHERE thread_id = ?1 ORDER BY seq ASC",
@@ -392,14 +422,16 @@ impl Store {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
+                row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, i64>(5)?,
-                row.get::<_, Option<i64>>(6)?,
-                row.get::<_, Option<String>>(7)?,
-                row.get::<_, Option<String>>(8)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, i64>(7)?,
+                row.get::<_, Option<i64>>(8)?,
                 row.get::<_, Option<String>>(9)?,
+                row.get::<_, Option<String>>(10)?,
+                row.get::<_, Option<String>>(11)?,
             ))
         })?;
 
@@ -408,6 +440,8 @@ impl Store {
             let (
                 id_str,
                 thread_id_str,
+                environment_id_str,
+                provider_instance_id_str,
                 seq,
                 input_json,
                 status_str,
@@ -420,6 +454,8 @@ impl Store {
             result.push(Turn {
                 id: TurnId::from(id_str),
                 thread_id: ThreadId::from(thread_id_str),
+                environment_id: EnvironmentId::from(environment_id_str),
+                provider_instance_id: ProviderInstanceId::from(provider_instance_id_str),
                 seq: seq as u64,
                 input: serde_json::from_str(&input_json)?,
                 status: serde_json::from_str(&status_str)?,
@@ -435,6 +471,92 @@ impl Store {
         }
 
         Ok(result)
+    }
+
+    pub fn record_provider_execution(
+        &self,
+        audit: &ProviderExecutionAudit,
+    ) -> Result<(), StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let provider_kind = serde_json::to_string(&audit.provider_kind)?;
+        let capabilities_json = serde_json::to_string(&audit.capabilities)?;
+        conn.execute(
+            "INSERT INTO provider_execution_audit (
+                turn_id, thread_id, environment_id, provider_instance_id,
+                provider_kind, profile_dir, binary_path, capabilities_json,
+                model, created_at_ms
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                audit.turn_id.as_str(),
+                audit.thread_id.as_str(),
+                audit.environment_id.as_str(),
+                audit.provider_instance_id.as_str(),
+                provider_kind,
+                audit.profile_dir.as_str(),
+                audit.binary_path.as_deref(),
+                capabilities_json,
+                audit.model.as_str(),
+                audit.created_at_ms as i64,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_provider_execution_audit(
+        &self,
+        turn_id: &TurnId,
+    ) -> Result<Option<ProviderExecutionAudit>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT turn_id, thread_id, environment_id, provider_instance_id,
+                    provider_kind, profile_dir, binary_path, capabilities_json,
+                    model, created_at_ms
+             FROM provider_execution_audit WHERE turn_id = ?1",
+        )?;
+        let row = stmt
+            .query_row(params![turn_id.as_str()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, i64>(9)?,
+                ))
+            })
+            .optional()?;
+        let Some((
+            turn_id,
+            thread_id,
+            environment_id,
+            provider_instance_id,
+            provider_kind,
+            profile_dir,
+            binary_path,
+            capabilities_json,
+            model,
+            created_at_ms,
+        )) = row
+        else {
+            return Ok(None);
+        };
+
+        Ok(Some(ProviderExecutionAudit {
+            turn_id: TurnId::from(turn_id),
+            thread_id: ThreadId::from(thread_id),
+            environment_id: EnvironmentId::from(environment_id),
+            provider_instance_id: ProviderInstanceId::from(provider_instance_id),
+            provider_kind: serde_json::from_str(&provider_kind)?,
+            profile_dir,
+            binary_path,
+            capabilities: serde_json::from_str(&capabilities_json)?,
+            model,
+            created_at_ms: checked_u64(created_at_ms, "provider_execution_audit.created_at_ms")?,
+        }))
     }
 
     pub fn get_latest_seq(&self, thread_id: &ThreadId) -> Result<u64, StoreError> {
@@ -556,6 +678,80 @@ impl Store {
             });
         }
 
+        Ok(events)
+    }
+
+    /// Highest durable event row sequence used by the node proxy replay stream.
+    pub fn latest_event_row_id(&self) -> Result<u64, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let id: Option<i64> = conn.query_row("SELECT MAX(id) FROM events", [], |row| row.get(0))?;
+        checked_u64(id.unwrap_or(0), "events.id")
+    }
+
+    /// Durable row sequence for a thread event after it has been committed.
+    pub fn event_row_id(
+        &self,
+        thread_id: &ThreadId,
+        event_seq: u64,
+    ) -> Result<Option<u64>, StoreError> {
+        let event_seq = i64::try_from(event_seq)
+            .map_err(|_| StoreError::Data("event sequence exceeds SQLite i64".to_string()))?;
+        let conn = self.conn.lock().unwrap();
+        let id: Option<i64> = conn
+            .query_row(
+                "SELECT id FROM events WHERE thread_id = ?1 AND seq = ?2",
+                params![thread_id.as_str(), event_seq],
+                |row| row.get(0),
+            )
+            .optional()?;
+        id.map(|value| checked_u64(value, "events.id")).transpose()
+    }
+
+    /// Read a bounded durable proxy event page in insertion order.
+    pub fn get_event_envelopes_after(
+        &self,
+        environment_id: &EnvironmentId,
+        after_row_id: u64,
+        through_row_id: u64,
+        limit: usize,
+    ) -> Result<Vec<(u64, EventEnvelope)>, StoreError> {
+        let after = i64::try_from(after_row_id)
+            .map_err(|_| StoreError::Data("proxy cursor exceeds SQLite i64".to_string()))?;
+        let through = i64::try_from(through_row_id)
+            .map_err(|_| StoreError::Data("proxy cursor exceeds SQLite i64".to_string()))?;
+        let limit = i64::try_from(limit)
+            .map_err(|_| StoreError::Data("proxy page limit exceeds SQLite i64".to_string()))?;
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, thread_id, seq, at_ms, payload_json FROM events
+             WHERE id > ?1 AND id <= ?2 ORDER BY id ASC LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![after, through, limit], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })?;
+
+        let mut events = Vec::new();
+        for row in rows {
+            let (row_id, thread_id, event_seq, at_ms, payload_json) = row?;
+            events.push((
+                checked_u64(row_id, "events.id")?,
+                EventEnvelope {
+                    subscription_id: "node-proxy".to_string(),
+                    environment_id: environment_id.clone(),
+                    thread_id: Some(ThreadId::from(thread_id)),
+                    run_id: None,
+                    seq: checked_u64(event_seq, "events.seq")?,
+                    at_ms: checked_u64(at_ms, "events.at_ms")?,
+                    kind: serde_json::from_str(&payload_json)?,
+                },
+            ));
+        }
         Ok(events)
     }
 
@@ -745,6 +941,11 @@ impl Store {
     }
 }
 
+fn checked_u64(value: i64, field: &str) -> Result<u64, StoreError> {
+    u64::try_from(value)
+        .map_err(|_| StoreError::Data(format!("{field} contains a negative value: {value}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -852,6 +1053,8 @@ mod tests {
         let turn = Turn {
             id: TurnId::from("turn-101"),
             thread_id: thread_id.clone(),
+            environment_id: thread.environment_id.clone(),
+            provider_instance_id: thread.provider_instance_id.clone(),
             seq: 1,
             input: TurnInput {
                 text: "Build feature".to_string(),
@@ -875,6 +1078,34 @@ mod tests {
             .unwrap();
         assert_eq!(retrieved.status, TurnStatus::Running);
         assert_eq!(retrieved.checkpoint_before.as_deref(), Some("ref-before"));
+        assert_eq!(retrieved.environment_id, thread.environment_id);
+        assert_eq!(retrieved.provider_instance_id, thread.provider_instance_id);
+
+        let audit = ProviderExecutionAudit {
+            turn_id: turn.id.clone(),
+            thread_id: thread_id.clone(),
+            environment_id: thread.environment_id.clone(),
+            provider_instance_id: thread.provider_instance_id.clone(),
+            provider_kind: ProviderKind::Claude,
+            profile_dir: "/profiles/claude/work".to_string(),
+            binary_path: Some("/bin/claude-work".to_string()),
+            capabilities: ProviderCapabilities {
+                supports_streaming: true,
+                supports_resume: true,
+                ..ProviderCapabilities::default()
+            },
+            model: "claude-3-7-sonnet".to_string(),
+            created_at_ms: 1000,
+        };
+        store
+            .record_provider_execution(&audit)
+            .expect("record provider audit");
+        assert_eq!(
+            store
+                .get_provider_execution_audit(&turn.id)
+                .expect("get provider audit"),
+            Some(audit)
+        );
 
         // Save resume token
         store

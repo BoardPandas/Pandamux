@@ -1,18 +1,40 @@
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
 
 use pandamux_core::event::ThreadEventKind;
-use pandamux_core::provider_config::ProviderKind;
+use pandamux_core::provider_config::{ProviderInstanceConfig, ProviderKind};
 use pandamux_core::thread::WorktreeRef;
+use pandamux_core::{ProviderInstanceId, UserSettings};
 use pandamux_protocol::{RpcRequest, ServerRole};
 use pandamux_providers::MockProviderDriver;
 use pandamux_server::{DriverRegistry, Router, Store};
 
+fn configure_mock_instance(store: &Store, instance_id: &str, limit: u32) {
+    let settings = UserSettings {
+        providers: vec![ProviderInstanceConfig {
+            id: ProviderInstanceId::new(instance_id),
+            provider: ProviderKind::Custom,
+            display_name: "Mock Provider".to_string(),
+            profile_dir: format!("profiles/custom/{instance_id}"),
+            environment_id: None,
+            binary_path: Some(format!("/mock/bin/{instance_id}")),
+            concurrency_limit: limit,
+            env_overrides: BTreeMap::new(),
+            settings: json!({ "instance": instance_id }),
+            enabled: true,
+        }],
+        ..UserSettings::default()
+    };
+    store.save_settings(&settings).expect("save mock settings");
+}
+
 #[tokio::test]
 async fn test_thread_approval_flow() {
     let store = Store::in_memory().expect("open store");
+    configure_mock_instance(&store, "mock-default", 2);
     let drivers = Arc::new(DriverRegistry::new());
     let mock = Arc::new(MockProviderDriver::new(
         ProviderKind::Custom,
@@ -33,6 +55,7 @@ async fn test_thread_approval_flow() {
         "thread.create",
         Some(json!({
             "title": "Approval Test",
+            "providerInstanceId": "mock-default",
             "model": "mock-fast"
         })),
     );
@@ -138,6 +161,7 @@ async fn test_thread_approval_flow() {
 #[tokio::test]
 async fn test_thread_interrupt_flow() {
     let store = Store::in_memory().expect("open store");
+    configure_mock_instance(&store, "mock-default", 2);
     let drivers = Arc::new(DriverRegistry::new());
     let mock = Arc::new(MockProviderDriver::new(
         ProviderKind::Custom,
@@ -158,6 +182,7 @@ async fn test_thread_interrupt_flow() {
         "thread.create",
         Some(json!({
             "title": "Interrupt Test",
+            "providerInstanceId": "mock-default",
             "model": "mock-fast"
         })),
     );
@@ -218,6 +243,7 @@ async fn test_thread_interrupt_flow() {
 #[tokio::test]
 async fn test_thread_resumption_across_restart() {
     let store = Store::in_memory().expect("open store");
+    configure_mock_instance(&store, "mock-default", 2);
 
     // Run first turn with Driver 1 issuing resume token
     let drivers1 = Arc::new(DriverRegistry::new());
@@ -239,6 +265,7 @@ async fn test_thread_resumption_across_restart() {
         "thread.create",
         Some(json!({
             "title": "Resume Test",
+            "providerInstanceId": "mock-default",
             "model": "mock-fast"
         })),
     );
@@ -329,6 +356,304 @@ async fn test_thread_resumption_across_restart() {
     // Verify driver 2 received previous resumption token
     let tokens = mock2.received_resume_tokens();
     assert_eq!(tokens, vec!["res-tok-abc-123".to_string()]);
+}
+
+#[tokio::test]
+async fn exact_provider_instance_flows_through_health_login_process_turn_and_audit() {
+    let store = Store::in_memory().expect("open store");
+    let temp_dir = tempfile::tempdir().expect("temp data directory");
+    let instance = |id: &str, account: &str| ProviderInstanceConfig {
+        id: ProviderInstanceId::new(id),
+        provider: ProviderKind::Antigravity,
+        display_name: format!("Antigravity {account}"),
+        profile_dir: format!("profiles/antigravity/{account}"),
+        environment_id: None,
+        binary_path: Some(format!("/mock/bin/{account}")),
+        concurrency_limit: 1,
+        env_overrides: BTreeMap::from([("ACCOUNT".to_string(), account.to_string())]),
+        settings: json!({ "account": account }),
+        enabled: true,
+    };
+    store
+        .save_settings(&UserSettings {
+            providers: vec![
+                instance("agy-work", "work"),
+                instance("agy-personal", "personal"),
+            ],
+            ..UserSettings::default()
+        })
+        .expect("save provider instances");
+
+    let drivers = Arc::new(DriverRegistry::new());
+    let mock = Arc::new(MockProviderDriver::new(
+        ProviderKind::Antigravity,
+        "Mock Antigravity",
+    ));
+    drivers.register(ProviderKind::Antigravity, mock.clone());
+    let router = Router::with_drivers(
+        store.clone(),
+        ServerRole::Hub,
+        "env-test".to_string(),
+        drivers,
+    )
+    .with_data_dir(temp_dir.path().to_path_buf());
+    let mut events = router.thread_manager().subscribe();
+
+    let mut observed_turns = Vec::new();
+    for (request_id, instance_id) in [(1, "agy-work"), (10, "agy-personal")] {
+        let created = router
+            .handle_request(RpcRequest::new(
+                request_id,
+                "thread.create",
+                Some(json!({
+                    "title": instance_id,
+                    "providerInstanceId": instance_id,
+                    "model": "mock-fast"
+                })),
+            ))
+            .await
+            .expect("create response");
+        assert!(created.is_success());
+        let thread_id = created.result.expect("thread result")["id"]
+            .as_str()
+            .expect("thread id")
+            .to_string();
+        let sent = router
+            .handle_request(RpcRequest::new(
+                request_id + 1,
+                "thread.send_turn",
+                Some(json!({
+                    "threadId": thread_id,
+                    "text": format!("hello from {instance_id}")
+                })),
+            ))
+            .await
+            .expect("send response");
+        assert!(sent.is_success());
+        let turn_id: pandamux_core::TurnId =
+            serde_json::from_value(sent.result.expect("turn result")["turnId"].clone())
+                .expect("typed turn id");
+        observed_turns.push((instance_id.to_string(), turn_id));
+
+        for _ in 0..10 {
+            if let Ok(Ok(event)) = timeout(Duration::from_millis(500), events.recv()).await
+                && matches!(event.kind, ThreadEventKind::TurnSettled { .. })
+            {
+                break;
+            }
+        }
+    }
+
+    let received = mock.received_configs();
+    assert_eq!(received.len(), 2);
+    assert_eq!(received[0].id.as_str(), "agy-work");
+    assert_eq!(received[0].settings["account"], "work");
+    assert_eq!(received[0].env_overrides["ACCOUNT"], "work");
+    assert_eq!(received[0].binary_path.as_deref(), Some("/mock/bin/work"));
+    assert_eq!(
+        received[0].profile_dir,
+        temp_dir
+            .path()
+            .join("profiles/antigravity/work")
+            .to_string_lossy()
+    );
+    assert_eq!(received[1].id.as_str(), "agy-personal");
+    assert_eq!(received[1].settings["account"], "personal");
+    assert_eq!(received[1].env_overrides["ACCOUNT"], "personal");
+    assert_eq!(
+        received[1].profile_dir,
+        temp_dir
+            .path()
+            .join("profiles/antigravity/personal")
+            .to_string_lossy()
+    );
+
+    let health = router
+        .handle_request(RpcRequest::new(
+            30,
+            "provider.health",
+            Some(json!({
+                "instanceId": "agy-personal",
+                "environmentId": "env-test"
+            })),
+        ))
+        .await
+        .expect("health response");
+    assert_eq!(
+        health.result.expect("health result")["reports"][0]["instanceId"],
+        "agy-personal"
+    );
+    let login = router
+        .handle_request(RpcRequest::new(
+            31,
+            "antigravity.oauth_start",
+            Some(json!({
+                "providerInstanceId": "agy-personal",
+                "environmentId": "env-test"
+            })),
+        ))
+        .await
+        .expect("login response");
+    let login_error = login.error.expect("uninstalled login must fail");
+    assert_eq!(
+        login_error.data.expect("typed login error")["providerInstanceId"],
+        "agy-personal"
+    );
+
+    for (instance_id, turn_id) in observed_turns {
+        let turn = store
+            .get_turn(&turn_id)
+            .expect("get turn")
+            .expect("stored turn");
+        assert_eq!(turn.environment_id.as_str(), "env-test");
+        assert_eq!(turn.provider_instance_id.as_str(), instance_id);
+        let audit = store
+            .get_provider_execution_audit(&turn_id)
+            .expect("get audit")
+            .expect("stored audit");
+        assert_eq!(audit.environment_id.as_str(), "env-test");
+        assert_eq!(audit.provider_instance_id.as_str(), instance_id);
+        assert_eq!(audit.provider_kind, ProviderKind::Antigravity);
+        assert!(audit.capabilities.supports_streaming);
+    }
+}
+
+#[tokio::test]
+async fn provider_capacity_is_held_for_process_lifetime_and_released_on_cancel() {
+    let store = Store::in_memory().expect("open store");
+    configure_mock_instance(&store, "mock-one", 1);
+    let drivers = Arc::new(DriverRegistry::new());
+    drivers.register(
+        ProviderKind::Custom,
+        Arc::new(MockProviderDriver::new(
+            ProviderKind::Custom,
+            "Mock Provider",
+        )),
+    );
+    let router = Router::with_drivers(store, ServerRole::Hub, "env-test".to_string(), drivers);
+    let mut events = router.thread_manager().subscribe();
+
+    let mut thread_ids = Vec::new();
+    for request_id in [1, 2] {
+        let response = router
+            .handle_request(RpcRequest::new(
+                request_id,
+                "thread.create",
+                Some(json!({
+                    "providerInstanceId": "mock-one",
+                    "model": "mock-fast"
+                })),
+            ))
+            .await
+            .expect("create response");
+        thread_ids.push(
+            response.result.expect("thread result")["id"]
+                .as_str()
+                .expect("thread id")
+                .to_string(),
+        );
+    }
+
+    let first = router
+        .handle_request(RpcRequest::new(
+            3,
+            "thread.send_turn",
+            Some(json!({
+                "threadId": thread_ids[0],
+                "text": "request_approval: hold capacity"
+            })),
+        ))
+        .await
+        .expect("first send response");
+    assert!(first.is_success());
+    for _ in 0..10 {
+        if let Ok(Ok(event)) = timeout(Duration::from_millis(500), events.recv()).await
+            && matches!(event.kind, ThreadEventKind::ApprovalRequested { .. })
+        {
+            break;
+        }
+    }
+
+    let rejected = router
+        .handle_request(RpcRequest::new(
+            4,
+            "thread.send_turn",
+            Some(json!({
+                "threadId": thread_ids[1],
+                "text": "must wait"
+            })),
+        ))
+        .await
+        .expect("capacity response");
+    assert_eq!(
+        rejected
+            .error
+            .expect("capacity error")
+            .data
+            .expect("capacity data")["reason"],
+        "provider_capacity_reached"
+    );
+
+    let cancelled = router
+        .handle_request(RpcRequest::new(
+            5,
+            "thread.cancel_turn",
+            Some(json!({ "threadId": thread_ids[0] })),
+        ))
+        .await
+        .expect("cancel response");
+    assert!(cancelled.is_success());
+    assert_eq!(
+        router.provider_resolver().active_processes(
+            &ProviderInstanceId::new("mock-one"),
+            &pandamux_core::EnvironmentId::new("env-test")
+        ),
+        0
+    );
+
+    let accepted = router
+        .handle_request(RpcRequest::new(
+            6,
+            "thread.send_turn",
+            Some(json!({
+                "threadId": thread_ids[1],
+                "text": "capacity released"
+            })),
+        ))
+        .await
+        .expect("second send response");
+    assert!(accepted.is_success());
+}
+
+#[tokio::test]
+async fn missing_provider_instance_never_falls_back_to_custom() {
+    let store = Store::in_memory().expect("open store");
+    configure_mock_instance(&store, "mock-known", 1);
+    let drivers = Arc::new(DriverRegistry::new());
+    drivers.register(
+        ProviderKind::Custom,
+        Arc::new(MockProviderDriver::new(
+            ProviderKind::Custom,
+            "Mock Provider",
+        )),
+    );
+    let router = Router::with_drivers(store, ServerRole::Hub, "env-test".to_string(), drivers);
+    let response = router
+        .handle_request(RpcRequest::new(
+            1,
+            "thread.create",
+            Some(json!({ "providerInstanceId": "unknown-instance" })),
+        ))
+        .await
+        .expect("create response");
+    assert_eq!(
+        response
+            .error
+            .expect("missing instance error")
+            .data
+            .expect("missing instance data")["reason"],
+        "provider_instance_missing"
+    );
 }
 
 #[tokio::test]

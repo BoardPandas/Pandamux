@@ -12,6 +12,7 @@ use pandamux_providers::{
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 const CLAUDE_AUTH_JSON: &str =
     include_str!("../../../spikes/phase0-drivers/fixtures/claude/auth_status_auth.json");
@@ -253,8 +254,13 @@ fn test_antigravity_initialize_contract() {
     assert_eq!(res.protocol_version, 1);
     assert_eq!(res.agent_info.name, "antigravity-acp");
     assert!(res.capabilities.load_session);
-    assert!(res.capabilities.resume_session);
-    assert!(res.auth_methods.contains(&"oauth-personal".to_string()));
+    assert!(res.capabilities.session_capabilities.resume);
+    assert!(res.capabilities.auth.logout);
+    assert!(
+        res.auth_methods
+            .iter()
+            .any(|method| method.id() == "oauth-personal")
+    );
 
     pandamux_providers::acp::validate_antigravity_initialize(&res)
         .expect("validate initialize succeeds");
@@ -321,27 +327,27 @@ fn test_antigravity_oauth_flow_contract() {
 
 #[test]
 fn test_antigravity_managed_bundle_manifest_validation() {
-    use pandamux_providers::antigravity::{ManagedBundleManifest, verify_bundle_manifest};
+    use pandamux_providers::antigravity::{
+        ManagedBundleManifest, pinned_bundle_manifest, validate_pinned_manifest,
+    };
 
     let manifest: ManagedBundleManifest =
         serde_json::from_str(AGY_MANIFEST_JSON).expect("parse manifest fixture");
-    assert_eq!(manifest.version, "1.1.1");
-    assert_eq!(manifest.entries.len(), 2);
-    assert!(manifest.entries.contains(&"agy_acp_server.exe".to_string()));
-    assert!(
-        manifest
-            .entries
-            .contains(&"localharness_external.exe".to_string())
+    assert_eq!(manifest.version, "agy_acp_server_1.1.1");
+    assert_eq!(manifest.executable.name, "agy_acp_server.exe");
+    assert_eq!(manifest.executable.size, 430_801_616);
+    assert_eq!(manifest.harness.name, "localharness_external.exe");
+    assert_eq!(manifest.harness.size, 130_971_800);
+    assert_eq!(
+        manifest,
+        pinned_bundle_manifest("windows", "x86_64").expect("Windows x64 pin")
     );
+    validate_pinned_manifest(&manifest).expect("official pin is accepted");
 
-    // Path traversal in manifest must be rejected
+    // Any caller-controlled release metadata must be rejected.
     let mut bad_manifest = manifest.clone();
-    bad_manifest.entries = vec![
-        "../evil.exe".to_string(),
-        "localharness_external.exe".to_string(),
-    ];
-    let dummy_bytes = vec![0u8; bad_manifest.size as usize];
-    assert!(verify_bundle_manifest(&bad_manifest, &dummy_bytes).is_err());
+    bad_manifest.executable.name = "../evil.exe".to_string();
+    assert!(validate_pinned_manifest(&bad_manifest).is_err());
 }
 
 #[test]
@@ -423,7 +429,7 @@ fn test_antigravity_seven_reliability_rules() {
     let _ = std::fs::remove_dir_all(&scratch);
 
     // Rule 3: Concurrency limiter (max 2 active processes)
-    let limiter = AntigravityConcurrencyLimiter::new(2);
+    let limiter = Arc::new(AntigravityConcurrencyLimiter::new(2));
     let guard1 = limiter.try_acquire().expect("acquire 1");
     let guard2 = limiter.try_acquire().expect("acquire 2");
     assert!(

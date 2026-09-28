@@ -134,5 +134,82 @@ pub fn apply_migrations(conn: &mut Connection) -> Result<()> {
         tx.commit()?;
     }
 
+    if current < 4 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS usage_buckets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                day TEXT NOT NULL,
+                hour_start INTEGER,
+                environment_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL,
+                account_key TEXT NOT NULL,
+                agent_id TEXT,
+                schedule_id TEXT,
+                input_tokens INTEGER NOT NULL,
+                cached_input_tokens INTEGER NOT NULL,
+                cache_write_tokens INTEGER NOT NULL,
+                output_tokens INTEGER NOT NULL,
+                reasoning_tokens INTEGER NOT NULL,
+                cost_usd_estimate REAL NOT NULL,
+                records INTEGER NOT NULL,
+                created_at_ms INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_usage_day ON usage_buckets(day);
+            CREATE INDEX IF NOT EXISTS idx_usage_account ON usage_buckets(account_key);
+            CREATE INDEX IF NOT EXISTS idx_usage_provider_model ON usage_buckets(provider, model);
+            CREATE INDEX IF NOT EXISTS idx_usage_env ON usage_buckets(environment_id);",
+        )?;
+
+        tx.execute(
+            "INSERT INTO _migrations (version, applied_at_ms) VALUES (4, ?1)",
+            [now_ms() as i64],
+        )?;
+
+        tx.commit()?;
+    }
+
+    if current < 5 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(
+            "ALTER TABLE turns ADD COLUMN environment_id TEXT NOT NULL DEFAULT '';
+            ALTER TABLE turns ADD COLUMN provider_instance_id TEXT NOT NULL DEFAULT '';
+
+            UPDATE turns
+            SET environment_id = COALESCE(
+                    (SELECT threads.environment_id FROM threads WHERE threads.id = turns.thread_id),
+                    ''
+                ),
+                provider_instance_id = COALESCE(
+                    (SELECT threads.provider_instance_id FROM threads WHERE threads.id = turns.thread_id),
+                    ''
+                );
+
+            CREATE TABLE provider_execution_audit (
+                turn_id TEXT PRIMARY KEY REFERENCES turns(id),
+                thread_id TEXT NOT NULL REFERENCES threads(id),
+                environment_id TEXT NOT NULL,
+                provider_instance_id TEXT NOT NULL,
+                provider_kind TEXT NOT NULL,
+                profile_dir TEXT NOT NULL,
+                binary_path TEXT,
+                capabilities_json TEXT NOT NULL,
+                model TEXT NOT NULL,
+                created_at_ms INTEGER NOT NULL
+            );
+
+            CREATE INDEX idx_provider_execution_audit_instance
+                ON provider_execution_audit(environment_id, provider_instance_id);",
+        )?;
+
+        tx.execute(
+            "INSERT INTO _migrations (version, applied_at_ms) VALUES (5, ?1)",
+            [now_ms() as i64],
+        )?;
+
+        tx.commit()?;
+    }
+
     Ok(())
 }

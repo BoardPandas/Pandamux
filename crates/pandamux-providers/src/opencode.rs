@@ -22,7 +22,9 @@ use crate::models::{
     InjectedInstructions, ModelInfo, ProviderAuthStatus, ProviderEvent, ProviderHealth,
     ProviderMetadata, ProviderSnapshot, SessionSpec, ToolPolicy, UsageLimits,
 };
-use crate::profiles::{apply_profile_environment, ensure_profile_dir, resolve_profile_dir};
+use crate::profiles::{
+    apply_profile_environment, ensure_profile_dir, resolve_instance_profile_dir,
+};
 use crate::shim_resolver::resolve_command_shim;
 use crate::supervision::{SupervisedChild, create_supervised_command};
 use crate::traits::{BoxFuture, ProviderDriver, ProviderSession};
@@ -205,11 +207,12 @@ impl OpenCodeDriver {
     }
 
     fn resolve_binary(&self, cfg: &ProviderInstanceConfig) -> Option<PathBuf> {
-        let explicit = cfg
-            .settings
-            .get("binaryPath")
-            .and_then(|v| v.as_str())
-            .map(PathBuf::from);
+        let explicit = cfg.binary_path.as_ref().map(PathBuf::from).or_else(|| {
+            cfg.settings
+                .get("binaryPath")
+                .and_then(|v| v.as_str())
+                .map(PathBuf::from)
+        });
         resolve_opencode_binary(explicit.as_deref())
     }
 }
@@ -260,8 +263,7 @@ impl ProviderDriver for OpenCodeDriver {
         Box::pin(async move {
             let binary = self.resolve_binary(cfg);
             if let Some(_bin) = binary {
-                let profile_dir =
-                    resolve_profile_dir(&self.base_data_dir, ProviderKind::OpenCode, &cfg.id);
+                let profile_dir = resolve_instance_profile_dir(&self.base_data_dir, cfg);
                 let has_auth = profile_dir.join("config.json").exists()
                     || cfg.settings.get("serverPassword").is_some()
                     || std::env::var("OPENCODE_SERVER_PASSWORD").is_ok();
@@ -332,8 +334,7 @@ impl ProviderDriver for OpenCodeDriver {
                         message: "OpenCode binary could not be resolved".into(),
                     })?;
 
-            let profile_dir =
-                resolve_profile_dir(&self.base_data_dir, ProviderKind::OpenCode, &cfg.id);
+            let profile_dir = resolve_instance_profile_dir(&self.base_data_dir, cfg);
             ensure_profile_dir(&profile_dir)?;
 
             let is_serve = self.serve_mode

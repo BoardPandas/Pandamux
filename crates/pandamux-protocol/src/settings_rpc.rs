@@ -1,5 +1,5 @@
 use pandamux_core::UserSettings;
-use pandamux_core::ids::ProviderInstanceId;
+use pandamux_core::ids::{EnvironmentId, ProviderInstanceId};
 use pandamux_core::provider_config::ProviderKind;
 use serde::{Deserialize, Serialize};
 
@@ -50,6 +50,9 @@ pub struct ProviderHealthParams {
     /// Optional specific provider instance to check.
     #[serde(default)]
     pub instance_id: Option<ProviderInstanceId>,
+    /// Environment whose instance overrides must be applied.
+    #[serde(default)]
+    pub environment_id: Option<EnvironmentId>,
 }
 
 /// Health report for an individual provider instance.

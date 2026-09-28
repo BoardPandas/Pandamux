@@ -8,9 +8,8 @@ use pandamux_protocol::terminal_rpc::{
     TerminalAttachParams, TerminalAttachResult, TerminalInputParams, TerminalOpenParams,
     TerminalResizeParams,
 };
-use pandamux_term::grid::{
-    CellColor, GridSize, ScreenCells, ScrollAmount, StyledCell, TerminalGrid,
-};
+use pandamux_term::GridSize;
+use pandamux_term::grid::{CellColor, ScreenCells, ScrollAmount, StyledCell, TerminalGrid};
 
 use crate::theme::{Radii, Theme, Typography};
 

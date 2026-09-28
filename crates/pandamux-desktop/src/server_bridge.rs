@@ -230,6 +230,7 @@ pub fn spawn_server_bridge(
                     protocol_version: PROTOCOL_VERSION,
                     client_kind: "desktop".to_string(),
                     client_version: env!("CARGO_PKG_VERSION").to_string(),
+                    capability: Some(runtime_info.token.clone()),
                 };
                 let hello_req = RpcRequest::new(
                     RpcId::Number(hello_id),
@@ -448,6 +449,7 @@ fn get_server_runtime_path() -> Option<PathBuf> {
         Some(
             PathBuf::from(local_app_data)
                 .join("pandamux")
+                .join("run")
                 .join("server.json"),
         )
     }
@@ -455,7 +457,12 @@ fn get_server_runtime_path() -> Option<PathBuf> {
     #[cfg(not(windows))]
     {
         let home = std::env::var("HOME").ok()?;
-        Some(PathBuf::from(home).join(".pandamux").join("server.json"))
+        Some(
+            PathBuf::from(home)
+                .join(".pandamux")
+                .join("run")
+                .join("server.json"),
+        )
     }
 }
 

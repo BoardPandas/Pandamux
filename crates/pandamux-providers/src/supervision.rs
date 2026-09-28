@@ -140,7 +140,6 @@ impl Drop for SupervisedChild {
 
 #[cfg(windows)]
 fn setup_windows_job_object(child: &Child) -> Result<isize, ProviderError> {
-    use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,

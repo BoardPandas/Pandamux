@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Changed
 
+- **Recovered and hardened the Phase 3 production foundation.** The Hub now composes the
+  SSH-backed node transport, the node proxy uses a versioned bounded protocol with replay
+  and explicit stale state, and remote calls no longer fall back to local execution.
+  Provider turns resolve one exact stored instance and retain its environment, profile,
+  binary, settings, audit identity, and lifetime concurrency permit. The server terminal
+  dependency is PTY-only, and a clean-commit artifact harness now builds and verifies the
+  Galahad server and CLI without enabling publication.
+- **Replaced the placeholder Antigravity path with the pinned Google ACP runtime flow.**
+  Managed installs now stream and verify the official platform archive, enforce the exact
+  two-file extraction contract, validate ACP capabilities before atomic activation, and
+  fall back to a verified Hub cache plus private SFTP transfer when a node cannot download.
+  Google sign-in now owns the actual ACP process and strict one-shot loopback relay.
+  Active sessions use ACP v1 content blocks, account model options, resumable sessions,
+  bounded tool events, workspace-confined file handlers, opaque permission choices,
+  read-only enforcement, a bounded cancellation drain, and a shared two-process ceiling
+  across sessions, model refresh, sign-in, and install validation. Live Windows and
+  Galahad acceptance remains required before this path is described as production-accepted.
+- **Replaced caller-asserted trust with transport-assigned request contexts.** Desktop,
+  CLI, MCP, provider-child, and node-proxy callers receive distinct server-owned roles and
+  scopes. Provider capabilities are expiring and thread-bound, node proxies are bound to
+  one authenticated environment, and request JSON cannot promote either identity.
+- **Updated contributor documentation to the current GPUI, Rust workspace, authenticated
+  server, remote-composition, and recovery-gate truth.** Historical Iced material remains
+  available but is clearly labeled as archive content.
 - **Cleared ground for Phase 1 GPUI rewrite (Step 1).** Extracted SSH pool, authentication, known hosts, and SFTP into new `pandamux-remote` crate. Reshaped `pandamux-term` with `grid` and `pty` feature flags, decoupling it from `russh`. Trimmed `pandamux-core` to retain domain types (`ids`, `project`, `project_registry`, `ssh`, `notification`, `i18n`, `home`, `settings`), and pruned multiplexer files (`split_tree`, `state`, `surface_content`, `keymap`, `sidebar`, old `agent`, `config`). Removed obsolete crates `pandamux-ui` and `pandamux-app`, retired resource folders, and legacy terminal spikes. Guarded `release.yml` with `RELEASES_ENABLED` check, disabled `winget.yml`, and updated CI workflows and crate boundaries.
 - **AI agents and contributors now have a faster, more reliable documentation path.**
   `AGENTS.md` defines the reading order and authority hierarchy, current behavior is
@@ -21,6 +45,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Added hardened local control endpoints and safe MCP projections.** Unix runtime paths
+  enforce owner and mode checks plus peer credentials. Windows pipes use SID-scoped names,
+  user-only DACLs, remote-client rejection, first-instance protection, and client process
+  validation. General MCP reads return purpose-built redacted settings and schedule views.
+- **Added a durable Phase 3 acceptance record.** Source, fixture, cross-target, local socket,
+  artifact, and live Windows and Galahad evidence are tracked independently so compilation
+  cannot be mistaken for production acceptance.
 - **Implemented Phase 4 Step 1 (Best-effort providers: Cursor, Grok, and OpenCode profiles on shared ACP driver).** Extended `pandamux-providers` and `pandamux-server` with driver implementations for Cursor, Grok, and OpenCode:
   - **Shared ACP driver enhancement**: Updated `parse_acp_line` in `acp.rs` to support `session/request_permission` alongside `request_permission` and handle structured `toolCall` payloads for file editing and command execution approvals. Added `with_preamble` to `AcpSession` for preamble instruction delivery.
   - **Cursor driver**: Implemented `CursorDriver` in `cursor.rs` using `cursor-agent acp` over stdio with fallback preamble instruction delivery (`=== PANDAMUX AGENT ROLE INSTRUCTIONS ===`, knowledge context, task prompt) and coarse permission response mapping (`ReadOnly`, `AutoEdit`, `Ask`, `FullAccess`).

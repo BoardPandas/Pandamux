@@ -1,9 +1,16 @@
-use crate::grid::{GridSize, TerminalGrid};
-use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+#[cfg(feature = "grid")]
+use crate::{GridSize, TerminalGrid};
+use portable_pty::CommandBuilder;
+#[cfg(feature = "grid")]
+use portable_pty::{PtySize, native_pty_system};
 use std::error::Error;
+#[cfg(feature = "grid")]
 use std::io::{Read, Write};
+#[cfg(feature = "grid")]
 use std::sync::mpsc;
+#[cfg(feature = "grid")]
 use std::thread;
+#[cfg(feature = "grid")]
 use std::time::{Duration, Instant};
 
 pub type PtyResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
@@ -19,6 +26,7 @@ pub struct PtyCommand {
     pub env: Vec<(String, String)>,
 }
 
+#[cfg(feature = "grid")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PtyCapture {
     pub output: String,
@@ -79,6 +87,7 @@ pub fn shell_marker_command(marker: &str) -> PtyCommand {
     }
 }
 
+#[cfg(feature = "grid")]
 pub fn capture_pty_command(
     command: &PtyCommand,
     marker: &str,
@@ -94,6 +103,7 @@ pub fn capture_pty_command(
     })
 }
 
+#[cfg(feature = "grid")]
 fn capture_output(
     command: &mut CommandBuilder,
     marker: &str,
@@ -191,7 +201,7 @@ fn capture_output(
     Ok(output)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "grid"))]
 mod tests {
     use super::*;
 

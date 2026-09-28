@@ -1,3 +1,4 @@
+use crate::GridSize;
 use crate::clipboard::{ClipboardKind, ClipboardStore};
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
@@ -141,18 +142,6 @@ fn resolve_color(color: Color) -> CellColor {
                 }
             }
         },
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct GridSize {
-    pub columns: usize,
-    pub rows: usize,
-}
-
-impl GridSize {
-    pub fn new(columns: usize, rows: usize) -> Self {
-        Self { columns, rows }
     }
 }
 

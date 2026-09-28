@@ -45,6 +45,7 @@ pub async fn cmd_hello(pipe: Option<&str>, json_output: bool) -> Result<(), Stri
         protocol_version: PROTOCOL_VERSION,
         client_kind: "pandamux-cli".to_string(),
         client_version: env!("CARGO_PKG_VERSION").to_string(),
+        capability: None,
     };
     let res: HelloResult = client.call_typed("system.hello", &params).await?;
 
@@ -172,11 +173,16 @@ pub async fn cmd_notify(
     json_output: bool,
 ) -> Result<(), String> {
     let mut client = IpcClient::connect(pipe).await?;
-    let params = json!({
+    let mut params = json!({
         "title": title,
         "body": body.unwrap_or(""),
         "source": source.unwrap_or("generic"),
     });
+    if let Ok(thread_id) = std::env::var("PANDAMUX_THREAD_ID")
+        && !thread_id.trim().is_empty()
+    {
+        params["threadId"] = Value::String(thread_id);
+    }
 
     let res: Value = client.call("notification.post", Some(params)).await?;
 
@@ -191,7 +197,7 @@ pub async fn cmd_notify(
 
 /// Runs `pandamux mcp` stdio JSON-RPC bridge.
 pub async fn cmd_mcp(pipe: Option<&str>) -> Result<(), String> {
-    let mut client = IpcClient::connect(pipe).await?;
+    let mut client = IpcClient::connect_mcp(pipe).await?;
 
     let stdin = tokio::io::stdin();
     let mut stdout = tokio::io::stdout();

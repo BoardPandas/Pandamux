@@ -18,7 +18,9 @@ use crate::models::{
     InjectedInstructions, ModelInfo, ProviderAuthStatus, ProviderHealth, ProviderMetadata,
     ProviderSnapshot, RateLimitEntry, SessionSpec, UsageLimits,
 };
-use crate::profiles::{apply_profile_environment, ensure_profile_dir, resolve_profile_dir};
+use crate::profiles::{
+    apply_profile_environment, ensure_profile_dir, resolve_instance_profile_dir,
+};
 use crate::shim_resolver::resolve_command_shim;
 use crate::supervision::{SupervisedChild, create_supervised_command};
 use crate::traits::{BoxFuture, ProviderDriver, ProviderSession};
@@ -185,11 +187,12 @@ impl GrokDriver {
     }
 
     fn resolve_binary(&self, cfg: &ProviderInstanceConfig) -> Option<PathBuf> {
-        let explicit = cfg
-            .settings
-            .get("binaryPath")
-            .and_then(|v| v.as_str())
-            .map(PathBuf::from);
+        let explicit = cfg.binary_path.as_ref().map(PathBuf::from).or_else(|| {
+            cfg.settings
+                .get("binaryPath")
+                .and_then(|v| v.as_str())
+                .map(PathBuf::from)
+        });
         resolve_grok_binary(explicit.as_deref())
     }
 }
@@ -240,8 +243,7 @@ impl ProviderDriver for GrokDriver {
         Box::pin(async move {
             let binary = self.resolve_binary(cfg);
             if let Some(_bin) = binary {
-                let profile_dir =
-                    resolve_profile_dir(&self.base_data_dir, ProviderKind::Grok, &cfg.id);
+                let profile_dir = resolve_instance_profile_dir(&self.base_data_dir, cfg);
                 let has_api_key = profile_dir.join("api_key.txt").exists()
                     || cfg.settings.get("apiKey").is_some()
                     || std::env::var("GROK_API_KEY").is_ok()
@@ -298,7 +300,7 @@ impl ProviderDriver for GrokDriver {
         cfg: &'a ProviderInstanceConfig,
     ) -> BoxFuture<'a, Option<UsageLimits>> {
         Box::pin(async move {
-            let profile_dir = resolve_profile_dir(&self.base_data_dir, ProviderKind::Grok, &cfg.id);
+            let profile_dir = resolve_instance_profile_dir(&self.base_data_dir, cfg);
             let limits_file = profile_dir.join("usage_limits.json");
             if let Ok(content) = std::fs::read_to_string(&limits_file)
                 && let Ok(limits) = parse_grok_usage_limits(&content)
@@ -322,7 +324,7 @@ impl ProviderDriver for GrokDriver {
                         message: "Grok binary could not be resolved".into(),
                     })?;
 
-            let profile_dir = resolve_profile_dir(&self.base_data_dir, ProviderKind::Grok, &cfg.id);
+            let profile_dir = resolve_instance_profile_dir(&self.base_data_dir, cfg);
             ensure_profile_dir(&profile_dir)?;
 
             let mut cmd = create_supervised_command(&binary_path);

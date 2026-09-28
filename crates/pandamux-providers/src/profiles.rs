@@ -1,6 +1,6 @@
 use crate::error::ProviderError;
 use pandamux_core::ids::ProviderInstanceId;
-use pandamux_core::provider_config::ProviderKind;
+use pandamux_core::provider_config::{ProviderInstanceConfig, ProviderKind};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
@@ -24,6 +24,18 @@ pub fn resolve_profile_dir(
         .join("profiles")
         .join(provider.as_str())
         .join(instance_id.as_str())
+}
+
+pub fn resolve_instance_profile_dir(base_dir: &Path, config: &ProviderInstanceConfig) -> PathBuf {
+    if config.profile_dir.trim().is_empty() {
+        return resolve_profile_dir(base_dir, config.provider, &config.id);
+    }
+    let configured = PathBuf::from(&config.profile_dir);
+    if configured.is_absolute() {
+        configured
+    } else {
+        base_dir.join(configured)
+    }
 }
 
 /// Ensures the profile directory exists on disk, creating parent directories if necessary.
@@ -101,6 +113,32 @@ mod tests {
         assert_eq!(
             gemini_dir,
             PathBuf::from("/var/data/pandamux/profiles/antigravity/inst-prod-1")
+        );
+    }
+
+    #[test]
+    fn configured_profile_directory_is_authoritative() {
+        let base = Path::new("/var/data/pandamux");
+        let mut config = ProviderInstanceConfig {
+            id: ProviderInstanceId::from("claude-work"),
+            provider: ProviderKind::Claude,
+            display_name: "Claude Work".to_string(),
+            profile_dir: "accounts/work".to_string(),
+            environment_id: None,
+            binary_path: None,
+            concurrency_limit: 1,
+            env_overrides: BTreeMap::new(),
+            settings: serde_json::Value::Null,
+            enabled: true,
+        };
+        assert_eq!(
+            resolve_instance_profile_dir(base, &config),
+            PathBuf::from("/var/data/pandamux/accounts/work")
+        );
+        config.profile_dir = "/profiles/claude-work".to_string();
+        assert_eq!(
+            resolve_instance_profile_dir(base, &config),
+            PathBuf::from("/profiles/claude-work")
         );
     }
 }

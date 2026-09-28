@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
-use pandamux_protocol::{RpcId, RpcRequest, RpcResponse};
+use pandamux_protocol::{HelloParams, PROTOCOL_VERSION, RpcId, RpcRequest, RpcResponse};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -22,20 +22,45 @@ pub struct IpcClient {
 impl IpcClient {
     /// Connects to `pandamux-server` using the specified or auto-discovered pipe path.
     pub async fn connect(explicit_pipe: Option<&str>) -> Result<Self, String> {
-        let pipe_path = match explicit_pipe {
-            Some(p) => p.to_string(),
-            None => resolve_pipe_path()?,
-        };
+        Self::connect_with_scope(explicit_pipe, false).await
+    }
+
+    pub async fn connect_mcp(explicit_pipe: Option<&str>) -> Result<Self, String> {
+        Self::connect_with_scope(explicit_pipe, true).await
+    }
+
+    async fn connect_with_scope(
+        explicit_pipe: Option<&str>,
+        mcp_scope: bool,
+    ) -> Result<Self, String> {
+        let (pipe_path, capability) = resolve_connection_info(explicit_pipe, mcp_scope)?;
 
         let stream: Box<dyn AsyncReadWrite> = connect_stream(&pipe_path).await?;
         let (reader, writer) = tokio::io::split(stream);
         let lines = BufReader::new(reader).lines();
 
-        Ok(Self {
+        let mut client = Self {
             lines,
             writer,
             next_id: Arc::new(AtomicI64::new(1)),
-        })
+        };
+        if let Some(capability) = capability {
+            let hello = HelloParams {
+                protocol_version: PROTOCOL_VERSION,
+                client_kind: if mcp_scope {
+                    "pandamux-mcp".to_string()
+                } else {
+                    "pandamux-cli".to_string()
+                },
+                client_version: env!("CARGO_PKG_VERSION").to_string(),
+                capability: Some(capability),
+            };
+            let _: Value = client
+                .call_typed("system.hello", &hello)
+                .await
+                .map_err(|error| format!("IPC authentication failed: {error}"))?;
+        }
+        Ok(client)
     }
 
     /// Dispatches an RPC method call and waits for the response.
@@ -141,6 +166,52 @@ pub fn resolve_pipe_path() -> Result<String, String> {
         .and_then(|p| p.as_str())
         .map(String::from)
         .ok_or_else(|| "Missing 'pipePath' in server.json".to_string())
+}
+
+fn resolve_connection_info(
+    explicit_pipe: Option<&str>,
+    mcp_scope: bool,
+) -> Result<(String, Option<String>), String> {
+    if let Ok(capability) = std::env::var("PANDAMUX_CAPABILITY")
+        && !capability.trim().is_empty()
+        && !mcp_scope
+    {
+        let pipe_path = match explicit_pipe {
+            Some(pipe) => pipe.to_string(),
+            None => resolve_pipe_path()?,
+        };
+        return Ok((pipe_path, Some(capability)));
+    }
+
+    let runtime = get_server_runtime_path()
+        .filter(|path| path.exists())
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|content| serde_json::from_str::<Value>(&content).ok());
+    let pipe_path = explicit_pipe
+        .map(str::to_string)
+        .or_else(|| {
+            runtime
+                .as_ref()
+                .and_then(|value| value.get("pipePath"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .ok_or_else(|| "Missing 'pipePath' in server.json".to_string())?;
+    let token_key = if mcp_scope { "mcpToken" } else { "token" };
+    let capability = runtime
+        .as_ref()
+        .filter(|value| {
+            explicit_pipe.is_none()
+                || value
+                    .get("pipePath")
+                    .and_then(Value::as_str)
+                    .is_some_and(|runtime_pipe| runtime_pipe == pipe_path)
+        })
+        .and_then(|value| value.get(token_key))
+        .and_then(Value::as_str)
+        .filter(|token| !token.is_empty())
+        .map(str::to_string);
+    Ok((pipe_path, capability))
 }
 
 /// Resolves standard location for `server.json`.

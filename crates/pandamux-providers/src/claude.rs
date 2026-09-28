@@ -13,7 +13,9 @@ use crate::models::{
     ModelInfo, ProviderAuthStatus, ProviderEvent, ProviderHealth, ProviderMetadata,
     ProviderSnapshot, SessionSpec, UsageLimits,
 };
-use crate::profiles::{apply_profile_environment, ensure_profile_dir, resolve_profile_dir};
+use crate::profiles::{
+    apply_profile_environment, ensure_profile_dir, resolve_instance_profile_dir,
+};
 use crate::shim_resolver::resolve_command_shim;
 use crate::supervision::{SupervisedChild, create_supervised_command};
 use crate::traits::{BoxFuture, ProviderDriver, ProviderSession};
@@ -418,6 +420,12 @@ impl ClaudeDriver {
     }
 
     fn resolve_claude_binary(&self, cfg: &ProviderInstanceConfig) -> Option<PathBuf> {
+        if let Some(explicit_path) = cfg.binary_path.as_ref() {
+            let path = PathBuf::from(explicit_path);
+            if path.is_file() {
+                return Some(path);
+            }
+        }
         if let Some(explicit_path) = cfg.settings.get("binaryPath").and_then(|v| v.as_str()) {
             let p = PathBuf::from(explicit_path);
             if p.is_file() {
@@ -473,8 +481,7 @@ impl ProviderDriver for ClaudeDriver {
 
     fn probe<'a>(&'a self, cfg: &'a ProviderInstanceConfig) -> BoxFuture<'a, ProviderSnapshot> {
         Box::pin(async move {
-            let profile_dir =
-                resolve_profile_dir(&self.base_data_dir, ProviderKind::Claude, &cfg.id);
+            let profile_dir = resolve_instance_profile_dir(&self.base_data_dir, cfg);
             let binary = self.resolve_claude_binary(cfg);
 
             if let Some(bin) = binary {
@@ -549,8 +556,7 @@ impl ProviderDriver for ClaudeDriver {
                         message: "Executable not found in PATH".to_string(),
                     })?;
 
-            let profile_dir =
-                resolve_profile_dir(&self.base_data_dir, ProviderKind::Claude, &cfg.id);
+            let profile_dir = resolve_instance_profile_dir(&self.base_data_dir, cfg);
             ensure_profile_dir(&profile_dir)?;
 
             let perm_mode = match spec.access {

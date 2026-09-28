@@ -27,6 +27,7 @@ pub struct MockProviderDriver {
     display_name: String,
     resume_token_to_issue: Arc<Mutex<Option<String>>>,
     received_resume_tokens: Arc<Mutex<Vec<String>>>,
+    received_configs: Arc<Mutex<Vec<ProviderInstanceConfig>>>,
 }
 
 impl MockProviderDriver {
@@ -36,6 +37,7 @@ impl MockProviderDriver {
             display_name: display_name.to_string(),
             resume_token_to_issue: Arc::new(Mutex::new(None)),
             received_resume_tokens: Arc::new(Mutex::new(Vec::new())),
+            received_configs: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -46,6 +48,10 @@ impl MockProviderDriver {
 
     pub fn received_resume_tokens(&self) -> Vec<String> {
         self.received_resume_tokens.lock().unwrap().clone()
+    }
+
+    pub fn received_configs(&self) -> Vec<ProviderInstanceConfig> {
+        self.received_configs.lock().unwrap().clone()
     }
 }
 
@@ -116,9 +122,10 @@ impl ProviderDriver for MockProviderDriver {
 
     fn start_session<'a>(
         &'a self,
-        _cfg: &'a ProviderInstanceConfig,
+        cfg: &'a ProviderInstanceConfig,
         spec: SessionSpec,
     ) -> BoxFuture<'a, Result<Box<dyn ProviderSession>, ProviderError>> {
+        self.received_configs.lock().unwrap().push(cfg.clone());
         let resume_to_issue = self.resume_token_to_issue.lock().unwrap().clone();
         if let Some(ref r) = spec.resume {
             self.received_resume_tokens.lock().unwrap().push(r.clone());

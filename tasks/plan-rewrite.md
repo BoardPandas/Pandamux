@@ -1,10 +1,10 @@
 # PandaMUX Rewrite: Chat-First Agent Client with Remote Environments, Multi-Repo Fleet Orchestration, Agents, Schedules, Full MCP Settings Control, and Broadside Sharing
 
-Date: 2026-09-25 (Approved 2026-09-26)
-Status: **Approved on 2026-09-26; Phase 0 (Spikes) in progress**
-Baseline: PandaMUX v0.53.3 (native Rust + Iced terminal multiplexer)
+Date: 2026-09-25 (Approved 2026-09-26; recovery rewrite 2026-09-28)
+Status: **Phases 0 to 3 and Phase 4 Step 1 are recorded complete; Phase 3 production acceptance and Phase 4 recovery are open**
+Baseline: PandaMUX v0.53.44 at `9511d0e22d44`; the uncommitted Phase 4 usage prototype is preserved for selective salvage
 
-Relationship to `tasks/plan-repo.md`: that file is the **historical** record of the Electron to native Rust rewrite (Phases 1 to 7, complete). This plan supersedes its product direction (terminal multiplexer) but keeps its engineering posture: backend-owned state, single writer, intent-in/delta-out, exact pins, crate isolation, tag-driven signed releases. Its Section 12 design tokens carry over where they still apply (Section 8). UI history: Iced is removed. An earlier draft of this plan chose Tauri 2 + React; the user replaced that with **GPUI + gpui-kit** (all Rust) on 2026-09-25, and Tauri 2 remains only as the documented fallback if the Phase 0 GPUI spike fails. `plan-repo.md` rejected GPUI for three reasons, each now handled explicitly: GPL contamination (zed#55470, still open; tracked as a license gate in S6 and Risks), "not built for external consumption" (gpui-kit publishes exact-pinned `gpui-pre` snapshots and ships in production in Longbridge Pro on Windows, macOS, and Linux), and weak accessibility (S1 assesses it; accepted risk).
+Relationship to `tasks/plan-repo.md`: that file is the **historical** record of the Electron to native Rust rewrite (Phases 1 to 7, complete). This plan supersedes its product direction (terminal multiplexer) but keeps its engineering posture: backend-owned state, single writer, intent-in/delta-out, deliberate dependency pins, crate isolation, and tag-driven signed releases. Its Section 12 design tokens carry over where they still apply (Section 8). UI history: Iced is removed. An earlier draft of this plan chose Tauri 2 + React; the user replaced that with **GPUI + gpui-kit** (all Rust) on 2026-09-25, and Tauri 2 remains only as the documented fallback if the Phase 0 GPUI spike fails. `plan-repo.md` rejected GPUI for three reasons, each now handled explicitly: GPL contamination (zed#55470, still open; tracked as a license gate in S6 and Risks), "not built for external consumption" (gpui-kit publishes exact-pinned `gpui-pre` snapshots and ships in production in Longbridge Pro on Windows, macOS, and Linux), and weak accessibility. Phase 0 treated accessibility as exploratory; the rewritten Phase 4 and Phase 7 criteria make the defined v1 accessibility matrix release-gating.
 
 Reference products: T3 Code (github.com/pingdotgg/t3code, MIT; Electron + React + Effect-TS), Pixel Agents (C:\Github\pixel-agents-future, 2D virtual office agent visualization), and Hark (C:\Github\Hark, Rust-based voice pipeline and code spellbook). We study them and borrow ideas, contracts, and lessons. We do **not** fork them. Where driver logic is **ported** to Rust (Antigravity for certain, possibly other providers), the port keeps T3's MIT copyright and license notice in a root `THIRD_PARTY_NOTICES.md`, and each ported module's doc comment cites the T3 source files it came from. Paths cited from it were checked against its `main` branch on 2026-09-25. Zed's own agent and terminal UI crates are GPL-3.0-or-later: study them for patterns, never copy code (Section 13).
 
@@ -32,7 +32,7 @@ Terminology used throughout:
 | Terminal placement | PTY on the thread's **node** (portable-pty; ConPTY on Windows); raw bytes over the hub/node protocol; the **desktop parses** with `pandamux-term`'s alacritty grid and paints a custom GPUI element; node keeps a bounded ring buffer for replay | Remote terminals survive disconnects without tmux. Desktop-side parsing (the VS Code remote model) keeps alacritty out of the node binary and rendering local. Node-side grid snapshots are the fallback (Phase 3 exit) |
 | Process topology (refined) | One headless binary, `pandamux-server`, in two roles. **Hub**: the local process the desktop, CLI, and full orchestrator talk to. **Node**: owns providers, terminals, threads, the store, git, attachments, **and the scheduler and a local agent executor** for its own environment. The local hub embeds the local node; remote hosts run a node only | The orchestrator needs one place that sees every environment; schedules stored on an always-on host must fire while the laptop is off, so a minimal agent-execution path (definitions + routing among that node's providers) runs on every node |
 | Local server lifetime | `pandamux-server.exe` is a **separate process** that the desktop spawns or discovers | Agents, schedules, and terminals keep running when the window closes; same binary as remote nodes; the CLI works without the GUI. Cost: the updater must drain it (Phase 7) |
-| Wire protocol | **JSON-RPC 2.0** messages, NDJSON framing on two transports in v1: the local **named pipe / Unix socket** (desktop and CLI) and an **SSH exec channel** (hub to node). WebSocket deferred until a browser/phone client exists | One schema everywhere; local IPC with an OS ACL means no token handling in the desktop and no network listener on the laptop (4.5) |
+| Wire protocol | **JSON-RPC 2.0** messages, NDJSON framing on two transports in v1: the local **named pipe / Unix socket** (desktop and CLI) and an **SSH exec channel** (hub to node). WebSocket deferred until a browser/phone client exists | One schema everywhere; OS ACLs establish the local user boundary, scoped capabilities establish client role and method authority, and there is no network listener on the laptop (4.5) |
 | Shared types | The desktop and CLI use `pandamux-protocol` Rust types through a shared **`pandamux-client`** crate. No TS generation. `schemars` generates the instructions-repo JSON Schema | No second language, no drift check; `pandamux-client` has zero GPUI deps and is unit-testable |
 | Persistence | **SQLite via rusqlite** (bundled, WAL) on each node, event-sourced: append-only `events` plus projections written in **one transaction** by a single writer thread | Matches T3's events-plus-projections model and our single-writer rule. sqlx rejected (no gain with one writer; friction for musl) |
 | Git & checkpoints | git CLI for per-thread worktrees, hidden-ref checkpoints (`refs/pandamux/checkpoints/<thread>/<turn>`), diffs, commit, push; `gh` for PRs. **Instant time-travel rewind and thread branching** from any checkpoint | Honors user git config, credential helpers, and hooks; checkpoint refs allow instant 0ms restoration of worktree state without manual git reset |
@@ -41,17 +41,17 @@ Terminology used throughout:
 | Antigravity integration (decided 2026-09-25: replicate T3) | Port T3 Code's approach (fully supported in T3 nightlies): run Google's **ACP server bundle** (`agy_acp_server` + `localharness_external`), not the `agy` CLI, as a **managed install** (pinned zip from `dl.google.com`, size + SHA-256 verified, hardened extraction, `initialize` validation), spawned with a **replaced** environment and a private per-instance `GEMINI_HOME`, driven over standard **ACP v1** by the shared ACP driver plus an Antigravity profile layer; Google OAuth loopback sign-in with strict URL validation and callback forwarding (5.4). S5a becomes "confirm the ported approach on Windows and Linux" and stays gating | T3 has solved and shipped this; porting its proven logic (with its MIT notice) removes the protocol-discovery risk. The `agy` CLI's headless issues (LL-G `headless-hangs-no-output`) do not apply to the ACP server bundle |
 | Provider-agnostic execution (new) | Drivers declare how they take **instructions** (native system/developer instructions, else a first-message preamble) and how they **restrict tools** (per-tool lists where supported, else coarse AccessMode). Agent instructions are never written into the user's repo or worktree | Lets any PandaMUX agent or schedule run on any provider, with documented, visible degradation per provider (5.3) |
 | Claude integration | Implement the Claude CLI's stream-json + control-request protocol in Rust; no Node sidecar | Keeps nodes Node-free; the control protocol is SDK-internal, mitigated by a tested CLI range and transcript contract tests |
-| Multi-instance provider profiles (decided 2026-09-25) | Named provider instances (for example "Claude (Max)" and "Claude (Team)") with isolated config dirs (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`), separate auth tokens, independent usage scanners and capacity buckets, manual thread selection, and orchestrator quota failover / pooling across subscriptions on the same email | Lets developers utilize multiple subscriptions (for example a personal Max subscription and a company Team organization on one email address) concurrently without token collisions; the orchestrator automatically reroutes to secondary instances when primary velocity limits hit |
+| Multi-instance provider profiles (refined 2026-09-28) | Named provider instances (for example "Claude (Max)" and "Claude (Team)") use isolated config dirs and credentials. Each instance is explicitly mapped to a generated opaque `SubscriptionKey`; matching email addresses are display hints only and never merge subscriptions or authorize pooling. Failover requires an explicit `FailoverPoolId` and organization policy approval | One email can represent multiple billing and security boundaries. Explicit identity prevents accidental usage aggregation and cross-organization failover |
 | Full MCP settings control (decided 2026-09-25) | Built-in local **MCP server** and tool bridge exposing PandaMUX management APIs to AI agents (reading and updating settings, organization boundaries, provider allowlists, schedules, project tags, and memory) with interactive approval cards for write actions | Users can instruct PandaMUX in natural language to adjust settings (for example: "allow my Claude Max subscription to be used for Wellforce repos" or "set up a nightly review schedule") instead of hunting through preference menus |
 | Multi-repo fleet management (decided 2026-09-25) | Global Orchestrator threads (`projectId: None`) capable of decomposing requests across multiple repositories (`targetProjectId`), managing cross-repo dependencies in a unified plan DAG, and batch-coordinating PRs | Enables "one chat to rule them all" where a single instruction (such as updating schemas, backend API, frontend UI, and docs) executes coherently across independent repos |
 | Repo grouping & subscription boundaries (decided 2026-09-25) | `ProjectRecord` carries `organization`, `tags`, and `collection`; Settings provides an Organization × Provider Instance checklist matrix enforcing hard boundaries on which subscriptions touch which projects | Guarantees company code (for example Wellforce) never touches unapproved personal subscriptions (such as personal Antigravity), prevents accidental cross-org token burn, and powers fleet queries ("run doc-sync on all personal websites") |
 | Remote bootstrap | Linux musl `pandamux-server` **and `pandamux-cli`** (x64, arm64; the CLI is needed on nodes so agents can call `pandamux memory ...`) **bundled in the signed installer**, uploaded over SFTP, SHA-256 verified against a manifest compiled into the signed desktop exe, started as a detached daemon, reached via `pandamux-server proxy` on an SSH exec channel | Works on air-gapped hosts, needs no sshd forwarding config, integrity rooted in Authenticode, one Release asset. Zed and T3 use the same model |
-| Usage and capacity | Node-side scanners produce `UsageBucket`s (T3's model); `CapacityEstimate`s carry a **confidence** (Reported, Estimated, Unknown); nodes keep a last-known copy for offline routing | Remaining quota is only reported by some providers; routing must know how far to trust each number |
+| Usage and capacity (refined 2026-09-28) | Nodes persist idempotent raw `UsageObservation` facts and durable scanner cursors. Hubs pull observations over authenticated tunnels and derive `UsageBucket` projections. Subscription quota and per-instance availability are separate; every capacity value carries source, freshness, and confidence | Facts can be re-priced and re-aggregated safely, retries do not double count, and routing never mistakes a healthy process for available subscription quota |
 | Orchestrator (fixed modes) | Entry points: (a) a **normal chat thread** (the composer's target picker offers "Orchestrator" next to single providers, or a per-message orchestrate toggle), (b) **schedules**, (c) the CLI (`pandamux orchestrate`), (d) later, GitHub event triggers. Modes **Auto** and **Approve first**; **two-step routing**: task to PandaMUX agent, then agent to provider/model/environment; deterministic rules from the instructions repo, fed by an LLM classifier that fails closed. Full cross-environment orchestration runs in the hub; the same pure crate runs node-scoped on nodes. The orchestrator is also a **built-in PandaMUX agent** (`orchestrator`) with its own editable instructions (intake and planning prompts) and memory (routing outcomes), while routing **rules** stay in `orchestrator.yaml` | Explainable ("why reviewer on Codex?"), testable without a model, safe on classification failure, and usable offline on a node. Treating the orchestrator as an agent reuses the editor, versioning, memory, and run log with no special case |
 | Orchestrator model (decided 2026-09-25) | **Settings > Orchestrator**: provider + model + effort the orchestrator runs on (for example Codex GPT-6-Astra at extra-high effort, or Claude Opus 5.5), chosen only from configured, authenticated providers using each driver's live model list, plus an ordered **fallback list** for when the primary is unavailable or out of capacity. Advanced: a separate fast model for intake classification. Per-environment override for node-side runs, defaulting to the same provider/model if that environment has it, else the first available fallback there; Settings warns when an environment with schedules has no usable orchestrator model | The orchestrator's quality and cost depend on its model; users pick what they trust and have paid for |
 | PandaMUX agents (new, user requirement) | Provider-agnostic roles defined as `agents/<id>.md` (YAML frontmatter + markdown, mirroring Claude Code agent files). Definition = template; each assignment = an **instance thread** tagged with the agent id; per-agent concurrency. Default repo seeded from this repo's `.claude/agents/` roster | Reuses thread infrastructure, so every agent's work is visible and steerable; one familiar file format; users see what each agent is doing on the Agents page |
 | Agent authoring (decided 2026-09-25; replaces "repo only") | Agents are **created and edited in the app** by the user and by the orchestrator. Agent editor on the Agents page (create, edit, duplicate, delete, history with diffs, revert, per-provider compile preview). **Save scope** per agent: Personal (default; a **PandaMUX-managed local git repo**), Project (`.pandamux/agents/`), or Team repo (branch + PR via `gh`; direct push only in trust-branch mode on a repo the user owns); "Promote to team" opens a PR. The **orchestrator writes only to the Personal layer** (it may propose PRs elsewhere); every orchestrator change is a commit tagged with its run, labeled, revertable, rate-capped. **Decided**: in Auto mode the orchestrator may freely edit only agents it created; editing human-authored agents needs user approval; access widening always needs approval in every mode | Users and the orchestrator can grow specialists as work demands, while git gives history, diff, and revert, and the shared layers keep their review gates |
-| Agent memory (decided 2026-09-25: in v1; embedded vector search added) | Persistent memory per agent **per project** plus an agent-wide section; markdown entries plus fast **local vector embeddings** (`fastembed-rs` + SQLite); editable in the app. Canonical on the hub, versioned in the personal git repo, distributed to nodes with the instructions snapshot; node-side writes journal locally and merge back by entry id. Agents read via semantic search and write via the **`pandamux memory` CLI** or MCP, plus an end-of-run reflection step; memory is injected at run start within a token budget and labeled as untrusted notes | Agents improve across runs; zero-cost local vector search finds conceptual facts without burning LLM tokens; memory is data, never permission |
+| Agent memory (decided 2026-09-25: in v1; refined 2026-09-28) | Persistent canonical markdown per agent and project plus an agent-wide section, versioned in the personal git repo and merged from node journals. Lexical retrieval is the correctness baseline. Optional local vector retrieval lands in isolated `pandamux-memory` only after its target, license, model-distribution, and size gate passes | Memory remains usable offline and without a native embedding runtime. The vector index is derived data and memory is untrusted data, never permission |
 | Backups (decided 2026-09-25) | One private backup repo holds **schedules, personal agents, and agent memory**: one-way export pushed by the hub (after changes, debounced, and daily), private repos only (visibility checked before every push), secrets excluded, explicit restore that never auto-applies FullAccess | One place to recover or move a developer's automation, with no path for the backup to fire schedules or overwrite agents on its own |
 | Scheduled tasks (decided 2026-09-25; formerly open questions 8 and 9) | Schedules are **machine-specific server state**, not configuration in any repo. Each schedule is stored in the SQLite store of the **environment that runs it** (under that host's OS user) and fired by that node's scheduler whether or not the hub or desktop is connected. The developer creates, edits, enables, disables, deletes, and runs them from **Settings > Schedules**, where **Environment** (local or any SSH environment) is a required field. Cron + IANA timezone; targets: orchestrator, a PandaMUX agent, or a coding session. Schedules are one of several orchestrator entry points, not the only one | User decision: an SSH Linux coding machine that stays online fires its schedules while the developer's own computer is off. Machine-local storage also means a schedule can only fire where it is stored, so shared config can never double-fire across teammates |
 | Configuration layers (new; project layer in v1 decided 2026-09-25) | Three layers, all in v1, broadest to most specific: (i) the **instructions repo** (org or default: agents, routing, prompts, knowledge); (ii) an optional **project layer** `.pandamux/` inside each code repo (project agents, knowledge, routing overrides that travel with the code); (iii) the **personal layer**: a PandaMUX-managed local git repo (personal agents, agent memory, the built-in orchestrator agent's edits) plus personal settings (orchestrator model, tier-to-model mapping, plan budgets, disabled agents, FullAccess opt-ins); pushed nowhere except, optionally, to the user's private backup repo. Schedules are in none of these layers: they are server state on their environment. Specific overrides broad; the project layer is **untrusted until approved per repo** | Mirrors Claude Code's user/project/local settings, which our users already understand. A cloned third-party repo could ship hostile agent instructions, hence the per-repo, per-hash trust prompt (like Claude Code's). The user chose to ship the project layer in v1 |
@@ -68,27 +68,31 @@ Terminology used throughout:
 | Backup repo (decided 2026-09-25) | A **user-created private repo** (PandaMUX offers `gh repo create --private`). Backups are **disabled until the user configures them**; no backup activity happens before that | Explicit opt-in keeps prompts, paths, and host names from going anywhere by default |
 | Memory scope (decided 2026-09-25) | Per agent **per project** plus an **agent-wide** section | Project facts stay with the project; general learnings travel |
 | Agent visualization (new) | Global **Agents page** (roster board), **Settings > Schedules** (list across environments plus per-schedule history), a **run view** tree (run, agent tasks, provider sub-agents), and the per-thread Agents surface with "Provider sub-agents" and "PandaMUX agents" groups | The user must see which agents exist, what each is working on, and what ran overnight |
-| Packaging | Existing **cargo-packager NSIS** pipeline: build, sign each exe, package, sign the installer. No WebView2 | Proven since v0.37; cargo-packager does not rebuild, so signatures survive |
-| Release | Same tag-driven workflow, Azure Trusted Signing via Doppler, one signed `Setup.exe`, in-app updater via the GitHub Releases API. New: Linux musl job; fmt/clippy/tests **inside** the release workflow. **Guarded until Phase 7**: no `v*` tags are pushed before cut-over, and `release.yml` additionally requires a repository variable `RELEASES_ENABLED=true` (checked in the first job) so an accidental tag cannot publish a half-built app; `winget.yml` stays disabled until the new app ships | LL-G `release-workflow-not-gated-on-ci`; a tag convention alone is one mistake away from publishing, so the variable is the hard gate |
+| Packaging | Rebuild the production cargo-packager NSIS path from the passing Phase 0 fixture while releases remain disabled. Package exactly the desktop, server, and CLI Windows binaries plus verified Linux node artifacts | The current workflow still targets the deleted Iced-era crate and has no production packager metadata, so historical success is evidence for the layout, not evidence that the current workflow works |
+| Release | Rebuild and rehearse tag validation, target builds, explicit-path signing, packaging, updater verification, install, upgrade, uninstall, and Winget generation before public publication. `RELEASES_ENABLED` and Winget stay disabled until a signed release candidate passes the clean-machine matrix | Current release and Winget files are stale scaffolding. Publication must be the last switch, after the exact built artifacts have passed CI and installation tests |
 | Mac readiness (decided 2026-09-25: macOS ships later) | macOS CI job from Phase 1 (build + test server, CLI, client, desktop on `macos-latest`) stays, keeping the code Mac-clean; shipping on macOS comes after v1 | Keeps Windows-only code from creeping in so the later port stays cheap |
-| CLI | `pandamux-cli` on `pandamux-client`, protocol **v3** over the local pipe/socket; new `agents`, `memory`, `schedule`, and `run` verbs. Also built for Linux musl and installed on every node next to `pandamux-server`, talking to the node's Unix socket, so agents on remote hosts can read and write memory | The OS ACL replaces today's unvalidated token; the CLI and local MCP server provide fast local agent integration paths |
+| CLI | `pandamux-cli` on `pandamux-client`, protocol **v3** over the local pipe/socket; new `agents`, `memory`, `schedule`, and `run` verbs. Also built for Linux musl and installed on every node next to `pandamux-server`, talking to the node's Unix socket, so agents on remote hosts can read and write memory | Interactive CLI uses the restricted control capability; agent-spawned CLI receives only a thread-scoped capability. The local MCP adapter has its own method allowlist |
 | Broadside bridge (decided 2026-09-25) | Native bridge to Broadside (github.com/BoardPandas/Broadside): 1-click transcript sharing (`pages.wellforceit.com`), sandboxed HTML/web artifact hosting (`broadside-content.bp-dev.workers.dev`), schedule auto-publishing with mobile notification links, and direct MCP tool integration (`mcp.wellforceit.com/mcp`) | Solves public and team sharing of agent transcripts and provides an isolated, browser-grade iframe preview of HTML/JS artifacts without bundling Chromium/CEF into the GPUI desktop client; zero additional server infra needed since Broadside runs serverless on Cloudflare Workers |
 | Repo strategy (decided 2026-09-25; formerly open question 5) | **Rewrite in place on master.** The old app never entered production and has no users, so there is no parallel shipping, no feature freeze, no side-by-side binary or CI split, and **no migration of 0.x data**. At the start of Phase 1, the reusable parts are moved into the new crates and everything else is deleted; git history keeps the old code for reference. Existing 0.x GitHub releases are left as they are | Nothing to protect, so the simplest path wins. No Node/pnpm added (Node stays only for the `.claude` wiring guard) |
-| Crate isolation (updated) | Only `pandamux-desktop` imports `gpui-pre*`, `gpui-kit`, `gpui-component`; nothing imports `iced` or `tauri`; `alacritty_terminal` and `portable-pty` only in `pandamux-term` (`grid` and `pty` features); `russh` only in `pandamux-remote`; ACP crates only in `pandamux-providers`; `rusqlite` only in `pandamux-server`; `pandamux-orchestrator` stays pure (no IO). Enforced from feature-resolved `cargo metadata` | Today's `scripts/check-rust-boundaries.ps1` only regex-checks `Cargo.toml`; a graph check catches transitive leaks, including GPUI reaching the musl server |
+| Crate isolation (updated 2026-09-28) | Only `pandamux-desktop` imports GPUI. `pandamux-orchestrator` is a pure domain crate. `pandamux-memory` isolates embedding and vector-index dependencies. `pandamux-server` owns SQLite, lifecycle, platform IO, and composes `pandamux-remote`; it imports `pandamux-term` with only the `pty` feature. Enforce the resolved dependency and feature graph from `cargo metadata` | The current boundary script only scans direct manifest text and the server currently enables both terminal features. A resolved-graph gate catches transitive UI, native-library, and default-feature leakage |
 
-## 2. Current repo review (measured 2026-09-25)
+## 2. Current repo review (refreshed 2026-09-28)
 
-- Workspace `0.53.3`, edition 2024, `rust-version = "1.88"`, five crates, exact pins.
-- `pandamux-core` (~6.6k lines): `state.rs` 1,289 and `split_tree.rs` 825 (terminal layout), `keymap.rs` 838, `project.rs` 441 + `project_registry.rs` 459 (stable project identity across hosts including git-remote matchers, **reusable**), `ssh.rs` 346 (secretless host profiles + `~/.ssh/config` import, **reusable**), `settings.rs` 241, `agent.rs` 194 (Starting/Running/Exited only), `protocol.rs` 49 (V2 envelope; `token` unvalidated), `notification.rs` 238.
-- `pandamux-term` (~4.1k lines): `grid.rs` 866, `pty.rs` 239, `shell.rs` 273 (shell resolution, chunked writes, DA1/CPR detection, tree-kill), `session.rs` 510, `search.rs`, `links.rs`, `cwd.rs`, `clipboard.rs` (OSC 52 policy): **kept** for the Terminal surface. `ssh.rs` 1,585: pool, auth (including the Windows OpenSSH agent pipe), known-hosts, SFTP (**moved** to `pandamux-remote`), plus the PTY+tmux `RemoteSessionManager` (deleted). No port forwarding and **no exec-without-PTY path** today. alacritty_terminal and portable-pty appear only in this crate.
-- `pandamux-ui` (~8.3k lines, Iced 0.14): deleted; its canvas terminal viewport is the porting reference for the GPUI terminal element.
-- `pandamux-app` (~11.5k lines): `iced_runtime.rs` **6,253**, `backend.rs` 3,106 (`handle_line` sync dispatcher), `persistence.rs` 805 (`%APPDATA%/pandamux`), `updater.rs` 344 (Releases API, semver, 6h quarantine), `pollers.rs` 79, `pipe_server.rs` 59.
-- `pandamux-cli`: one 1,344-line `main.rs`, about 50 commands, mostly terminal/layout verbs.
-- `resources/`: `claude-instructions/`, `icons/`, `opencode-plugin/`, `pandamux-orchestrator/` (Claude Code plugin driving `pandamux agent spawn` and `layout grid`), `shell-integration/`, `sounds/`, `themes/` (27 terminal themes).
-- `.claude/agents/`: architect, builder, explorer, reviewer, tester, security, performance, ux-reviewer (plus general agents). This roster seeds the default instructions repo's `agents/`.
-- CI: `rust.yml`, `release.yml`, `claude-wiring.yml`, `winget.yml`.
-- Status: the 0.x app never entered production and has no users; nothing needs to be preserved or migrated.
-- No git worktree, provider, thread, usage, agent-role, or scheduling concept exists in app code today.
+- Verified baseline: workspace `0.53.44`, edition 2024, `rust-version = "1.88"`; `master` and `origin/master` both point to `9511d0e22d44`.
+- Phases 0 to 3 and Phase 4 Step 1 have implementation commits, but checked boxes are not production acceptance. The Phase 3 live matrix in its exit criteria has not been archived.
+- Remote routing is incomplete in the production composition. `ProxyTunnel` exists, but there is no registered production `EnvironmentTransport`, and `pandamux-server proxy` is not implemented end to end. Thread execution also constructs a placeholder provider configuration instead of resolving the stored provider instance and its profile, binary, settings, environment, enabled state, and concurrency policy.
+- The default new-thread provider id resolves to the Custom mock path. Until exact instance resolution is fixed, live provider and remote acceptance would not exercise the configuration the user selected.
+- Phase 4 Step 1, Cursor, Grok, and OpenCode profiles, is committed at `52656f5`. The uncommitted Phase 4 Step 2 prototype touches core, protocol, providers, router, store, and migration code. It contains useful token types, fixtures, RPC scaffolding, and a migration draft, but it is not an accepted implementation and must be selectively salvaged.
+- The prototype has known static compile errors and correctness gaps: no durable source identity, retry-safe event identity, transactional cursor advancement, rotation handling, authenticated provenance, subscription identity, schedule attribution, persistent pricing source, or production scanner owner. It can double count managed turns and can lose a partial trailing JSON record.
+- Local IPC does not yet enforce the approved security contract. Runtime tokens are written but not validated; Unix permissions are not explicitly restricted; the Windows pipe lacks the planned user-SID name, DACL, remote-client rejection, and peer-image checks. This blocks mutating MCP and unattended scheduling.
+- Existing MCP is read-only, but `read_settings` exposes the full settings object, including arbitrary provider settings and environment overrides. It needs a redacted projection before being treated as a safe read API.
+- Organization and schedule domain records exist, but organization restrictions are not enforced in routing and the schedule default is currently `Auto`, contrary to the approved Approve-first posture. The continue-existing-thread target lacks a thread id.
+- Provider health UI and environment UI contain incomplete and misleading states. Unknown authentication can appear healthy, request failures disappear, plausible fallback version/platform values are fabricated, and several visible controls have no handlers.
+- The workspace has nine crates. `pandamux-orchestrator` and `pandamux-memory` do not exist yet. `pandamux-server` currently enables both `pandamux-term` features, and no production crate composes `pandamux-remote`.
+- The dependency boundary checker is text-based, not resolved-graph-based. CI installs drifting `stable`; the stated exact-pin policy is not consistently enforced. Phase 4 needs no new runtime dependency, while embedding, keyring, YAML/schema, and scheduling libraries each need an isolated target-matrix spike before adoption.
+- Release automation is stale scaffolding. `release.yml` builds deleted `pandamux-app`, expects removed packager metadata, omits the server and remote ARM64 artifacts, and does not gate signing on the current CI suite. The updater was not ported. The checked-in remote manifest and Winget metadata are placeholders or internally inconsistent.
+- Root `README.md`, `CLAUDE.md`, and the maintained `docs/` wiki still describe the removed Iced multiplexer and contradict the implemented GPUI chat-first architecture. Minimal developer-truth corrections belong in the recovery gate; a complete user and release documentation pass remains in Phase 7.
+- The worktree contains user-owned uncommitted Phase 4 files. Recovery work must preserve them, take an explicit snapshot, use narrow staging, and never reset or clean them.
 
 ## 3. Kept, deleted, new
 
@@ -99,16 +103,17 @@ Terminology used throughout:
 | `pandamux-core` | **Kept, trimmed and extended** | Keep `ids`, `project`, `project_registry`, `ssh`, `notification`, `i18n`, `home`. Add `organization`, `thread` (with `projectId: Option<ProjectId>` for global threads), `event`, `provider_config` (multi-instance profiles), `environment`, `usage`, `terminal`, `agent_def`, `schedule`, `run`, `settings` v2 (including organization subscription access matrix). Delete `split_tree`, `state`, `surface_content`, `keymap`, `sidebar`, the old `agent`, `config` at the start of Phase 1 |
 | `pandamux-protocol` | **New** | Versioned wire contract, JSON-RPC 2.0 types, protocol version constants, and MCP tool schemas |
 | `pandamux-client` | **New** | Transport client, hello, reconnect with `sinceSeq`, subscriptions, per-thread and per-run **projections**, token frame queue (smoothing). Zero GPUI deps; used by desktop and CLI |
-| `pandamux-providers` | **New** | `ProviderDriver` trait, event model, drivers, multi-instance profile management, probes, usage scanners, instruction injection and tool-restriction mapping, supervision (Job Objects / process groups) |
+| `pandamux-providers` | **New** | `ProviderDriver` trait, event model, drivers, multi-instance profile management, side-effect-free probes, provider parsers, instruction injection and tool-restriction mapping, supervision (Job Objects / process groups). Filesystem scanning and cursor ownership stay in the server |
 | `pandamux-remote` | **New** (SSH parts of `pandamux-term/src/ssh.rs`) | Pool, auth, known-hosts, SFTP, **new** exec-without-PTY, bootstrap, proxy, reconnect, and cross-host worktree delta sync |
 | `pandamux-term` | **Kept, reshaped** | Features `pty` (server side: portable-pty, `shell.rs`, grid-free byte session with ring buffer) and `grid` (desktop side: `grid.rs`, `search.rs`, `links.rs`, `cwd.rs`, `clipboard.rs`) |
-| `pandamux-orchestrator` | **New** (pure, no IO) | Multi-repo DAG planner, fleet routing rules, organization subscription boundary enforcement, in-memory run blackboard, circuit breaker state machine, instructions bundle schema and validation (`orchestrator.yaml`, `agents/*.md`, `knowledge/`, prompts), agent-change policy (access-widening detection, approval requirements, creation caps), memory entry model and merge rules, schedule engine (cron + timezone evaluation, overlap, catch-up, budgets). Runs in hub and nodes |
-| `pandamux-server` | **New** (evolves `pandamux-app::backend` + `persistence`) | Binary + lib; Windows, Linux musl, macOS (CI). Hub and node roles, router, transports, store (SQLite WAL), threads, terminals, git worktrees, attachments, usage, instructions sync and the **personal git repo**, embedded local vector index (`fastembed-rs`), local **MCP server** endpoint, Hark voice IPC bridge, schedule storage and scheduler (every node), budget ledger |
-| `pandamux-desktop` | **New** (GPUI + gpui-kit) | `[[bin]] name = "pandamux"` from the start. Views (threads, multi-repo fleet sidebar, Agents page, 2D Floor Plan virtual office, run DAG, surfaces, settings matrix), terminal element, system tray and global hotkey quick-summon scratchpad (`tray-icon`), platform services, updater, server spawn/discovery. The **only** crate importing GPUI |
+| `pandamux-orchestrator` | **New** (pure, no IO) | Multi-repo DAG planner, fleet routing and organization-policy evaluation, in-memory run blackboard, circuit-breaker and run state machines, instructions bundle schema and validation, agent-change policy, memory entry and merge rules, and pure schedule evaluation. No Tokio, SQLite, GPUI, network, filesystem, provider-process, or embedding dependencies |
+| `pandamux-memory` | **New** (isolated adapter) | Embedding model lifecycle, vector persistence, and lexical fallback. Contains `fastembed` or its selected replacement only after the target-matrix and distribution spike passes. The index is derived and rebuildable; domain consumers receive query results through narrow types |
+| `pandamux-server` | **New** (evolves `pandamux-app::backend` + `persistence`) | Binary + lib; Windows, Linux musl, macOS (CI). Hub and node roles, authenticated router, local and SSH transports, `pandamux-remote` composition, store (SQLite WAL), threads, PTYs, git worktrees, attachments, usage ingestion, instructions sync, personal git repo, memory adapter lifecycle, local MCP endpoint, Hark voice IPC, schedule storage and runtime, and budget ledger |
+| `pandamux-desktop` | **New** (GPUI + gpui-kit) | `[[bin]] name = "pandamux"` from the start. Views (threads, multi-repo fleet sidebar, Agents page, 2D Floor Plan virtual office, run DAG, surfaces, settings matrix), terminal element, system tray and global hotkey quick-summon scratchpad (`tray-icon`), platform services, server spawn/discovery, and the updater restored in Phase 7. The **only** crate importing GPUI |
 | `pandamux-cli` | **Kept, rewritten** | Protocol v3 via `pandamux-client`; verbs in 4.6; Windows exe plus Linux musl builds installed on nodes |
-| `pandamux-ui`, `pandamux-app` | **Deleted** at the start of Phase 1 | Iced removed; `backend.rs` dispatcher shape, `persistence.rs` atomic-write/versioning, `updater.rs`, and `pollers.rs` patterns are moved into `pandamux-server` / `pandamux-desktop` first, then the crates are deleted |
+| `pandamux-ui`, `pandamux-app` | **Deleted** at the start of Phase 1 | Iced removed. Backend and persistence patterns were reused; the 2026-09-28 audit found that updater behavior and production packaging were not ported and assigns their recovery to Phase 7 |
 
-Dependencies removed at the start of Phase 1: `iced` and its text/GPU stack, `arboard`. Kept: `alacritty_terminal`, `portable-pty` (inside `pandamux-term`), `russh`, `russh-sftp`, `tokio`, `serde`, `reqwest`, `winresource`. New (pinned in S6): `rusqlite`, `keyring`, `schemars`, `tree-sitter`, `tray-icon`, a YAML parser, a frontmatter parser, a cron parser plus a timezone-aware time library (candidates: `croner` or `cron` with `chrono-tz`, or `jiff`), and `fastembed` for zero-cost offline vector memory.
+Dependencies removed at the start of Phase 1: `iced` and its text/GPU stack, `arboard`. Kept: `alacritty_terminal`, `portable-pty` (inside `pandamux-term`), `russh`, `russh-sftp`, `tokio`, `serde`, `reqwest`, `winresource`. Already added: `rusqlite` and `tray-icon`. Phase 4 adds no runtime dependency. Phase 5 selects and directly pins `schemars` plus one YAML parser; keyring stays in a hub-only platform adapter and must not pull desktop secret-service dependencies into musl nodes; `fastembed` stays isolated in `pandamux-memory` and lands only after its model-distribution and target-matrix spike. Phase 6 selects one exact-pinned cron and IANA-timezone stack after deterministic DST, fake-clock, and musl proof. Tree-sitter remains an optional compression adapter, not an orchestration prerequisite.
 
 ### 3.2 Repository directories
 
@@ -141,7 +146,8 @@ crates/
   pandamux-remote/            russh pool/auth/SFTP/exec/bootstrap/proxy/worktree-sync
   pandamux-term/              features: pty (server side), grid (desktop side)
   pandamux-orchestrator/      multi-repo DAG planner, routing engine, blackboard, circuit breakers (pure)
-  pandamux-server/            hub + node binary, SQLite WAL, MCP server, vector index, Hark IPC
+  pandamux-memory/            isolated embedding/index adapter with lexical fallback
+  pandamux-server/            hub + node binary, SQLite WAL, MCP server, remote composition, Hark IPC
   pandamux-desktop/           GPUI + gpui-kit app (pandamux.exe)
     src/views/{sidebar,timeline,composer,surfaces,agents,floorplan,schedules,runs,settings,usage}/
     src/terminal/             GPUI terminal element over pandamux-term grid
@@ -234,9 +240,9 @@ Store rules: `events(thread_id, seq, at, kind, payload_json)` is append-only; ea
 
 ### 4.5 Protocol and transports
 
-- JSON-RPC 2.0, NDJSON framing. First call `system.hello { protocolVersion, clientKind, clientVersion }` returns `{ serverVersion, protocolVersion, role, capabilities }`. Major mismatch: refuse with an upgrade hint; minor: capability gating.
+- JSON-RPC 2.0, NDJSON framing. A protected handshake proves an out-of-band scoped capability, then `system.hello { protocolVersion, clientKind, clientVersion }` returns the server-assigned `{ serverVersion, protocolVersion, role, capabilities }`. `clientKind` is diagnostic and never grants authority. Capability secrets are redacted from logs. Major mismatch: refuse with an upgrade hint; minor: capability gating.
 - Server-to-client notifications: `event { subscriptionId, environmentId, threadId?, runId?, seq, kind, payload }`, plus `terminal.output`.
-- **Transport decision (v1)**: desktop and CLI use local IPC. Windows: named pipe `\\.\pipe\pandamux-hub-<user SID>` (the user SID suffix means it never collides across users on one machine), created with a DACL granting only the current user, `PIPE_REJECT_REMOTE_CLIENTS`, and `FILE_FLAG_FIRST_PIPE_INSTANCE`; clients verify the server via `GetNamedPipeServerProcessId` and its image path (anti-squatting). Unix: socket `0600` in a `0700` directory. The OS ACL is the authentication. Remote nodes: SSH exec channel running `pandamux-server proxy`, which connects to the node's `0600` socket as the same user.
+- **Transport decision (v1)**: desktop and CLI use local IPC. Windows: named pipe `\\.\pipe\pandamux-hub-<user SID>` (the user SID suffix means it never collides across users on one machine), created with a DACL granting only the current user, `PIPE_REJECT_REMOTE_CLIENTS`, and `FILE_FLAG_FIRST_PIPE_INSTANCE`; clients verify the server via `GetNamedPipeServerProcessId` and its image path (anti-squatting). Unix: socket `0600` in a `0700` directory. The OS boundary authenticates the user; a server-issued capability authenticates the client role and method scope. Remote nodes use an SSH exec channel running `pandamux-server proxy`; the server tags that accepted proxy path rather than trusting a caller-supplied role.
 - Why not WebSocket in v1: no browser origin to serve, and a listener adds a network surface, token handling, and origin checks for zero v1 benefit. The router is transport-agnostic; a future browser/phone client (decided: not in v1) would add WS with TLS, pairing, and an origin allowlist, accepting Text and Binary frames (LL-G `websocket-binary-frames-not-text`).
 - Attachments: `attachment.importPath {threadId, path}` for local files; chunked `attachment.put` (base64, 256 KiB) for clipboard images and hub to node transfer. Stored names are server-generated.
 - Hub to node sync on connect: `bundle.push {layers: [{kind, source, sha}], payload}` (the exact approved instructions commit as a git bundle or tarball, plus any approved project layers, the personal git repo snapshot (personal agents and memory for trusted projects), and the effective personal overrides the node needs, such as tier mapping, the orchestrator model for that environment, and FullAccess opt-ins), `capacity.push` (latest estimates), then `memory.journal.pull` (memory writes the node recorded while disconnected, merged on the hub by entry id), `schedule.list` and `schedule.runs.since {cursor}` refresh the hub's cache of that node's schedules and the run history recorded while disconnected. Schedules are never pushed from hub to node except as explicit user edits.
@@ -264,12 +270,12 @@ Store rules: `events(thread_id, seq, at, kind, payload_json)` is append-only; ea
 | new (surfaces) | `subagent.tree {threadId}`; `fs.list` / `fs.read` (confined, read-only, size-capped); `pr.get` and `pr.linked` via `gh` |
 | new (broadside) | `broadside.shareTranscript {threadId, visibility}`, `broadside.publishArtifact {threadId, artifactId, visibility}`, `broadside.status` |
 | new (terminal) | `terminal.open/list/attach/input/resize/close`; events `terminal.output {terminalId, offset, data, truncated?}`, `terminal.exited` |
-| new (mcp) | Local MCP server in `pandamux-server` exposing management tools (`settings_get`, `settings_update`, `org_policy_set`, `project_tag`, `schedule_manage`, `agent_manage`, `memory_manage`) with interactive confirmation cards in desktop chat for mutating calls |
+| new (mcp) | Local MCP server in `pandamux-server`: redacted read tools after R0 IPC hardening; revisioned proposal and approval tools for settings, organization, project, agent, and memory after Phase 5B; schedule writes only after the Phase 6 scheduler is real |
 | new (hub to node) | `bundle.push`, `capacity.push`, `schedule.runs.since` |
 
 CLI verbs: `pandamux thread list/send`, `pandamux orchestrate "<task>"`, `pandamux run list/show/approve/cancel`, `pandamux agents` (roster with status), `pandamux agents assign <agent> "<task>"`, `pandamux agents create/edit/history/revert`, `pandamux memory add|update|list|search` (scoped automatically by `PANDAMUX_AGENT_ID` and the thread's project; usable by agents on any node), `pandamux schedule list/show/run/enable/disable/next` (with `--env <environment>`), `pandamux schedule backup`, `pandamux broadside share <threadId>`, `pandamux broadside publish <path>`, `pandamux instructions status/check/approve`, `pandamux project trust <path>`, `pandamux project tag/group/org`, `pandamux checkpoint list/rollback/branch`, `pandamux notify`.
 
-Provider processes and terminal shells get `PANDAMUX=1`, `PANDAMUX_THREAD_ID`, and `PANDAMUX_PIPE` (plus `PANDAMUX_AGENT_ID`, `PANDAMUX_PROJECT_ID`, and `PANDAMUX_RUN_ID` for agent instances), so they can call `pandamux-cli notify` and `pandamux memory ...`; on a remote node `PANDAMUX_PIPE` points to that node's Unix socket and the node-installed CLI is on `PATH` for the agent process.
+Provider processes and terminal shells get `PANDAMUX=1`, `PANDAMUX_THREAD_ID`, `PANDAMUX_PIPE`, and an expiring `PANDAMUX_CAPABILITY` limited to that thread's allowed `notify` and memory operations (plus `PANDAMUX_AGENT_ID`, `PANDAMUX_PROJECT_ID`, and `PANDAMUX_RUN_ID` for agent instances). On a remote node the pipe points to that node's Unix socket and the node-installed CLI is on `PATH`; the general control capability is never injected into a provider environment.
 
 ### 4.7 Desktop app (`pandamux-desktop`)
 
@@ -280,13 +286,13 @@ The desktop is a view plus platform services. It holds a **read projection** (fr
 | Runtime bridge | GPUI runs its own executor, not tokio. `pandamux-client` runs on a dedicated tokio runtime thread; channels bridge events into `cx.spawn` tasks that update entities and call `cx.notify()` at most once per frame. Declare channel senders before joined handles (LL-G `join-on-drop-sender-field-order`). Verify in S1 |
 | Server lifecycle | Read `%LOCALAPPDATA%/pandamux/run/server.json`; if absent or dead, spawn `pandamux-server.exe` detached with `CREATE_NO_WINDOW`; `system.hello` health check; restart with backoff; menu item "Restart server" |
 | Platform services | System tray icon and global hotkey summon (`CmdOrCtrl+Shift+Panda` or `Win+Alt+P` via `tray-icon` crate) toggles floating quick-summon scratchpad window; file pick via GPUI path prompts; clipboard via GPUI (image read verified in S1); external links via GPUI's URL opener behind a scheme allowlist; reveal and open-in-editor for local environments only; OS notifications through a platform module (crate chosen in Phase 2); single instance via a per-user named mutex; window geometry persisted |
-| Updates | Port `pandamux-app::updater`; drain the server first (Phase 7). Evaluate `gpui-updater-pre` but keep ours unless clearly better |
+| Updates | Restore the deleted app's useful updater behavior in the current platform boundary during Phase 7B; verify hash, Authenticode, exact asset name, drain, install, recovery, and N-to-N+1 behavior |
 | Window chrome | gpui-kit `title_bar` (custom 40px titlebar with surfaces panel buttons), `status_bar` |
 | Agent-assisted UI work | Reference or vendor gpui-kit's `skills/gpui-kit` and `skills/gpui-kit-design-guides` into `.claude/skills/` (Phase 1, respecting the claude-wiring guard); read gpui-kit's `CLAUDE.md` and examples first |
 
 ### 4.8 Security model
 
-1. **Local hub**: no network listener in v1; user-only pipe or socket; anti-squatting checks; token-free because the ACL is the boundary.
+1. **Local hub**: no network listener in v1; user-only pipe or socket; anti-squatting checks. The ACL is the user boundary, while server-issued scoped capabilities and method allowlists distinguish desktop, interactive CLI, MCP, node proxy, and provider children.
 2. **Remote node**: never listens on TCP; socket and token file `0600`; reached only through authenticated SSH (known-hosts verified; changed host key blocks with a warning).
 3. **Rendering agent output**: inert (GPUI has no script engine); gpui-kit TextView in **markdown mode only** (raw HTML renders as text); links only via the scheme allowlist (http, https, mailto) with a visible URL; remote images **never auto-fetched** (tracking beacons); S1 verifies TextView does not fetch on its own.
 4. **Terminal**: OSC 52 writes allowed with a size cap, queries denied; hyperlinks open via the allowlist on click only.
@@ -295,12 +301,12 @@ The desktop is a view plus platform services. It holds a **read projection** (fr
 7. **Instructions repo**: fetched only by the hub into a managed mirror; approval-gated (or "trust this branch" by explicit user choice, optionally requiring signed commits), validated, audited (7.9); nodes accept bundles only from the hub over the authenticated channel, verify the commit SHA of the payload, and refuse a schema newer than they support. Nodes never hold GitHub credentials.
 8. **Project layer** (`.pandamux/` in a code repo): **untrusted by default**. Nothing from it (agents, knowledge, routing overrides) loads until the user approves that repo's layer, per repo and per content hash; any change to the layer after approval requires re-approval (like Claude Code's project trust prompt). A project layer can never raise an access ceiling above the instructions repo's or grant FullAccess, and it cannot define schedules.
 9. **Agent instructions placement**: injected through the provider session (5.3), **never written into the user's repo, worktree, or provider config files**.
-10. **Secrets**: provider env var secrets in the OS keyring via `keyring` on the hub; pushed to nodes in memory (opt-in `0600` persistence on a node that must run schedules unattended across restarts); redacted from logs; write-only in the UI.
+10. **Secrets**: provider secrets are write-only in the UI and redacted from logs. A hub-only OS keyring adapter lands only after the platform spike; it never becomes a musl-node dependency. Secrets are pushed to nodes in memory, with opt-in `0600` persistence only when a node must run unattended across restarts.
 11. **Backups** (schedules, personal agents, memory): one-way export to a **private** git repo only (visibility checked via `gh` or the GitHub API; unknown visibility warns; public refused); secrets and env var values excluded (names only); FullAccess exported as a flag but never honored on restore without re-confirmation; restores arrive disabled (7.5).
 12. **Files and attachments**: `fs.*` confined to the thread root with canonicalized paths; server-generated attachment names; size caps.
 13. **Agent authoring**: the orchestrator writes agents **only to the Personal layer** (Team and Project changes are proposed as PRs or branches for a human to merge). Any change that widens access (accessMode ceiling, tool policy, FullAccess, allowed environments) **always** requires user approval, in every mode. In Approve-first mode every orchestrator agent change waits for approval; in Auto mode, the orchestrator may freely edit only agents it created, and edits to **human-authored** agents require approval (decided). The orchestrator may not edit its own built-in definition without approval. Creation is capped per run and per day; orchestrator-created agents are labeled; every change is a git commit tagged with its run id and revertable.
 14. **Agent memory**: memory is a prompt-injection persistence vector (a hostile file could lead an agent to store "always push to X"). Memory is injected as clearly labeled **untrusted notes, data not instructions**; it can never change access, tools, routing rules, or agent definitions; the reflection step and the CLI refuse entries that look like secrets or instructions to widen access; every memory write appears in the run log with a diff; per-project memory loads only for trusted projects; an optional "review new memories before they apply" setting holds writes for approval (decided: default off). Memory is scrubbed for secrets before commit and before any backup push.
-15. **Supply chain**: exact pins; `cargo deny` advisories and licenses (GPL/AGPL/LGPL denied); remote binaries hash-verified.
+15. **Supply chain**: committed lockfile; exact pins for critical, native, protocol, parser, GPUI, packaging, and scheduler dependencies; documented exceptions elsewhere; `cargo deny advisories licenses bans sources` with GPL/AGPL/LGPL denied; remote binaries hash-verified.
 16. **Broadside artifact and transcript sharing**: Shared transcripts default to unlisted or private grants; sensitive organizations can disable Broadside sharing entirely via Organization policy; HTML artifacts are hosted with strict content isolation on `broadside-content.bp-dev.workers.dev` (`never allow-same-origin`, opaque origin, Public Suffix List separation) preventing cross-origin access to local resources. Broadside API bearer tokens are stored in the OS keyring, never in git or plain config.
 
 ### 4.9 Testing strategy
@@ -318,8 +324,7 @@ The desktop is a view plus platform services. It holds a **read projection** (fr
 
 | Host | Path | Contents |
 |-|-|-|
-| Windows (hub + local node) | `%APPDATA%/pandamux/` | `config/settings.json` (v2), `data/hub.db`, `data/vectors.db` (fastembed vector store), `profiles/<provider>/<instance>/` (isolated config directories: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GEMINI_HOME`), `personal/` (PandaMUX-managed git repo: `agents/`, `memory/<agent>/<project or _agent>.md` plus `memory/index.json`), `attachments/`, `schedule-backup/` (managed clone of the private backup repo, when configured), `instructions/<url-hash>.git` (managed bare mirror, never a user working copy), `bundles/<sha>/` (approved parsed bundles), `trust/project-layers.json` (approved project-layer hashes), `backups/` |
-| Windows | `%LOCALAPPDATA%/pandamux/` | `data/node.db` (the local node's store, including its schedules; machine-specific, so non-roaming), `run/server.json`, `logs/`, `worktrees/<project>/<thread>/` (pre-warmed and active worktrees), `cache/cargo/`, `cache/pnpm/` (shared build caches) |
+| Windows (hub + local node) | `%LOCALAPPDATA%/pandamux/` | Authoritative non-roaming v1 base: `config/settings.json`, `data/hub.db`, `data/node.db`, optional derived `data/vectors.db` only when Phase 5E vector search is enabled, `profiles/<provider>/<instance>/`, `personal/`, `attachments/`, `schedule-backup/` when configured, `instructions/<url-hash>.git`, `bundles/<sha>/`, `trust/project-layers.json`, `run/`, `logs/`, `worktrees/`, `cache/`, and `backups/`. The rewrite has no production users, so historical `%APPDATA%` state is not auto-migrated; any future location change requires a versioned migration and backup |
 | Any host running Antigravity | app data base (`%LOCALAPPDATA%/pandamux` or `~/.pandamux`) | `tools/antigravity-acp/<platform>-<arch>/versions/<sha256>/` plus `active.json` (managed bundle), per-instance `profiles/antigravity/<instance>/` (`GEMINI_HOME`) and a **sibling** `scratch/antigravity/<instance>/` temp dir |
 | Linux node | `~/.pandamux/` | `server/<version>/pandamux-server`, `run/server.json`, `run/token` (0600), `run/server.sock` (0600), `data/node.db` (including this host's schedules), `data/attachments/`, `bundles/<sha>/`, `worktrees/<project>/<thread>/`, `cache/`, `logs/` |
 
@@ -338,13 +343,13 @@ Worktrees live outside the user's repo so they never appear as untracked files; 
 ### 4.12 Acceleration and performance architecture
 
 1. **Instant time-travel and branch creation via checkpoints**: Turn-level checkpoint refs (`refs/pandamux/checkpoints/<thread>/<turn>`). PandaMUX generates tree hashes without copying working trees. Instant rollback rewinds the worktree index and HEAD pointers in milliseconds, enabling branching from any prior turn with zero file copying overhead.
-2. **Local embedded vector search**: In-process `fastembed-rs` + SQLite (`data/vectors.db`) in `pandamux-memory`. Local embedding models (e.g. `all-MiniLM-L6-v2`) provide zero-external-API latency, offline operation, and sub-millisecond semantic retrieval across agent memories and project knowledge.
-3. **Pre-warmed worktree pools**: The hub and nodes maintain a pool of pre-warmed clean git worktrees per active repository. When the orchestrator dispatches a task, it binds immediately to an idle worktree from the pool (0ms dispatch latency) rather than blocking on `git worktree add`.
+2. **Optional local vector search**: canonical memory works with lexical retrieval first. After Phase 5E proves the model distribution and native target matrix, `pandamux-memory` may add a derived SQLite vector index. Missing or stale embeddings degrade visibly to lexical search and never block an agent.
+3. **Pre-warmed worktree pools**: The hub and nodes may maintain bounded clean worktrees for active repositories. Dispatch uses one only after verifying its baseline, ownership, and cleanliness; otherwise it creates a worktree normally. Measure the benefit instead of promising zero-millisecond allocation.
 4. **Shared build and package cache mounts**: Worktree environments configure shared target and dependency directories (`CARGO_TARGET_DIR`, pnpm store, uv cache) through persistent symlinks or environment overrides. Sub-agents avoid redundant dependency downloads and full compilations across separate worktrees.
 5. **Compiler and linter autonomous feedback loops**: Sub-agents run verification commands (`cargo check`, `tsc`, `eslint`) directly in their worktree and inspect diagnostic output to self-correct compilation or lint errors before signaling turn completion.
 6. **Anti-oscillation circuit breakers**: The orchestrator monitors file change histories across turns. If two sub-agents or successive turns repeatedly toggle the same code blocks or oscillate between conflicting states, the circuit breaker halts the loop, rolls back to a stable checkpoint, and pauses for user guidance.
 7. **Shared in-memory blackboard**: Multi-repo and multi-agent runs expose a shared blackboard (`Run.blackboard`) in `pandamux-server`. Concurrent sub-agents publish and consume API schemas, contracts, and type definitions with zero latency, without needing to poll or read git commits across worktrees.
-8. **Tree-sitter AST diff compression**: Inter-agent context handoffs pass structural AST change summaries generated by `tree-sitter` rather than full raw unified diffs, reducing token consumption by up to 70% while preserving semantic clarity for receiving agents.
+8. **Structural diff compression**: the current implementation uses an owned line-oriented structural heuristic, not tree-sitter. Raw diffs remain the correctness source. Tree-sitter may be evaluated later behind an optional adapter only if measured quality and token savings justify the grammar and native dependency cost.
 9. **120 FPS token velocity smoothing render queue**: Streaming tokens from high-speed providers are buffered through a velocity-smoothing queue in `pandamux-client`. Tokens are dispatched to GPUI in frame-budgeted chunks (targeting 120 FPS), eliminating UI micro-stutters during massive token bursts.
 
 ## 5. Provider driver contract
@@ -437,36 +442,38 @@ Rules: instructions never touch repo or worktree files; the injection method use
 
 ### 5.5 Multi-instance provider profiles and subscription pooling
 
-PandaMUX allows multiple accounts, subscriptions, and profiles to run concurrently for the same provider (for example, a Claude Team subscription and a Claude Max subscription belonging to the same user or email, or separate work and personal Codex accounts).
+PandaMUX allows multiple accounts, subscriptions, and profiles to run concurrently for the same provider, but it does not infer billing identity or permission from an email address.
 
-1. **Instance identity and isolation**:
-   - Each provider config defines one or more named instances (`ProviderInstanceId`, such as `claude:max`, `claude:team`, `antigravity:personal`, `codex:work`).
-   - Each instance maintains its own isolated configuration and cache directory on disk (`profiles/<provider>/<instance>/`), setting `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, or `GEMINI_HOME` respectively. Processes spawned under one instance never touch or collide with credentials, session histories, or tokens of another.
-   - Probes and health checks execute independently per instance. The UI displays distinct account and subscription badges (for example "Claude Max" vs "Claude Team").
-2. **Quota pooling and rate-limit failover**:
-   - Independent capacity tracking: Each instance maintains its own `UsageBucket` and `CapacityEstimate`.
-   - Automatic failover: When a turn or task running on an instance hits a rate-limit error (HTTP 429, quota exhaustion, or session limit), the session or orchestrator automatically fails over to another eligible instance of the same or compatible provider without failing or stalling the turn.
-   - Handoff context: In-flight turn state and worktree changes remain intact while the driver switches active instance credentials and resumes streaming.
-3. **Boundary enforcement**:
-   - Pooling and failover strictly respect the repository or organization subscription checklist matrix (7.15). If an organization policy restricts a repository to `claude:team`, failover to `claude:max` is disallowed and will pause with an approval request rather than silently crossing subscription boundaries.
+1. **Three explicit identities**:
+   - `ProviderInstanceId` identifies one provider configuration on one environment, including its isolated profile directory, binary, settings, and concurrency limit.
+   - `SubscriptionKey` is a generated opaque identifier for one billing or quota boundary. The user or policy explicitly maps instances on different hosts to it. A provider-reported account fingerprint can suggest a match but cannot merge records automatically.
+   - `FailoverPoolId` is an explicit policy group. Membership means an instance may be considered as a fallback only after organization, capability, access, health, and capacity filters pass.
+   - Email and account names are optional masked display labels. They are never primary keys, never written to routine logs, and never sufficient to pool credentials.
+2. **Isolation and observation**:
+   - Each instance has a dedicated `profiles/<provider>/<instance>/` directory and its own `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, or `GEMINI_HOME` as applicable.
+   - Health, installation, authentication, process concurrency, and disk availability are instance facts. Subscription usage and quota are subscription facts. The router evaluates both and explains every exclusion.
+3. **Failover safety**:
+   - Organization policy is a hard filter before scoring. Ambiguous or missing organization assignment fails closed.
+   - Automatic retry is allowed only before visible assistant output, tool execution, file mutation, network mutation, or any other externally observable side effect.
+   - After output or side effects, a rate limit produces a durable interrupted state with the original attempt, checkpoint, provider, and reason. PandaMUX may propose a continuation on another eligible instance, but it never silently replays the turn.
+   - Provider-native cross-account session resume is used only when a fixture and live acceptance prove it for that provider and version. Otherwise a new attempt receives a bounded handoff summary and the existing worktree checkpoint.
+   - Every route attempt, rejection, transition, and handoff is audited. If no allowed fallback remains, the run pauses with an actionable reason and never crosses an organization boundary.
 
 ### 5.6 Full MCP settings control and tool bridge
 
-`pandamux-server` embeds a native Model Context Protocol (MCP) server exposing tools that allow PandaMUX agents and external tools to inspect and modify settings programmatically via natural language.
+`pandamux-server` embeds a local MCP endpoint. Provider sessions continue to use their native CLI protocols by default; the MCP endpoint is an optional management surface with the same authenticated application service and policy validators as the desktop and CLI.
 
-1. **Exposed MCP tools**:
-   - `settings_get(path: Option<String>)`: Read configuration values, provider profiles, or model mappings.
-   - `settings_update(path: String, value: Value)`: Modify settings (such as adding model fallbacks or toggling features).
-   - `org_policy_set(org_id: String, allowed_instances: Vec<String>)`: Update the subscription matrix for an organization.
-   - `project_tag(project_id: String, add_tags: Vec<String>, remove_tags: Vec<String>)`: Adjust repository groupings, tags, and collections.
-   - `schedule_manage(action: String, schedule_spec: Value)`: Create, update, enable, or disable scheduled runs.
-   - `agent_manage(action: String, agent_spec: Value)`: Modify agent definitions or authoring permissions.
-   - `memory_manage(action: String, memory_spec: Value)`: Search, add, or prune memory facts.
-2. **Interactive confirmation safety model**:
-   - Read-only tools (`settings_get`) execute immediately without user interruption.
-   - Write tools (`settings_update`, `org_policy_set`, `schedule_manage`) generate an interactive visual confirmation card in the desktop chat.
-   - The card shows a clean diff of proposed changes (for example "Allow Claude Max subscription for Organization Wellforce") with single-click "Approve" and "Reject" buttons. No settings mutation commits to disk until the user explicitly confirms the card.
-   - This enables users to instruct PandaMUX in natural language (for example, "Allow my Claude Max subscription to be used in Anti-Gravity" or "Group these five repos under organization X") without having to navigate settings menus manually.
+1. **Read boundary first**:
+   - `settings_get`, health, and list tools return purpose-built safe projections. They never serialize the full `UserSettings`, raw provider settings JSON, environment-variable overrides, profile paths, credentials, tokens, or secret-bearing error strings.
+   - All tool results and errors use versioned schemas and stable error codes. Missing MCP tooling is distinct from a missing underlying PandaMUX capability.
+2. **Durable proposal workflow for writes**:
+   - `settings_update`, `org_policy_set`, `project_tag`, `agent_manage`, and `memory_manage` create an idempotent proposal containing caller identity, request id, expected revision, exact old/new diff, affected environments/projects/schedules, policy impact, expiry, and audit metadata.
+   - The desktop renders Approve once and Reject. Disconnect, expiry, duplicate completion, revision mismatch, or unavailable desktop produces no mutation. Access widening always requires local approval and cannot be covered by a blanket rule.
+   - Approval applies the proposal with compare-and-swap semantics through the same validator used by native settings UI, then records one audit event. Full-object replacement is an internal revisioned desktop operation and is never an MCP tool.
+3. **Phase availability**:
+   - Phase 4 permits only the redacted read surface after local IPC authentication is complete.
+   - Phase 5 adds the durable proposal system and settings, organization, project, agent, and memory mutations.
+   - `schedule_manage` remains read-only or returns `CapabilityNotReady` until Phase 6 has a real scheduler, schedule validator, event audit, and executor. A tool can never create a nominally enabled schedule that no runtime safely owns.
 
 ## 6. Remote environments
 
@@ -578,8 +585,8 @@ You are the Reviewer. Review the changes in this worktree against the task...
 
 Decided 2026-09-25: schedules are **machine-specific server state**, not shared configuration. They never live in the instructions repo or a project layer.
 
-- **Storage and ownership**: each schedule is a record in the SQLite store of the **environment that runs it**, under that host's OS user (`~/.pandamux/data/node.db` on Linux, `%LOCALAPPDATA%/pandamux/data/node.db` on Windows). That node's scheduler fires it whether or not the hub or desktop is connected. The hub aggregates schedules from all connected environments for display and editing; for an unreachable environment it shows the last-known list marked **unreachable** (read-only until it reconnects).
-- **Management**: created, edited, enabled, disabled, deleted, and run now from **Settings > Schedules**, with a required **Environment** field (local or any SSH environment). Every change is an environment-scoped call to that node over an authenticated hub connection and is recorded in the node's `schedule_events` (who, when, what).
+- **Storage and ownership**: each schedule is a record in the SQLite store of the **environment that runs it**, under that host's OS user (`~/.pandamux/data/node.db` on Linux, `%LOCALAPPDATA%/pandamux/data/node.db` on Windows). That node's scheduler fires it whether or not the hub or desktop is connected. The hub aggregates schedules from all connected environments. When an environment is unreachable, its last-known node projection is read-only and marked stale; any user-requested edit is a separate cancellable **pending control intent** on the hub and does not change the displayed node state until acknowledged.
+- **Management**: created, edited, enabled, disabled, deleted, and run now from **Settings > Schedules**, with a required **Environment** field (local or any SSH environment). Reachable changes are environment-scoped calls recorded in the node's `schedule_events`. An offline pending intent shows proposed action, target revision, age, and Cancel; on reconnect the node revalidates policy and revision before applying and acknowledging it.
 - **Moving** a schedule to another environment: the hub creates it on the target node, then deletes it from the source node, only when **both** are reachable (otherwise the move is refused with a reason). Run history stays with the source and is labeled "moved".
 - **Trigger**: cron expression with an IANA timezone. Event triggers (GitHub issue/PR/CI polling or webhooks) are a later extension point; the trigger field is a tagged union so they drop in.
 - **Target**: `orchestrator` (plan and dispatch), `agent` (one PandaMUX agent instance; the definition comes from the last approved instructions commit the hub distributed to that node), or `session` (a plain coding thread with a prompt, provider, and model or tier). The project is a path on that environment (resolved through the project registry).
@@ -597,7 +604,7 @@ Schedule record (as stored on the node and shown in Settings; also the backup fo
   "trigger": { "cron": "0 2 * * *", "timezone": "America/Chicago" },
   "target": { "kind": "agent", "agent": "reviewer", "projectPath": "/home/chaz/src/Pandamux",
               "prompt": "Review commits merged to main in the last 24 hours and report risks." },
-  "approval": "auto", "overlap": "skip", "catchUp": "run_once",
+  "approval": "approve_first", "overlap": "skip", "catchUp": "run_once",
   "budget": { "perRun": { "maxTokens": 500000, "maxRuntimeMinutes": 45 }, "perDay": { "maxCostUsd": 10 } },
   "notify": ["failure", "needs_approval"],
   "fullAccessOptIn": false, "enabled": true
@@ -607,7 +614,7 @@ Schedule record (as stored on the node and shown in Settings; also the backup fo
 **Backup to git (one-way; covers schedules, personal agents, and agent memory, decided 2026-09-25).** The node (for schedules) and the hub's personal repo (for agents and memory) stay the source of truth; the backup is export only and nothing is ever auto-imported from it, so it cannot resurrect or duplicate schedules or overwrite agents.
 - **Where** (decided): a **user-created private repo** configured in Settings > Schedules > Backup (for example a personal `pandamux-backups` repo); PandaMUX offers to create it with `gh repo create --private`. PandaMUX checks visibility via `gh` or the GitHub API and **refuses a public repo** (the default instructions repo is public, and schedules contain prompts, repo paths, and host names); unknown visibility shows a warning that must be acknowledged. **Backups are disabled until the user configures and sets them up; no backup activity (no clone, no push, no visibility checks) happens before that.**
 - **What**: schedule definitions only (the record above: target, cron and timezone, prompt, project path, environment id and display name, policies, enabled flag), one file per environment (`schedules/<environment>.json`, stable key order for clean diffs). Excluded: secret and env var values (names or references only), run history, tokens. `fullAccessOptIn` is exported as a flag but **never honored on restore** without re-confirmation.
-- **Who pushes**: the hub, using the user's git credentials (credential helper or `gh`), after every schedule change (debounced) and once a day; the commit message names the environment and the change. Nodes never need GitHub credentials. Changes only happen through the hub, so the hub always sees them; changes made while an environment was unreachable are impossible by design (edits require reachability).
+- **Who pushes**: the hub, using the user's git credentials (credential helper or `gh`), after every acknowledged schedule change (debounced) and once a day; the commit message names the environment and the change. Nodes never need GitHub credentials. Pending offline intents are not exported as if they were node state.
 - **Agents and memory**: the hub also pushes the personal repo's `agents/` and `memory/` (secret-scrubbed) into the same backup repo after each change (debounced) and daily; per-agent FullAccess opt-ins are exported only as flags.
 - **Restore**: Settings > Schedules > Restore: pick a backup file and commit, preview, choose the **target environment** (it may differ from the original, which doubles as "copy schedules to a new machine"). Restored schedules arrive **disabled** until the user enables each one; FullAccess must be re-confirmed. Settings > Agents > Restore: pick a commit, preview agents and memory with diffs against the current personal repo, and import selected items as a new commit in the personal repo (revertable); FullAccess opt-ins are never restored without re-confirmation.
 
@@ -692,9 +699,15 @@ Git is the source of truth, but the copy PandaMUX reads is **managed by PandaMUX
 
 ### 7.10 Usage and capacity model
 
-- `UsageBucket { day, hourStart?, environmentId, provider, model, accountKey, agentId?, scheduleId?, tokens { input, cachedInput, cacheWrite, output, reasoning }, costUsdEstimate, records }` (T3 `packages/contracts/src/usage.ts` v6 shape plus environment, account, agent, and schedule). Node-side incremental scanners; raw transcripts never leave the node; `accountKey` dedupes one subscription used on several hosts. Agent and schedule attribution come from PandaMUX's own thread tags, not the transcripts.
-- `CapacityEstimate { provider, accountKey, windows: [{ kind: Session | Weekly | Monthly | Custom, usedFraction, resetsAt, source }], remainingFraction, confidence: Reported | Estimated | Unknown, asOf }`. **Reported**: provider data (Codex rateLimits; Grok if confirmed; shape like T3 `providerUsageLimits.ts`). **Estimated**: plan budget minus observed usage. **Unknown**: no data. Snapshots pushed to nodes decay in confidence with age.
-- Hard evidence (a rate-limit error) forces zero until `resetsAt`; estimates only lower capacity before a reset (BP `presence-check-validator-is-a-floor`, monotonic). Routing discounts Estimated and Unknown.
+- **Ingestion truth is an idempotent fact**: `UsageObservation { observationId, sourceKind, sourceVersion, sourceNativeId?, occurredAt, provider, providerInstanceId, subscriptionKey, model?, tokens, providerReportedCostMicrousd?, threadId?, agentId?, scheduleId? }`. Token counts and money are non-negative checked integers. Environment provenance is stamped by the authenticated receiver, not accepted from a caller body.
+- **Projection is separate**: `UsageBucket` is produced at query time by SQL aggregation over observations and accepts date, environment, provider, subscription, agent, and schedule filters. It is never the write model. Unknown price remains unknown.
+- **Source precedence**: PandaMUX-managed turn events are authoritative for managed turns. Transcript scanners cover external or historical use. A provider-native turn/session id or a deterministic source fingerprint prevents the same managed turn from being counted twice.
+- **Durable scanning**: cursor identity includes provider instance, source kind, platform file identity, committed byte offset, size, modification time, parser version, and last error. Canonical path is diagnostic only. A cursor never advances past an incomplete trailing record. Replacement, truncation, and rotation are explicit state transitions. Symlinks and junctions are not followed by default.
+- **Hub pull protocol**: the hub calls `usage.export { afterSeq, limit }`; the node returns normalized observations only, never raw transcripts or paths. The hub upserts by `(environmentId, observationId)` and advances its high-water mark in one transaction. `nodeStoreId` detects a reset; optional acknowledgement permits bounded node outbox compaction.
+- **Pricing**: API-equivalent estimates are source-dated, effective-dated, versioned, provider-scoped, and stored as integer micro-USD. They are not labeled actual spend. Provider-reported cost is kept separately. There is no generic fallback price and no substring-first model match. Query-time pricing preserves safe revaluation.
+- **Capacity separates two concerns**: `CapacitySnapshot` describes subscription quota windows with `source`, `confidence`, `asOf`, `resetsAt`, and optional hard-block evidence. `InstanceAvailability` describes health, authentication, concurrency, and local resources for one instance on one environment.
+- **Confidence**: **Reported** means provider-reported and fixture-verified; **Estimated** means budget-derived; **Unknown** means PandaMUX has no defensible value. Codex rate-limit data can be Reported. Grok becomes Reported only after fixtures and live verification. Claude and Antigravity remain Estimated or Unknown until their provider supplies a verified source.
+- **Monotonic safety**: a locally observed hard limit forces zero until reset and cannot be raised by a stale hub snapshot. Age decays snapshot confidence. Routing discounts Estimated and Unknown and always reports why an instance was selected or excluded.
 
 ### 7.11 Team use
 
@@ -707,9 +720,9 @@ Git is the source of truth, but the copy PandaMUX reads is **managed by PandaMUX
 ### 7.12 Agent memory (decided 2026-09-25: in v1)
 
 - **Scope**: per agent **per project** by default, plus an **agent-wide** section for general learnings (decided). The built-in orchestrator agent's memory records routing outcomes (provider, task type, success, rework) that the planner can consult; routing **rules** still come only from `orchestrator.yaml`.
-- **Format**: markdown files in the personal git repo, `memory/<agent>/<project-id>.md` and `memory/<agent>/_agent.md`, one fact per entry with a small header (`id`, `created`, `updated`, `sourceRun`, `scope`), plus `memory/index.json` for fast lookup and an embedded vector database (`data/vectors.db`) managed via `fastembed-rs` (`all-MiniLM-L6-v2`) in `pandamux-memory`. Human-readable and editable in the app (Memory tab on each agent: view, edit, delete, "forget all for this project").
+- **Format**: markdown files in the personal git repo, `memory/<agent>/<project-id>.md` and `memory/<agent>/_agent.md`, one fact per entry with a small header (`id`, `created`, `updated`, `sourceRun`, `scope`), plus `memory/index.json` for fast lexical lookup. If the Phase 5E native-target spike passes, `pandamux-memory` adds a derived `data/vectors.db` pinned to an explicit model, tokenizer, dimensions, and SHA. Human-readable canonical memory remains editable in the app.
 - **Canonical store**: the hub; every change is a commit in the personal repo (history, diff, revert). The hub ships memory for trusted projects to nodes inside the bundle so remote and scheduled runs see it. Node-side runs (for example a schedule firing while the laptop is off) append writes to the node's `memory_journal`; on reconnect the hub pulls the journal and merges by entry id (append, update, tombstone); two different updates to the same entry become a **conflict** surfaced in the Memory tab.
-- **Writing**: (a) during a run, agents call the **`pandamux` CLI** (`pandamux memory add|update|list|search`), scoped automatically by `PANDAMUX_AGENT_ID` and the thread's project; this honors the repo rule "No MCP; all Claude Code integration is via the pandamux CLI", and is why the CLI ships to every node; (b) at run end, a short **reflection** step on a cheap model proposes memory updates under fixed rules (one fact per entry; no secrets; nothing derivable from the code or git history; no instructions that change access, tools, routing, or targets).
+- **Writing**: (a) during a run, agents normally call the **`pandamux` CLI** (`pandamux memory add|update|list|search`), scoped automatically by `PANDAMUX_AGENT_ID` and the thread's project; the CLI ships to every node and does not require an MCP bridge; (b) after Phase 5's guarded proposal system lands, trusted clients may use the equivalent local MCP tools; (c) at run end, a short reflection step on a cheap model proposes memory updates under fixed rules (one fact per entry; no secrets; nothing derivable from the code or git history; no instructions that change access, tools, routing, or targets).
 - **Reading**: at run start, hybrid retrieval combines structured facts and semantic vector search hits (`data/vectors.db`) within a token budget (default 2,000 tokens), labeled as **untrusted notes from earlier runs**; agents fetch more with `pandamux memory search`.
 - **Review setting (decided)**: "Review new memories before they apply" is optional and **off by default**; every write is still visible in the run log with a diff and revertable.
 - **Maintenance**: size caps per agent and project (default 200 entries), periodic consolidation by a cheap model (itself a reviewable commit), secret scrubbing before commit and before backup, tombstones compacted after the backup has captured them.
@@ -788,7 +801,7 @@ PandaMUX integrates with the Hark voice assistant (`C:\Github\Hark`) to provide 
    - Native Rust-to-Rust bridge: `pandamux-server` connects to the running Hark daemon via a local IPC named pipe (`\\.\pipe\hark-pandamux`) or Unix domain socket.
    - Reuses Hark's audio pipeline (`hark-pipeline`, `hark-stt`, `hark-inject`).
 2. **Dynamic spellbook synchronization**:
-   - Code-aware transcription requires domain vocabulary. PandaMUX extracts symbols from active repositories (types, functions, files, branch names) and active agent names via `pandamux-core` and tree-sitter.
+   - Code-aware transcription requires domain vocabulary. PandaMUX extracts symbols from active repositories (types, functions, files, branch names) and active agent names through the existing owned lexical/structural extractor. An optional tree-sitter adapter may improve extraction later if its dependency gate and measurements pass.
    - PandaMUX pushes these symbols into Hark's `spellbook` service (`hark-spellbook`) over IPC.
    - Result: Technical terms, project-specific identifier names, and agent handles are transcribed with near-perfect accuracy without phonetic misinterpretations.
 3. **Voice control workflow**:
@@ -886,7 +899,7 @@ Examples to study first: `stream-markdown`, `markdown`, `markdown_table`, `text_
 
 **T3 lessons translated to GPUI.**
 - *Selection across virtualized messages*: selection is owned at the **timeline** level (anchor and head as item + offset); spanned items stay laid out while a selection is active; copy text comes from the projection. gpui-kit TextView's `window_selection.rs` may already provide window-level selection; S1 decides.
-- *Streaming cost*: incremental markdown (closed blocks cached; only the open tail re-parses); highlight fences once closed, caching tree-sitter results by `(language, hash)`; one entity notify per frame.
+- *Streaming cost*: incremental markdown (closed blocks cached; only the open tail re-parses); highlight fences once closed, caching syntax-highlight results by `(language, hash, highlighter version)`; one entity notify per frame.
 - *Variable heights*: S1 verifies `virtual_list` with growing items and stick-to-bottom; fallback is turn-level virtualization with the latest N turns unvirtualized.
 
 **Carried from `plan-repo.md` Section 12:** dark default and light tokens, typography (Segoe UI; JetBrains Mono for code and the terminal), radii, shadows, transitions, 40px titlebar, 26px status bar (environment, usage, orchestrator and scheduler state), 264px sidebar, one overlay at a time, the fixed-dark terminal scheme. Window blur on Windows is unverified; translucent fills are the baseline. **Dropped:** drag-split interaction, 52px icon rail, shell badges (the SSH gold `#d8b45e` is reused for remote environment chips).
@@ -896,6 +909,8 @@ Examples to study first: `stream-markdown`, `markdown`, `markdown_table`, `text_
 ## 9. Phases
 
 Repo strategy (decided): **rewrite in place on master**. The old app has no users, so there is no parallel shipping, no side-by-side CI, and no data migration. Phase 1 starts by moving the reusable parts and deleting the rest (step 1). `rust.yml` is rewritten for the new workspace and is required from Phase 1. `release.yml` is **guarded until Phase 7**: no `v*` tags are pushed before cut-over, and the workflow's first job fails unless the repository variable `RELEASES_ENABLED` is `true` (set only in Phase 7), so an accidental tag cannot publish a half-built app. `winget.yml` is disabled until the new app ships. Preview builds for internal testing come from CI artifacts, not GitHub Releases.
+
+Historical checkboxes below mean a commit recorded the step as complete. They do not certify current production wiring, live acceptance, documentation accuracy, or release readiness. The 2026-09-28 audit found concrete gaps in several checked claims; Recovery Gate R0 and the rewritten Phase 4 to 7 checkpoints are the current contract.
 
 ### Phase 0: Spikes (go/no-go; code in `spikes/phase0-*`, excluded from the workspace)
 
@@ -912,15 +927,15 @@ Repo strategy (decided): **rewrite in place on master**. The old app has no user
 4. **S4 Packaging.** cargo-packager NSIS with three exes plus Linux binaries as resources: build, sign each exe, package, sign installer; signatures survive.
 5. **S5a Antigravity: confirm the ported T3 approach (gating; Antigravity is a must-have).** The protocol is known (5.4); this spike confirms a minimal Rust port works on **Windows and on Galahad (Linux)**: managed install (pinned zip, size and SHA-256, two-entry hardened extraction, `initialize` validation with the required capabilities), replaced environment with private `GEMINI_HOME`, OAuth sign-in (URL scraped from stdout or the BROWSER helper, strict validation, callback forwarded as a one-shot GET), including the **remote sign-in relay** through the tunnel on Galahad; `session/new`, `session/prompt` with streamed text and tool events, a `request_permission` decision honored (a rejected write is actually refused), `fs` capability writes routed through our handler, `session/cancel` with the 15 s kill, `session/load`/`session/resume`, model list from `configOptions` and selection via `session/set_config_option`, error mapping (`-32000`, `-32603`), orphan temp-dir sweep, sibling temp dir under `MAX_PATH`, and the measured unpack size and startup time per process. Record fixtures. **A failed S5a triggers a design review** (like S1 and S2), because Antigravity gates the first release.
 6. **S5b Best-effort ACP providers** (not gating). `agent-client-protocol` client against `cursor-agent acp`; Grok CLI binary and ACP entry point; OpenCode `acp` vs `serve`; for each: session-level instruction mechanism (else preamble) and permission granularity. Record fixtures.
-7. **S6 Pins and licenses.** Exact versions for gpui-kit and all `gpui-pre*` (equal, matching gpui-kit), rusqlite/libsqlite3-sys (MSRV), agent-client-protocol, russh, tree-sitter grammars, the cron and timezone crates, YAML and frontmatter parsers. `cargo deny check licenses` on the desktop graph; inspect `gpui-pre-ztracing`, `gpui-pre-zlog`, `gpui-pre-sum-tree` license files against zed#55470; any GPL finding blocks Phase 1.
+7. **S6 Pins and licenses.** Verify exact GPUI snapshot alignment and review candidate versions/licenses for rusqlite/libsqlite3-sys, ACP, russh, schema/YAML, optional structural parsers, embeddings, and scheduling. Candidate review is not adoption: later native and scheduler dependencies still pass their phase-specific target gates. Run license checks on the resolved desktop graph and inspect the shipped GPUI license files; any GPL finding blocks Phase 1.
 
 Exit criteria: `spikes/PHASE0_REPORT.md` records pass/fail per spike with numbers, the proxy-vs-streamlocal decision, verified or rejected status per row in 5.2 and 5.3, a11y findings, pins, and the license verdict. Any failed S1, S2, S5a, or S6 criterion triggers a design review. Ships: nothing.
 
 ### Phase 1: Foundation (local only, Codex + Claude + Antigravity)
 
-1. [x] **Clear the ground.** (Completed in commit `7a22b68`, v0.53.11) Move the reusable parts: SSH pool/auth/known-hosts/SFTP from `pandamux-term/src/ssh.rs` into a new `pandamux-remote`; reshape `pandamux-term` (grid, pty, shell) into its `grid` and `pty` features for the Terminal surface; keep the useful `pandamux-core` types (`ids`, `project`, `project_registry`, `ssh` host profiles and `~/.ssh/config` parsing, `notification`, `i18n`, `home`); carry the `backend.rs` dispatcher shape, `persistence.rs` atomic-write/versioning, `updater.rs`, and `pollers.rs` patterns into `pandamux-server` and `pandamux-desktop`; keep the release/signing workflow. Then delete everything else: `pandamux-ui`, `pandamux-app`, the split tree, pane/tab/layout model, V2 terminal methods and their CLI commands, `resources/pandamux-orchestrator`, `resources/shell-integration`, `resources/claude-instructions`, `resources/opencode-plugin`, unused sounds, `spikes/phase2-native-terminal`, and the Iced CI steps. Guard `release.yml` (`RELEASES_ENABLED`) and disable `winget.yml` in the same change.
+1. [x] **Clear the ground.** (Recorded in commit `7a22b68`, v0.53.11) SSH, terminal, core, backend, and persistence pieces were moved or rewritten and the old Iced crates were deleted. The intended updater and release-pipeline carryover did not survive as a working current implementation; Phase 7 restores them from verified behavior and the Phase 0 packaging contract.
 2. [x] **Add `pandamux-protocol` and `pandamux-client` with reducer tests; add new `pandamux-core` modules.** (Completed in commit `e839833`, v0.53.12)
-3. [x] **Add `pandamux-server`.** (Completed in commit `7a38a40`, v0.53.13) Hub + local node, single-writer SQLite store with migrations, user-only named pipe with anti-squatting, runtime file, graceful drain (BP `provable-graceful-shutdown`), and initial MCP server endpoint for read-only settings inspection.
+3. [x] **Add `pandamux-server`.** (Recorded in commit `7a38a40`, v0.53.13) Hub + local node, single-writer SQLite store, migrations, runtime file, drain scaffolding, and initial read-only MCP endpoint. Later audit found the user-only IPC and anti-squatting contract incomplete; R0.4 is the acceptance gate.
 4. [x] **Add `pandamux-providers`.** (Completed in commit `40b9bb1`, v0.53.14) Trait, event model, capabilities, Job Object supervision, multi-instance profile isolation in `profiles/<provider>/<instance>/` setting `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GEMINI_HOME` with the Codex and Claude drivers and fixture contract tests.
 5. [x] **Shared ACP driver + Antigravity profile** (Completed in commit `4979e53`, v0.53.15) (5.4), ported from T3 with `THIRD_PARTY_NOTICES.md` and module-doc citations: managed install and resolution order, spawn environment, OAuth sign-in with callback forwarding (local), permission and mode mapping, `interaction_` prompts, heuristic sub-agent classification, payload sanitizing, all seven reliability rules, per-environment concurrency cap and disk preflight, health checks that never spawn. Phase 4 then only adds Cursor, Grok, and OpenCode profiles. Fixture contract tests plus a live smoke on Windows.
 6. [x] **Threads**: create, send turn, stream, approvals, interrupt, resume after restart; optional per-thread worktree. (Completed in commit `25004a9`, v0.53.16)
@@ -928,7 +943,7 @@ Exit criteria: `spikes/PHASE0_REPORT.md` records pass/fail per spike with number
 8. [x] **Views**: sidebar with nav stubs, timeline, composer (text), provider/model picker, reconnect with `sinceSeq`. (Completed in commit `6484398`, v0.53.18)
 9. [x] **`pandamux-cli` v3 skeleton** (`ping`, `identify`, `thread list`, `thread send`, `notify`, `mcp`). (Completed in commit `384bfcd`, v0.53.19)
 10. [x] **Reference or vendor gpui-kit's agent skills and design guides.** (Completed in commit `cd9800d`, v0.53.20)
-11. [x] **CI `rust.yml` (rewritten, required)** (Completed in commit `7e97368`, v0.53.21): Windows job (fmt, clippy, graph-based boundary check, `cargo deny` advisories and licenses, cargo tests including GPUI view tests, built-artifact smoke calling `system.hello` per BP `evaluate-built-artifacts-in-ci`) and a **macOS job** (build and test server, CLI, client, desktop). sccache and rust-cache.
+11. [x] **CI `rust.yml` (rewritten, required)** (Recorded in commit `7e97368`, v0.53.21): Windows and macOS jobs, format, clippy, selected dependency checks, tests, caching, and built-artifact smoke. Later audit found the boundary script scans manifest text rather than the resolved feature graph and `cargo deny` coverage is incomplete; Phase 5's dependency gate replaces those claims with tested enforcement.
 
 Exit criteria: the old crates and resources are gone and the workspace builds; on Windows, chat with Codex, Claude, and Antigravity in one project, approve and deny, interrupt, close and reopen with full history; killing the desktop leaves turns running; killing the server leaves no orphaned providers; an accidental `v*` tag does not publish (the `RELEASES_ENABLED` guard fails the run); both CI jobs green. Ships: internal CI artifacts only.
 
@@ -946,7 +961,7 @@ Exit criteria: the old crates and resources are gone and the workspace builds; o
 10. [x] **Surfaces panel with Agents ("Provider sub-agents" group), Diff, Files (root-confinement tests), Pull request, Linked pull requests.** (Completed in commit `41238e8`, v0.53.31)
 11. [x] **Sidebar live status: "Working Nm", approval and paused markers, settled counts.** (Completed in commit `143a39d`, v0.53.32)
 12. [x] **Local Terminal surface: `pandamux-term` feature split, node PTY sessions with ring buffer, `terminal.*`, GPUI terminal element.** (Completed in commit `470ef64`, v0.53.33)
-13. [x] **Tree-sitter AST diff compression for agent context handoffs, token velocity smoothing render queue in `pandamux-client` targeting 120 FPS, and system tray icon with global hotkey (`CmdOrCtrl+Shift+Panda` or `Win+Alt+P` via `tray-icon`) toggling the floating quick-summon scratchpad window.** (Completed in commit `523f9a5`, v0.53.34)
+13. [x] **Structural diff compression, token smoothing, tray, and quick summon.** (Recorded in commit `523f9a5`, v0.53.34.) The structural implementation is an owned line-oriented heuristic, not tree-sitter; Phase 5 treats tree-sitter as an optional measured adapter rather than an existing dependency.
 
 Exit criteria: single-machine T3-style feature set; nested Claude sub-agents appear live with type, model, elapsed, latest activity, tokens, tool count, then settle; `fs.read` refuses paths outside the root (including symlinks); `vim` and `htop` (or Windows TUIs) run in a local terminal and reattach with scrollback after closing the window; `cat` of a 20 MB file stalls the UI no more than 100ms; the keyboard a11y bar passes and S1 screen-reader findings are documented; global hotkey summons the scratchpad. Ships: internal CI artifacts only.
 
@@ -964,62 +979,568 @@ Exit criteria: single-machine T3-style feature set; nested Claude sub-agents app
 
 Exit criteria: Antigravity's managed bundle is installed on Galahad by node-side download (and, with outbound access blocked, by the hub-pushed zip), with hashes verified; remote Antigravity sign-in completes from the desktop through the relay; run a Claude, a Codex, and an Antigravity thread on Galahad; sleep the laptop 30 minutes mid-turn and see the completed turn after wake; a remote `htop` terminal survives the same sleep (decide here whether desktop-side replay suffices or the node-side grid fallback is needed); the node upgrades when idle; pasted images reach the remote provider; unpushed worktree deltas sync to Galahad. Ships: internal CI artifacts only.
 
-### Phase 4: Best-effort providers + usage
+### Recovery Gate R0: prove the Phase 3 foundation before extending it
 
-1. [x] **Cursor, Grok, and OpenCode per S5b as profiles on the shared ACP driver built in Phase 1 (porting T3's corresponding driver logic where useful, with notices); OpenCode `serve` if needed; each with its 5.3 instruction and tool-restriction mapping.** (Completed in commit `52656f5`, v0.53.44)
-2. Usage scanners and hub aggregation; account dedupe; pricing table.
-3. Capacity model with confidence; Codex rateLimits ingestion; plan-budget settings; capacity snapshot push to nodes.
-4. Usage page (`chart`/`plot`, capacity cards).
-5. Provider health: version/auth labels and login guidance (runnable in the Terminal surface).
-6. Multi-instance provider subscription pooling and automatic rate-limit failovers across accounts on the same email (5.5); local embedded vector search via `fastembed-rs` + SQLite (`data/vectors.db`) in `pandamux-memory` (4.12, 7.12).
+**Why this gate exists:** Phase 3 has implementation commits, but the production hub does not yet compose a remote transport, the server does not complete the proxy command, thread execution does not resolve the selected provider instance, and the documented live matrix has not been archived. Phase 4 usage, capacity, and failover would otherwise observe and route a placeholder system.
 
-Exit criteria: the three must-have providers (Codex, Claude, Antigravity) pass the fixture suite and a live smoke locally and on Galahad, including instruction injection and access-ceiling enforcement; each best-effort provider either passes the same checks or is shipped disabled with a documented reason; weekly usage totals match each CLI's reporting within 2%; capacity shows its confidence everywhere; rate-limit failover smoothly transitions between multiple subscription profiles on the same email without stalling the turn. Ships: internal CI artifacts only.
+#### R0.1 Preserve and classify the unfinished Phase 4 attempt
 
-### Phase 5: Orchestrator + PandaMUX agents
+1. Record the exact baseline SHA, branch/upstream, version, tracked diff, untracked files, and ownership before editing.
+2. Create a recoverable named snapshot of the user-owned Phase 4 prototype without resetting or cleaning the worktree. Preferred mechanism: copy a binary-safe patch plus an archive of untracked files into an app-owned recovery directory, record SHA-256 values and the exact baseline, and verify a dry-run restore into a temporary worktree. If a recovery commit is used instead, create it on a temporary recovery branch from the exact baseline with path-specific staging, then restore the user's working state without stash, reset, or checkout-overwrite. Keep unrelated changes out of every commit.
+3. Classify each prototype unit as **keep**, **rewrite**, or **discard**. Expected keeps are token category types, parser fixtures, protocol scaffolding, and migration-test ideas. Expected rewrites are scanner ownership, cursor identity, persistence, provenance, pricing, and aggregation.
+4. Add a short recovery note to the completion record listing every salvaged file and every deliberately replaced design.
 
-1. `pandamux-orchestrator`: bundle schema and validation for `orchestrator.yaml`, `agents/*.md`, `knowledge/`, prompts; two-step routing engine; run state machine; unit tests over synthetic rosters and capacity tables.
-2. Instructions sync (7.9): managed bare mirror, `git ls-remote` check every 5 minutes, fetch on change, credentials via the user's git helper or `gh`, tracking modes (branch, tag, commit), update policies (approve each; trust this branch with optional signed commits and the widening hold), behavioral-change summary, audit table; bundle parse and `bundle.push` (git bundle or tarball, SHA-verified) to nodes; Orchestrator settings page with "N updates available".
-3. Configuration layers (7.8), **all three in v1**: merge engine for instructions repo, project layer, and personal settings, with layer-of-origin display. Project layer (`.pandamux/`): loading from the project checkout, content hashing, the per-repo, per-hash **trust prompt** with diff, re-prompt on any change, revoke in Settings > Project trust; merge rules enforced in code (a project agent overrides a repo agent by id for that project only, never widens an access ceiling, never grants FullAccess; any `schedules` content in the layer is rejected with a readable error); tests with a **hostile project-layer fixture** (an agent that tries to widen its ceiling, request FullAccess, override a repo agent with exfiltration instructions, and ship a schedule).
-4. Create the default instructions repo `BoardPandas/pandamux-instructions` (public, MIT), seeding `agents/` from `.claude/agents/` (architect, builder, explorer, reviewer, tester, security, performance, ux-reviewer) converted to the provider-agnostic format, with `knowledge/`, prompts, and a README on forking.
-5. Agent execution: instruction injection and tool policies per 5.3; access ceilings; local FullAccess opt-ins; per-run budgets and the budget ledger.
-6. Intake classifier with fail-closed parsing; planner with multi-repo DAG task decomposition (`dependsOn`, `targetProjectId`) and agent selection; plan card; Auto and Approve-first modes; chat entry point (composer "Orchestrator" target and per-message orchestrate toggle) and CLI entry point.
-7. Agent instances: dispatch to pre-warmed worktrees (4.12), shared in-memory `Run.blackboard` for concurrent inter-agent schema/contract exchange, per-agent concurrency and queueing, Assign task from the Agents page and CLI.
-8. Monitoring, provider fallback with handoff, stall watchdog, review agent, verification, report.
-9. UI: **Agents page**, **run view** tree, per-thread Agents surface "PandaMUX agents" group, **Floor Plan surface** (7.16, native GPUI 2D virtual office with animated panda avatars, desks, typing/thinking states, and speech bubbles), sidebar Organization/Collection/Tag grouping, and **Settings > Organizations & Subscriptions** checklist matrix (7.15).
-10. CLI: `orchestrate`, `run list/show/approve/cancel`, `agents`, `agents assign`, `agents create/edit/history/revert`, `memory add|update|list|search`, `instructions status/check/approve`, `project trust`, `project tag/group/org`, `mcp`.
-11. **Personal git repo and agent editor**: PandaMUX-managed repo under app data; agent editor (create, edit, duplicate, delete, history with diffs, revert, per-provider compile preview); save scopes Personal, Project (write `.pandamux/agents/`, optional branch commit), Team (branch + PR via `gh`; direct push only in trust-branch mode on a user-owned repo); Promote to team.
-12. **Orchestrator-authored agents**: planner may propose and create Personal agents; change control (`agent_changes`), approval rules (access widening always; human-authored agents need approval; Approve-first holds everything; Auto may freely edit only orchestrator-created agents), creation caps, run-tagged commits, labels, one-click revert, no self-edit of the built-in definition without approval.
-13. **Agent memory** (7.12): markdown store in the personal repo with index and fastembed vector store; `memory.*` protocol and `pandamux memory` CLI (local and on nodes); run-start injection within the token budget as untrusted notes; end-of-run reflection with the write rules; node `memory_journal` and hub merge by entry id with conflict surfacing; secret scrubbing; size caps and consolidation; optional review setting (default off); Memory tab.
-14. **Built-in orchestrator agent** and **Settings > Orchestrator > Model** (7.13): provider, model, effort from live model lists; ordered fallbacks; optional intake model; per-environment overrides with validation warnings; run log records the model used.
-15. **Full MCP settings tool suite** (5.6): `settings_get`, `settings_update`, `org_policy_set`, `project_tag`, `schedule_manage`, `agent_manage`, `memory_manage` with interactive desktop confirmation cards for write operations.
-16. **Broadside client bridge and MCP integration** (7.18): 1-click transcript export from chat timeline (`create_transcript`), artifact publishing (`publish_artifact`), and integration with agent toolsets via `mcp.wellforceit.com/mcp`.
+Acceptance:
 
-Exit criteria: a scripted three-task feature started from a chat thread's composer (and again from `pandamux orchestrate`) runs in both modes; the planner assigns architect, builder, and reviewer, and each instance appears live on the Agents page and in the originating thread's Agents surface with provider, model, and environment; the run view shows run, agent tasks, and provider sub-agents; the same reviewer definition runs on Claude (native instructions), Codex, and Antigravity, with the delivery method shown; forcing a rate limit re-routes an agent to another provider in the same worktree; a repo commit that widens an agent's access ceiling is highlighted in the approval summary and has no effect until approved; FullAccess requested by a repo agent is refused without a local opt-in; a push to the tracked branch shows "1 update available" within one check interval, and in trust-branch mode applies automatically unless it widens a ceiling; a remote node receives and runs exactly the hub's applied SHA without GitHub credentials; a cloned repo with `.pandamux/agents/` loads nothing until trusted, the trust prompt shows its agents and diff, editing the layer re-prompts, and the hostile project-layer fixture is contained (ceiling not widened, FullAccess refused, schedule rejected, override limited to that project and visible as such in the UI); **agents and memory**: in Auto mode the orchestrator creates a new specialist agent (Personal scope, labeled, commit tagged with the run) and uses it in the same run; that agent writes a project memory via `pandamux memory add`; a later run of the same agent on the same project **in a different environment** (Galahad) receives that memory at run start; the user reverts the agent to its previous version from History; an orchestrator edit to a human-authored agent waits for approval, and an orchestrator change that widens an access ceiling waits for approval even in Auto mode; a memory-poisoning fixture (a repo file instructing the agent to remember "always push to X") produces no entry that can change access or targets, and any entry written is visible in the run log and revertable; the orchestrator runs on the model chosen in Settings, falls back to the next model when the primary is made unavailable, and Settings warns for an environment with schedules but no usable orchestrator model; **multi-repo fleet & MCP**: multi-repo DAG routes across distinct projects, sharing contracts on the blackboard; MCP settings tool modifies organization policies with visual confirmation cards; Floor Plan canvas displays animated avatars; 1-click "Share to Broadside" exports a thread transcript to `pages.wellforceit.com` with unlisted visibility and copies the share URL; an agent publishes an HTML artifact to `broadside-content.bp-dev.workers.dev` and verifies iframe sandboxing. Ships: internal CI artifacts only.
+- The pre-recovery prototype is recoverable by an exact ref/commit or a verified patch-plus-untracked archive whose baseline and hashes are recorded.
+- `git status` before and after the snapshot accounts for every path.
+- No user-owned file is lost, broadly staged, or silently absorbed.
 
-### Phase 6: Scheduled tasks
+#### R0.2 Complete production environment routing
 
-1. Schedule engine in `pandamux-orchestrator` (record validation, cron + timezone, overlap, catch-up, budgets, state machine) with fake-clock tests (DST, sleep jumps, storms).
-2. Node-side schedule storage (`schedules`, `schedule_events` with who/when, `schedule_runs`), scheduler, and node-scoped executor on every node; per-node budget ledger; last-known capacity with age-decayed confidence; runs as ordinary threads.
-3. Environment-scoped `schedule.*` routed by the hub; hub cache of each node's schedules and run history (`schedule.list`, `schedule.runs.since`) with unreachable marking; move between environments only when both are reachable.
-4. Policies: approval (auto, approve first with queued notification), pause on unresolvable approval, notifications, max runtime; per-schedule FullAccess local opt-in.
-5. **Settings > Schedules**: list across environments, create/edit with the required Environment picker, enable/disable, delete, Run now, Move, next-run preview, per-schedule run history linking threads and run views; for `session` targets, the **mode selector** (new thread per run, default; or continue an existing thread with a thread picker limited to that environment) and the continue-thread rules (archived or deleted: skip and notify; busy: overlap policy, `parallel` falls back to `queue`; other environment: skip and notify).
-6. **Backup of schedules, personal agents, and memory** (7.5, 7.12), **disabled until the user configures it** (no clone, push, or visibility check before setup): private-repo configuration with visibility check before every push (`gh` or GitHub API; public refused, unknown warns), offer to create a private repo, hub-side managed clone, one JSON file per environment for schedules with stable key order, `agents/` and secret-scrubbed `memory/` from the personal repo, secrets excluded, debounced push after each change plus a daily push; **Restore** for schedules (file and commit picker, preview, target environment, restored as disabled, FullAccess re-confirmation) and for agents and memory (preview with diffs, import as a revertable commit, FullAccess never auto-restored).
-7. Optional systemd user service install for nodes that hold schedules (with linger guidance).
-8. CLI: `schedule list/show/run/enable/disable/next` with `--env`, `schedule backup`.
-9. Fleet and group-targeted scheduled runs across organizations or tags; backup of organization subscription policies and repo groups to private git repo alongside schedules, agents, and memories.
-10. **Schedule auto-publishing to Broadside** (7.18): scheduled tasks can automatically export run transcripts and artifact links into mobile notifications via Broadside.
+1. Add the hub-owned adapter that implements `EnvironmentTransport` over `pandamux-remote::ProxyTunnel`; register and unregister it with `EnvironmentRouter` for the environment lifecycle.
+2. Implement `pandamux-server proxy` as the node-side NDJSON bridge over an SSH exec channel, including hello/version negotiation, bounded request and event queues, cancellation, EOF semantics, and joined cleanup.
+3. Define reconnect behavior: reject new routed calls while disconnected, preserve node-owned work, resume event delivery from sequence, and surface an explicit stale or unreachable state instead of silently falling back local.
+4. Make `pandamux-server` the production composition owner of `pandamux-remote`. Restrict its terminal dependency to `default-features = false, features = ["pty"]`.
+5. Add fixture integration tests for connect, request/response, event relay, cancellation, abrupt SSH loss, protocol mismatch, reconnect, and cleanup with no leaked child or task.
+6. Add a narrow non-release node-artifact harness for the live R0 matrix: build the current Galahad target's server and CLI, fail on either missing binary, generate a fresh commit/version/size/SHA-256 manifest, verify it before and after transfer, and keep publication disabled. Multi-target artifact flow, signing, packaging, and public manifests remain Phase 7 work.
 
-Exit criteria: from Settings > Schedules, create a nightly schedule on the Linux environment (Galahad) targeting the reviewer agent; power off the laptop; the run fires on time on Galahad, routes the reviewer to a non-default provider because the preferred one is below its capacity threshold, and after reconnect its thread, run tree, usage, and outcome appear in the schedule's history and the sidebar, and any memory the reviewer wrote on Galahad during that run is merged into the hub's personal repo; while Galahad is unreachable its schedules show as unreachable and read-only; moving a schedule between two reachable environments works and is refused when one is unreachable; a local schedule missed during sleep follows its catch-up policy on wake; 20 schedules due in the same minute respect overlap and concurrency caps without starving interactive threads; a run that exceeds its budget stops with `BudgetExceeded`; an unattended run that hits an approval outside its ceiling pauses and notifies; **session targets**: a "new thread per run" schedule creates a fresh thread each run, and a "continue an existing thread" schedule appends a clock-marked turn to the chosen thread; with that thread busy the overlap policy applies (`skip` notifies, `queue` runs after the turn settles), and with the thread archived the run is skipped with a notification and the schedule shows "target thread unavailable"; **backup**: before setup, no backup activity occurs (no network calls, no clone); after the user creates a private repo via the offered `gh repo create --private` and configures it, back up Galahad's schedules to a private repo, wipe Galahad's store, restore from the backup to Galahad, all schedules arrive disabled, enable them, and the next run fires; delete a personal agent and its memory, restore both from the same backup repo as a revertable commit, and the agent runs with its memory again; no secret value appears anywhere in the backup repo; configuring a public repo as the backup target is refused; an unattended nightly schedule on Galahad auto-publishes its run report and transcript to Broadside and includes the `pages.wellforceit.com` review URL in its completion notification. Ships: internal CI artifacts only.
+Acceptance:
 
-### Phase 7: Ship (cut-over)
+- A routed environment-scoped RPC demonstrably traverses the production SSH proxy and returns from the remote node.
+- Dropping the tunnel leaves no proxy child or forwarding task and does not relabel the node as local.
+- The resolved dependency graph contains `pandamux-remote` only in its intended composition path and excludes the terminal grid from the server.
 
-1. Release workflow: set `RELEASES_ENABLED=true` and re-enable `winget.yml` (re-bootstrapping the winget-pkgs manifest if needed) only in this phase. Linux job (musl x64/arm64) feeds the Windows job; the Windows job runs fmt, clippy, `cargo deny`, and tests **before** building (LL-G `release-workflow-not-gated-on-ci`); build, sign `pandamux.exe`, `pandamux-server.exe`, `pandamux-cli.exe` (Azure credentials via action inputs, LL-G `azure-trusted-signing-credentials`), `cargo packager` NSIS, sign the installer, publish one asset.
-2. Updater (ported in Phase 1): drain the local server first (no new turns; warn about running agents, due schedules, and open terminals), then exit it so the installer can replace files.
-3. No migration: the 0.x app had no users, so first launch starts clean (a user-initiated `~/.ssh/config` import is the only onboarding helper). `check-rust-boundaries.ps1` is already graph-based and feature-aware from Phase 1.
-4. Docs: root `CLAUDE.md` and `AGENTS.md` rewritten (GPUI pin-bump rule, no-GPL-Zed-code rule, agents, schedules, multi-instance pooling, repo grouping, and MCP overview); `crates/pandamux-desktop/CLAUDE.md`, `crates/pandamux-providers/CLAUDE.md` (driver contract, fixtures, probe rule, 5.3 degradation table), `crates/pandamux-remote/CLAUDE.md`, `crates/pandamux-term/CLAUDE.md`, `crates/pandamux-orchestrator/CLAUDE.md` (purity, bundle schema versioning, fake-clock tests); instructions-repo authoring guide; `docs/` regenerated; `site/` rewritten and deployed.
-5. Version: bump `[workspace.package] version` to **1.0.0** for the cut-over release (Major bump explicitly decided by the user on 2026-09-25, as `.claude/rules/commit-changelog.md` requires); CHANGELOG `1.0.0` entry describes the new product, the breaking protocol v3, and the removed multiplexer. Agents still never bump Major on their own for later changes.
+#### R0.3 Resolve the exact provider instance for every turn
 
-Exit criteria (first-release gate): a signed installer from a tag installs on clean Windows 10 and 11 VMs, connects to a remote host, and with **each of Codex, Claude, and Antigravity** runs a chat turn locally and remotely; runs an orchestrated multi-repo fleet task with agents sharing blackboard contracts; demonstrates transparent multi-instance failover between Claude Team and Max; enforces organization subscription matrix boundaries; modifies settings via MCP with interactive card approval; dictates code via Hark voice bridge; animates agents on the 2D Floor Plan canvas; publishes a transcript and an HTML artifact to Broadside with sandboxed preview; fires a schedule; opens local and remote terminals; the updater installs a subsequent test release; boundary and license checks pass; winget publishing is re-enabled only after the first release is live. Ships: the new PandaMUX to all users.
+1. Replace provider-kind inference from an instance-id string with a typed lookup of the stored `ProviderInstanceConfig` on the thread's environment.
+2. Carry its provider kind, binary override, profile directory, settings, environment overrides, enabled state, concurrency limit, and capability map into driver construction. R0 does not require `SubscriptionKey`; the normalized subscription mapping lands transactionally in 4A after typed execution is proven.
+3. Remove the `prov-default` to Custom-mock production fallback. A missing, disabled, incompatible, or unauthenticated instance returns a structured actionable error.
+4. Share one resolver between thread start, health, login, orchestrator routing, schedule validation, and usage attribution so those paths cannot disagree.
+5. Enforce per-instance concurrency with permits owned for the complete provider-process lifetime and released during every cancellation and crash path.
+
+Acceptance:
+
+- Tests prove two instances of one provider receive different profile directories and settings without credential or process leakage.
+- The selected thread, health row, login target, spawned process, existing turn record, and audit record all carry the same typed instance id. Checkpoint 4A extends that invariant to normalized usage observations and subscription mapping.
+- No production path constructs a placeholder provider config or selects the Custom mock implicitly.
+
+#### R0.4 Secure the local control boundary and correct developer truth
+
+1. Introduce `RequestContext { peerRole, authenticatedEnvironmentId, clientIdentity, capabilityScope }` at the router boundary. The accepting endpoint and server-side handshake assign role and scope; request JSON cannot claim them. Node proxy connections are tagged by the SSH proxy listener. Every local control call requires a capability in addition to the per-user OS boundary: the desktop and interactive CLI load a restricted control capability, MCP runs behind a distinct server-owned adapter, and provider children receive only a per-process expiring capability limited to their thread and the exact `notify` or memory methods they need. Provider environments never receive the general control capability.
+2. Windows: include the user SID in the pipe name, create the pipe with a user-only DACL and remote-client rejection, validate the connecting client PID and image where supported, and test anti-squatting behavior.
+3. Unix: create the runtime directory as `0700`, the socket as `0600`, reject symlink or ownership surprises, and validate peer credentials where supported.
+4. Either validate the existing runtime token as a scoped capability on every applicable connection or replace it with explicit endpoint and per-child capabilities once the new model is proven. Never retain security theater. Keep the general control capability outside provider-readable working/profile directories and inherited environments. Document that a malicious process already running as the same OS user is outside the v1 isolation boundary; a FullAccess provider intentionally has host-user authority and may defeat file-held capability separation, so the UI must not describe that mode as process-isolated. Scoped capabilities protect normal sandboxed and accidental call paths, not a hostile same-user process.
+5. Audit every existing MCP read tool. Replace full-settings and full-schedule serialization with purpose-built redacted projections, or disable the tool until its projection exists. Schedule prompts, repo paths, notification targets, FullAccess state, provider overrides, arbitrary provider JSON, profile paths, and secrets are never returned by a general read tool.
+6. Correct `README.md`, `CLAUDE.md`, and the maintained docs index enough to state the GPUI chat-first architecture, current commands, crate map, version authority, remote composition, and known Phase 4 status. Preserve historical rewrite material under its clearly marked archive.
+
+Acceptance:
+
+- Same-user desktop and CLI connections work; unauthorized local clients and cross-user or remote pipe clients are rejected before routing.
+- Safe-projection snapshot tests prove provider env overrides, arbitrary provider JSON, profile paths, secrets, schedule prompts, repo paths, notification targets, and FullAccess state cannot appear in general MCP reads.
+- Method-allowlist tests prove a provider-child capability cannot invoke settings, organization, schedule, environment, or hub-ingestion methods, and request fields cannot upgrade its role.
+- A new contributor following root docs reaches the current crates and current validation commands without encountering the removed Iced app.
+
+##### R0.2 through R0.4 implementation record, 2026-09-28
+
+- **R0.2 production routing:** `pandamux-server` now owns `pandamux-remote` composition and consumes only the `pty` half of `pandamux-term`. The versioned proxy bridge provides bounded request and event queues, cancellation, protocol and environment negotiation, durable replay cursors, explicit stale state, reconnect, and joined cleanup. Six proxy transport integration fixtures pass. `scripts/r0-node-artifacts.sh` requires an exact clean commit, both Galahad binaries, a fresh size and SHA-256 manifest, verification before and after transfer, and disabled publication.
+- **R0.3 exact provider execution:** one shared resolver loads the typed stored instance for its environment, applies exact profile, binary, settings, environment overrides, enabled state, compatibility, health, and concurrency, and returns structured failures. Threads, turns, health, login, provider launch, and process audit retain the same typed instance ID. Permits remain owned for the full provider-process lifetime and are released on every tested cancellation and shutdown path. No production Custom fallback remains. Orchestrator and scheduler execution do not yet exist; Phase 5 and Phase 6 must use this resolver when those paths become real.
+- **R0.4 local boundary:** accepting transports assign immutable request contexts. Control, MCP, provider-child, node-proxy, and internal roles have distinct server-owned scopes. Provider tokens expire, require the exact thread on every allowed call, and cannot upgrade through request fields. Unix runtime, record, and socket modes, symlink and ownership checks, and peer credentials are enforced and tested. Windows code uses a SID-scoped pipe, protected user-only DACL, remote-client rejection, connecting PID and executable validation, and first-instance anti-squatting. The exact security module type-checks for MSVC, and the full Windows server plus all targets cross-check for the GNU ABI without warnings. Native Windows behavior remains a live acceptance item because this Linux host cannot run Windows binaries and lacks the MSVC linker and libraries.
+- **MCP and developer truth:** general MCP reads now use explicit redacted projections with sentinel tests for provider paths, environment overrides, arbitrary JSON, secret-like values, schedule prompts, repository paths, notification targets, and FullAccess state. `README.md`, `CLAUDE.md`, and `docs/README.md` route contributors to the GPUI desktop, current crates and commands, authenticated server composition, and open recovery gate. The removed Iced wiki is labeled historical.
+- **Verification:** `cargo test --workspace` passed 286 tests with zero failures and two intentionally ignored real-shell terminal tests. Strict workspace Clippy, formatting, whitespace, crate-boundary, wiring, and focused compile checks passed. A production Unix socket smoke authenticated the real CLI for `ping` and `identify` and observed `0700`, `0600`, and `0600` modes for the runtime directory, record, and socket. These are implementation checks, not R0.5 production acceptance.
+
+#### R0.5 Archive the Phase 3 production acceptance matrix
+
+Live results and required evidence are tracked in [`docs/operations/PHASE3_ACCEPTANCE.md`](../docs/operations/PHASE3_ACCEPTANCE.md). The record is open; no live Windows or Galahad row has been inferred from fixture coverage.
+
+R0.5 preflight found that the recovered Antigravity path used placeholder release metadata, shell-script stand-ins for the Google bundle, a fabricated OAuth flow, and success responses without a live ACP process. The recovery implementation now uses the pinned Google ACP 1.1.1 bundles, streaming size and SHA-256 verification, two-entry hardened extraction, real initialize and session traffic, strict OAuth relay validation, workspace-confined file capabilities, opaque permission option IDs, cancellation and process cleanup, node download plus verified hub-to-node SFTP fallback, and private profile and scratch directories. This correction is source and fixture evidence only. The Windows and Galahad live rows below remain gating.
+
+Run the matrix against local Windows and Galahad with exact binary SHAs and captured artifacts:
+
+1. Codex, Claude, and Antigravity: login where needed, start a configured-instance thread, stream output, request and resolve an approval, cancel, reconnect, and enforce an access ceiling.
+2. Antigravity: node-side managed download; separately block outbound node access and prove verified hub download plus SFTP push; complete remote OAuth relay.
+3. Disconnect and sleep the laptop for 30 minutes during a remote turn and a remote full-screen terminal; reconnect and recover final turn events plus terminal replay.
+4. Upgrade the idle node using the R0-generated non-release artifacts and fresh manifest; refuse or defer an upgrade while owned work is active. This proves Phase 3 node lifecycle and hashes, not the later multi-target release pipeline.
+5. Transfer a pasted image to a remote provider and synchronize an unpushed worktree delta to Galahad.
+6. Cursor, Grok, and OpenCode each pass the common fixture and live smoke or remain disabled with a stored structured reason exposed through the protocol. Phase 4E owns the final disabled/error UI acceptance.
+
+Gate exit:
+
+- Store exact commands, results, logs, screenshots where useful, environment details, artifact hashes, limitations, and the deciding commit SHAs in a Phase 3 acceptance record.
+- R0 closes only when every required row passes or the plan explicitly re-scopes that row with user approval. A checked implementation step is not a substitute.
+- Ships: internal CI artifacts only.
+
+### Phase 4: Provider observability, usage, capacity, policy, and safe failover
+
+#### Previous Phase 4 attempt and recovery decision
+
+- [x] **Cursor, Grok, and OpenCode profiles on the shared ACP driver.** Completed in `52656f5`, v0.53.44. Keep this committed Step 1 subject to R0 live acceptance.
+- [x] **Usage prototype recovery (R0.1 completed 2026-09-28).** The 2026-09-28 uncommitted attempt is evidence and salvage material, not the implementation contract. Do not incrementally patch its append-only buckets, caller-supplied provenance, path-only cursors, floating-point pricing, or memory-only scanner state into production.
+- **Explicit move:** vector memory and `fastembed` leave Phase 4 and move to isolated Phase 5 memory work. Phase 4 adds no runtime dependency.
+
+##### R0.1 recovery completion record
+
+- Baseline `9511d0e22d44192f106e2f84a7c96b96d76734b6`, branch `master`, upstream `origin/master`, and workspace version `0.53.44` were recorded with the exact nine tracked and three untracked paths. Every path was owned by the user before recovery work began.
+- The named snapshot is `/home/brandon/.codex/recovery/Pandamux/2026-09-28-r0.1-phase4-prototype-9511d0e`. Its full-index binary patch has SHA-256 `96117c5a4fe97b0448036a6154f2b9c0cf70b31a9417c33aea698b7aa0f9668a`; its untracked archive has SHA-256 `27cb07ad0ef5497e6b764d562bbc0828ffeb09e1c597cc08b49f54bc2f6754bd`. A detached worktree restore at the exact baseline passed `git apply --check --binary`, applied the patch, extracted the archive, and matched all 12 paths byte for byte. Source status was identical before and after the snapshot.
+- **Keep:** `tasks/plan-rewrite.md` as the current contract; the token-category vocabulary and serialization-test intent from `crates/pandamux-core/src/usage.rs`; module seams in `crates/pandamux-core/src/lib.rs`, `crates/pandamux-protocol/src/lib.rs`, `crates/pandamux-providers/src/lib.rs`, and `crates/pandamux-server/src/lib.rs`; pure Claude and Codex parser fixtures from `crates/pandamux-providers/src/usage_scanner.rs`; query and versioned-wire fixture ideas from `crates/pandamux-protocol/src/usage_rpc.rs`; migration and store failure-test ideas from `crates/pandamux-server/src/store/migrations.rs` and `crates/pandamux-server/src/store/mod.rs`; and router fixture intent from `crates/pandamux-server/src/router.rs`. Migration 4 remains immutable as a legacy input to migration 5.
+- **Rewrite:** `crates/pandamux-core/src/usage.rs` around checked `UsageObservation`, `SubscriptionKey`, integer money, explicit unknowns, and projection-only buckets; `crates/pandamux-protocol/src/usage_rpc.rs` around authenticated export and bounded query contracts; `crates/pandamux-providers/src/usage_scanner.rs` as pure parsers below a server-owned scanner with durable file-identity cursors; `crates/pandamux-server/src/usage_aggregator.rs` as indexed SQL projection and effective-dated pricing; the usage portions of `crates/pandamux-server/src/store/mod.rs` as transactional observation, cursor, and outbox persistence; and the usage portions of `crates/pandamux-server/src/router.rs` behind trusted request context.
+- **Discard:** caller-submitted `UsageBucket` writes and environment identity, path-only in-memory cursors, scanner-owned filesystem traversal, append-only duplicate-prone buckets, floating-point prices and fallback prices, fabricated dates and models, silent read and parse failures, clamping corrupt database values, unknown-provider fallback to Claude, in-memory pricing mutation, and loading all rows for aggregation.
+- Pre-edit verification was intentionally recorded rather than repaired in place: `cargo fmt --all --check` failed on formatting in `usage.rs` and `router.rs`; `cargo test -p pandamux-core usage` failed to compile because the prototype used `ProviderKind` as a `BTreeMap` key without `Ord`. These failures confirm that the snapshot is salvage material, not an accepted implementation.
+
+#### Phase 4 domain contract
+
+1. `UsageObservation` is the only ingestion truth. It has a stable observation id, source kind and parser version, optional provider-native session/turn id, occurrence time, provider, provider instance, subscription key, model, checked token categories, optional provider-reported micro-USD, and optional thread, agent, and schedule attribution.
+2. `UsageBucket` is a query projection, never a write DTO. The server derives environment identity from authenticated context and derives managed-run attribution from thread metadata.
+3. `SubscriptionKey` identifies one quota boundary; `ProviderInstanceId` identifies one configured runtime on one environment; `FailoverPoolId` expresses explicit routing policy. Email is only a masked label.
+4. `CapacitySnapshot` represents subscription quota windows. `InstanceAvailability` represents installation, executable compatibility, authentication, process health, concurrency, and local resources. Neither substitutes for the other.
+5. Token counts, byte offsets, sequence values, and money use checked integer conversions. Overflow, negative database values, unknown enum values, and malformed timestamps are quarantined or rejected, never clamped into plausible data.
+
+#### Checkpoint 4A: normalized schema, migration, and authenticated protocol
+
+1. Finish or replace core token types with total checked addition, all provider variants, forward-compatible unknown handling, and stable serialization tests.
+2. Consolidate overlapping organization types into one canonical policy/domain model before schema design. Define invariants for project organization, allowed provider instances/subscriptions, failover pools, budgets, Broadside policy, and fail-closed missing or ambiguous assignment.
+3. Keep applied migration 4 immutable. Add migration 5 for normalized observations, durable scanner cursors, node outbox sequence, hub high-water marks, subscriptions, instance-to-subscription mapping, failover pools, canonical organization policy, pricing versions, capacity snapshots, and quarantine records.
+4. Give observations a unique stable id and use conflict-safe inserts. Cursor advancement, observation inserts, and outbox enqueue happen in one SQLite transaction.
+5. Deterministically backfill valid migration-4 rows into observations; quarantine invalid providers, negative integers, impossible dates, and ambiguous identity. Preserve the legacy table until a verified release has completed migration and reconciliation.
+6. Test upgrades from schema versions 1, 2, 3, and 4, repeated migration, interrupted rollback, corrupt legacy rows, and database reopen. Never renumber an applied migration.
+7. Define internal `usage.export { afterSeq, limit }` and optional `usage.ack`. Require an authenticated hub peer. The response contains normalized observations and `nodeStoreId`, never transcript text, profile paths, or source filenames.
+8. Define desktop-facing `usage.query`, `capacity.query`, and `provider.health` with bounded pagination, explicit filters, stable error codes, and versioned wire fixtures.
+9. Remove or permanently internalize unrestricted `usage.record_buckets`; no client can submit environment id, subscription identity, or cost as trusted provenance.
+
+Checkpoint acceptance:
+
+- Replaying any accepted batch produces no duplicate fact or projection change.
+- Cursor and fact insertion either commit together or both roll back.
+- An authenticated node cannot forge another environment, and a desktop client cannot call hub-only ingestion methods.
+- Migration tests preserve all valid legacy totals and enumerate every quarantined row.
+
+#### Checkpoint 4B: node-owned scanners and source reconciliation
+
+1. Keep provider-specific transcript parsing as pure fixture-tested code. Put filesystem enumeration, cursor state, cadence, blocking IO, and lifecycle in a server-owned scanner service.
+2. Run filesystem work on a dedicated bounded blocking worker. Trigger a startup scan, a turn-completion scan, and a jittered periodic fallback. Apply owner, TTL, cap, drain, and joined-shutdown rules.
+3. Cursor by platform file identity, not path: device and inode on Unix; volume serial and file index on Windows. Record canonical path only for diagnostics. Detect replace, truncate, rotation, parser-version change, and node-store reset.
+4. Do not follow symlinks or junctions by default. Bound directories, files, bytes, line length, record size, total scan time, and diagnostic retention.
+5. Never advance past an incomplete trailing JSON record. A malformed complete record is quarantined with a safe reason and bounded excerpt hash; subsequent valid records remain discoverable according to a provider-specific resynchronization rule.
+6. Managed PandaMUX turn usage is authoritative. Transcript scans cover external use and backfill. Use provider-native ids where available; otherwise derive a versioned fingerprint sufficient to exclude a managed observation without merging unrelated turns.
+7. Eliminate fabricated dates and stale hard-coded fallback model ids. Unknown time, model, identity, or token fields remain explicitly unknown and affect coverage reporting.
+8. Expose source coverage, last successful scan, lag, quarantined count, last safe error, and parser version through diagnostics.
+
+Checkpoint acceptance:
+
+- Fixtures cover first scan, restart, append, partial line, rotation, truncation, path rename, file replacement, duplicate record, malformed record, symlink cycle, oversized record, permission denial, and source disappearance on Windows and Unix abstractions.
+- Restarting after any injected transaction failure neither loses nor duplicates an accepted observation.
+- A managed turn present in both the event store and provider transcript contributes exactly once.
+- Scanner shutdown completes within the owned drain budget with no detached blocking task.
+
+#### Checkpoint 4C: hub synchronization, aggregation, and pricing
+
+1. The hub pulls bounded pages from every connected node, upserts `(environmentId, observationId)`, and advances that node's high-water mark transactionally. Reconnect resumes from the committed mark; a changed `nodeStoreId` enters an explicit reconciliation state.
+2. Bound outbox retention by count, age, and bytes. Compact only after acknowledgement. If the hub falls behind past retention, report an explicit coverage gap and request a bounded backfill rather than pretending totals are complete.
+3. Implement `usage.query` as indexed SQL aggregation with date, environment, provider, subscription, agent, schedule, model, and source filters. It must not load all observations into memory.
+4. Store source-dated, effective-dated, versioned, provider-scoped pricing rules. Match exact canonical model ids plus explicit aliases. Keep provider-reported spend separate from API-equivalent estimates; unknown price yields `None`, not a generic price.
+5. Calculate estimates from integer token counts into integer micro-USD with checked arithmetic and documented rounding. Query-time pricing permits safe revaluation and identifies the pricing version used.
+6. Publish coverage metadata with every result: observation sources, included environments, stale or unreachable nodes, unknown-price token share, quarantined count, and latest source time.
+
+Checkpoint acceptance:
+
+- Duplicate pages, reordered pages, reconnects, and process restarts produce identical aggregates.
+- Query totals equal fixture truth across timezone boundaries and all filters; property tests cover aggregation conservation and checked overflow.
+- A pricing update changes only the estimate projection, never raw usage facts.
+- Raw transcripts, filesystem paths, and unmasked account labels never leave their node.
+
+#### Checkpoint 4D: capacity, provider health, and actionable login
+
+1. Implement provider adapters for quota reports only where fixtures prove the semantics. Codex rate-limit events may be Reported. Grok remains unverified until fixtures and a live smoke pass. Claude and Antigravity use Estimated or Unknown unless a defensible provider source appears.
+2. Persist capacity revisions with subscription key, windows, used and remaining fraction, reset time, source, confidence, provider version, and `asOf`. Push signed-by-context snapshots to nodes with schema version and age-decay policy.
+3. Local hard-limit evidence forces remaining capacity to zero until its verified reset and cannot be raised by stale hub data. Conflicting evidence is visible and fails toward the safer value.
+4. Run provider health probes concurrently with per-instance deadlines and a global cap. Probes never spawn a provider session, trigger login, or burn quota.
+5. Report installation, resolved executable/version, authentication state and confidence, masked account/subscription label, runtime health, last success, check time, expiry, and structured login guidance separately. Unknown authentication is not Healthy.
+6. Login is an explicit action. Preview environment, instance, profile, and exact safe command or flow before launching it in the Terminal surface. Remote-unreachable and terminal-launch errors remain visible and retryable.
+
+Checkpoint acceptance:
+
+- Capacity fixtures cover fresh Reported, stale Reported, Estimated, Unknown, reset, hard limit, conflicting snapshots, offline node, and clock skew.
+- Health fixtures cover missing binary, unsupported version, unknown auth, logged out, logged in, timeout, malformed output, remote unreachable, and login launch failure.
+- No health test starts a provider session or modifies provider state.
+
+#### Checkpoint 4E: Usage, provider identity, policy, and accessibility UI
+
+1. Add Usage as a top-level rail destination, following the existing projection-plus-intents architecture. Put pure reducers and formatting in `pandamux-client`; GPUI owns presentation only.
+2. Filters: date, environment, provider, named subscription, agent, schedule, model, and source. Token totals are primary. Dollar values are labeled **API-equivalent estimate** unless provider-reported; Unknown remains visible.
+3. Show source coverage and freshness with every aggregate. Provide loading, empty, partial, stale, offline, malformed-source, migration-quarantine, and server-error states.
+4. Capacity cards always show confidence, source, `as of`, reset time, hard-limit state, and why a profile was discounted or excluded. Charts have equivalent table or text summaries.
+5. Add a subscription/instance editor that uses user-defined names plus provider and optional masked account label. Opaque keys never appear in the UI.
+6. Render and edit the canonical 4A organization policy model. Enforce it in direct routing, failover, schedule validation and execution, MCP proposal validation, and Broadside sharing. Missing or ambiguous project organization fails closed when a policy-sensitive action is requested.
+7. Organization matrix cells identify provider instance and subscription, not email. Removing the last valid provider or one used by enabled schedules requires a blocking impact review.
+8. Fix provider health presentation: version, reason, freshness, last successful snapshot, explicit retry, and separate login action. Render Unknown or Not reported instead of fabricated operational values; disable unfinished actions with a reason.
+9. Accessibility gate: every icon has an accessible name; keyboard reachability, visible focus, focus return, persistent announced errors, non-color status, minimum hit targets, 200 percent scaling/scroll, reduced motion, and forced-colors behavior are tested. Run a screen-reader smoke on the supported Windows path where the GPUI accessibility bridge exposes controls, and record any framework-limited gap explicitly. Usage charts expose their data table.
+
+Checkpoint acceptance:
+
+- Reducer tests cover every data, error, stale, and filter state without GPUI.
+- Keyboard-only walkthrough reaches and operates Usage, health/login, filters, organization policy, retry, and details without focus loss.
+- Cross-organization fixtures prove a disallowed personal subscription is filtered before scoring and cannot be approved implicitly by failover.
+- No plausible fake version, platform, account, price, capacity, or health value is rendered.
+
+#### Checkpoint 4F: explicit pools and side-effect-aware failover
+
+1. Add explicit failover-pool editing and validation. A pool can span compatible providers only when every member declares the required instruction, tool, model, and access capabilities.
+2. Route new turns by hard filters first: project and organization policy, required capabilities, access ceiling, authentication, compatibility, and local hard blocks. Then score capacity confidence, health, concurrency, locality, and user preference.
+3. Classify every attempt as **safe to retry**, **visible output begun**, **tool side effect begun**, or **externally committed**. Drivers emit the transition before forwarding the corresponding output or action.
+4. Automatically retry only in the safe state. Otherwise persist `InterruptedForCapacity` with checkpoint, partial output, tool ledger, and exact provider evidence; offer an audited continuation on an eligible instance.
+5. Do not claim transparent cross-account resume unless that provider and tested version prove native portability. The portable fallback is a new provider session plus bounded handoff and the same worktree checkpoint.
+6. Add durable continuation records so approval or tool results survive provider handoff and restart without duplicate execution.
+
+Checkpoint acceptance:
+
+- Deterministic routing fixtures explain every selected and rejected instance.
+- Injected rate limits before output retry once on an allowed instance. Injected limits after text, file edit, command, network action, or approval never silently replay.
+- A disallowed cross-organization candidate remains excluded even when it is the only healthy instance.
+- Duplicate continuation, approval, and tool-result delivery is idempotent across restart.
+
+#### Phase 4 verification and completion record
+
+Run narrow unit and migration tests first, then crate tests, workspace fmt/clippy/tests, resolved-boundary checks, `cargo deny advisories licenses bans sources`, built-artifact smoke, and the local plus Galahad live matrix. Cargo commands remain serial in this repository.
+
+Phase 4 exits only when:
+
+- R0 is closed and archived.
+- Usage restarts, rotations, retries, reconnects, and backfills are idempotent, with source coverage visible.
+- Weekly totals reconcile against each provider's defensible reporting source within 2 percent where that source exists; providers without a source show Unknown rather than failing the phase on invented precision.
+- Capacity confidence and freshness appear everywhere capacity affects a decision.
+- Organization policy is enforced before routing, and failover obeys the side-effect boundary.
+- The Usage and health surfaces pass their keyboard, scaling, reduced-motion, and non-color-status matrix.
+- The completion record contains implementation SHAs, exact commands and results, live-environment evidence, artifacts, known limitations, rollback notes, and every deferred or unverified provider claim.
+- Rollback disables scanners, hub sync, capacity routing, and automatic failover independently while preserving raw observations and legacy tables. Read-only usage queries may remain available if their schema is sound.
+- Ships: internal CI artifacts only.
+
+### Phase 5: Orchestrator, agents, trusted configuration, memory, and integrations
+
+#### Phase 5 dependency and boundary gate
+
+1. Add `pandamux-orchestrator` as a pure crate with no Tokio, filesystem, network, SQLite, GPUI, provider process, keyring, or embedding dependency. Domain inputs and effects are serializable values; the server interprets effects.
+2. Replace the manifest-text boundary script with a `cargo metadata` graph and resolved-feature check. Assert GPUI isolation, server PTY-only terminal features, GPUI snapshot alignment, orchestrator purity, memory isolation, and no duplicate forbidden native stacks.
+3. Define the actual pin policy: commit the lockfile; exact-pin security-critical, native, protocol, parser, GPUI-snapshot, packaging, and scheduler dependencies; allow compatible ranges only when explicitly justified. Add a pinned `rust-toolchain.toml` or document and enforce the selected toolchain in CI.
+4. Select and directly pin `schemars` plus one YAML parser after license and target checks. Parse markdown frontmatter through a small owned delimiter layer unless a separate crate proves necessary.
+5. Do not add `fastembed`, keyring, a cron stack, or tree-sitter in this checkpoint. Each has its own owner and gate below.
+
+Acceptance:
+
+- Pure orchestrator tests compile without server, Tokio, SQLite, GPUI, provider, or platform dependencies.
+- The graph check fails fixtures that introduce transitive GPUI into server, a default-feature grid leak, native embeddings into orchestrator, or version-skewed GPUI snapshots.
+- `cargo deny advisories licenses bans sources` passes the resolved graph.
+
+#### Checkpoint 5A: schemas, deterministic policy, DAG, and run state machine
+
+1. Version schemas for `orchestrator.yaml`, `agents/*.md`, knowledge references, prompts, routing rules, and compiled instruction bundles. Unknown schema versions fail closed; errors carry file, field, code, and safe explanation.
+2. Define pure domain records: `Run`, `AgentTask`, `Attempt`, `DependencyEdge`, `BlackboardEntry`, `BudgetReservation`, `ApprovalRequirement`, `CheckpointRef`, `RouteDecision`, and terminal run states. State transitions are explicit, total, replayable, and idempotent.
+3. Implement two-step routing: task to PandaMUX agent, then agent to provider/model/environment/instance. Organization and capability filters are hard constraints; deterministic scores and tie-breakers are recorded. An LLM may classify or propose a DAG, but schema parse and policy reconciliation fail closed.
+4. Validate DAGs for missing targets, cross-project permission, duplicate ids, cycles, impossible dependencies, output-contract mismatch, budget overflow, and unavailable required capabilities before dispatch.
+5. Implement Auto and Approve-first as policy inputs to the same state machine. Auto can skip only approvals the current policy explicitly permits; it can never widen access, cross an organization boundary, or approve a human-authored agent edit.
+6. Build synthetic property and model tests for ordering, cycle rejection, retry budgets, cancellation propagation, partial failure, capacity changes, provider fallback, duplicate events, crash replay, and deterministic explanation text.
+
+Acceptance:
+
+- Replaying an event log produces byte-equivalent run state and no duplicate effect.
+- Identical inputs produce identical routes and explanations.
+- Invalid model JSON is retried within a bounded parse budget, then fails closed without dispatch.
+- A cross-organization, cyclic, over-budget, or capability-impossible plan cannot enter Running.
+
+#### Checkpoint 5B: trusted configuration, layers, and durable approvals
+
+1. Create the PandaMUX-managed personal git repo under app data with atomic initialization, explicit ownership, stable commits, recovery from interrupted writes, and one-click history/revert. Secrets and runtime state are forbidden by schema and pre-commit validation.
+2. Implement the managed instructions mirror: `git ls-remote` before fetch, branch/tag/commit tracking, captured stderr, credential-helper or `gh` use without token storage, candidate validation, behavioral diff, approval or trust-branch policy, active SHA audit, and exact bundle distribution to nodes.
+3. Implement the three configuration layers with origin tracking: approved instructions repo, trusted project `.pandamux/`, and personal. Project trust is per repository and content hash. It cannot widen access, grant FullAccess, define schedules, or override outside that project.
+4. Add the hostile project-layer fixture: exfiltration prompt, access widening, FullAccess request, schedule content, invalid references, and a same-id agent override. Every blocked element remains visible with its origin and reason.
+5. Implement durable mutation proposals before any mutating MCP tool. Records contain request id, caller, expected revision, old/new canonical values, impact summary, expiry, resolution, applier, and audit link. Apply through compare-and-swap after Approve once.
+6. Confirmation cards show caller/tool, environment, exact diff, affected organizations/projects/agents/schedules, access and budget impact, expiry, and validation errors. Disconnect, timeout, rejection, duplicate resolution, or revision drift performs no mutation.
+7. Creating `BoardPandas/pandamux-instructions`, pushing it, changing its visibility, or opening its initial PR is a separate external-write checkpoint requiring current user authorization. Until then, fixtures or a local bare remote prove the workflow without mutating GitHub.
+
+Acceptance:
+
+- The active bundle is always a fully validated immutable SHA; a failed fetch, invalid candidate, or offline state keeps the last good bundle.
+- A node runs exactly the SHA distributed by the hub without GitHub credentials.
+- Duplicate proposals are idempotent, stale revisions cannot overwrite new state, and access widening always waits for local approval.
+- Personal-repo interruption and revert tests preserve a valid HEAD and recover all accepted edits.
+
+#### Checkpoint 5C: execution owner, worktrees, budgets, and recovery
+
+1. The server owns effects from the pure engine: worktree creation, provider turns, checkpoints, approvals, tools, files, commits, notifications, and event persistence. Persist intent before dispatch and outcome before the next dependent task.
+2. Allocate one isolated worktree per task attempt. Never run an agent in the user's checkout. Record repo baseline, worktree path, branch/ref, checkpoint refs, dirty-state policy, and cleanup eligibility.
+3. Implement per-agent, per-provider-instance, per-environment, and global concurrency caps with reserved interactive capacity. Queue ordering is explicit and starvation-tested.
+4. Reserve estimated budget before dispatch, reconcile actual usage after each attempt, and stop or request approval before exceeding run or daily limits. Conservation checks supplement but do not replace source correctness.
+5. Implement the shared blackboard as typed, size-bounded, append-versioned artifacts with producer, consumers, schema, content hash, and run scope. Persist enough to recover a run; never treat blackboard text as permission.
+6. Add stall watchdogs based on meaningful progress signals, provider-specific cancellation, bounded drain, and escalation. A timeout does not declare the process dead until the owner verifies cleanup.
+7. Recovery replays persisted state, validates worktree/checkpoint existence, reclaims only expired owned leases, and marks ambiguous externally-visible attempts for human review rather than rerunning them.
+8. Provider fallback uses Phase 4's side-effect boundary and durable continuation. Review and verification tasks consume recorded artifacts and cannot self-assert success without configured evidence.
+
+Acceptance:
+
+- Crash at each persist/dispatch boundary resumes or pauses exactly once with no duplicate provider turn or tool effect.
+- Concurrent tasks never share an index or overwrite the user's working tree.
+- Cancellation and shutdown join provider processes, worktree owners, timers, and event writers within declared budgets.
+- A three-task architect, builder, reviewer DAG exchanges a typed contract and blocks the reviewer until its dependencies settle.
+
+#### Checkpoint 5D: agent authoring, product surfaces, CLI, and Floor Plan
+
+1. Add the built-in orchestrator agent plus editable Personal agents. Agent editor supports create, edit, duplicate, delete, compile preview per provider, history, diff, and revert. Save scopes are Personal, Project, and Team with the existing approval and repository rules.
+2. Orchestrator-created agents are Personal, labeled with creator/run, rate-capped, commit-tagged, and reversible. Auto may edit only agents it created. Human-authored edits, self-edit of the built-in orchestrator, and all access widening require approval.
+3. Implement composer Orchestrator target, per-message orchestration, plan card, run tree, Agents page, per-thread PandaMUX Agents group, organization/collection/tag grouping, model and fallback settings, and warnings for environments without a usable configured model.
+4. Implement CLI commands for orchestrate; run list/show/approve/cancel; agent list/assign/create/edit/history/revert; instructions status/check/approve; project trust/tag/group/org. Commands use the same application services and stable errors as the desktop.
+5. Build the Floor Plan as a projection of real run state, never as a second state machine. Use a bounded texture atlas and one canvas-style GPUI element. Reduced motion freezes decorative animation while preserving textual state; every avatar has an equivalent list row and accessible action.
+6. Performance gates cover 100 agents, bursty token/state updates, hidden/minimized windows, and 200 percent scaling. Rendering must coalesce updates and never persist animation ticks.
+
+Acceptance:
+
+- The same agent definition runs on Claude, Codex, and Antigravity with provider/model/environment/instruction-delivery method visible.
+- Agent history and revert are exact git operations with no hidden mutable copy.
+- All run actions work by keyboard, status is not color-only, and Floor Plan information remains available with reduced motion or without the canvas.
+- The desktop and CLI show identical run state after reconnect because both consume shared projections.
+
+#### Checkpoint 5E: memory with an isolated optional vector index
+
+1. Land canonical markdown memory, entry ids, tombstones, personal-repo commits, node journal, hub merge, conflict UI, secret screening, poisoning rules, size caps, token-budgeted injection, and lexical search before embeddings.
+2. Treat memory as untrusted data. It cannot alter access, tools, routing, organization, targets, schedules, or agent definitions. Every write identifies its source run and appears as a reviewable diff.
+3. Add `pandamux-memory` only after a spike proves the selected embedding stack on Windows MSVC, macOS, Linux glibc, Linux musl x64, and Linux musl ARM64; passes license policy; and records installer/bootstrap size and cold-start memory.
+4. Decide and document whether the model is bundled, first-run downloaded, or hub-distributed. Pin model, tokenizer, dimensions, and SHA. Offline nodes without the model use lexical search and show degraded status rather than blocking agents.
+5. The vector database is derived and rebuildable. Its currency fingerprint includes entry content, scope, embedding model/version, tokenizer, dimensions, and normalization. A model change creates a new index generation and atomic swap; never reinterpret old vectors.
+6. Implement local/node memory CLI and protocol with automatic scope, bounded results, redacted diagnostics, and merge-by-entry-id. Node journals are acknowledged only after the canonical git commit succeeds.
+
+Acceptance:
+
+- Lexical-only mode passes all correctness tests and the cross-environment memory flow.
+- Index deletion and rebuild preserve canonical memory and produce the same scoped result set within documented ranking tolerance.
+- A poisoning fixture cannot store or apply permission-changing instructions; secret fixtures are rejected and leave no index residue.
+- Two offline edits to the same entry surface a conflict and are never silently last-write-wins.
+
+#### Checkpoint 5F: guarded MCP and Broadside integration
+
+1. Enable approved MCP mutations for settings, organization policy, project metadata, agents, and memory only after 5B proposals pass. `schedule_manage` stays unavailable for writes until Phase 6.
+2. Enforce caller identity, idempotency, expected revision, organization policy, access impact, and audit on every tool. Tool argument type errors and capability-not-ready errors are structured and distinct.
+3. Spike keyring per platform. Desktop or hub adapters may use OS credential storage; static musl nodes must not acquire desktop secret-service dependencies. Unattended-node credentials require the explicit `0600` persistence policy already approved, with rotation and redaction tests.
+4. Broadside connection is opt-in. Preview destination, organization, visibility, content size, token source, and sandbox policy. Default sharing is unlisted unless organization policy is stricter.
+5. Convert thread events monotonically: preserve chronology, coalesce streaming tokens, represent tools as distinct cards, strip secrets and forbidden local paths, and never fetch or inline remote images implicitly.
+6. Publish in the background with an idempotency key. Failure never destroys the local transcript or artifact. Render remote HTML only through Broadside's sandboxed origin, never `file://` or an unsandboxed local browser.
+
+Acceptance:
+
+- MCP approval survives restart, applies at most once, and cannot bypass organization or access policy.
+- Full-settings and secret-exfiltration fixtures reveal no hidden provider values.
+- Broadside retry creates one remote artifact, local content remains intact on failure, and organization sharing denial is final.
+- Sandbox, visibility, expiration, reauthentication, and token-redaction tests pass before live publishing is called accepted.
+
+#### Phase 5 exit and rollback
+
+Phase 5 exits when a scripted multi-repo three-task feature succeeds from composer and CLI in both modes; agents, attempts, provider sub-agents, worktrees, checkpoints, approvals, usage, budgets, and blackboard artifacts are visible and replayable; trusted-layer and hostile-layer matrices pass; a remote node uses the exact applied bundle; an agent created in Auto mode is committed, used, and reverted; memory written on one environment is safely available on another; guarded MCP changes an organization policy through an approval card; and Broadside transcript/artifact live smokes pass only if the user has configured and authorized the external service.
+
+The completion record includes dependency-spike decisions, exact test and live commands, resolved dependency graph, performance and accessibility measurements, external-service status, known degradations, and every unverified provider capability. Rollback switches independently disable orchestration dispatch, automatic agent authoring, vector search, MCP mutations, and Broadside writes while leaving read views, git history, canonical memory, and audit records intact. Ships: internal CI artifacts only.
+
+### Phase 6: Node-owned scheduled tasks, recovery, and backup
+
+#### Schedule ownership decision
+
+- A schedule is authoritative on exactly one node and can fire without the hub. The hub is a control and projection plane, not a required clock.
+- A fleet or group schedule is a hub-authored template materialized as independent node-owned schedules with distinct ids, revisions, status, and audit. It is never one nominal schedule whose execution secretly depends on the hub.
+- Disabling, deleting, or editing a schedule while its node is offline creates a separate cancellable hub-side pending control intent. The last-known node projection remains read-only and unchanged, and PandaMUX never claims the remote schedule stopped until the node revalidates and acknowledges the revision.
+- Broadside results produced while offline queue locally for hub-mediated publishing after reconnect. Nodes do not receive Broadside credentials by default.
+
+#### Phase 6 dependency gate
+
+1. Compare a small set of cron and time libraries, then choose one exact-pinned stack supporting IANA zones, deterministic next-run evaluation, DST gaps and repeats, Windows, macOS, glibc, musl x64, and musl ARM64.
+2. The cron/time dependency belongs only in `pandamux-orchestrator`; Tokio timers and wall-clock observation belong in `pandamux-server`.
+3. Prove the library behind a fake clock before enabling a real timer. Do not mix multiple time ecosystems.
+4. Correct the domain before migration: new schedules default to Approve first, and `ContinueExistingThread` includes a required typed thread id whose environment must match the schedule owner.
+
+Acceptance:
+
+- A decision record captures candidates, exact versions, licenses, target builds, DST behavior, and rejected options.
+- Pure next-run tests do not depend on wall-clock sleeps or Tokio time.
+- Imported, restored, or default-constructed schedules cannot silently become Auto.
+
+#### Checkpoint 6A: pure schedule schema and state machine
+
+1. Define versioned `ScheduleSpec`, `ScheduleTarget`, `SchedulePolicy`, `ScheduleRevision`, `ScheduleOccurrence`, and `ScheduleDecision`. Validation covers cron, timezone, owner environment, target existence, organization, capabilities, access ceiling, budget, runtime, overlap, catch-up, notification, and publish policy.
+2. Compute the next five occurrences for preview and retain the timezone and offset decision. DST gap policy fires once at the next valid instant; repeated local time fires once according to a documented fold rule.
+3. Catch-up is explicit: Skip, RunOnce, or RunEach up to a hard cap. Detect wall-clock jumps by comparing monotonic elapsed time with wall time; never depend only on OS sleep notifications.
+4. Overlap is explicit: Skip, Queue, or Parallel within configured caps. Continuing a busy thread cannot run Parallel; it degrades to Queue with a recorded reason.
+5. Model occurrence states from Due through Reserved, AwaitingApproval, Running, Settled, Skipped, Expired, Cancelled, or Failed. Every transition is replayable and at most once for `(scheduleId, revision, scheduledFor)`.
+6. Validate schedule targets against an immutable snapshot of bundle SHA, project/org policy, provider options, and thread availability. A changed dependency produces a new decision, not silent reuse.
+
+Acceptance:
+
+- Fake-clock suites cover DST gap and repeat in several zones, leap day, timezone change, clock rollback, long sleep, host restart, catch-up cap, storm, overlap, expired approval, and duplicate timer delivery.
+- Property tests prove occurrences are ordered, unique, bounded, and deterministic.
+- An archived, deleted, busy, or wrong-environment thread produces the specified skip or queue event with an actionable reason.
+
+#### Checkpoint 6B: node store, timer owner, executor, and audit
+
+1. Add node migrations for schedules, revisions, event audit, occurrences, runs, pending control operations, timer leases, notification outbox, and optional publish outbox. Preserve all applied migration numbers and test every prior schema.
+2. The node owns one scheduler service with explicit owner, wakeup generation, bounded lookahead, reconciliation cadence, lease TTL, concurrency cap, drain, and joined shutdown. Enabled schedules prevent idle exit.
+3. Reconcile state on startup before arming timers. Persist an occurrence reservation before dispatch. A crash after reservation but before run creation resolves by idempotency key, never a second run.
+4. Execute through the Phase 5 node-scoped agent path with the exact bundle SHA, policy snapshot, budget reservation, capacity evidence, and isolated worktree. Runs are ordinary visible threads with schedule and occurrence ids.
+5. Interactive work retains reserved capacity. A due storm uses deterministic fair ordering plus bounded jitter and cannot consume every provider, CPU, or worktree permit.
+6. An approval outside the unattended ceiling transitions to AwaitingApproval, not Auto. Expiry follows policy and notifies. FullAccess is a per-schedule local opt-in and is never inferred from an agent, bundle, backup, or previous run.
+7. Enforce max runtime with cooperative cancel, bounded drain, process-tree verification, and a durable terminal reason. Budget exceeded is equally durable and prevents downstream tasks.
+8. Audit who created, edited, enabled, disabled, ran, approved, moved, restored, or deleted a schedule, with old/new revision and authenticated origin.
+
+Acceptance:
+
+- Crash-injection at reservation, thread creation, provider dispatch, settlement, and audit boundaries yields zero duplicate occurrences.
+- Twenty simultaneous schedules respect caps and interactive reserve; fairness tests prove no schedule starves indefinitely.
+- Daemon restart and host reboot recover enabled schedules; disabling the last schedule restores normal idle behavior.
+- Shutdown either drains within the declared budget or records recoverable debt before exit. No timer or provider process detaches.
+
+#### Checkpoint 6C: hub routing, cache, API, CLI, and schedule UI
+
+1. Add environment-scoped, revisioned schedule methods for validate, create, update, enable, disable, delete, run-now, list, show, next, events-since, runs-since, move, and pending-operation status. Use stable errors and idempotency keys.
+2. The hub caches acknowledged node projections with revision, last sequence, last contact, and stale state. Unreachable node data is clearly read-only. Pending control intents are displayed separately and never overlaid as accepted state. A fresh hub query cannot make a stale remote schedule look disabled.
+3. Moving a schedule is a two-node transaction protocol: validate destination, create disabled destination copy, confirm it, disable source, confirm it, then allow enabling destination. Failure leaves an explicit recoverable state and never two enabled owners.
+4. Settings > Schedules lists all environments and requires an owner environment. Editor shows next five runs, selected IANA zone, DST warning, project/org/provider impact, budget, access, overlap, catch-up, notification, and target availability.
+5. New schedules default to Approve first. Enabling, FullAccess, destructive delete, move, restore, policy widening, and a change affecting active occurrences require an impact preview and local confirmation.
+6. Run now still enforces organization, capacity, budget, access, target, and concurrency rules. It is not an administrative bypass.
+7. Continue-existing-thread picker is limited to that environment. Archived or deleted means Skip and notify; Busy follows overlap; a moved thread invalidates the schedule until edited.
+8. CLI provides `schedule list/show/validate/run/enable/disable/next/events` with an explicit environment and revision-aware output. Destructive mutations use the same proposal/confirmation rules where applicable.
+9. Enable MCP `schedule_manage` only now, backed by the same validator, proposal record, compare-and-swap apply, audit, and local confirmation card.
+
+Acceptance:
+
+- Desktop, CLI, and MCP observe the same revision and errors.
+- Offline nodes show last-known data with age. The hub may accept a separately labeled, cancellable pending control intent, but the node projection remains unchanged until revision-aware acknowledgement.
+- Move failure at every boundary results in at most one enabled authoritative schedule.
+- Keyboard, screen-reader, focus-return, 200 percent scaling, non-color state, and error-announcement checks pass for list, editor, confirmation, and history.
+
+#### Checkpoint 6D: service lifecycle and unattended host proof
+
+1. Add an opt-in systemd user-service installer for Linux nodes, with safe unit generation, restart policy, startup self-test, linger guidance, log location, uninstall, and status diagnostics.
+2. Avoid abort-and-immediate-restart bind races. Shutdown stops accepting work, drains owned tasks, closes the socket, verifies child cleanup, then exits. Startup distinguishes stale socket from live owner.
+3. Record recovery debt for any turn, schedule occurrence, PTY, worktree, or outbox item not fully reconciled before shutdown. Reacquisition waits until correlated recovery completes.
+4. Test node upgrade interaction: no update during active schedule dispatch or unresolved recovery debt; due work is visibly deferred within policy; version rollback preserves the database or refuses an incompatible schema before mutation.
+5. Add health diagnostics for clock skew, last reconciliation, next wake, enabled count, queue depth, service persistence, failed systemd units, and pending approvals.
+
+Acceptance:
+
+- With the hub and laptop off, Galahad reboots, starts the user service, fires a schedule once, persists the result, and exposes it after reconnect.
+- Repeated stop/start, crash, stale socket, and port or path collision tests do not create two scheduler owners.
+- Upgrade and rollback rehearsals preserve accepted schedules and do not strand provider children.
+
+#### Checkpoint 6E: private backup and restore
+
+1. Backup is disabled by default and performs no network, clone, or visibility request before configuration.
+2. The user chooses or explicitly authorizes creation of a private repo. Verify private visibility before every push, not only setup. Public is refused; unknown pauses with a warning.
+3. Export canonical, stable-order, secret-scrubbed data: one schedule file per environment, personal agents, memory, organization policies, and repo groups. Exclude tokens, credentials, profile paths, raw transcripts, run history, usage facts, and environment-variable values.
+4. A hub-owned outbox debounces accepted changes and adds a daily reconciliation. Persist-before-dispatch; duplicate retries produce one logical backup commit.
+5. Restore always previews commit, diff, target environment, collisions, missing agents/projects/providers, and policy impact. Schedules restore disabled; FullAccess is cleared; Auto approval becomes Approve first unless separately reconfirmed.
+6. Agent and memory restore lands as a revertable personal-repo commit. Tombstones and conflicts remain explicit.
+7. Test restore using a disposable store or isolated test node. Never wipe a real Galahad store merely to prove backup.
+
+Acceptance:
+
+- Before setup, network-call assertions remain zero.
+- Secret fixtures and private paths do not appear in the exported repository or git history.
+- Restoring to a disposable empty node yields disabled schedules with FullAccess cleared; explicit enable then produces exactly one next occurrence.
+- Making the target repo public between pushes is detected and blocks the next export.
+
+#### Checkpoint 6F: fleet templates, notifications, and deferred publishing
+
+1. A fleet/group schedule expands to reviewed per-node materializations. Preview enumerates target projects, organizations, environments, provider/subscription eligibility, budgets, and the number of schedules created.
+2. Template edits reconcile child revisions; offline children show Pending update or Pending disable. Deletion is not reported complete until every reachable child acknowledges and every offline child remains visibly pending.
+3. Results roll up without hiding per-node failures, stale nodes, or policy exclusions. Every child has its own occurrence id, run, usage, and audit.
+4. Local notification outbox is bounded, retryable, and coalesces storms. It never marks delivery without acknowledgement.
+5. If Broadside auto-publish is enabled, the node queues a redacted publish intent and local artifact reference. The hub publishes after reconnect with its credential and idempotency key. Expired or deleted artifacts fail visibly without affecting the run result.
+
+Acceptance:
+
+- Offline materialization and template-change fixtures never imply that an unreachable node stopped work.
+- Cross-organization fleet expansion filters disallowed targets before schedule creation.
+- Reconnect publishes each authorized result at most once and does not place Broadside credentials on nodes.
+
+#### Phase 6 exit and rollback
+
+Phase 6 exits after the full fake-clock and crash matrix, then a live Galahad proof: create an Approve-first reviewer schedule, turn off the laptop, fire once on time, route within policy using current capacity, reconnect, and recover its thread, run tree, usage, audit, and memory journal. Also prove unreachable read-only state, pending disable semantics, safe move, sleep catch-up, storm fairness, budget stop, approval pause, both session target modes, opt-in service reboot behavior, and backup/restore against a disposable store.
+
+The completion record includes the scheduler dependency decision, exact fake-clock seeds, migrations, service units, commands/results, environment clock/timezone details, notification and publish status, backup repo visibility evidence, and limitations. Rollback can disable timer arming, run-now, MCP mutations, fleet materialization, backup pushes, and Broadside publishing independently. Disabling the runtime never deletes schedule definitions or audit history. Ships: internal CI artifacts only.
+
+### Phase 7: Release recovery, signed candidates, and public cut-over
+
+#### Release truth at Phase 7 entry
+
+- The current `release.yml` is not a dormant working pipeline. It builds the deleted `pandamux-app`, reads removed packager metadata, omits `pandamux-server.exe`, and is not gated on the current CI suite.
+- The updater was not ported into the current crates.
+- Linux CI produces only musl x64 and does not feed verified artifacts into packaging. The remote build script can continue after Cargo failure, looks for the wrong CLI filename, and silently skips missing files.
+- The checked-in remote manifest contains placeholder hashes and sizes. Winget files disagree on version and product identity. All are inputs to replace, not release evidence.
+- `RELEASES_ENABLED` and Winget publishing remain disabled through packaging recovery and candidate testing.
+
+#### Checkpoint 7A: recover packaging and artifact flow with publication disabled
+
+1. Promote the passing Phase 0 packaging fixture into production cargo-packager metadata owned by `pandamux-desktop`. Restore current Windows resource metadata and build integration.
+2. Build the exact Windows deliverables: `pandamux.exe`, `pandamux-server.exe`, and `pandamux-cli.exe`. Treat any missing path as fatal.
+3. Build Linux musl x64 and ARM64 server and CLI in separate jobs. The build scripts fail on Cargo errors, verify the exact declared binary names, and fail on missing or zero-byte outputs.
+4. Generate a versioned manifest from artifacts with target, filename, size, SHA-256, protocol compatibility, and build commit. Never accept a checked-in placeholder manifest at runtime.
+5. Upload target artifacts, download them into the Windows packaging job, verify size and hash, then package the tested bytes. The packaging job does not rebuild Linux resources.
+6. Rebuild release CI around reusable required gates: format, clippy with warnings denied, all relevant tests, resolved dependency boundaries, `cargo deny advisories licenses bans sources`, schema/fixture checks, and built-artifact `system.hello` smoke.
+7. Enforce tag, root workspace version, changelog heading, installer metadata, manifest version, and asset-name agreement before any signing step.
+8. Produce an unsigned internal installer from `workflow_dispatch` or an equivalent non-public path. Extract it and compare payload hashes to the input artifacts.
+
+Acceptance:
+
+- Packaging succeeds from a clean checkout without references to removed crates or placeholder metadata.
+- All four Linux remote binaries (`pandamux-server` and `pandamux-cli` for musl x64 and ARM64), all three Windows executables, the generated manifest, and the installer payload are accounted for by hashes.
+- Any failed prerequisite, missing artifact, version mismatch, or hash mismatch prevents packaging and publication.
+- `RELEASES_ENABLED` is false and no GitHub release, tag-triggered publication, or Winget change occurs.
+
+#### Checkpoint 7B: restore updater and lifecycle-safe installation
+
+1. Restore release discovery, semantic-version comparison, exact asset-name selection, quarantine/backoff, download, hash verification, Authenticode verification, installer launch, and result reporting in the current desktop/platform boundary.
+2. The updater enters a visible drain mode: stop new turns and schedule dispatch, inventory active turns, pending approvals, due schedules, terminals, outboxes, and recovery debt, then offer Wait, Cancel update, or Force only where data-preservation guarantees are explicit.
+3. Normal update waits for owned work to settle, persists all queues, stops accepting connections, closes desktop clients, joins the server, verifies no child providers or PTYs remain, and only then launches the installer.
+4. The installer may stop the server as a last-resort fallback, but that path emits evidence and cannot be labeled graceful.
+5. Implement N-to-N+1 and failed-update recovery tests with real installed layouts. Preserve app data, node configuration, schedules, personal agents, memory, and databases. Refuse downgrade across an incompatible schema before mutation.
+6. Validate uninstall choices separately from update. Default uninstall removes binaries but preserves user data unless the user explicitly chooses data removal with a precise preview.
+
+Acceptance:
+
+- Locally test-signed fixtures or an injected test verifier prove N-to-N+1 updater logic and relaunch into a successful server handshake. Production-signer and signed-candidate proof remains in 7C.
+- Active work blocks or delays update according to policy; force behavior is explicit and leaves a recovery record.
+- Corrupt, wrong-version, wrong-name, hash-mismatched, unsigned, or signer-mismatched installers are rejected before execution.
+- Update failure leaves the previous installed version runnable or produces a tested repair path without deleting user data.
+
+#### Checkpoint 7C: release candidate hardening and clean-machine matrix
+
+1. Freeze features. Resolve all required Phase 0 to 6 completion records and known blockers. Every deferral is explicit, user-visible, and either non-gating or removed from 1.0 claims.
+2. Complete developer and user documentation: root README, CLAUDE and AGENTS routing, crate guides, provider degradation table, remote operations, usage/privacy model, organization policy, orchestration, agent authoring, memory, schedules, backup/restore, updater, troubleshooting, security, accessibility, and instructions-repo authoring.
+3. Generate and review SBOM, third-party notices, licenses, source provenance for ported T3 logic, security scan, secret scan, dependency audit, and release threat-model deltas. GPL/AGPL/LGPL findings remain blocking under the approved policy.
+4. Create internal `0.99.x` candidates without enabling public publishing. Sign only the explicit three Windows executable paths with Azure credentials supplied through action inputs. Verify each signature, package without rebuilding, sign the installer last, extract it, compare payload hashes, and verify signatures again.
+5. Run clean Windows 10 and Windows 11 VM tests: install, first launch, local server discovery, CLI handshake, local and remote terminal, remote bootstrap for x64 and ARM64 artifacts where hardware or emulation is approved, provider login, uninstall, repair, and data preservation.
+6. Run the product matrix with Codex, Claude, and Antigravity locally and on Galahad; safe pre-output failover between explicitly pooled subscriptions; cross-organization denial; approved MCP mutation; Hark bridge; orchestrator DAG and blackboard; memory; Floor Plan equivalent views; schedule while laptop is off; backup/restore on disposable data; Broadside only when configured; update to the next candidate.
+7. Measure startup, idle memory, installer size, remote bootstrap size, 2,000-event timeline, 100-agent Floor Plan, scanner load, schedule storm, and shutdown drain. Record thresholds and results, not qualitative impressions.
+8. Run the accessibility matrix on the built installer: keyboard-only, focus, screen reader where supported, 200 percent scale, high contrast/forced colors, reduced motion, non-color status, and actionable errors.
+
+Acceptance:
+
+- Every candidate artifact is traceable to one commit and one green required workflow set.
+- One production-signed internal candidate updates to the next production-signed candidate and returns to a successful server handshake with user data preserved.
+- Clean-machine install, upgrade, uninstall, provider, remote, orchestration, schedule, security, performance, and accessibility matrices are archived with exact versions and failures.
+- No candidate is called shipped, deployed, or publicly available. Signing and successful CI remain separate from publication.
+
+#### Checkpoint 7D: public 1.0 cut-over and post-publication proof
+
+1. With explicit release authorization after 7C, bump the root workspace version to `1.0.0`, write the breaking-product CHANGELOG entry, regenerate all derived metadata, and verify a clean diff. Agents do not infer future major bumps.
+2. Enable `RELEASES_ENABLED` only for the reviewed release path. Create the authorized tag after tag/version/changelog equality passes. Required CI must complete before the signing and publication jobs can run.
+3. Publish exactly one signed Windows installer asset plus the checksums and attestations the updater requires. Linux node and CLI payloads remain embedded or otherwise distributed exactly as the signed-client trust design specifies, not as ambiguous duplicate user assets.
+4. Verify the public release page, asset name, size, hash, signature, signer, updater discovery, download, and one real installed N-to-1.0 update. Confirm the served artifact, not merely the workflow output.
+5. Generate all Winget manifests from the same release metadata source. Validate them, install in Windows Sandbox, confirm product identity and hash, then enable and run Winget publication only after the GitHub release is live and verified.
+6. Deploy the rewritten site only after its download links, version, screenshots, capability claims, privacy statements, and system requirements match the verified release. Record deployment and served-version evidence separately.
+7. Monitor the first release for updater failures, crash signatures, authentication regressions, schedule duplication, and remote bootstrap failures. The rollback plan can disable updater discovery, Winget automation, Broadside writes, or risky runtime features without deleting user data.
+
+First-release gate:
+
+- Phase 0 through Phase 6 completion records are accepted.
+- Signed Windows 10 and 11 clean-machine matrices and N-to-N+1 update pass.
+- Codex, Claude, and Antigravity meet the local and remote release contract; best-effort providers are either verified or visibly disabled with reasons.
+- Organization boundaries, side-effect-aware failover, MCP approvals, scheduling, backup safety, and local IPC security pass adversarial fixtures.
+- Boundary, license, security, performance, accessibility, and artifact-integrity gates pass on the exact release commit.
+- GitHub publication, served artifact, updater availability, site deployment, and Winget activation are reported as distinct verified statuses.
+- Ships: the new PandaMUX 1.0 only after the public artifact and updater path are verified.
 
 ### macOS port (decided: after v1)
 
@@ -1029,18 +1550,21 @@ Already covered: macOS CI from Phase 1; Unix sockets and process groups; keyring
 
 | Risk | Impact | Mitigation |
 |-|-|-|
-| Unattended runs spend usage or make unwanted changes | Burned quota, surprise commits or PRs | Schedules are created only by the developer in Settings (never from a repo); approve-first offered as the default policy for new schedules; access ceilings; FullAccess only by local opt-in; per-run and per-day budgets enforced where the run executes; worktrees only (never the user's checkout); no auto-merge; pause on unresolvable approval; behavioral-change summary on repo updates |
+| Unattended runs spend usage or make unwanted changes | Burned quota, surprise commits or PRs | Schedule creation or policy widening requires authenticated local confirmation, whether initiated by Settings, CLI, or MCP; Approve first is the domain default; access ceilings; FullAccess only by separate local opt-in; budgets; isolated worktrees; no auto-merge; pause on unresolvable approval |
 | Schedule storms (many overlapping runs) | Quota exhaustion, host overload, starved interactive work | Overlap policy per schedule; global and per-node caps; interactive threads get reserved concurrency; jittered start within a minute; storm test in Phase 6 exit |
 | Agent specs translate poorly to some providers | Weaker or unsafe behavior on some providers | Capabilities matching; `requiredCapabilities` can exclude providers; instruction delivery method shown; per-provider degradation table (5.3); never widen access to compensate |
 | Clock, timezone, and sleep/wake on the laptop | Missed, doubled, or late runs | IANA timezones; wall-clock-jump detection; explicit catch-up policy; DST rules (gap fires once later, repeat fires once); fake-clock tests |
 | Hub and node orchestration divergence (version or bundle skew) | Different routing decisions offline | Same pure crate in both; bundle carries `schemaVersion` and SHA; nodes refuse newer schemas; runs record `bundleSha` |
-| Stale capacity on offline nodes | Node routes to an exhausted provider | Age-decayed confidence; hard rate-limit evidence observed locally overrides; retry-on-limit fallback |
+| Stale capacity on offline nodes | Node routes to an exhausted provider | Age-decayed confidence; local hard-limit evidence overrides; automatic fallback only before output or side effects; otherwise durable interrupted state and explicit continuation |
+| Transcript and managed-turn overlap | Usage is double counted and routing decisions become wrong | Managed events are authoritative; stable native ids or versioned fingerprints reconcile scanner facts; idempotent observation ids and restart/rotation fixtures |
+| Path-only scanner cursors | Rotation, replacement, partial writes, or restart loses or duplicates usage | Persist platform file identity and committed offset transactionally; never advance past a partial record; explicit truncate/replace states and bounded blocking worker |
+| Email-based subscription inference | Corporate and personal quota or credentials merge across a security boundary | Generated `SubscriptionKey`, explicit mapping and `FailoverPoolId`; email is masked display metadata only |
 | GPUI/gpui-kit API churn per snapshot | Upgrades break the desktop | Exact pins; paired bumps; `gpui-pre*` version check in the boundary script; GPUI confined to the desktop, logic in `pandamux-client` |
 | Thin GPUI docs and weaker AI-agent fluency | Slow UI work | gpui-kit skills, examples, `CLAUDE.md`; Zed Agent Panel as a pattern-only reference; S1 first; GPUI gotchas to a new LL-G shelf |
 | Cross-message selection and variable-height virtualization unproven | Poor selection, scroll jank | S1 criteria (a) and (b); timeline-owned selection; turn-level virtualization fallback |
 | Compile times | Slow iteration and CI | sccache, rust-cache, crate splits, dev profile tuning; S1 records numbers |
 | License contamination from Zed GPL code | Non-compliant distribution | No code from GPL Zed crates; `cargo deny` licenses in CI; zed#55470 checked in S6 |
-| Accessibility weaker than a web UI | Screen-reader users poorly served | S1 assessment; keyboard bar; documented gaps |
+| Accessibility weaker than a web UI | Screen-reader, keyboard, high-contrast, or low-vision users are blocked | Phase 4 onward gates keyboard reachability, accessible names, focus, non-color state, 200 percent scaling, reduced motion, forced colors, and data-table equivalents; remaining gaps are explicit release blockers or documented deferrals |
 | S1 fails outright | UI stack must change | Tauri 2 + React fallback; everything below the desktop is UI-independent |
 | Provider CLI protocol churn | Silent breakage | Transcript contract tests; tested-version range warning; Codex schema diff; weekly non-blocking live job |
 | Sub-agent visibility varies by provider | Surface inconsistent | `subAgents` capability drives an explicit empty state; absent fields stay absent |
@@ -1056,7 +1580,7 @@ Already covered: macOS CI from Phase 1; Unix sockets and process groups; keyring
 | A schedule runs with the host user's credentials | A misconfigured schedule acts with that user's git, provider, and SSH access on the host | Creation and edits require an authenticated hub connection to that node; `schedule_events` audit (who, when, what); access ceilings; FullAccess per-schedule opt-in only; budgets and max runtime |
 | Losing schedules with a host (disk loss, reinstall) | Automation silently disappears | Optional private git backup (7.5) with restore to any environment; Settings shows last backup commit |
 | Schedule backup leaks prompts or host details (backup repo mis-set to public, or made public later) | Prompts, repo paths, and host names exposed | Visibility check via `gh` or GitHub API before every push (public refused, unknown warns); secrets and env var values never exported; run history and tokens excluded; FullAccess exported only as a flag and never honored on restore without re-confirmation |
-| Local server exposure | Another local user or process drives agents | No network listener in v1; user-only pipe ACL; anti-squatting |
+| Local server exposure | Another local user or process drives agents | R0.4 must prove user-only ACL/modes, anti-squatting, peer identity, and authenticated request context before mutations or scheduling |
 | Agent sprawl (the orchestrator creates many overlapping agents) | Confusing roster, diluted routing, wasted tokens | Per-run and per-day creation caps; Personal scope only; "created by orchestrator" label and filter; planner must justify a new agent against existing descriptions; periodic "unused agents" report; one-click delete or revert |
 | Memory poisoning (injected content persists as memory and steers later runs) | Durable prompt injection across runs and environments | Memory framed as untrusted data, never instructions; cannot change access, tools, routing, or definitions; write rules reject instruction-like and secret-like entries; every write in the run log with a diff; per-project memory only for trusted projects; optional review-before-apply; poisoning fixture in the Phase 5 exit |
 | Memory growth | Token budget blown, stale or contradictory notes | Size caps, token budget at injection, relevance selection, periodic consolidation as reviewable commits, "forget all for this project" |
@@ -1067,50 +1591,73 @@ Already covered: macOS CI from Phase 1; Unix sockets and process groups; keyring
 | Antigravity resource cost (about 1 GB unpacked per process; Windows handles kept after force-kill; deep unpack paths) | Full disks, orphaned temp dirs, `MAX_PATH` failures, slow starts | Health checks never spawn; per-environment concurrency cap (default 2) and a free-disk preflight; orphan sweep at driver start; sibling temp dir; process reuse per thread where the session allows |
 | Remote Antigravity sign-in (OAuth loopback is on the remote host) | Users cannot sign in on nodes | Desktop one-shot loopback listener on the same port or a pasted URL; strict validation (`accounts.google.com`, `redirect_uri`, `state`); hub relays the callback to the node, which performs the one-shot GET |
 | License compliance for code ported from T3 | MIT attribution missed | `THIRD_PARTY_NOTICES.md` with T3's notice added in the same change as the first port; module docs cite T3 source files; reviewer checklist item |
-| Accidental publish of a half-built app | Users install an unfinished build | No `v*` tags before Phase 7; `RELEASES_ENABLED` repository variable checked in the release workflow's first job; winget disabled until the first release is live |
-| Deleting reusable code too early | Lost working SSH, PTY, or signing logic | Phase 1 step 1 moves the reusable parts (SSH, grid/pty/shell, core types, persistence, updater, release workflow) before deleting; git history keeps everything |
+| Accidental publish of a half-built app | Users install an unfinished build | `RELEASES_ENABLED` and Winget stay disabled through packaging recovery and signed RCs; public cut-over requires exact artifact, installer, updater, and clean-machine proof |
+| Historical scaffolding is mistaken for working release code | A tag fails late or publishes incomplete artifacts | Phase 7 treats updater, packager metadata, remote manifests, release workflow, and Winget as recovery work; artifact-only dry runs precede signing and publication |
 | Scope creep | Phases never exit | User-fixed must-haves; Browser, Device, phone client, macOS, event triggers, and the hosted team hub decided as after v1; exit criteria gate every phase |
 | libsqlite3-sys MSRV | Opaque build failures | Deliberate `rust-version` bump (LL-G `libsqlite3-sys-msrv-cfg-select`) |
-| Installer/updater vs running server | Locked files or killed work | Drain before update; installer stops the server as fallback |
-| MCP tool mutation without human oversight | Agents or prompts alter settings, subscription boundaries, or schedules undesirably | Read-only MCP tools execute immediately; mutating MCP tools (`settings_update`, `org_policy_set`, `schedule_manage`) generate an interactive visual confirmation card in chat requiring explicit 1-click human approval before writing |
-| Cross-subscription boundary leakage | Sensitive corporate repository tasks failover to personal subscriptions during rate limits | Router enforces organization subscription checklist matrix as a hard filter; rate-limit failover strictly pruned against allowed subscriptions; halts with approval request rather than crossing boundary |
-| Multi-repo worktree and branch collisions | Concurrent fleet tasks overwrite working trees or uncommitted code | Pre-warmed isolated worktree per repo and task (`worktrees/<project>/run-<id>/<n>`); independent indices and checkouts; intermediate state shared via in-memory blackboard |
+| Installer/updater vs running server | Locked files, duplicate schedules, or killed work | Update drain accounts for turns, schedules, approvals, terminals, outboxes, and recovery debt; forced installer stop is separately reported and tested, never labeled graceful |
+| MCP tool mutation without human oversight | Agents or prompts alter settings, subscription boundaries, or schedules undesirably | Redacted reads only at first; writes become durable expiring proposals with caller identity, exact diff, expected revision, local Approve once, compare-and-swap apply, idempotency, and audit |
+| Cross-subscription boundary leakage | Sensitive corporate repository tasks failover to personal subscriptions during rate limits | Organization policy is a hard pre-score filter; disallowed instances are never offered as a turn-level fallback. Changing the policy is a separate impact-reviewed mutation |
+| Multi-repo worktree and branch collisions | Concurrent fleet tasks overwrite working trees or uncommitted code | One owned isolated worktree per attempt with baseline and lease verification; pre-warmed worktrees are optional and must prove cleanliness; independent indices and typed blackboard artifacts |
 | Broadside network reachability or service outage | Transcript or artifact sharing fails | Sharing actions execute asynchronously in the background; failures display non-blocking error notifications; local artifact files and thread transcripts remain fully functional locally in SQLite and git |
 | Accidental public exposure of sensitive code via Broadside transcripts | Sensitive intellectual property visible publicly | Default sharing visibility is strictly `unlisted` or restricted by organization policy; Settings > Organizations allows disabling Broadside sharing completely for sensitive organizations (such as Wellforce); explicit confirmation dialog shows token and destination before publishing |
 
 ## 11. Open questions for the user
 
-All open questions were resolved on 2026-09-25 and are recorded as decisions in the Decision Summary (Section 1). New questions get added here.
+No blocking product question remains for starting Recovery Gate R0. The 2026-09-28 rewrite makes these conservative defaults explicit; changing one later requires a decision-record update:
+
+- Preserve the approved v1 product scope, but satisfy it through smaller acceptance-gated checkpoints rather than adding more parallel features.
+- Subscription identity and failover pools are explicit; matching email never merges or authorizes.
+- Phase 4 adds no runtime dependency and stores normalized facts before projections.
+- The hub pulls bounded usage pages from nodes; raw transcripts stay local.
+- Canonical memory and lexical retrieval ship independently of optional vector embeddings.
+- Nodes own schedules; hub fleet schedules are materialized templates, and offline changes remain visibly pending.
+- Nodes queue Broadside publish intents for the hub instead of receiving Broadside credentials by default.
+- Packaging recovery and internal signed candidates occur while all public release switches remain disabled.
 
 ## 12. Knowledge base entries applied
 
-LL-G and BP were re-checked on 2026-09-25: neither has a GPUI, Zed, or scheduling shelf. GPUI discoveries go to a new LL-G shelf. Tauri, React, pnpm, and CSP entries from the earlier draft no longer apply.
+LL-G and BP were refreshed on 2026-09-28 before this recovery rewrite. Tauri, React, pnpm, and CSP entries from the earlier draft do not apply.
 
-- LL-G claude-code `permission-prompt-tool-needs-initialize` (HIGH): Claude driver sends `initialize` and uses `--permission-prompt-tool stdio`; S2 tests deny with `message` on a non-benign command.
-- LL-G antigravity-cli `headless-hangs-no-output`, `exit-0-not-complete` (HIGH): the reason PandaMUX does not drive the `agy` CLI and instead ports T3's ACP-server approach; completion is verified independently of exit codes (critical for unattended runs).
-- LL-G rust `blocking-io-on-tokio`, `gui-subsystem-console-child-window`, `join-on-drop-sender-field-order`, `libsqlite3-sys-msrv-cfg-select` (HIGH); `test-claims-production-os-singleton` (MEDIUM); `websocket-binary-frames-not-text` (HIGH, when WS is added).
-- LL-G llm-integration `reasoning-model-spiral`, `confirmed-tool-actions-need-durable-continuation` (HIGH).
-- LL-G github-actions `release-workflow-not-gated-on-ci`, `azure-trusted-signing-credentials` (HIGH).
-- LL-G git `clone-branch-rejects-sha` (MEDIUM), `concurrent-shared-tree-worktree` (HIGH: every agent instance and scheduled run gets its own worktree).
-- LL-G linux `daemon-stays-dead` (HIGH: restart policy for the optional systemd user unit of schedule-homing nodes).
-- LL-G accessibility `forced-colors-drops-background-state` (MEDIUM, as a principle).
-- BP documentation `plan-with-lessons-learned` (FOUNDATIONAL); validation `presence-check-validator-is-a-floor` (FOUNDATIONAL); safety `read-only-first-rule` (FOUNDATIONAL: probes are read-only); design-systems `laws-of-ux-code-review` (FOUNDATIONAL); dependencies `npm-audit-prod-ci-prune-unused` (FOUNDATIONAL, applied via `cargo deny`); safety `versioned-config-migration-backup`; resource-lifecycle `owner-ttl-cap-drain` (daemons, terminals, schedule runs), `provable-graceful-shutdown`; llm-resilience `llm-json-parse-retry-fail-closed`, `reconcile-llm-self-assessment-directionally`; deployment `evaluate-built-artifacts-in-ci`, `doppler-secrets`.
+- LL-G claude-code `permission-prompt-tool-needs-initialize` (HIGH): Claude sends `initialize`, uses the stdio permission tool, and fixture tests deny a non-benign action with a message.
+- LL-G antigravity-cli `headless-hangs-no-output`, `exit-0-not-complete` (HIGH): PandaMUX drives the ACP server bundle, not `agy`; completion is derived from protocol state rather than process exit.
+- LL-G rust `blocking-io-on-tokio`, `gui-subsystem-console-child-window`, `join-on-drop-sender-field-order`, `libsqlite3-sys-msrv-cfg-select` (HIGH): scanners use a bounded blocking owner; GUI children stay hidden; shutdown ownership is ordered; Rust and SQLite versions move deliberately.
+- LL-G architecture `check-sibling-services-before-parallel-store`, `derived-cache-currency-misses-second-input`, `precondition-gate-counts-unfiltered-collection`, `conservation-check-cannot-detect-misread-source`, `persist-before-dispatch`, and `get-endpoints-can-schedule-writes` (HIGH): reuse the event store, fingerprint every vector input, filter before counting, validate sources rather than totals alone, persist run/schedule intents before effects, and keep reads side-effect free.
+- LL-G LLM integration `reasoning-model-spiral`, `confirmed-tool-actions-need-durable-continuation`, `tool-arg-type-errors`, and `provider-tool-schema-vocabulary` (HIGH): bounded classifier retries, durable post-approval continuation, stable typed errors, and provider fixture vocabulary.
+- LL-G MCP process-global leak, partial-credential clobber, missing-tool-versus-capability, session/child leaks, and protocol-version rules: proposals are scoped and durable, secret updates are field-safe, errors distinguish tool availability from product capability, and every child is joined.
+- LL-G Git `clone-branch-rejects-sha`, `concurrent-shared-tree-worktree`, stale version, interrupted rebase, and content-filter staging: fetch SHAs explicitly, isolate every attempt, verify release metadata, preserve recoverable state, and stage exact paths.
+- LL-G Linux `systemd-restart-on-abort-bind-race`, post-reboot failed units, and `daemon-stays-dead`: reconcile socket ownership before restart, inspect failed units, and prove opt-in schedule-node persistence.
+- LL-G GitHub Actions `release-workflow-not-gated-on-ci`, `azure-trusted-signing-credentials`, and `tag-trigger-breaks-azure-oidc`: release runs own their gates, credentials use action inputs, and the signed-candidate path proves its trigger and identity contract before publication.
+- LL-G accessibility `aria-modal-needs-inert-not-tab-trap` and `forced-colors-drops-background-state`: confirmation flows own focus/inertness and never encode status through background color alone.
+- LL-G data visualization `mixed-scale-divisor`: usage and capacity charts label units and never compare incompatible scales under one visual divisor.
+- LL-G SQLite `upsert-by-name-collision`: generated ids and explicit unique keys own identity; display names never drive an upsert.
+- BP `read-only-first-rule`, `plan-with-lessons-learned`, `presence-check-validator-is-a-floor`, `never-renumber-applied-migrations`, and `laws-of-ux-code-review` (FOUNDATIONAL) directly shape R0, migrations, probes, and UI gates.
+- BP `versioned-config-migration-backup`, `owner-ttl-cap-drain`, `provable-graceful-shutdown`, `evaluate-built-artifacts-in-ci`, `llm-json-parse-retry-fail-closed`, and `reconcile-llm-self-assessment-directionally` shape migrations, scanners, scheduler ownership, release proof, and verification policy.
+- BP dependency audit practice is applied through Rust-native controls: resolved graph checks, lockfile and pin policy, `cargo deny advisories licenses bans sources`, unused-dependency review, and target-matrix spikes for native crates.
 
 ## 13. Lessons learned / gotchas
 
 Known before starting (carry these into implementation):
 
+- A checked roadmap item or a commit message proves only that work was recorded. Production composition, live acceptance, documentation, release, and deployment each need separate evidence.
+- Preserve the current dirty Phase 4 prototype before recovery. Use exact baselines and path-specific staging; never reset, clean, or absorb unrelated work.
+- Usage ingestion stores idempotent observations, not pre-aggregated buckets. Aggregation, attribution, and pricing are projections so they can be corrected without rewriting source facts.
+- Managed turn events and transcript scanners overlap. Declare source precedence and stable deduplication before enabling both, or totals will look plausible while being wrong.
+- Scanner cursors need platform file identity and a committed byte offset. Paths alone do not survive rotation, and advancing over a partial trailing record permanently loses data.
+- Never use email as subscription identity or failover authority. Use generated keys, explicit cross-host mapping, masked labels, and explicit pools.
+- Unknown is a first-class state for model, price, authentication, health, capacity, version, and platform. Never fabricate a plausible default or translate Unknown into Healthy.
+- Keep environment and caller provenance out of request bodies. Stamp it from the authenticated connection context.
 - **Never copy code from GPL Zed crates** (`agent_ui`, `markdown`, `terminal`, `terminal_view`, and others with `GPL-3.0-or-later` manifests); study patterns only. Keep `cargo deny` license checks blocking.
 - zed#55470 is open upstream, yet Zed main's `ztracing` manifest and the `gpui-pre-ztracing` 0.3.6 snapshot declare Apache-2.0. Trust license files, not an issue title or a manifest alone.
-- crates.io `gpui` (0.2.2) is stale; all `gpui-pre*` crates move together with gpui-kit. gpui-kit's pin checker needs a JS runtime, so our boundary script does the equivalent from `cargo metadata`.
+- crates.io `gpui` (0.2.2) is stale; all `gpui-pre*` crates move together with gpui-kit. The current boundary script does not prove this; Phase 5 must replace it with a resolved `cargo metadata` and feature-graph assertion.
 - GPUI has its own executor; tokio IO needs a tokio runtime thread bridged by channels (verify in S1).
 - Use gpui-kit TextView in markdown mode only for agent output, and confirm it does not auto-fetch remote images.
 - Claude headless approvals need BOTH `--permission-prompt-tool stdio` and an `initialize` control request; a deny without `message` hangs; benign commands are auto-approved and prove nothing.
 - Antigravity: drive Google's ACP server bundle, not the `agy` CLI (whose print mode historically hung without closed stdin, and whose exit 0 does not mean the task finished). Never spawn the bundle for health checks (about 1 GB unpack per launch); replace, do not merge, its environment; keep its temp dir a sibling of the profile dir (Windows `MAX_PATH`); sweep orphaned unpack dirs at start; accept the sign-in URL on stdout or stderr and validate it strictly; surface `_meta["agy.security.warning"]` on `allow_always` approvals.
 - Ported T3 logic must land with `THIRD_PARTY_NOTICES.md` and source citations in the same change.
 - Never write agent instructions into the user's repo, worktree, `CLAUDE.md`, or provider config files; inject through the session. A preamble can be lost to context compaction, so re-send it when the provider signals compaction.
-- Multi-instance providers: Never share config directories between subscriptions; always use dedicated `profiles/<provider>/<instance>/` with isolated `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, and `GEMINI_HOME`.
-- Mutating MCP tools must be non-blocking in protocol execution until resolved by the interactive confirmation card, with an explicit timeout.
+- Multi-instance providers: never share config directories between instances; always use dedicated `profiles/<provider>/<instance>/` with isolated `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, and `GEMINI_HOME`. Instance and subscription are separate identities.
+- Mutating MCP tools create a durable, expiring, revisioned proposal. The protocol call must not hold a process-global lock while waiting for UI; apply once through compare-and-swap after explicit local approval.
 - Hark IPC named pipe communication on Windows must set appropriate DACLs and handle daemon disconnects gracefully without stalling agent sessions.
 - Pixel Agents rendering: Keep 2D canvas quad rendering hardware-accelerated with texture atlases in GPUI; never render sprites as individual DOM-like elements.
 - Schedules are machine state, not repo config: never add a schedules folder to the instructions repo or project layer, and never auto-import from the backup repo; either path would reintroduce double-firing across machines and teammates.
@@ -1119,21 +1666,27 @@ Known before starting (carry these into implementation):
 - Never read agent behavior from a user working copy of the instructions repo; only the managed mirror at an applied SHA counts, or a local checkout switch silently changes what unattended agents do.
 - Project-layer trust is per repo **and per content hash**; trusting a repo once must not trust future changes to its `.pandamux/`.
 - Scheduler correctness depends on wall-clock-jump detection, not OS sleep events; test with a fake clock across DST boundaries in several timezones.
+- Never renumber an applied SQLite migration. Add a new migration, back up or preserve legacy data, quarantine invalid rows, and test every supported starting schema plus interrupted rollback.
 - A node that stores enabled schedules must not idle out; tie daemon idle-exit to "no enabled schedules stored here", and handle host reboots via an opt-in user service.
+- A hub cannot promise that an offline node's schedule was disabled or deleted. Keep the operation pending and visible until that node acknowledges the revision.
+- Restored schedules arrive disabled, FullAccess cleared, and Approve first unless the user reconfirms broader authority locally.
 - ConPTY asks for the cursor position at startup; with no desktop attached the node must answer or the shell blocks. Drop same-size resizes; keep the PTY master alive (`plan-repo.md` Section 10).
 - `git clone` with a branch flag rejects SHAs; use init + fetch + checkout of `FETCH_HEAD`, and never hide stderr.
 - Signing must stay the last mutation of each binary; Azure credentials go in the action's inputs, not step env.
-- The release workflow must run its own fmt, clippy, and tests.
+- The release workflow must run or require its own complete gates. A green ordinary CI run, a signed binary, a packaged installer, a published release, a served updater asset, a deployed site, and Winget availability are separate evidence boundaries.
 - The boundary script must walk feature-resolved `cargo metadata` so GPUI never reaches the musl server, alacritty never leaves `pandamux-term`, and `pandamux-orchestrator` stays IO-free.
-- The hub pipe name includes the user SID so users on one machine never collide.
-- Move before delete: Phase 1 step 1 relocates every reusable piece before removing the old crates, and the release workflow stays guarded (`RELEASES_ENABLED`) until Phase 7.
+- The hub pipe name must include the user SID, use a user-only DACL, reject remote clients, and verify its peer. Unix runtime directory and socket modes need equally explicit tests.
+- Do not assume deleted-crate behavior was ported because a phase said it was. The updater and release pipeline are concrete counterexamples; locate the current implementation and test its artifact before making a carryover claim.
 - Sub-agent linkage is only as good as the provider's signal; never infer a parent from timing.
 - Surface single-key shortcuts must be scoped to panel focus.
 - Health probes must be read-only; a probe that starts a session burns quota and can trigger logins.
 - Every child process is spawned with `CREATE_NO_WINDOW` inside a Job Object; npm `.cmd` shims need resolution.
 - Windows Application Control may block freshly built test binaries (`os error 4551`); rerun or clean the package. Run Cargo commands serially in this repo (both from `plan-repo.md`).
-- Broadside API authentication: Store Broadside bearer tokens in the OS keyring (`keyring` crate) or environment variables, never plain in `settings.json` or SQLite. Token expiration must produce a clear re-authentication prompt rather than silent sharing failures.
+- Broadside API authentication: store bearer tokens through the approved hub secret adapter or environment variables, never plain in `settings.json` or SQLite. The keyring crate itself is conditional on the platform spike and must not infect musl nodes. Token expiration produces a clear re-authentication prompt.
 - Sandboxed artifact execution: Broadside ensures strict iframe isolation via `never allow-same-origin` and PSL separation on `broadside-content.bp-dev.workers.dev`. Never bypass this sandbox by rendering untrusted agent HTML directly in a local browser with `file://` URLs.
 - Transcript conversion monotonicity: Converting `ThreadEvent` sequences to Broadside's `MessageShape` must preserve chronological order, coalesce streaming assistant tokens, and map tool calls to distinct structured cards.
+- Vector indexes are derived caches. Their currency fingerprint includes content plus model, tokenizer, dimensions, and normalization; deletion or incompatibility falls back to lexical search and rebuild.
+- Native and platform-heavy dependencies earn their place with license, target-matrix, distribution, size, offline, and failure-mode proof before becoming shared workspace dependencies.
+- Release artifacts flow forward from target build jobs and are hash-verified. The packaging job never rebuilds a signed input or accepts a checked-in placeholder manifest.
 
 To fill during implementation: record each phase's discoveries here with the phase tag, and route durable, cross-project gotchas to LL-G (including the new GPUI shelf) and patterns to BP per the repo rules.

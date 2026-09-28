@@ -14,10 +14,16 @@ use pandamux_core::remote_manifest::{
 #[serde(rename_all = "camelCase")]
 pub struct RemoteServerRuntime {
     pub pid: u32,
+    #[serde(alias = "serverVersion")]
     pub version: String,
+    #[serde(default, alias = "environmentId")]
+    pub environment_id: String,
+    #[serde(alias = "pipePath")]
     pub socket_path: String,
+    #[serde(default, alias = "proxyPath")]
+    pub proxy_path: Option<String>,
     pub token: String,
-    #[serde(default)]
+    #[serde(default, alias = "startedAtMs")]
     pub started_at: u64,
 }
 
@@ -39,6 +45,17 @@ pub struct RemoteBootstrapResult {
     pub cli_path: String,
     pub ownership: DaemonOwnership,
     pub runtime: RemoteServerRuntime,
+}
+
+impl RemoteBootstrapResult {
+    pub fn proxy_command(&self) -> String {
+        let run_dir = format!("{}/.pandamux/run", self.home.trim_end_matches('/'));
+        format!(
+            "{} proxy --runtime-dir {}",
+            shell_quote(&self.server_path),
+            shell_quote(&run_dir)
+        )
+    }
 }
 
 /// Provider of compiled binary bytes for target architectures.
@@ -228,6 +245,7 @@ pub async fn start_or_discover_daemon(
     home: &str,
     server_path: &str,
     version: &str,
+    environment_id: &str,
 ) -> Result<(DaemonOwnership, RemoteServerRuntime), SshFailure> {
     let run_dir = format!("{home}/.pandamux/run");
     let runtime_path = format!("{run_dir}/server.json");
@@ -245,17 +263,33 @@ pub async fn start_or_discover_daemon(
             &format!("kill -0 {} 2>/dev/null", runtime.pid),
         )
         .await?;
-        if pid_check.exit_code == 0 && runtime.version == version {
+        if pid_check.exit_code == 0
+            && runtime.version == version
+            && runtime.environment_id == environment_id
+        {
             return Ok((DaemonOwnership::Discovered, runtime));
         }
     }
 
     // Otherwise start launcher-owned daemon with setsid nohup
-    let mkdir_cmd = format!("mkdir -p \"{run_dir}\"");
+    let data_dir = format!("{home}/.pandamux/data");
+    let mkdir_cmd = format!(
+        "mkdir -p {} {}",
+        shell_quote(&run_dir),
+        shell_quote(&data_dir)
+    );
     execute_remote_command(pool, config, &mkdir_cmd).await?;
 
     let log_path = format!("{run_dir}/daemon.log");
-    let launch_cmd = format!("setsid nohup \"{server_path}\" daemon > \"{log_path}\" 2>&1 &");
+    let db_path = format!("{data_dir}/node.db");
+    let launch_cmd = format!(
+        "setsid nohup {} daemon --environment-id {} --runtime-dir {} --db {} > {} 2>&1 &",
+        shell_quote(server_path),
+        shell_quote(environment_id),
+        shell_quote(&run_dir),
+        shell_quote(&db_path),
+        shell_quote(&log_path)
+    );
     let launch_res = execute_remote_command(pool, config, &launch_cmd).await?;
     if launch_res.exit_code != 0 {
         return Err(bootstrap_failure(
@@ -307,6 +341,7 @@ pub async fn bootstrap_remote_environment(
     config: &SshConfig,
     manifest: &RemoteBinaryManifest,
     binary_source: &impl RemoteBinarySource,
+    environment_id: &str,
 ) -> Result<RemoteBootstrapResult, SshFailure> {
     let (platform, home) = detect_remote_platform(pool, config).await?;
     let RemotePlatform::Linux(arch) = platform;
@@ -315,8 +350,15 @@ pub async fn bootstrap_remote_environment(
         install_remote_binaries_if_needed(pool, config, manifest, binary_source, arch, &home)
             .await?;
 
-    let (ownership, runtime) =
-        start_or_discover_daemon(pool, config, &home, &server_path, &manifest.version).await?;
+    let (ownership, runtime) = start_or_discover_daemon(
+        pool,
+        config,
+        &home,
+        &server_path,
+        &manifest.version,
+        environment_id,
+    )
+    .await?;
 
     Ok(RemoteBootstrapResult {
         platform,
@@ -328,6 +370,10 @@ pub async fn bootstrap_remote_environment(
     })
 }
 
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -337,15 +383,22 @@ mod tests {
         let json = r#"{
             "pid": 12345,
             "version": "0.53.36",
+            "environmentId": "env-remote",
             "socketPath": "/home/panda/.pandamux/run/server.sock",
+            "proxyPath": "/home/panda/.pandamux/run/proxy.sock",
             "token": "tok_xyz789",
             "startedAt": 1700000000
         }"#;
 
         let parsed: RemoteServerRuntime = serde_json::from_str(json).expect("valid parse");
         assert_eq!(parsed.pid, 12345);
+        assert_eq!(parsed.environment_id, "env-remote");
         assert_eq!(parsed.version, "0.53.36");
         assert_eq!(parsed.socket_path, "/home/panda/.pandamux/run/server.sock");
+        assert_eq!(
+            parsed.proxy_path.as_deref(),
+            Some("/home/panda/.pandamux/run/proxy.sock")
+        );
         assert_eq!(parsed.token, "tok_xyz789");
     }
 

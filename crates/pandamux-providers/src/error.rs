@@ -3,14 +3,41 @@ use std::path::PathBuf;
 /// Structured error type for provider drivers and sessions.
 #[derive(Debug)]
 pub enum ProviderError {
-    ProcessFailed { program: String, message: String },
-    AuthRequired { provider: String, message: String },
-    ProtocolError { provider: String, message: String },
-    SessionError { thread_id: String, message: String },
-    Timeout { timeout_secs: u64 },
-    RateLimitExceeded { provider: String, details: String },
-    SupervisionError { message: String },
-    ProfileError { path: PathBuf, message: String },
+    ProcessFailed {
+        program: String,
+        message: String,
+    },
+    AuthRequired {
+        provider: String,
+        message: String,
+    },
+    ProtocolError {
+        provider: String,
+        message: String,
+    },
+    SessionError {
+        thread_id: String,
+        message: String,
+    },
+    Timeout {
+        timeout_secs: u64,
+    },
+    RateLimitExceeded {
+        provider: String,
+        details: String,
+    },
+    InstallationError {
+        operation: String,
+        code: String,
+        message: String,
+    },
+    SupervisionError {
+        message: String,
+    },
+    ProfileError {
+        path: PathBuf,
+        message: String,
+    },
     Io(std::io::Error),
     Json(serde_json::Error),
     Other(String),
@@ -56,6 +83,16 @@ impl std::fmt::Display for ProviderError {
                 write!(
                     f,
                     "Rate limit exceeded for provider '{provider}': {details}"
+                )
+            }
+            Self::InstallationError {
+                operation,
+                code,
+                message,
+            } => {
+                write!(
+                    f,
+                    "Installation error during {operation} ({code}): {message}"
                 )
             }
             Self::SupervisionError { message } => {

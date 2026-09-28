@@ -118,6 +118,8 @@ pub enum ThreadOrigin {
 pub struct Turn {
     pub id: TurnId,
     pub thread_id: ThreadId,
+    pub environment_id: EnvironmentId,
+    pub provider_instance_id: ProviderInstanceId,
     pub seq: u64,
     pub input: TurnInput,
     #[serde(default)]

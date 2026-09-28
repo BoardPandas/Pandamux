@@ -7,6 +7,7 @@ pub mod git_rpc;
 pub mod hark_rpc;
 pub mod jsonrpc;
 pub mod mcp;
+pub mod proxy;
 pub mod settings_rpc;
 pub mod subagent_rpc;
 pub mod subscription;
@@ -16,9 +17,10 @@ pub mod thread_rpc;
 pub mod worktree_rpc;
 
 pub use antigravity_rpc::{
-    AntigravityInstallParams, AntigravityInstallResult, AntigravityOAuthRelayParams,
-    AntigravityOAuthRelayResult, AntigravityOAuthStartParams, AntigravityOAuthStartResult,
-    AntigravityStatusParams, AntigravityStatusResult, ManagedBundleManifest,
+    AntigravityDiscardUploadParams, AntigravityInstallParams, AntigravityInstallResult,
+    AntigravityOAuthRelayParams, AntigravityOAuthRelayResult, AntigravityOAuthStartParams,
+    AntigravityOAuthStartResult, AntigravityPrepareUploadParams, AntigravityPrepareUploadResult,
+    AntigravityStatusParams, AntigravityStatusResult, ManagedBundleFile, ManagedBundleManifest,
 };
 pub use attachment_rpc::{
     AttachmentGetParams, AttachmentGetResult, AttachmentImportPathParams, AttachmentImportResult,
@@ -40,6 +42,7 @@ pub use hark_rpc::{
 };
 pub use jsonrpc::{JSONRPC_VERSION, RpcError, RpcId, RpcRequest, RpcResponse};
 pub use mcp::{McpCallToolParams, McpCallToolResult, McpContentItem, McpToolDefinition};
+pub use proxy::{PROXY_PROTOCOL_VERSION, ProxyMessage};
 pub use settings_rpc::{
     ProviderHealthParams, ProviderHealthReport, ProviderHealthResult, SettingsGetParams,
     SettingsGetResult, SettingsSetParams, SettingsSetResult,

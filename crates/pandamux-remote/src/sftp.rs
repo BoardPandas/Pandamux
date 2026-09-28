@@ -1,4 +1,5 @@
 use russh_sftp::client::SftpSession;
+use russh_sftp::protocol::{FileAttributes, OpenFlags};
 use std::path::Path;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -170,8 +171,80 @@ pub async fn upload_file_sftp(
     local_path: &Path,
     remote_path: &str,
 ) -> Result<(), SshFailure> {
-    let bytes = tokio::fs::read(local_path).await.map_err(|error| {
-        sftp_failure(format!("read local file {}: {error}", local_path.display()))
+    let mut local = tokio::fs::File::open(local_path).await.map_err(|error| {
+        sftp_failure(format!("open local file {}: {error}", local_path.display()))
     })?;
-    upload_bytes_sftp(pool, &config, remote_path, &bytes).await
+    let expected_size = local
+        .metadata()
+        .await
+        .map_err(|error| {
+            sftp_failure(format!(
+                "read local metadata {}: {error}",
+                local_path.display()
+            ))
+        })?
+        .len();
+    let handle = pool.acquire(&config).await?;
+    let channel = handle
+        .channel_open_session()
+        .await
+        .map_err(|error| sftp_failure(format!("open sftp channel: {error}")))?;
+    channel
+        .request_subsystem(true, "sftp")
+        .await
+        .map_err(|error| sftp_failure(format!("request sftp subsystem: {error}")))?;
+    let sftp = SftpSession::new(channel.into_stream())
+        .await
+        .map_err(|error| sftp_failure(format!("start sftp session: {error}")))?;
+    let attributes = FileAttributes {
+        permissions: Some(0o600),
+        ..FileAttributes::default()
+    };
+    let mut remote = sftp
+        .open_with_flags_and_attributes(
+            remote_path,
+            OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE,
+            attributes.clone(),
+        )
+        .await
+        .map_err(|error| sftp_failure(format!("create remote {remote_path}: {error}")))?;
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    let mut uploaded = 0_u64;
+    loop {
+        let read = local.read(&mut buffer).await.map_err(|error| {
+            sftp_failure(format!("read local file {}: {error}", local_path.display()))
+        })?;
+        if read == 0 {
+            break;
+        }
+        remote
+            .write_all(&buffer[..read])
+            .await
+            .map_err(|error| sftp_failure(format!("write remote {remote_path}: {error}")))?;
+        uploaded = uploaded.saturating_add(read as u64);
+    }
+    remote
+        .sync_all()
+        .await
+        .map_err(|error| sftp_failure(format!("sync remote {remote_path}: {error}")))?;
+    remote
+        .set_metadata(attributes)
+        .await
+        .map_err(|error| sftp_failure(format!("protect remote {remote_path}: {error}")))?;
+    let remote_size = remote
+        .metadata()
+        .await
+        .map_err(|error| sftp_failure(format!("stat remote {remote_path}: {error}")))?
+        .len();
+    remote
+        .shutdown()
+        .await
+        .map_err(|error| sftp_failure(format!("finalize remote {remote_path}: {error}")))?;
+    let _ = sftp.close().await;
+    if uploaded != expected_size || remote_size != expected_size {
+        return Err(sftp_failure(format!(
+            "remote upload size mismatch for {remote_path}: local {expected_size}, uploaded {uploaded}, remote {remote_size}"
+        )));
+    }
+    Ok(())
 }

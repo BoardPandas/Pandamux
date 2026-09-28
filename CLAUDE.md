@@ -1,152 +1,158 @@
-# PandaMUX — Development Guide
+# PandaMUX Development Guide
 
-Native Windows terminal multiplexer for AI agents. Rust workspace: Iced (GPU UI) + alacritty_terminal (grid) + portable-pty (local PTY) + russh (remote PTY/SFTP).
+PandaMUX is a native, chat-first desktop for supervising local and remote AI coding agents. The current workspace uses GPUI through `gpui-kit`, an authenticated server-owned JSON-RPC control plane, `alacritty_terminal` for the desktop grid, `portable-pty` for server-owned local terminals, and `russh` for remote Linux composition.
 
-**Owner**: BoardPandas (github.com/BoardPandas). Prefers fast, pragmatic solutions; tests live.
-**Repo**: github.com/BoardPandas/Pandamux | **Site**: pandamux.boardpandas.ai (Netlify, static from `site/`)
-**Version**: single source is `[workspace.package] version` in the root `Cargo.toml`. Read it there rather than trusting a number quoted here. See `CHANGELOG.md`.
+The active implementation is not the removed Iced multiplexer. [`tasks/plan-repo.md`](tasks/plan-repo.md) is historical except for its retained Section 12 UI specification. [`tasks/plan-rewrite.md`](tasks/plan-rewrite.md) is the current implementation and acceptance contract.
 
-> **History**: this app was rewritten from an Electron/TypeScript prototype into a fully native Rust application (plan: `tasks/plan-repo.md`). The Electron build was a never-shipped fork pull and has been deleted (Phase 7). The browser/CDP pane was intentionally dropped; agents use Claude Code's own browser tooling instead.
->
-> Phases 1-7 are complete (native terminal engine, Iced shell, pipe/CLI parity, peripheral UI, SSH remote surfaces + OSC 52 + SFTP image paste, and ship: signed installer + release CI). Signed releases have been publishing from the tag workflow since v0.37. The `.claude/` folder is the source of truth for how this repo runs (commits, changelog, knowledge-base checks, agents). See Conventions at the bottom.
+## Authority and status
 
----
+For current facts, use this order:
 
-## Build & Dev
+1. Implementation and manifests
+2. `CHANGELOG.md`
+3. This guide
+4. The maintained [`docs/README.md`](docs/README.md) index
 
-Rust stable toolchain (rustup) + MSVC build tools (Windows target). The app has no Node/pnpm runtime or install step; Node 24 runs the repository's `.claude/` wiring guard, and site publishing uses `npx netlify`.
+The only version source is `[workspace.package] version` in the root [`Cargo.toml`](Cargo.toml). Crates inherit it with `version.workspace = true`.
+
+The codebase is at the Phase 4 recovery gate. R0.1 preserves the unfinished usage prototype; R0.2 completes production proxy routing; R0.3 enforces exact provider-instance execution; R0.4 secures the local control boundary. R0.5 still requires live Windows and Galahad acceptance with exact artifact hashes. Do not call the rewrite production-accepted, released, or shipped before that matrix passes and its record is archived.
+
+## Build and development
+
+Use Rust stable. Windows builds require the MSVC build tools. The application has no Node runtime, though Node 24 runs the repository wiring guard.
 
 ```bash
-# GUI app (the Iced shell needs the iced-runtime feature). With that feature the
-# window opens by DEFAULT (no flag): the installed Start Menu shortcut runs
-# `pandamux.exe` with no args, so the argument-less path must be the GUI. The
-# feature build is a Windows GUI-subsystem binary, so no console window appears.
-cargo run -p pandamux-app --features iced-runtime                        # interactive window (default)
-cargo run -p pandamux-app --features iced-runtime -- --iced-shell        # same; flag kept for back-compat
-cargo run -p pandamux-app --features iced-runtime -- --iced-shell-smoke  # noninteractive CI smoke
-cargo build --release -p pandamux-app --features iced-runtime            # release GUI (pandamux.exe)
+# GPUI desktop, binary name pandamux
+cargo run -p pandamux-desktop
+cargo run -p pandamux-desktop -- --headless
+cargo run -p pandamux-desktop -- --smoke
 
-# CLI (pandamux-cli.exe) + headless pipe server
-cargo build --release -p pandamux-cli
-cargo run  -p pandamux-app                                               # headless pipe server (no GUI)
-cargo run  -p pandamux-app --features iced-runtime -- --headless         # force the pipe server in the GUI build
+# Server composition root
+cargo run -p pandamux-server
+cargo run -p pandamux-server -- daemon --role node
+cargo run -p pandamux-server -- proxy
 
-# Checks
+# CLI
+cargo run -p pandamux-cli -- --help
+cargo run -p pandamux-cli -- ping
+cargo run -p pandamux-cli -- identify
+cargo run -p pandamux-cli -- thread list
+cargo run -p pandamux-cli -- thread send <thread-id> "prompt"
+cargo run -p pandamux-cli -- notify "Build complete"
+cargo run -p pandamux-cli -- mcp
+```
+
+The desktop discovers or starts a sibling `pandamux-server` and authenticates through the private runtime record. For manual development, start the server first if the binaries do not share a target directory.
+
+### Validation
+
+Run Cargo commands serially in one checkout.
+
+```bash
 cargo fmt --all --check
-.\scripts\check-rust-boundaries.ps1     # enforces the crate-isolation invariant (Section 6.1 of the plan)
-node scripts/check-claude-wiring.mjs    # rule `paths:` globs resolve + hook matchers are tool names
+cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-cargo test -p pandamux-ui  --features iced-runtime --lib
-cargo test -p pandamux-app --features iced-runtime --bin pandamux
+pwsh -File scripts/check-rust-boundaries.ps1
+node scripts/check-claude-wiring.mjs
 ```
 
-The GUI binary is declared as `[[bin]] name = "pandamux"` in `crates/pandamux-app/Cargo.toml`, so the release artifact is `target/release/pandamux.exe` while the cargo package stays `pandamux-app` (so `-p pandamux-app` and the CI smokes are unchanged).
-
-### Native dependency notes
-
-- Native deps of note: `alacritty_terminal`, `portable-pty`, `russh` + `russh-sftp`, `iced` (+ wgpu/glyphon/cosmic-text via Iced), `arboard`. All are pinned to exact versions (`=x.y.z`); see the crate manifests and the Phase 2 spike report (`spikes/phase2-native-terminal/PHASE2_REPORT.md`) for why.
-- `winresource` (build-dependency of `pandamux-app`, Windows only) embeds the icon + version metadata into `pandamux.exe` via `build.rs`. A missing resource compiler is treated as a warning so a dev box without the Windows SDK still builds; CI (windows-latest) has `rc.exe` and embeds for real.
-- Windows Application Control can intermittently block freshly built Cargo test/build-script executables with `os error 4551`. It is host-policy noise: rerun, or `cargo clean -p <pkg>` then rerun.
-
----
-
-## Architecture (Rust workspace)
-
-```
-crates/
-  pandamux-core/   Shared domain types, split tree, session model, pipe-protocol (JSON-RPC) types,
-                   agent + sidebar + notification + ssh models. CANONICAL state lives here. Zero Iced.
-  pandamux-term/   Terminal engine: alacritty_terminal grid, portable-pty local PTY, russh remote PTY +
-                   SFTP, OSC 52 clipboard policy, hand-built search/serialize/link detection, shell
-                   lifecycle (resolution/chunking/DA1-CPR/tree-kill). Exposes pandamux's OWN grid types;
-                   alacritty_terminal never leaks out.
-  pandamux-ui/     Iced app: canvas terminal viewport (wgpu/cosmic-text/glyphon), panes/splits/tabs,
-                   chrome (titlebar/rail/status bar), session panel, command palette, settings,
-                   markdown/diff surfaces, theming, icons. The ONLY crate that imports Iced.
-  pandamux-app/    Binary (pandamux.exe): composition root + tokio runtime; owns authoritative mutable
-                   state; named-pipe server, agent manager, git/port pollers, session persistence,
-                   in-app updater, OS clipboard bridge.
-  pandamux-cli/    Binary (pandamux-cli.exe): the `pandamux` CLI, pipe client (wire-compatible with the
-                   V2 JSON-RPC protocol).
-resources/         Runtime assets loaded from <exe dir>/resources: themes, sounds, shell-integration,
-                   icons, pandamux-orchestrator plugin.
-site/              Landing page (static HTML, Netlify) — describes the public download.
-tasks/plan-repo.md Historical rewrite plan (phases, decisions, gotchas, UI design spec in Section 12).
-```
-
-### Key design decisions
-
-- **Crate-isolation invariant (hard rule, CI-enforced by `scripts/check-rust-boundaries.ps1`)**: `pandamux-core`/`pandamux-term` have ZERO Iced dependency; `pandamux-ui` is the only crate that imports Iced; `alacritty_terminal` types never appear outside `pandamux-term`. An engine or framework swap then touches only one crate.
-- **Backend-owned state (intent-in, delta-out, single writer)**: `pandamux-app` owns the canonical workspace/pane/surface split tree; the Iced UI holds a read-projection and submits intents. The named-pipe server (CLI/agents/orchestrator) and the UI both submit the SAME intents to the SAME sync dispatcher (`pandamux-app::backend::handle_line`), so a CLI-driven and a UI-driven mutation are indistinguishable at the state layer. The pipe server runs as an Iced subscription in the live runtime.
-- **PTY ID = Surface ID**: each terminal surface keeps its `Term`/PTY alive in memory keyed by surface id; switching tabs never reconstructs grid state (native equivalent of the old keep-alive tabs).
-- **Immutable split tree**: layouts are a binary `SplitNode` tree in `pandamux-core::split`; mutations produce new trees. The UI renders a 2-level column projection over it (design decision 12.1); UI-initiated splits stay 2-level so the projection round-trips, while arbitrary-depth CLI/orchestrator trees still render via a graceful fallback.
-- **No MCP**: all Claude Code integration is via the `pandamux` CLI over the named pipe. Do NOT build MCP servers.
-
----
-
-## Release Process (Phase 7)
-
-The whole release runs in GitHub Actions on a `v*` tag (`.github/workflows/release.yml`, windows-latest). A person never builds or signs locally. The GitHub Release carries exactly ONE asset: the signed NSIS `Setup.exe`. The in-app updater (`pandamux-app::updater`) discovers it via the GitHub Releases API, so there is no Velopack feed / `latest.yml`.
-
-Pipeline: `cargo build --release` (winresource embeds icon + version into `pandamux.exe`) → Azure Trusted Signing on `pandamux.exe` + `pandamux-cli.exe` → `cargo packager` bundles the already-signed exe into `Setup.exe` (NSIS; cargo-packager does not rebuild, so the signature stays valid) → sign the installer → `gh release` with the installer as the only asset.
-
-Signing secrets come from Doppler (`pandamux`/`prd`, six `AZURE_*` vars) via the single `DOPPLER_TOKEN` repo secret and `dopplerhq/secrets-fetch-action`; the `pandamux-ci-signing` service principal holds the **Artifact Signing Certificate Profile Signer** role on the `SupportForge` profile (Wellforce `HDBtrustedsigning` account). Signing MUST be the last mutation of a binary before it is packaged/uploaded.
-
-### To cut a release
-
-1. Update `CHANGELOG.md` and bump `[workspace.package] version` in the root `Cargo.toml` (see `.claude/rules/commit-changelog.md`).
-2. Commit, then tag: `git tag -a v<VERSION> -m "PandaMUX v<VERSION>"` and `git push origin v<VERSION>`.
-3. The workflow builds, signs, packages, signs the installer, and publishes the Release.
-
-### Local packaging validation (optional, no signing)
+Useful scoped checks:
 
 ```bash
-cargo build --release -p pandamux-cli
-cargo build --release -p pandamux-app --features iced-runtime
-cargo packager --release --formats nsis --out-dir dist   # -> dist/pandamux_<ver>_x64-setup.exe
+cargo test -p pandamux-core
+cargo test -p pandamux-protocol
+cargo test -p pandamux-providers
+cargo test -p pandamux-remote
+cargo test -p pandamux-server
+cargo test -p pandamux-cli
+cargo test -p pandamux-term
+cargo test -p pandamux-desktop
+cargo check -p pandamux-protocol -p pandamux-client -p pandamux-cli -p pandamux-server -p pandamux-desktop
 ```
 
-The packager config is `[package.metadata.packager]` in `crates/pandamux-app/Cargo.toml`. Resources land at `<install>/resources/...`, exactly where the runtime's `resources_dir()` looks. `cargo-packager` downloads its own NSIS (no choco install needed). Keys are kebab-case, but note `installer-mode` (not `install-mode`).
+The CI workflow in `.github/workflows/rust.yml` checks Windows formatting, Clippy, crate boundaries, advisories, tests, and release binaries; it also checks the core binaries on Apple Silicon and builds the x86_64 Linux musl node artifacts.
 
-### Distribution
+Before any long or potentially silent command, explain what will run, estimate its duration, and state whether it is safe to interrupt.
 
-- winget auto-publish (`.github/workflows/winget.yml`) runs on release published. The installer type changed from the old portable zip to NSIS, so the winget-pkgs package needs a one-time manual re-bootstrap PR from `winget/*.yaml` (now `InstallerType: nsis`) before winget-releaser can auto-update it.
-- macOS/Linux packaging is deferred (rcodesign + AppImage/Flatpak noted for later).
+## Workspace architecture
 
----
+```text
+crates/
+  pandamux-core/       Framework-free domain types, IDs, settings, threads, turns, events, policy
+  pandamux-protocol/   Versioned RPC, subscription, terminal, settings, and proxy contracts
+  pandamux-providers/  Provider drivers, profiles, parser fixtures, and process supervision
+  pandamux-remote/     SSH auth and pooling, exec, SFTP, bootstrap, ProxyJump, proxy tunnels
+  pandamux-server/     SQLite single writer, router, provider resolver, PTYs, Hub and node runtime
+  pandamux-client/     Client event projections and rendering-oriented state
+  pandamux-desktop/    GPUI chat shell, timeline, composer, settings, surfaces, terminal grid
+  pandamux-cli/        Authenticated CLI and MCP stdio adapter
+  pandamux-term/       Optional `grid` and `pty` terminal features
+```
 
-## Named Pipe + CLI (parity contract)
+### Hard boundaries
 
-`\\.\pipe\pandamux`: V1 text protocol (`ping` and `report_pwd`) plus V2 JSON-RPC for the CLI, agents, and orchestrator. The request envelope has an optional `token` field, but the current server does not validate it, so the local pipe must not be described as authenticated. The non-browser V2 surface is wire-compatible with the historical prototype; browser/CDP methods reject with a "use Claude Code's browser tooling" message and `system.capabilities` reports `browser: false`.
+- `pandamux-core` remains independent of UI, storage, terminal, and SSH frameworks.
+- `pandamux-protocol` contains wire contracts and must not depend on implementation crates.
+- `pandamux-server` is the production composition owner of `pandamux-remote`.
+- `pandamux-server` depends on `pandamux-term` with `default-features = false, features = ["pty"]`.
+- `pandamux-desktop` depends on `pandamux-term` with `default-features = false, features = ["grid"]`.
+- Provider and durable state live behind the server. The desktop maintains projections and submits intents.
+- Run `scripts/check-rust-boundaries.ps1` after dependency changes.
 
-V2 methods (all route through `pandamux-app::backend::handle_line`): `system.*`, `workspace.*`, `pane.*`, `layout.grid`, `surface.*` (including `send_text`/`send_key`/`read_text`/`paste`/`paste_image`/`set_color_scheme`), `markdown.*`, `diff.*`, `notification.*`, `sidebar.*`, `agent.*`, `clipboard.*`, `ssh.*`, `window.*`, `config.*`, and `theme.*`. The authoritative CLI command list is `crates/pandamux-cli` (`pandamux <command>`); neither `hook.event` nor `pandamux browser *` is implemented.
+## Server and local IPC
 
----
+`pandamux-server` runs as a Hub on the desktop machine and as a node daemon on remote Linux hosts. It owns SQLite, provider processes, local PTYs, attachments, event ordering, and environment routing.
 
-## pandamux-orchestrator Plugin
+The runtime record is stored under `%LOCALAPPDATA%\pandamux\run\server.json` on Windows or `~/.pandamux/run/server.json` on Unix. It contains separate control and MCP capabilities. Connections must authenticate with `system.hello` before routing.
 
-Claude Code plugin bundled in `resources/pandamux-orchestrator/`. Install it manually with `/plugin install pandamux-orchestrator`; PandaMUX does not write to `~/.claude` on launch. The plugin decomposes complex dev tasks into parallel Claude Code agents in visible panes, coordinated through the pipe protocol (state in a JSON file in TMPDIR; no daemon). It talks to the CLI/pipe only, so it works unchanged against the Rust pipe server. See `resources/pandamux-orchestrator/` for its skills, hooks, and scripts.
+`RequestContext` is assigned by the accepting transport and contains the peer role, authenticated environment, client identity, and capability scope. Request JSON cannot select or upgrade those fields.
 
----
+- Local desktop and CLI: control scope, with MCP methods excluded
+- MCP adapter: `system.hello`, `system.ping`, and the read-only MCP tool surface
+- Provider child: expiring token, exact thread, exact notification or memory methods
+- Node proxy: server-assigned proxy role for the node's authenticated environment
+- Internal calls: explicit in-process context only
 
-## Shell Integration
+Windows uses a SID-scoped pipe name, a protected user-only DACL, remote-client rejection, first-instance anti-squatting, and connecting PID and image validation. Unix uses a `0700` runtime directory, `0600` runtime records and sockets, safe owner and symlink checks, and peer credential validation.
 
-Scripts in `resources/shell-integration/` (bash/zsh/PowerShell/cmd) report cwd and emit shell metadata; the native backend currently handles V1 `report_pwd` while git/port state is recomputed by pollers. Env vars set by PandaMUX in spawned shells are `PANDAMUX=1`, `PANDAMUX_SURFACE_ID`, `PANDAMUX_PIPE`, and, for orchestrator-spawned surfaces, `PANDAMUX_AGENT_ID`. Per-session cwd tracking also uses OSC 9;9 / OSC 7.
+The v1 boundary is per OS user, not hostile same-user process isolation. FullAccess providers intentionally have host-user authority. Never describe a FullAccess session as process-isolated.
 
----
+The MCP surface is intentionally read-only in Phase 4. `read_settings` and `list_schedules` return purpose-built projections. They must never expose profile paths, provider environment overrides, arbitrary provider JSON, secrets, schedule prompts, repository paths, notification targets, or FullAccess state.
 
-## Website (pandamux.boardpandas.ai)
+## Provider execution
 
-Static site in `site/`, deployed to Netlify (`netlify.toml`). `site/index.html` describes the native Rust app and signed NSIS installer, with i18n via `site/i18n.js` and URL-hash switching. Publish site changes with `npx netlify deploy --prod --dir site`.
+Every executable provider path starts from a stored `ProviderInstanceConfig` resolved for the thread's environment. The shared resolver applies the exact provider kind, binary override, profile directory, settings, environment overrides, enabled state, capability map, authentication probe, and concurrency limit. Missing or incompatible instances fail with structured errors. Production code never falls back to the Custom mock.
 
----
+Per-instance permits are held for the complete provider-process lifetime, including approval waits, and are released on cancellation, crash, configuration replacement, or shutdown. The selected instance ID is carried through the thread, health and login paths, turn, process audit, and provider launch.
 
-## Conventions
+Phase 4A will extend that typed identity into normalized usage observations and subscription mappings. The recovered usage prototype is evidence only; its append-only buckets, caller-supplied provenance, floating-point pricing, and in-memory path cursors are not the implementation contract.
 
-- **State**: canonical in `pandamux-app` (`pandamux-core` types); the Iced UI is a read-projection (intent-in, delta-out).
-- **Crate isolation**: never import Iced outside `pandamux-ui`; never leak `alacritty_terminal` types outside `pandamux-term`. CI fails the build otherwise.
-- **Pins**: dependencies are pinned exactly (`=x.y.z`). Re-verify + bump deliberately at dependency refreshes.
-- **Version**: single source is the root `Cargo.toml` `[workspace.package] version`; crates inherit via `version.workspace = true`. It drives `CARGO_PKG_VERSION`, which the updater compares to GitHub releases.
-- **Workflow source of truth (`.claude/`)**: before committing, update `CHANGELOG.md` and bump the version per `.claude/rules/commit-changelog.md`; write commit messages to a file and use `git commit -F` (never inline `-m`). Consult the LL-G and BP knowledge bases before code/config work (`.claude/rules/llg-check.md`, `.claude/rules/bp-check.md`). Use the custom agents in `.claude/agents/`, not built-in subagent types.
-- **Writing style**: no em dashes or double dashes in files, code, or comments; use commas, colons, parentheses, or semicolons instead.
-- **Command communication**: before running any long or potentially silent command (for example: cargo test, cargo build, test harnesses), explain in chat what will run, provide a rough duration estimate, state whether it is safe to interrupt early, and never execute long actions silently.
+## Remote composition
+
+`pandamux-remote` owns SSH mechanics, but `pandamux-server` owns their production composition.
+
+1. The Hub authenticates with `russh`, detects the Linux platform, and reads the node runtime record.
+2. Bootstrap verifies exact server and CLI artifact size and SHA-256 before atomic placement.
+3. A compatible daemon is discovered or started with `pandamux-server daemon`.
+4. An SSH exec channel runs `pandamux-server proxy`, which bridges to the daemon's private Unix socket.
+5. The versioned proxy carries bounded RPC, cancellation, durable event replay, EOF state, and joined cleanup.
+6. A dropped tunnel marks the environment stale or unreachable. It never silently reroutes remote work to the local machine.
+
+The non-release R0 artifact harness is `scripts/r0-node-artifacts.sh`. Its build mode refuses a dirty tree, requires both binaries, records commit, version, size, and SHA-256, re-verifies the directory, and leaves publication disabled.
+
+## Release state
+
+Release authorization is not implied by implementation work. Keep implementation, verification, commit, push, deployment, and live acceptance as separate evidence boundaries.
+
+The current GPUI rewrite has not passed R0.5. `.github/workflows/release.yml` still contains historical packaging references and must not be used as evidence that the current workspace is releasable. Phase 7 owns the final Windows packaging, signing, publication, and update pipeline.
+
+## Repository conventions
+
+- Preserve unrelated and user-owned work in dirty checkouts. Never reset, clean, broadly stage, or absorb it.
+- Treat approved plans and acceptance matrices as contracts. Record deliberate deviations and their reasons.
+- Update `CHANGELOG.md` and the root version when preparing a commit according to `.claude/rules/commit-changelog.md`.
+- Write commit messages through a file with `git commit -F`; do not use an inline message.
+- Consult the LL-G and BP knowledge bases using the repository rules before code or configuration work.
+- Use the custom agents in `.claude/agents/` only when delegation is explicitly authorized.
+- Do not use em dashes or doubled hyphens as prose punctuation in files, comments, or messages. Command-line flags remain unchanged.
+- Do not claim a test, build, artifact, commit, push, deployment, or live acceptance result without direct evidence.

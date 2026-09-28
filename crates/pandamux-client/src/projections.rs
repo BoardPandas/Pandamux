@@ -52,6 +52,8 @@ impl ThreadProjection {
                 let turn = Turn {
                     id: turn_id.clone(),
                     thread_id: self.thread.id.clone(),
+                    environment_id: self.thread.environment_id.clone(),
+                    provider_instance_id: self.thread.provider_instance_id.clone(),
                     seq: event.seq,
                     input: input.clone(),
                     status: TurnStatus::Requested,

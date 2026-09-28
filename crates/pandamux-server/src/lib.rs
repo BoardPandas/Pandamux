@@ -6,12 +6,18 @@ pub mod fs;
 pub mod git;
 pub mod hark;
 pub mod mcp_server;
+pub mod provider_resolver;
+pub mod proxy_connection;
+pub mod proxy_transport;
+pub mod request_context;
 pub mod router;
 pub mod runtime;
 pub mod server;
 pub mod store;
 pub mod terminal;
 pub mod thread_manager;
+#[cfg(windows)]
+pub mod windows_security;
 pub mod worktree;
 
 pub use attachment::AttachmentManager;
@@ -20,14 +26,24 @@ pub use checkpoint::{
     prune_old_checkpoints, prune_thread_checkpoints, rollback_to_checkpoint,
 };
 pub use driver_registry::DriverRegistry;
-pub use environment_router::{EnvironmentRouter, EnvironmentTransport, MockEnvironmentTransport};
+pub use environment_router::{
+    EnvironmentRouter, EnvironmentTransport, EnvironmentTransportState, MockEnvironmentTransport,
+};
 pub use git::{get_git_status, git_commit, git_create_pr, git_push};
 pub use hark::HarkBridge;
 pub use mcp_server::McpServer;
+pub use provider_resolver::{
+    ProviderResolver, ResolvedProviderExecution, ResolvedProviderInstance,
+};
+pub use proxy_connection::serve_proxy_connection;
+pub use proxy_transport::ProxyEnvironmentTransport;
+pub use request_context::{
+    CapabilityAuthority, CapabilityScope, ClientIdentity, PeerRole, RequestContext,
+};
 pub use router::Router;
 pub use runtime::{RUNTIME_FILENAME, RuntimeInfo};
 pub use server::{Server, ServerConfig};
-pub use store::{Store, StoreError};
+pub use store::{ProviderExecutionAudit, Store, StoreError};
 pub use terminal::TerminalServerManager;
 pub use thread_manager::ThreadManager;
 
