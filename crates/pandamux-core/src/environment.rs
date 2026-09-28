@@ -12,6 +12,12 @@ pub struct Environment {
     pub status: EnvironmentStatus,
     #[serde(default)]
     pub platform: Option<String>,
+    #[serde(default)]
+    pub server_version: Option<String>,
+    #[serde(default)]
+    pub schedules_count: Option<usize>,
+    #[serde(default)]
+    pub last_error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,6 +32,10 @@ pub enum EnvironmentKind {
 pub enum EnvironmentStatus {
     Connected,
     Connecting,
+    Bootstrapping,
+    Ready,
+    Degraded,
+    Offline,
     #[default]
     Disconnected,
     Unreachable,

@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Implemented Phase 3 Step 2 (Linux musl builds of `pandamux-server` and `pandamux-cli`, remote binary manifest, and embedded SHA-256 hashes).** Added compilation support and integrity verification for remote Linux musl nodes:
+  - **Remote binary manifest**: Implemented `remote_manifest.rs` in `pandamux-core` defining `RemoteBinaryManifest`, `RemoteTargetBinaries`, `RemoteBinaryMeta`, and `RemotePlatform` with platform detection from `uname -sm` (Linux x86_64, aarch64). Provides standard remote path resolution (`install_dir`, `server_binary_path`, `cli_binary_path`, and `agent_path_env` prepending to PATH for agent processes).
+  - **Embedded integrity verification**: Added `embedded_remote_manifest()` and `compute_sha256` in `pandamux-core` for remote verification scripts (`remote_verify_sha256_cmd`) and atomic binary placement (`remote_install_cmd`). Added `resources/remote-binaries/manifest.json`.
+  - **Musl build pipeline**: Added build automation scripts `scripts/build-remote-musl.sh` and `scripts/build-remote-musl.ps1` for `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`, and added the `linux-musl` CI job to `.github/workflows/rust.yml`.
+  - **Remote environment states**: Updated `Environment` and `EnvironmentStatus` in `pandamux-core` with lifecycle states (`Bootstrapping`, `Ready`, `Degraded`, `Offline`) and host metadata fields (`server_version`, `schedules_count`, `last_error`).
+
 - **Implemented Phase 3 Step 1 (Extend `pandamux-remote`: exec-without-PTY streaming, proxy tunnels, and ProxyJump bastion routing).** Enhanced `pandamux-remote` to support remote execution, tunneling, and bastion jump host routing for remote environments:
   - **Exec-without-PTY streaming**: Added `execute_remote_command_stream` and `ExecStreamMsg` (`Stdout`, `Stderr`, `ExitStatus`) enabling real-time streaming of stdout and stderr chunks through an asynchronous channel sender without PTY allocation.
   - **Proxy tunnels**: Implemented `proxy.rs` providing `ProxyTunnel` with `AsyncRead` and `AsyncWrite` implementations over `russh::ChannelStream`, supporting both exec-based daemon tunnels (`open_exec_proxy_tunnel`) running `pandamux-server proxy` to connect to the daemon socket without special sshd forwarding, and direct Unix domain socket forwarding (`open_streamlocal_proxy_tunnel`).

@@ -111,3 +111,30 @@ jobs:
 
       - name: Build workspace binaries
         run: cargo build --release -p pandamux-cli -p pandamux-server -p pandamux-desktop
+
+  linux-musl:
+    name: Linux musl (x64)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl-tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-all-crates: true
+
+      - name: Build musl server and CLI
+        run: cargo build --release --target x86_64-unknown-linux-musl -p pandamux-server -p pandamux-cli
+

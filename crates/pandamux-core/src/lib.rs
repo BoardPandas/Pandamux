@@ -11,6 +11,7 @@ pub mod organization;
 pub mod project;
 pub mod project_registry;
 pub mod provider_config;
+pub mod remote_manifest;
 pub mod run;
 pub mod schedule;
 pub mod settings;
@@ -58,6 +59,10 @@ pub use project_registry::{
     resolve_project_id,
 };
 pub use provider_config::{ProviderCapabilities, ProviderInstanceConfig, ProviderKind};
+pub use remote_manifest::{
+    RemoteArch, RemoteBinaryKind, RemoteBinaryManifest, RemoteBinaryMeta, RemotePlatform,
+    RemoteTargetBinaries, embedded_remote_manifest,
+};
 pub use run::{Run, RunEvent, RunKind, RunStatus, RunTask, RunTaskStatus};
 pub use schedule::{
     PerDayBudget, PerRunBudget, ScheduleApprovalPolicy, ScheduleBudget, ScheduleCatchUpPolicy,
