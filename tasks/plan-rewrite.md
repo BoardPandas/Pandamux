@@ -939,7 +939,7 @@ Exit criteria: the old crates and resources are gone and the workspace builds; o
 3. [x] **Custom diff viewer on gpui-kit `highlighter` and read-only editor pieces.** (Completed in commit `cdb0023`, v0.53.24)
 4. [x] **Attachments (local): paste, drag, pick; size caps; provider mapping.** (Completed in commit `ccc2b5e`, v0.53.25)
 5. [x] **Settings: Providers (scoped, tier mapping), Terminal, General, Advanced; health checks that never trigger auth.** (Completed in commit `2bb4f28`, v0.53.26)
-6. Git actions: status, commit (drafted message), push, PR via `gh` or compare URL.
+6. [x] **Git actions: status, commit (drafted message), push, PR via `gh` or compare URL.** (Completed in commit `e141449`, v0.53.27)
 7. OS notifications; command palette; shortcuts; light/dark theme.
 8. Timeline virtualization with the S1 selection model; incremental markdown and highlight cache; 2,000-item performance budget.
 9. Provider sub-agent tree: `SubAgent*` events (Claude; Codex if S2 found a source), `sub_agents` projection, `subagent.tree`, timeline folding.
