@@ -259,25 +259,47 @@ impl ThreadProjection {
             }
             ThreadEventKind::SubAgentSpawned {
                 sub_agent_id,
+                parent_sub_agent_id,
+                parent_item_id,
                 title,
                 agent_type,
                 model,
-                ..
+                effort,
             } => {
-                self.sub_agents.insert(
-                    sub_agent_id.clone(),
-                    SubAgentProjection {
-                        id: sub_agent_id.clone(),
-                        title: title.clone(),
-                        agent_type: agent_type.clone(),
-                        model: model.clone(),
-                        latest_activity: None,
-                        tokens: 0,
-                        tool_calls: 0,
-                        outcome: None,
-                        finished: false,
-                    },
-                );
+                let proj = SubAgentProjection {
+                    id: sub_agent_id.clone(),
+                    title: title.clone(),
+                    agent_type: agent_type.clone(),
+                    model: model.clone(),
+                    parent_sub_agent_id: parent_sub_agent_id.clone(),
+                    parent_item_id: parent_item_id.clone(),
+                    effort: effort.clone(),
+                    latest_activity: None,
+                    tokens: 0,
+                    tool_calls: 0,
+                    outcome: None,
+                    elapsed_ms: None,
+                    summary: None,
+                    started_at_ms: event.at_ms,
+                    finished: false,
+                };
+                self.sub_agents.insert(sub_agent_id.clone(), proj);
+                self.items.push(TimelineItem::SubAgent {
+                    id: sub_agent_id.clone(),
+                    parent_sub_agent_id: parent_sub_agent_id.clone(),
+                    parent_item_id: parent_item_id.clone(),
+                    title: title.clone(),
+                    agent_type: agent_type.clone(),
+                    model: model.clone(),
+                    effort: effort.clone(),
+                    latest_activity: None,
+                    tokens: 0,
+                    tool_calls: 0,
+                    outcome: None,
+                    elapsed_ms: None,
+                    summary: None,
+                    finished: false,
+                });
             }
             ThreadEventKind::SubAgentActivity {
                 sub_agent_id,
@@ -285,6 +307,18 @@ impl ThreadProjection {
             } => {
                 if let Some(agent) = self.sub_agents.get_mut(sub_agent_id) {
                     agent.latest_activity = Some(preview.clone());
+                }
+                for item in self.items.iter_mut().rev() {
+                    if let TimelineItem::SubAgent {
+                        id,
+                        latest_activity,
+                        ..
+                    } = item
+                        && id == sub_agent_id
+                    {
+                        *latest_activity = Some(preview.clone());
+                        break;
+                    }
                 }
             }
             ThreadEventKind::SubAgentUsage {
@@ -296,18 +330,87 @@ impl ThreadProjection {
                     agent.tokens = *tokens;
                     agent.tool_calls = *tool_calls;
                 }
+                for item in self.items.iter_mut().rev() {
+                    if let TimelineItem::SubAgent {
+                        id,
+                        tokens: t,
+                        tool_calls: tc,
+                        ..
+                    } = item
+                        && id == sub_agent_id
+                    {
+                        *t = *tokens;
+                        *tc = *tool_calls;
+                        break;
+                    }
+                }
             }
             ThreadEventKind::SubAgentFinished {
                 sub_agent_id,
                 outcome,
-                ..
+                elapsed_ms,
+                summary,
             } => {
                 if let Some(agent) = self.sub_agents.get_mut(sub_agent_id) {
                     agent.outcome = Some(outcome.clone());
+                    agent.elapsed_ms = Some(*elapsed_ms);
+                    agent.summary = summary.clone();
                     agent.finished = true;
+                }
+                for item in self.items.iter_mut().rev() {
+                    if let TimelineItem::SubAgent {
+                        id,
+                        outcome: out,
+                        elapsed_ms: el,
+                        summary: sum,
+                        finished,
+                        ..
+                    } = item
+                        && id == sub_agent_id
+                    {
+                        *out = Some(outcome.clone());
+                        *el = Some(*elapsed_ms);
+                        *sum = summary.clone();
+                        *finished = true;
+                        break;
+                    }
                 }
             }
         }
+    }
+
+    /// Assembles the nested tree of sub-agents rooted at top-level agents (parent_sub_agent_id is None).
+    pub fn subagent_tree(&self) -> Vec<SubAgentTreeNode> {
+        let mut by_parent: HashMap<Option<String>, Vec<SubAgentProjection>> = HashMap::new();
+        for agent in self.sub_agents.values() {
+            by_parent
+                .entry(agent.parent_sub_agent_id.clone())
+                .or_default()
+                .push(agent.clone());
+        }
+
+        for list in by_parent.values_mut() {
+            list.sort_by(|a, b| a.id.cmp(&b.id));
+        }
+
+        fn build_subtree(
+            parent_id: Option<&str>,
+            by_parent: &HashMap<Option<String>, Vec<SubAgentProjection>>,
+        ) -> Vec<SubAgentTreeNode> {
+            let key = parent_id.map(|s| s.to_string());
+            let Some(children) = by_parent.get(&key) else {
+                return Vec::new();
+            };
+            children
+                .iter()
+                .map(|child| SubAgentTreeNode {
+                    agent: child.clone(),
+                    children: build_subtree(Some(&child.id), by_parent),
+                })
+                .collect()
+        }
+
+        build_subtree(None, &by_parent)
     }
 
     /// Returns the timeline items with consecutive intermediate reasoning, tool calls,
@@ -638,6 +741,29 @@ pub enum TimelineItem {
         total_additions: usize,
         total_deletions: usize,
     },
+    SubAgent {
+        id: String,
+        #[serde(default)]
+        parent_sub_agent_id: Option<String>,
+        #[serde(default)]
+        parent_item_id: Option<String>,
+        title: String,
+        agent_type: String,
+        model: String,
+        #[serde(default)]
+        effort: Option<String>,
+        #[serde(default)]
+        latest_activity: Option<String>,
+        tokens: u64,
+        tool_calls: u32,
+        #[serde(default)]
+        outcome: Option<String>,
+        #[serde(default)]
+        elapsed_ms: Option<u64>,
+        #[serde(default)]
+        summary: Option<String>,
+        finished: bool,
+    },
 }
 
 impl TimelineItem {
@@ -691,11 +817,34 @@ pub struct SubAgentProjection {
     pub title: String,
     pub agent_type: String,
     pub model: String,
+    #[serde(default)]
+    pub parent_sub_agent_id: Option<String>,
+    #[serde(default)]
+    pub parent_item_id: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
+    #[serde(default)]
     pub latest_activity: Option<String>,
     pub tokens: u64,
     pub tool_calls: u32,
+    #[serde(default)]
     pub outcome: Option<String>,
+    #[serde(default)]
+    pub elapsed_ms: Option<u64>,
+    #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub started_at_ms: u64,
     pub finished: bool,
+}
+
+/// A node in the provider sub-agent tree representing a nested or top-level sub-agent.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubAgentTreeNode {
+    pub agent: SubAgentProjection,
+    #[serde(default)]
+    pub children: Vec<SubAgentTreeNode>,
 }
 
 /// Client-side projection of an orchestrator or schedule run.

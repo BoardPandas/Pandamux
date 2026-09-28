@@ -5,8 +5,8 @@ pub mod transport;
 
 pub use client::PandamuxClient;
 pub use projections::{
-    ChangedFileSummary, RunProjection, SubAgentProjection, ThreadProjection, TimelineItem,
-    WorkLogEntry, WorkLogStatus, format_duration,
+    ChangedFileSummary, RunProjection, SubAgentProjection, SubAgentTreeNode, ThreadProjection,
+    TimelineItem, WorkLogEntry, WorkLogStatus, format_duration,
 };
 pub use token_queue::TokenSmoothingQueue;
 pub use transport::{MockTransport, MockTransportPeer, TransportError};
@@ -568,5 +568,98 @@ mod tests {
         let stat3 = ChangedFileSummary::parse("D\tsrc/deprecated.rs");
         assert_eq!(stat3.path, "src/deprecated.rs");
         assert_eq!(stat3.kind, FileChangeKind::Deleted);
+    }
+
+    #[test]
+    fn nested_subagent_tree_hierarchy() {
+        let thread = mock_thread("thread-sub");
+        let mut proj = ThreadProjection::new(thread);
+
+        // 1. Top level subagent: root-task
+        proj.apply_event(&ThreadEvent {
+            thread_id: ThreadId::from("thread-sub"),
+            seq: 1,
+            at_ms: 1010,
+            kind: ThreadEventKind::SubAgentSpawned {
+                sub_agent_id: "root-task".to_string(),
+                parent_sub_agent_id: None,
+                parent_item_id: None,
+                title: "Primary orchestrator subagent".to_string(),
+                agent_type: "task".to_string(),
+                model: "claude-3-7-sonnet".to_string(),
+                effort: Some("high".to_string()),
+            },
+        });
+
+        // 2. Child 1 under root-task: child-explore
+        proj.apply_event(&ThreadEvent {
+            thread_id: ThreadId::from("thread-sub"),
+            seq: 2,
+            at_ms: 1020,
+            kind: ThreadEventKind::SubAgentSpawned {
+                sub_agent_id: "child-explore".to_string(),
+                parent_sub_agent_id: Some("root-task".to_string()),
+                parent_item_id: None,
+                title: "Codebase discovery".to_string(),
+                agent_type: "explore".to_string(),
+                model: "claude-3-5-haiku".to_string(),
+                effort: Some("low".to_string()),
+            },
+        });
+
+        // 3. Child 2 under root-task: child-test
+        proj.apply_event(&ThreadEvent {
+            thread_id: ThreadId::from("thread-sub"),
+            seq: 3,
+            at_ms: 1030,
+            kind: ThreadEventKind::SubAgentSpawned {
+                sub_agent_id: "child-test".to_string(),
+                parent_sub_agent_id: Some("root-task".to_string()),
+                parent_item_id: None,
+                title: "Test suite executor".to_string(),
+                agent_type: "test-runner".to_string(),
+                model: "claude-3-5-haiku".to_string(),
+                effort: None,
+            },
+        });
+
+        // 4. Grandchild under child-explore: leaf-crawler
+        proj.apply_event(&ThreadEvent {
+            thread_id: ThreadId::from("thread-sub"),
+            seq: 4,
+            at_ms: 1040,
+            kind: ThreadEventKind::SubAgentSpawned {
+                sub_agent_id: "leaf-crawler".to_string(),
+                parent_sub_agent_id: Some("child-explore".to_string()),
+                parent_item_id: None,
+                title: "AST indexer".to_string(),
+                agent_type: "crawler".to_string(),
+                model: "claude-3-5-haiku".to_string(),
+                effort: None,
+            },
+        });
+
+        // Build the subagent tree
+        let tree = proj.subagent_tree();
+        assert_eq!(tree.len(), 1, "Only 1 top-level root agent");
+        assert_eq!(tree[0].agent.id, "root-task");
+        assert_eq!(tree[0].children.len(), 2, "2 children under root-task");
+
+        // child-explore should have 1 child (leaf-crawler)
+        let explore_node = tree[0]
+            .children
+            .iter()
+            .find(|c| c.agent.id == "child-explore")
+            .expect("find child-explore");
+        assert_eq!(explore_node.children.len(), 1);
+        assert_eq!(explore_node.children[0].agent.id, "leaf-crawler");
+
+        // child-test should have 0 children
+        let test_node = tree[0]
+            .children
+            .iter()
+            .find(|c| c.agent.id == "child-test")
+            .expect("find child-test");
+        assert!(test_node.children.is_empty());
     }
 }

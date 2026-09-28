@@ -1,9 +1,10 @@
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use pandamux_core::UserSettings;
+use pandamux_core::{ThreadEventKind, UserSettings};
 use pandamux_protocol::{
     AttachmentGetParams, AttachmentImportPathParams, AttachmentListParams,
     AttachmentPutChunkParams, CheckpointDiffParams, CheckpointListParams, CheckpointRollbackParams,
@@ -11,8 +12,9 @@ use pandamux_protocol::{
     IdentifyResult, McpCallToolParams, PROTOCOL_VERSION, PingResult, ProviderHealthParams,
     ProviderHealthReport, ProviderHealthResult, RpcError, RpcRequest, RpcResponse,
     ServerCapabilities, ServerRole, SettingsGetParams, SettingsGetResult, SettingsSetParams,
-    ThreadCancelTurnParams, ThreadCreateParams, ThreadGetParams, ThreadListParams,
-    ThreadRespondApprovalParams, ThreadResumeParams, ThreadSendTurnParams,
+    SubAgentTreeItem, SubAgentTreeParams, SubAgentTreeResult, ThreadCancelTurnParams,
+    ThreadCreateParams, ThreadGetParams, ThreadListParams, ThreadRespondApprovalParams,
+    ThreadResumeParams, ThreadSendTurnParams,
 };
 
 use crate::attachment::AttachmentManager;
@@ -158,6 +160,7 @@ impl Router {
             "attachment.put" => self.handle_attachment_put(params).await,
             "attachment.list" => self.handle_attachment_list(params),
             "attachment.get" => self.handle_attachment_get(params),
+            "subagent.tree" | "subagent.list" => self.handle_subagent_tree(params),
             unknown => Err(RpcError::method_not_found(unknown)),
         };
 
@@ -583,6 +586,125 @@ impl Router {
         Ok(json!({ "ok": true }))
     }
 
+    fn handle_subagent_tree(&self, params: Value) -> Result<Value, RpcError> {
+        let params: SubAgentTreeParams =
+            serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
+
+        let events = self
+            .store
+            .get_events(&params.thread_id, None)
+            .map_err(|e| RpcError::internal_error(format!("Failed to query events: {e}")))?;
+
+        let mut subagents: HashMap<String, SubAgentTreeItem> = HashMap::new();
+        for ev in &events {
+            match &ev.kind {
+                ThreadEventKind::SubAgentSpawned {
+                    sub_agent_id,
+                    parent_sub_agent_id,
+                    parent_item_id,
+                    title,
+                    agent_type,
+                    model,
+                    effort,
+                } => {
+                    subagents.insert(
+                        sub_agent_id.clone(),
+                        SubAgentTreeItem {
+                            id: sub_agent_id.clone(),
+                            parent_sub_agent_id: parent_sub_agent_id.clone(),
+                            parent_item_id: parent_item_id.clone(),
+                            title: title.clone(),
+                            agent_type: agent_type.clone(),
+                            model: model.clone(),
+                            effort: effort.clone(),
+                            latest_activity: None,
+                            tokens: 0,
+                            tool_calls: 0,
+                            outcome: None,
+                            elapsed_ms: None,
+                            summary: None,
+                            finished: false,
+                            children: Vec::new(),
+                        },
+                    );
+                }
+                ThreadEventKind::SubAgentActivity {
+                    sub_agent_id,
+                    preview,
+                } => {
+                    if let Some(agent) = subagents.get_mut(sub_agent_id) {
+                        agent.latest_activity = Some(preview.clone());
+                    }
+                }
+                ThreadEventKind::SubAgentUsage {
+                    sub_agent_id,
+                    tokens,
+                    tool_calls,
+                } => {
+                    if let Some(agent) = subagents.get_mut(sub_agent_id) {
+                        agent.tokens = *tokens;
+                        agent.tool_calls = *tool_calls;
+                    }
+                }
+                ThreadEventKind::SubAgentFinished {
+                    sub_agent_id,
+                    outcome,
+                    elapsed_ms,
+                    summary,
+                } => {
+                    if let Some(agent) = subagents.get_mut(sub_agent_id) {
+                        agent.outcome = Some(outcome.clone());
+                        agent.elapsed_ms = Some(*elapsed_ms);
+                        agent.summary = summary.clone();
+                        agent.finished = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let total_count = subagents.len();
+
+        let mut by_parent: HashMap<Option<String>, Vec<SubAgentTreeItem>> = HashMap::new();
+        for agent in subagents.values() {
+            by_parent
+                .entry(agent.parent_sub_agent_id.clone())
+                .or_default()
+                .push(agent.clone());
+        }
+        for list in by_parent.values_mut() {
+            list.sort_by(|a, b| a.id.cmp(&b.id));
+        }
+
+        fn build_tree(
+            parent_id: Option<&str>,
+            by_parent: &HashMap<Option<String>, Vec<SubAgentTreeItem>>,
+        ) -> Vec<SubAgentTreeItem> {
+            let key = parent_id.map(|s| s.to_string());
+            let Some(children) = by_parent.get(&key) else {
+                return Vec::new();
+            };
+            children
+                .iter()
+                .map(|child| {
+                    let mut node = child.clone();
+                    node.children = build_tree(Some(&child.id), by_parent);
+                    node
+                })
+                .collect()
+        }
+
+        let root_agents = build_tree(None, &by_parent);
+
+        let result = SubAgentTreeResult {
+            thread_id: params.thread_id,
+            root_agents,
+            total_count,
+        };
+
+        serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))
+    }
+
     fn handle_attachment_import_path(&self, params: Value) -> Result<Value, RpcError> {
         let p: AttachmentImportPathParams =
             serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
@@ -996,5 +1118,121 @@ mod tests {
                 .unwrap()
                 .starts_with("https://github.com/BoardPandas/Pandamux/compare/")
         );
+    }
+
+    #[tokio::test]
+    async fn router_handles_subagent_tree() {
+        let store = Store::in_memory().unwrap();
+        let router = Router::new(store.clone(), ServerRole::Node, "env-local".to_string());
+
+        // Create thread
+        let req = RpcRequest::new(
+            1,
+            "thread.create",
+            Some(json!({ "title": "Subagent Thread" })),
+        );
+        let res = router.handle_request(req).await.unwrap();
+        assert!(res.is_success());
+        let tid: pandamux_core::ThreadId =
+            serde_json::from_value(res.result.unwrap()["id"].clone()).unwrap();
+
+        // Append sub-agent events
+        let ev1 = pandamux_core::ThreadEvent {
+            thread_id: tid.clone(),
+            seq: 1,
+            at_ms: 1000,
+            kind: ThreadEventKind::SubAgentSpawned {
+                sub_agent_id: "agent-root".to_string(),
+                parent_sub_agent_id: None,
+                parent_item_id: None,
+                title: "Root Coordinator".to_string(),
+                agent_type: "task".to_string(),
+                model: "claude-3-7-sonnet".to_string(),
+                effort: Some("high".to_string()),
+            },
+        };
+        store.append_event(&ev1).unwrap();
+
+        let ev2 = pandamux_core::ThreadEvent {
+            thread_id: tid.clone(),
+            seq: 2,
+            at_ms: 1010,
+            kind: ThreadEventKind::SubAgentSpawned {
+                sub_agent_id: "agent-child".to_string(),
+                parent_sub_agent_id: Some("agent-root".to_string()),
+                parent_item_id: None,
+                title: "Code Explorer".to_string(),
+                agent_type: "explore".to_string(),
+                model: "claude-3-5-haiku".to_string(),
+                effort: Some("low".to_string()),
+            },
+        };
+        store.append_event(&ev2).unwrap();
+
+        let ev3 = pandamux_core::ThreadEvent {
+            thread_id: tid.clone(),
+            seq: 3,
+            at_ms: 1020,
+            kind: ThreadEventKind::SubAgentActivity {
+                sub_agent_id: "agent-child".to_string(),
+                preview: "Scanning repository dependencies...".to_string(),
+            },
+        };
+        store.append_event(&ev3).unwrap();
+
+        let ev4 = pandamux_core::ThreadEvent {
+            thread_id: tid.clone(),
+            seq: 4,
+            at_ms: 1030,
+            kind: ThreadEventKind::SubAgentUsage {
+                sub_agent_id: "agent-child".to_string(),
+                tokens: 450,
+                tool_calls: 3,
+            },
+        };
+        store.append_event(&ev4).unwrap();
+
+        let ev5 = pandamux_core::ThreadEvent {
+            thread_id: tid.clone(),
+            seq: 5,
+            at_ms: 1040,
+            kind: ThreadEventKind::SubAgentFinished {
+                sub_agent_id: "agent-child".to_string(),
+                outcome: "Completed scan".to_string(),
+                elapsed_ms: 1200,
+                summary: Some("Discovered 5 crates".to_string()),
+            },
+        };
+        store.append_event(&ev5).unwrap();
+
+        // Query subagent.tree
+        let tree_req = RpcRequest::new(
+            2,
+            "subagent.tree",
+            Some(json!({
+                "threadId": tid
+            })),
+        );
+        let tree_res = router.handle_request(tree_req).await.unwrap();
+        assert!(tree_res.is_success());
+        let tree_val: SubAgentTreeResult =
+            serde_json::from_value(tree_res.result.unwrap()).unwrap();
+
+        assert_eq!(tree_val.total_count, 2);
+        assert_eq!(tree_val.root_agents.len(), 1);
+        assert_eq!(tree_val.root_agents[0].id, "agent-root");
+        assert_eq!(tree_val.root_agents[0].children.len(), 1);
+
+        let child = &tree_val.root_agents[0].children[0];
+        assert_eq!(child.id, "agent-child");
+        assert_eq!(
+            child.latest_activity.as_deref(),
+            Some("Scanning repository dependencies...")
+        );
+        assert_eq!(child.tokens, 450);
+        assert_eq!(child.tool_calls, 3);
+        assert_eq!(child.outcome.as_deref(), Some("Completed scan"));
+        assert_eq!(child.elapsed_ms, Some(1200));
+        assert!(child.finished);
     }
 }

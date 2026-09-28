@@ -4,6 +4,7 @@ pub mod git_rpc;
 pub mod jsonrpc;
 pub mod mcp;
 pub mod settings_rpc;
+pub mod subagent_rpc;
 pub mod subscription;
 pub mod system;
 pub mod thread_rpc;
@@ -23,6 +24,7 @@ pub use settings_rpc::{
     ProviderHealthParams, ProviderHealthReport, ProviderHealthResult, SettingsGetParams,
     SettingsGetResult, SettingsSetParams, SettingsSetResult,
 };
+pub use subagent_rpc::{SubAgentTreeItem, SubAgentTreeParams, SubAgentTreeResult};
 pub use subscription::{EventEnvelope, SubscribeParams, SubscribeResult, UnsubscribeParams};
 pub use system::{
     HelloParams, HelloResult, IdentifyResult, PROTOCOL_VERSION, PingResult, ServerCapabilities,
@@ -91,5 +93,61 @@ mod tests {
         let parsed: EventEnvelope = serde_json::from_str(&json_str).expect("deserialize env");
         assert_eq!(parsed.seq, 42);
         assert_eq!(parsed.subscription_id, "sub-1");
+    }
+
+    #[test]
+    fn subagent_tree_round_trip() {
+        use pandamux_core::ThreadId;
+
+        let child = SubAgentTreeItem {
+            id: "sub-2".to_string(),
+            parent_sub_agent_id: Some("sub-1".to_string()),
+            parent_item_id: None,
+            title: "Nested exploration".to_string(),
+            agent_type: "explore".to_string(),
+            model: "claude-3-5-haiku".to_string(),
+            effort: Some("low".to_string()),
+            latest_activity: Some("Inspecting target/".to_string()),
+            tokens: 500,
+            tool_calls: 2,
+            outcome: Some("completed".to_string()),
+            elapsed_ms: Some(1200),
+            summary: Some("Found 3 build artifacts".to_string()),
+            finished: true,
+            children: vec![],
+        };
+
+        let root = SubAgentTreeItem {
+            id: "sub-1".to_string(),
+            parent_sub_agent_id: None,
+            parent_item_id: None,
+            title: "Task runner".to_string(),
+            agent_type: "task".to_string(),
+            model: "claude-3-7-sonnet".to_string(),
+            effort: Some("high".to_string()),
+            latest_activity: Some("Waiting on sub-agents".to_string()),
+            tokens: 2500,
+            tool_calls: 5,
+            outcome: None,
+            elapsed_ms: Some(4500),
+            summary: None,
+            finished: false,
+            children: vec![child],
+        };
+
+        let result = SubAgentTreeResult {
+            thread_id: ThreadId::from("thread-100"),
+            root_agents: vec![root],
+            total_count: 2,
+        };
+
+        let json = serde_json::to_string(&result).expect("serialize SubAgentTreeResult");
+        let parsed: SubAgentTreeResult =
+            serde_json::from_str(&json).expect("deserialize SubAgentTreeResult");
+        assert_eq!(parsed.thread_id.as_str(), "thread-100");
+        assert_eq!(parsed.total_count, 2);
+        assert_eq!(parsed.root_agents.len(), 1);
+        assert_eq!(parsed.root_agents[0].children.len(), 1);
+        assert_eq!(parsed.root_agents[0].children[0].id, "sub-2");
     }
 }

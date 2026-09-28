@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Range;
 use std::time::Instant;
@@ -353,6 +353,39 @@ pub fn render_timeline_item<V: 'static>(
             total_additions,
             total_deletions,
         } => render_changed_files_card(idx, files, *total_additions, *total_deletions, theme),
+
+        TimelineItem::SubAgent {
+            id,
+            parent_sub_agent_id,
+            title,
+            agent_type,
+            model,
+            effort,
+            latest_activity,
+            tokens,
+            tool_calls,
+            outcome,
+            elapsed_ms,
+            summary,
+            finished,
+            ..
+        } => render_subagent_card(
+            idx,
+            id,
+            parent_sub_agent_id.as_deref(),
+            title,
+            agent_type,
+            model,
+            effort.as_deref(),
+            latest_activity.as_deref(),
+            *tokens,
+            *tool_calls,
+            outcome.as_deref(),
+            *elapsed_ms,
+            summary.as_deref(),
+            *finished,
+            theme,
+        ),
     }
 }
 
@@ -1461,6 +1494,179 @@ pub fn render_changed_files_card(
         .into_any_element()
 }
 
+/// Renders a provider sub-agent card with type, model, elapsed, latest activity, tokens, and tool count.
+#[allow(clippy::too_many_arguments)]
+pub fn render_subagent_card(
+    idx: usize,
+    _id: &str,
+    parent_sub_agent_id: Option<&str>,
+    title: &str,
+    agent_type: &str,
+    model: &str,
+    effort: Option<&str>,
+    latest_activity: Option<&str>,
+    tokens: u64,
+    tool_calls: u32,
+    outcome: Option<&str>,
+    elapsed_ms: Option<u64>,
+    summary: Option<&str>,
+    finished: bool,
+    theme: &Theme,
+) -> AnyElement {
+    let is_child = parent_sub_agent_id.is_some();
+    let (status_text, status_color, status_bg) = if finished {
+        let text = outcome.unwrap_or("✓ Succeeded");
+        (text, theme.terminal.success, rgba(0x7fd88f1a))
+    } else {
+        ("● Running", theme.accent.color(), rgba(0x43d9c91a))
+    };
+
+    let duration_label = elapsed_ms.map(format_duration);
+
+    div()
+        .id(ElementId::NamedInteger("subagent-card".into(), idx as u64))
+        .when(is_child, |this| {
+            this.ml_4().border_l_2().border_color(theme.accent.color())
+        })
+        .p_3()
+        .rounded(Radii::ROW)
+        .bg(theme.chrome.panel2)
+        .border_1()
+        .border_color(rgba(0xffffff14))
+        .v_flex()
+        .gap_2()
+        // Top Header
+        .child(
+            div()
+                .h_flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_2()
+                        .child(div().text_size(px(14.0)).child("🤖"))
+                        .child(
+                            div()
+                                .px_1p5()
+                                .py_0p5()
+                                .rounded(Radii::CHIP)
+                                .bg(rgba(0xffffff0d))
+                                .text_size(Typography::META_SIZE)
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(theme.accent.color())
+                                .child(agent_type.to_string()),
+                        )
+                        .child(
+                            div()
+                                .px_1p5()
+                                .py_0p5()
+                                .rounded(Radii::CHIP)
+                                .bg(rgba(0xffffff08))
+                                .text_size(Typography::META_SIZE)
+                                .text_color(theme.chrome.text_t3)
+                                .child(model.to_string()),
+                        )
+                        .when_some(effort, |this, eff| {
+                            this.child(
+                                div()
+                                    .px_1p5()
+                                    .py_0p5()
+                                    .rounded(Radii::CHIP)
+                                    .bg(rgba(0xffffff08))
+                                    .text_size(Typography::META_SIZE)
+                                    .text_color(theme.chrome.text_t3)
+                                    .child(format!("effort: {eff}")),
+                            )
+                        })
+                        .child(
+                            div()
+                                .text_size(Typography::BODY_SIZE)
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(theme.chrome.text_t1)
+                                .child(title.to_string()),
+                        ),
+                )
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .px_2()
+                                .py_0p5()
+                                .rounded(Radii::CHIP)
+                                .bg(status_bg)
+                                .text_size(Typography::META_SIZE)
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(status_color)
+                                .child(status_text.to_string()),
+                        )
+                        .when_some(duration_label, |this, dur| {
+                            this.child(
+                                div()
+                                    .px_2()
+                                    .py_0p5()
+                                    .rounded(Radii::CHIP)
+                                    .bg(rgba(0xffffff0a))
+                                    .text_size(Typography::META_SIZE)
+                                    .text_color(theme.chrome.text_t3)
+                                    .child(format!("⏱ {dur}")),
+                            )
+                        }),
+                ),
+        )
+        // Latest Activity preview
+        .when_some(latest_activity, |this, act| {
+            this.child(
+                div()
+                    .p_2()
+                    .rounded(Radii::CHIP)
+                    .bg(theme.terminal.surface)
+                    .border_1()
+                    .border_color(rgba(0xffffff0d))
+                    .h_flex()
+                    .items_center()
+                    .gap_1p5()
+                    .child(
+                        div()
+                            .text_size(Typography::META_SIZE)
+                            .text_color(theme.accent.color())
+                            .child("⚡"),
+                    )
+                    .child(
+                        div()
+                            .font_family(Typography::MONO_FAMILY)
+                            .text_size(Typography::META_SIZE)
+                            .text_color(theme.chrome.text_t2)
+                            .child(act.to_string()),
+                    ),
+            )
+        })
+        // Summary text if present
+        .when_some(summary, |this, sum| {
+            this.child(
+                div()
+                    .text_size(Typography::SECONDARY_SIZE)
+                    .text_color(theme.chrome.text_t2)
+                    .child(sum.to_string()),
+            )
+        })
+        // Metrics footer: tokens & tool calls
+        .child(
+            div()
+                .h_flex()
+                .gap_3()
+                .text_size(Typography::META_SIZE)
+                .text_color(theme.chrome.text_t3)
+                .child(div().child(format!("📊 {tokens} tokens")))
+                .child(div().child(format!("🛠️ {tool_calls} tools"))),
+        )
+        .into_any_element()
+}
+
 /// Cached syntax highlighted code block or markdown segment.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CachedMarkdownBlock {
@@ -1647,6 +1853,20 @@ impl TimelineSelection {
                 TimelineItem::ChangedFiles { files, .. } => {
                     out.push(format!("Changed Files: {} files", files.len()));
                 }
+                TimelineItem::SubAgent {
+                    title,
+                    agent_type,
+                    model,
+                    latest_activity,
+                    summary,
+                    ..
+                } => {
+                    let desc = summary
+                        .as_deref()
+                        .or(latest_activity.as_deref())
+                        .unwrap_or("");
+                    out.push(format!("Sub-Agent [{agent_type}:{model}] {title}: {desc}"));
+                }
                 _ => {}
             }
         }
@@ -1678,6 +1898,7 @@ pub struct VirtualizedTimelineState {
     pub unread_count: usize,
     pub selection: TimelineSelection,
     pub cache: MarkdownHighlightCache,
+    pub folded_subagents: HashSet<String>,
 }
 
 impl VirtualizedTimelineState {
@@ -1691,7 +1912,39 @@ impl VirtualizedTimelineState {
             unread_count: 0,
             selection: TimelineSelection::new(),
             cache: MarkdownHighlightCache::new(),
+            folded_subagents: HashSet::new(),
         }
+    }
+
+    /// Toggles folding for a subagent hierarchy by ID.
+    pub fn toggle_subagent_fold(&mut self, id: &str) {
+        if self.folded_subagents.contains(id) {
+            self.folded_subagents.remove(id);
+        } else {
+            self.folded_subagents.insert(id.to_string());
+        }
+    }
+
+    /// Returns true if the subagent hierarchy is folded.
+    pub fn is_subagent_folded(&self, id: &str) -> bool {
+        self.folded_subagents.contains(id)
+    }
+
+    /// Returns visible items taking into account folded subagent hierarchies.
+    pub fn visible_items<'a>(&self, items: &'a [TimelineItem]) -> Vec<(usize, &'a TimelineItem)> {
+        let mut visible = Vec::with_capacity(items.len());
+        for (idx, item) in items.iter().enumerate() {
+            if let TimelineItem::SubAgent {
+                parent_sub_agent_id: Some(parent_id),
+                ..
+            } = item
+                && self.folded_subagents.contains(parent_id)
+            {
+                continue;
+            }
+            visible.push((idx, item));
+        }
+        visible
     }
 
     /// Computes the active slice of items that should be rendered.
@@ -1816,7 +2069,8 @@ pub fn render_virtualized_timeline<V: 'static>(
     on_jump_to_bottom: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
     cx: &mut Context<V>,
 ) -> AnyElement {
-    let total_items = items.len();
+    let visible_items = state.visible_items(items);
+    let total_items = visible_items.len();
     let range = state.visible_range(total_items);
     let top_spacer = state.top_spacer_height(total_items);
     let bottom_spacer = state.bottom_spacer_height(total_items);
@@ -1839,8 +2093,8 @@ pub fn render_virtualized_timeline<V: 'static>(
                 // Top Spacer for recycled preceding rows
                 .when(top_spacer > 0.0, |this| this.child(div().h(px(top_spacer))))
                 // Active Visible Range
-                .children(range.clone().filter_map(|idx| {
-                    let item = items.get(idx)?;
+                .children(range.clone().filter_map(|i| {
+                    let &(idx, item) = visible_items.get(i)?;
                     let is_selected = state.selection.is_item_selected(idx);
                     let border_color = if is_selected {
                         theme.accent_color()
@@ -1965,5 +2219,105 @@ mod tests {
         assert_eq!(report.total_items, 2000);
         assert!(report.passes_budget, "Must pass performance budget");
         assert!(report.items_per_ms > 20.0);
+    }
+
+    #[test]
+    fn test_subagent_timeline_folding() {
+        let mut state = VirtualizedTimelineState::new();
+
+        let items = vec![
+            TimelineItem::TurnUserPrompt {
+                turn_id: "turn-1".into(),
+                text: "Refactor router".into(),
+                attachments: Vec::new(),
+            },
+            TimelineItem::SubAgent {
+                id: "parent-agent".into(),
+                parent_sub_agent_id: None,
+                parent_item_id: None,
+                title: "Router Refactoring".into(),
+                agent_type: "general-developer".into(),
+                model: "claude-3-7-sonnet".into(),
+                effort: Some("high".into()),
+                latest_activity: Some("Analyzing routes".into()),
+                tokens: 4200,
+                tool_calls: 3,
+                outcome: None,
+                elapsed_ms: Some(1200),
+                summary: None,
+                finished: false,
+            },
+            TimelineItem::SubAgent {
+                id: "child-agent".into(),
+                parent_sub_agent_id: Some("parent-agent".into()),
+                parent_item_id: None,
+                title: "AST parser subagent".into(),
+                agent_type: "explore".into(),
+                model: "claude-3-5-haiku".into(),
+                effort: None,
+                latest_activity: Some("Searching symbols".into()),
+                tokens: 800,
+                tool_calls: 1,
+                outcome: Some("Success".into()),
+                elapsed_ms: Some(300),
+                summary: Some("Found 12 router symbols".into()),
+                finished: true,
+            },
+            TimelineItem::AssistantText {
+                id: "asst-1".into(),
+                text: "Finished refactoring".into(),
+            },
+        ];
+
+        // Initially all 4 items are visible
+        let visible = state.visible_items(&items);
+        assert_eq!(visible.len(), 4);
+        assert!(!state.is_subagent_folded("parent-agent"));
+
+        // Fold parent-agent
+        state.toggle_subagent_fold("parent-agent");
+        assert!(state.is_subagent_folded("parent-agent"));
+
+        let visible_folded = state.visible_items(&items);
+        // child-agent is hidden, so visible length is 3
+        assert_eq!(visible_folded.len(), 3);
+        assert_eq!(visible_folded[0].0, 0);
+        assert_eq!(visible_folded[1].0, 1);
+        assert_eq!(visible_folded[2].0, 3);
+
+        // Unfold parent-agent
+        state.toggle_subagent_fold("parent-agent");
+        assert!(!state.is_subagent_folded("parent-agent"));
+        let visible_unfolded = state.visible_items(&items);
+        assert_eq!(visible_unfolded.len(), 4);
+    }
+
+    #[test]
+    fn test_subagent_extract_selected_text() {
+        let items = vec![TimelineItem::SubAgent {
+            id: "sub-1".into(),
+            parent_sub_agent_id: None,
+            parent_item_id: None,
+            title: "Planner".into(),
+            agent_type: "architect".into(),
+            model: "claude-3-7-sonnet".into(),
+            effort: Some("high".into()),
+            latest_activity: Some("Scanning modules".into()),
+            tokens: 1500,
+            tool_calls: 2,
+            outcome: None,
+            elapsed_ms: Some(850),
+            summary: Some("Designed router split".into()),
+            finished: true,
+        }];
+
+        let mut sel = TimelineSelection::new();
+        sel.start(0, 0);
+        sel.update(0, 50);
+
+        let text = sel.extract_selected_text(&items);
+        assert!(
+            text.contains("Sub-Agent [architect:claude-3-7-sonnet] Planner: Designed router split")
+        );
     }
 }
