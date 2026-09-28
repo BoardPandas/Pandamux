@@ -1,3 +1,4 @@
+pub mod antigravity_rpc;
 pub mod attachment_rpc;
 pub mod checkpoint_rpc;
 pub mod fs_rpc;
@@ -11,6 +12,11 @@ pub mod system;
 pub mod terminal_rpc;
 pub mod thread_rpc;
 
+pub use antigravity_rpc::{
+    AntigravityInstallParams, AntigravityInstallResult, AntigravityOAuthRelayParams,
+    AntigravityOAuthRelayResult, AntigravityOAuthStartParams, AntigravityOAuthStartResult,
+    AntigravityStatusParams, AntigravityStatusResult, ManagedBundleManifest,
+};
 pub use attachment_rpc::{
     AttachmentGetParams, AttachmentGetResult, AttachmentImportPathParams, AttachmentImportResult,
     AttachmentListParams, AttachmentListResult, AttachmentPutChunkParams, AttachmentPutResult,

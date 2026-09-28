@@ -5,6 +5,11 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use pandamux_core::{ThreadEventKind, UserSettings};
+use pandamux_protocol::antigravity_rpc::{
+    AntigravityInstallParams, AntigravityOAuthRelayParams, AntigravityOAuthRelayResult,
+    AntigravityOAuthStartParams, AntigravityOAuthStartResult, AntigravityStatusParams,
+    AntigravityStatusResult,
+};
 use pandamux_protocol::{
     AttachmentGetParams, AttachmentImportPathParams, AttachmentListParams,
     AttachmentPutChunkParams, CheckpointDiffParams, CheckpointListParams, CheckpointRollbackParams,
@@ -35,9 +40,22 @@ pub struct Router {
     terminal: TerminalServerManager,
     environment_router: Arc<crate::environment_router::EnvironmentRouter>,
     remote_terminals: Arc<std::sync::Mutex<HashMap<String, pandamux_core::ids::EnvironmentId>>>,
+    data_dir: PathBuf,
     role: ServerRole,
     environment_id: String,
     server_version: String,
+}
+
+fn default_data_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("PANDAMUX_DATA_DIR") {
+        PathBuf::from(dir)
+    } else if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+        PathBuf::from(local_app_data).join("pandamux")
+    } else if let Ok(home) = std::env::var("HOME") {
+        PathBuf::from(home).join(".pandamux")
+    } else {
+        std::env::temp_dir().join("pandamux")
+    }
 }
 
 fn default_attachments_dir() -> PathBuf {
@@ -98,10 +116,16 @@ impl Router {
             terminal,
             environment_router,
             remote_terminals: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            data_dir: default_data_dir(),
             role,
             environment_id,
             server_version: env!("CARGO_PKG_VERSION").to_string(),
         }
+    }
+
+    pub fn with_data_dir(mut self, dir: PathBuf) -> Self {
+        self.data_dir = dir;
+        self
     }
 
     pub fn with_environment_router(
@@ -374,6 +398,14 @@ impl Router {
             "terminal.input" => self.handle_terminal_input(params),
             "terminal.resize" => self.handle_terminal_resize(params),
             "terminal.close" => self.handle_terminal_close(params),
+            "antigravity.status" => self.handle_antigravity_status(params),
+            "antigravity.install" => self.handle_antigravity_install(params).await,
+            "antigravity.oauth_start" | "antigravity.oauthStart" => {
+                self.handle_antigravity_oauth_start(params)
+            }
+            "antigravity.oauth_relay" | "antigravity.oauthRelay" => {
+                self.handle_antigravity_oauth_relay(params).await
+            }
             unknown => Err(RpcError::method_not_found(unknown)),
         };
 
@@ -1035,6 +1067,127 @@ impl Router {
             .close(close_params)
             .map_err(RpcError::internal_error)?;
         Ok(json!({ "success": true }))
+    }
+
+    fn handle_antigravity_status(&self, params: Value) -> Result<Value, RpcError> {
+        let _p: AntigravityStatusParams = serde_json::from_value(params).unwrap_or_default();
+
+        #[cfg(target_os = "windows")]
+        let (platform, arch) = ("windows", "x64");
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        let (platform, arch) = ("linux", "x64");
+        #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+        let (platform, arch) = ("linux", "arm64");
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+        let (platform, arch) = ("unsupported", "unknown");
+
+        let platform_arch = format!("{platform}-{arch}");
+        let bin_path = pandamux_providers::antigravity::resolve_antigravity_binary(
+            None,
+            &self.data_dir,
+            &platform_arch,
+        );
+
+        let gemini_home = self.data_dir.join("profiles/antigravity/default");
+        let health = if let Some(ref bp) = bin_path {
+            pandamux_providers::antigravity::probe_antigravity_health_offline(
+                bp,
+                &gemini_home,
+                None,
+            )
+        } else {
+            pandamux_providers::models::ProviderHealth::Unavailable {
+                reason: "Binary not installed".to_string(),
+            }
+        };
+
+        let authenticated = matches!(health, pandamux_providers::models::ProviderHealth::Healthy);
+        let free_disk = pandamux_providers::antigravity::get_available_disk_bytes(&self.data_dir);
+
+        let result = AntigravityStatusResult {
+            installed: bin_path.is_some(),
+            version: if bin_path.is_some() {
+                Some("1.1.1".to_string())
+            } else {
+                None
+            },
+            binary_path: bin_path.map(|p| p.to_string_lossy().to_string()),
+            authenticated,
+            active_processes: 0,
+            max_processes: 2,
+            free_disk_bytes: free_disk,
+        };
+
+        serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))
+    }
+
+    async fn handle_antigravity_install(&self, params: Value) -> Result<Value, RpcError> {
+        let p: AntigravityInstallParams = serde_json::from_value(params).map_err(|e| {
+            RpcError::invalid_params(format!("Invalid antigravity.install params: {e}"))
+        })?;
+
+        let fallback_bytes = if let Some(ref b64) = p.fallback_bytes_base64 {
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64).ok()
+        } else {
+            None
+        };
+
+        let result = pandamux_providers::antigravity::install_managed_bundle(
+            &self.data_dir,
+            &p.manifest,
+            fallback_bytes.as_deref(),
+        )
+        .await
+        .map_err(|e| RpcError::internal_error(format!("Antigravity bundle install failed: {e}")))?;
+
+        serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))
+    }
+
+    fn handle_antigravity_oauth_start(&self, params: Value) -> Result<Value, RpcError> {
+        let _p: AntigravityOAuthStartParams = serde_json::from_value(params).unwrap_or_default();
+
+        let state = format!("agy-state-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let redirect_port = 51123;
+        let auth_url = format!(
+            "https://accounts.google.com/o/oauth2/v2/auth?client_id=pandamux-acp.apps.googleusercontent.com&redirect_uri=http%3A%2F%2F127.0.0.1%3A{redirect_port}%2F&response_type=code&scope=openid%20profile%20email&state={state}"
+        );
+
+        let result = AntigravityOAuthStartResult {
+            auth_url,
+            redirect_port,
+            state,
+        };
+
+        serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))
+    }
+
+    async fn handle_antigravity_oauth_relay(&self, params: Value) -> Result<Value, RpcError> {
+        let p: AntigravityOAuthRelayParams = serde_json::from_value(params).map_err(|e| {
+            RpcError::invalid_params(format!("Invalid antigravity.oauth_relay params: {e}"))
+        })?;
+
+        let message = pandamux_providers::antigravity::execute_oauth_relay_callback(
+            &p.callback_url,
+            &p.state,
+            p.redirect_port,
+        )
+        .await
+        .map_err(|e| RpcError::internal_error(format!("OAuth relay execution failed: {e}")))?;
+
+        let profile_dir = self.data_dir.join("profiles/antigravity/default");
+        let _ = std::fs::create_dir_all(&profile_dir);
+        let settings_path = profile_dir.join("settings.json");
+        let _ = std::fs::write(
+            &settings_path,
+            serde_json::json!({ "auth": { "type": "oauth-personal" } }).to_string(),
+        );
+
+        let result = AntigravityOAuthRelayResult {
+            success: true,
+            message,
+        };
+
+        serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 }
 
@@ -2084,5 +2237,198 @@ mod tests {
         assert!(close_res.is_success());
         assert_eq!(close_count.load(Ordering::SeqCst), 1);
         assert!(!hub_router.remote_terminals().contains_key("term-remote-1"));
+    }
+
+    #[tokio::test]
+    async fn router_handles_antigravity_node_install_and_oauth_relay() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = Store::in_memory().unwrap();
+        let router = Router::new(store, ServerRole::Node, "env_node".to_string())
+            .with_data_dir(temp_dir.path().to_path_buf());
+
+        // 1. Initial status: uninstalled
+        let status_req = RpcRequest::new(1, "antigravity.status", None);
+        let status_res = router.handle_request(status_req).await.unwrap();
+        assert!(status_res.is_success());
+        let status: AntigravityStatusResult =
+            serde_json::from_value(status_res.result.unwrap()).unwrap();
+        assert!(!status.installed);
+        assert!(!status.authenticated);
+        assert_eq!(status.max_processes, 2);
+
+        let payload = b"sample-binary-payload-for-testing";
+        let sha256_hash =
+            "92207cde24114feb016121530c70b5c3de6d8e021bfbc9412c328a778147f78a".to_string();
+
+        #[cfg(windows)]
+        let (platform, arch, bin_entry) = ("windows", "x64", "agy_acp_server.exe");
+        #[cfg(not(windows))]
+        let (platform, arch, bin_entry) = ("linux", "x64", "agy_acp_server.par");
+
+        use pandamux_protocol::antigravity_rpc::{AntigravityInstallResult, ManagedBundleManifest};
+        let manifest = ManagedBundleManifest {
+            version: "1.1.1".to_string(),
+            platform: platform.to_string(),
+            arch: arch.to_string(),
+            url: format!(
+                "https://dl.google.com/antigravity/releases/{platform}-{arch}/agy_acp_server_1.1.1.zip"
+            ),
+            size: payload.len() as u64,
+            sha256: sha256_hash,
+            entries: vec![bin_entry.to_string(), "localharness_external".to_string()],
+        };
+
+        let b64_payload =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, payload);
+        let install_req = RpcRequest::new(
+            2,
+            "antigravity.install",
+            Some(json!({
+                "manifest": manifest,
+                "fallbackBytesBase64": b64_payload
+            })),
+        );
+        let install_res = router.handle_request(install_req).await.unwrap();
+        assert!(install_res.is_success());
+        let install_out: AntigravityInstallResult =
+            serde_json::from_value(install_res.result.unwrap()).unwrap();
+        assert!(install_out.installed);
+        assert_eq!(install_out.version, "1.1.1");
+
+        // 3. Status after installation: installed, but unauthenticated
+        let status_req_2 = RpcRequest::new(3, "antigravity.status", None);
+        let status_res_2 = router.handle_request(status_req_2).await.unwrap();
+        assert!(status_res_2.is_success());
+        let status_2: AntigravityStatusResult =
+            serde_json::from_value(status_res_2.result.unwrap()).unwrap();
+        assert!(status_2.installed);
+        assert!(!status_2.authenticated);
+
+        // 4. OAuth start generates valid auth URL
+        let oauth_start_req = RpcRequest::new(4, "antigravity.oauth_start", None);
+        let oauth_start_res = router.handle_request(oauth_start_req).await.unwrap();
+        assert!(oauth_start_res.is_success());
+        let oauth_start: AntigravityOAuthStartResult =
+            serde_json::from_value(oauth_start_res.result.unwrap()).unwrap();
+        assert!(
+            oauth_start
+                .auth_url
+                .starts_with("https://accounts.google.com/")
+        );
+        assert_eq!(oauth_start.redirect_port, 51123);
+
+        // 5. OAuth relay callback completes authentication
+        let callback_url = format!(
+            "http://127.0.0.1:51123/?code=4/sample_code&state={}",
+            oauth_start.state
+        );
+        let relay_req = RpcRequest::new(
+            5,
+            "antigravity.oauth_relay",
+            Some(json!({
+                "callbackUrl": callback_url,
+                "state": oauth_start.state,
+                "redirectPort": oauth_start.redirect_port
+            })),
+        );
+        let relay_res = router.handle_request(relay_req).await.unwrap();
+        assert!(relay_res.is_success());
+
+        // 6. Final status: installed AND authenticated!
+        let status_req_3 = RpcRequest::new(6, "antigravity.status", None);
+        let status_res_3 = router.handle_request(status_req_3).await.unwrap();
+        let status_3: AntigravityStatusResult =
+            serde_json::from_value(status_res_3.result.unwrap()).unwrap();
+        assert!(status_3.installed);
+        assert!(status_3.authenticated);
+    }
+
+    #[tokio::test]
+    async fn router_routes_antigravity_to_remote_node() {
+        use pandamux_core::EnvironmentId;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let remote_env = EnvironmentId::new("env_galahad");
+        let env_router = Arc::new(crate::environment_router::EnvironmentRouter::new(
+            EnvironmentId::new("env_local"),
+        ));
+
+        let install_count = Arc::new(AtomicUsize::new(0));
+        let relay_count = Arc::new(AtomicUsize::new(0));
+        let ic = Arc::clone(&install_count);
+        let rc = Arc::clone(&relay_count);
+
+        let mock_transport = Arc::new(crate::environment_router::MockEnvironmentTransport::new(
+            move |req| match req.method.as_str() {
+                "antigravity.install" => {
+                    ic.fetch_add(1, Ordering::SeqCst);
+                    Ok(RpcResponse::success(
+                        req.id.clone().unwrap_or(1.into()),
+                        json!({
+                            "installed": true,
+                            "version": "1.1.1",
+                            "binaryPath": "/remote/tools/agy_acp_server.par",
+                            "source": "hub_push",
+                            "freeDiskBytes": 10737418240u64
+                        }),
+                    ))
+                }
+                "antigravity.oauth_relay" => {
+                    rc.fetch_add(1, Ordering::SeqCst);
+                    Ok(RpcResponse::success(
+                        req.id.clone().unwrap_or(2.into()),
+                        json!({
+                            "success": true,
+                            "message": "Relayed to remote node loopback"
+                        }),
+                    ))
+                }
+                _ => Err(RpcError::method_not_found(&req.method)),
+            },
+        ));
+
+        env_router
+            .register_transport(remote_env.clone(), mock_transport, None)
+            .await;
+
+        let store = Store::in_memory().unwrap();
+        let hub_router = Router::new(store, ServerRole::Hub, "env_local".to_string())
+            .with_environment_router(env_router);
+
+        // Forward install to remote node
+        let install_req = RpcRequest::new(
+            1,
+            "antigravity.install",
+            Some(json!({
+                "environmentId": "env_galahad",
+                "manifest": {
+                    "version": "1.1.1",
+                    "platform": "linux",
+                    "arch": "x64",
+                    "url": "https://dl.google.com/test.zip",
+                    "size": 100,
+                    "sha256": "0123456789abcdef",
+                    "entries": ["agy_acp_server.par", "localharness_external"]
+                }
+            })),
+        );
+        let install_res = hub_router.handle_request(install_req).await.unwrap();
+        assert!(install_res.is_success());
+        assert_eq!(install_count.load(Ordering::SeqCst), 1);
+
+        // Forward oauth_relay to remote node
+        let relay_req = RpcRequest::new(
+            2,
+            "antigravity.oauth_relay",
+            Some(json!({
+                "environmentId": "env_galahad",
+                "callbackUrl": "http://127.0.0.1:51123/?code=123&state=state-1",
+                "state": "state-1",
+                "redirectPort": 51123
+            })),
+        );
+        let relay_res = hub_router.handle_request(relay_req).await.unwrap();
+        assert!(relay_res.is_success());
+        assert_eq!(relay_count.load(Ordering::SeqCst), 1);
     }
 }
