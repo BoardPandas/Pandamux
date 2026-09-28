@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Implemented Phase 2 Step 11 (sidebar live status, approval and paused markers, settled counts).** Added real-time thread status indicators, project groupings, and turn settlement counts in `pandamux-desktop`:
+  - **Live Working Duration**: Added `format_working_duration` and `working_duration_str` computing live working elapsed duration (e.g. "Working 7m", "Working 11m", "Working <1m", "Working 1h 5m") from active turns or thread update timestamps, displayed alongside a spinner icon badge on active thread rows.
+  - **Status & Approval Markers**: Added dedicated status chip indicators for `ThreadStatus` lifecycle variants, including approval warning badge (`⚠️ Approval`), paused badge (`⏸️ Paused`), errored badge (`❌ Error`), and settled badge (`✓ Settled`).
+  - **Agent & Origin Badges**: Added agent instance chips (`🤖 <agent_id>`) for specialized agent instances and origin tags (`🧭 <run_id>` / `⏰ <schedule_id>`) for Orchestrator and Schedule threads.
+  - **Project Grouping & Settled Counts**: Implemented `ProjectThreadGroup` and `group_threads_by_project` organizing threads by project or repository with group header counters showing settled vs active threads (`N settled · M active`), plus a total settled indicator in the sidebar header.
+
 - **Implemented Phase 2 Step 10 (surfaces panel: agents, diff, confined files, PR, and linked PRs).** Added complete right-side surfaces panel and root-confined filesystem RPC operations across `pandamux-protocol`, `pandamux-server`, and `pandamux-desktop`:
   - **Protocol v3 Filesystem RPCs**: Added `fs.read` and `fs.list` RPC endpoints (`FsReadParams`, `FsReadResult`, `FsListParams`, `FsListResult`, `FsEntry`) in `pandamux-protocol` for reading and inspecting workspace directories and files with size caps (5 MB) and binary detection.
   - **Server Root-Confinement Engine**: Implemented `fs.rs` in `pandamux-server` enforcing strict workspace root confinement with canonical path verification, rejecting directory traversal attacks (`../`) and external symlink escapes while permitting safe symlinks within the workspace root. Added tests verifying confinement, symlink traversal prevention, and directory listing.

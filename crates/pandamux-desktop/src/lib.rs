@@ -33,7 +33,10 @@ pub use server_bridge::{
     spawn_server_bridge,
 };
 pub use settings_view::{SettingsCategory, SettingsViewState, render_settings_view};
-pub use sidebar::{AgentRosterItem, DEFAULT_AGENTS, RailTab, render_rail, render_sidebar};
+pub use sidebar::{
+    AgentRosterItem, DEFAULT_AGENTS, ProjectThreadGroup, RailTab, format_working_duration,
+    group_threads_by_project, render_rail, render_sidebar, working_duration_str,
+};
 pub use surfaces_panel::{
     PandamuxAgentInstance, PullRequestSummary, SurfaceTab, SurfacesPanelState,
     render_surfaces_panel,
