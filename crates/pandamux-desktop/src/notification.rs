@@ -45,6 +45,8 @@ pub struct ToastNotification {
     pub timestamp_ms: u64,
 }
 
+static TOAST_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 impl ToastNotification {
     pub fn new(
         title: impl Into<String>,
@@ -55,7 +57,8 @@ impl ToastNotification {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
-        let id = format!("toast-{}", now);
+        let counter = TOAST_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let id = format!("toast-{now}-{counter}");
         Self {
             id,
             title: title.into(),
@@ -186,6 +189,7 @@ pub fn render_toast_overlay<V: 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::prelude::v1::test;
 
     #[test]
     fn test_toast_notification_creation() {

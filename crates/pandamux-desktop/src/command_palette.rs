@@ -498,6 +498,7 @@ pub fn render_command_palette<V: 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::prelude::v1::test;
 
     #[test]
     fn test_filter_commands() {

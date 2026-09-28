@@ -28,7 +28,7 @@ use crate::server_bridge::{ServerBridgeHandle, ServerStatus, spawn_server_bridge
 use crate::settings_view::{SettingsViewState, render_settings_view};
 use crate::sidebar::{RailTab, render_rail, render_sidebar};
 use crate::theme::{AccentColor, Radii, Spacing, Theme, Typography};
-use crate::timeline::render_timeline_item;
+use crate::timeline::{VirtualizedTimelineState, render_virtualized_timeline};
 use crate::titlebar::CustomTitlebar;
 
 /// The primary application view for PandaMUX Desktop.
@@ -48,6 +48,7 @@ pub struct AppView {
     pub is_git_busy: bool,
     pub command_palette: CommandPaletteState,
     pub notifications: Vec<ToastNotification>,
+    pub timeline_state: VirtualizedTimelineState,
 }
 
 impl AppView {
@@ -99,6 +100,7 @@ impl AppView {
             is_git_busy: false,
             command_palette: CommandPaletteState::new(),
             notifications: Vec::new(),
+            timeline_state: VirtualizedTimelineState::new(),
         };
 
         app.load_settings(cx);
@@ -117,6 +119,8 @@ impl AppView {
                     kind: envelope.kind.clone(),
                 };
                 proj.apply_event(&event);
+                let count = proj.grouped_items().len();
+                self.timeline_state.on_new_items(count);
             }
 
             match &envelope.kind {
@@ -590,8 +594,33 @@ impl AppView {
 
     /// Sets the active thread and queries Git status.
     pub fn select_thread(&mut self, thread_id: ThreadId, cx: &mut Context<Self>) {
-        self.active_thread_id = Some(thread_id);
+        self.active_thread_id = Some(thread_id.clone());
+        if let Some(proj) = self.thread_projections.get(&thread_id) {
+            let total = proj.grouped_items().len();
+            self.timeline_state.jump_to_bottom(total);
+        }
         self.refresh_git_status(cx);
+    }
+
+    /// Copies selected timeline messages to the system clipboard.
+    pub fn copy_selected_timeline(&mut self, cx: &mut Context<Self>) {
+        if let Some(tid) = &self.active_thread_id
+            && let Some(proj) = self.thread_projections.get(tid)
+        {
+            let text = self
+                .timeline_state
+                .selection
+                .extract_selected_text(&proj.grouped_items());
+            if !text.is_empty() {
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                self.notify_user(
+                    "Copied",
+                    "Copied selected timeline messages to clipboard",
+                    NotificationLevel::Info,
+                    cx,
+                );
+            }
+        }
     }
 
     /// Sets the active navigation rail tab.
@@ -1129,7 +1158,7 @@ impl Render for AppView {
 
 impl AppView {
     /// Renders the central workspace with timeline and composer.
-    fn render_main_surface(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_main_surface(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let active_proj = self
             .active_thread_id
             .as_ref()
@@ -1212,27 +1241,33 @@ impl AppView {
                             Button::new("btn-ready").ghost().label("● Ready")
                         }),
                 )
-                // Timeline messages area
-                .child(
-                    div()
-                        .flex_1()
-                        .v_flex()
-                        .p_2()
-                        .gap_3()
-                        .overflow_hidden()
-                        .children(proj.grouped_items().iter().enumerate().map(|(idx, item)| {
-                            render_timeline_item(
-                                idx,
-                                item,
-                                &thread_id,
-                                theme,
-                                |this: &mut AppView, tid, req_id, dec, _win, cx| {
-                                    this.respond_approval(tid, req_id, dec, cx);
-                                },
-                                cx,
-                            )
-                        })),
-                )
+                // Virtualized Timeline messages area
+                .child(div().flex_1().size_full().overflow_hidden().child(
+                    render_virtualized_timeline(
+                        &self.timeline_state,
+                        &proj.grouped_items(),
+                        &thread_id,
+                        theme,
+                        |this: &mut AppView, tid, req_id, dec, _win, cx| {
+                            this.respond_approval(tid, req_id, dec, cx);
+                        },
+                        |this: &mut AppView, idx, _win, cx| {
+                            this.timeline_state.selection.start(idx, 0);
+                            cx.notify();
+                        },
+                        |this: &mut AppView, _win, cx| {
+                            let total = this
+                                .active_thread_id
+                                .as_ref()
+                                .and_then(|tid| this.thread_projections.get(tid))
+                                .map(|p| p.grouped_items().len())
+                                .unwrap_or(0);
+                            this.timeline_state.jump_to_bottom(total);
+                            cx.notify();
+                        },
+                        cx,
+                    ),
+                ))
                 // Rich Composer with Drag & Drop file attachment support
                 .child(
                     div()
@@ -1280,6 +1315,7 @@ impl AppView {
                 )
                 // Git actions bar
                 .child(self.render_git_actions_bar(theme, cx))
+                .into_any_element()
         } else {
             // Welcome empty state
             div()
@@ -1310,6 +1346,7 @@ impl AppView {
                             this.create_default_thread(cx);
                         })),
                 )
+                .into_any_element()
         }
     }
 

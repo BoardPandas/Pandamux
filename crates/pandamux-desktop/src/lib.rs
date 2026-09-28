@@ -1,4 +1,4 @@
-#![recursion_limit = "1024"]
+#![recursion_limit = "4096"]
 
 pub mod app_view;
 pub mod command_palette;
@@ -34,13 +34,17 @@ pub use server_bridge::{
 pub use settings_view::{SettingsCategory, SettingsViewState, render_settings_view};
 pub use sidebar::{AgentRosterItem, DEFAULT_AGENTS, RailTab, render_rail, render_sidebar};
 pub use theme::{AccentColor, ChromePalette, Radii, Spacing, Theme, ThemeMode, Typography};
-pub use timeline::render_timeline_item;
+pub use timeline::{
+    CachedMarkdownBlock, MarkdownHighlightCache, TimelineBenchmarkReport, TimelinePosition,
+    TimelineSelection, VirtualizedTimelineState, render_timeline_item, render_virtualized_timeline,
+};
 pub use titlebar::CustomTitlebar;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui_kit::gpui::px;
+    use core::prelude::v1::test;
+    use gpui_kit::gpui::{px, rgb};
     use pandamux_core::{
         ApprovalDecision, ApprovalKind, EnvironmentId, ProviderInstanceId, Thread, ThreadEvent,
         ThreadEventKind, ThreadId, ThreadStatus, ThreadWorkspace, TurnId, TurnInput, TurnOutcome,
