@@ -34,6 +34,7 @@ pub struct Router {
     drivers: Arc<DriverRegistry>,
     terminal: TerminalServerManager,
     environment_router: Arc<crate::environment_router::EnvironmentRouter>,
+    remote_terminals: Arc<std::sync::Mutex<HashMap<String, pandamux_core::ids::EnvironmentId>>>,
     role: ServerRole,
     environment_id: String,
     server_version: String,
@@ -96,6 +97,7 @@ impl Router {
             drivers,
             terminal,
             environment_router,
+            remote_terminals: Arc::new(std::sync::Mutex::new(HashMap::new())),
             role,
             environment_id,
             server_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -112,6 +114,23 @@ impl Router {
 
     pub fn environment_router(&self) -> &Arc<crate::environment_router::EnvironmentRouter> {
         &self.environment_router
+    }
+
+    pub fn remote_terminals(&self) -> HashMap<String, pandamux_core::ids::EnvironmentId> {
+        self.remote_terminals
+            .lock()
+            .map(|m| m.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn register_remote_terminal(
+        &self,
+        terminal_id: String,
+        environment_id: pandamux_core::ids::EnvironmentId,
+    ) {
+        if let Ok(mut map) = self.remote_terminals.lock() {
+            map.insert(terminal_id, environment_id);
+        }
     }
 
     pub fn with_attachments(mut self, attachments: AttachmentManager) -> Self {
@@ -194,17 +213,36 @@ impl Router {
         params: &Value,
     ) -> Option<pandamux_core::ids::EnvironmentId> {
         // 1. Direct environmentId in params
-        if let Some(env_id_val) = params.get("environmentId").and_then(|v| v.as_str()) {
+        if let Some(env_id_val) = params
+            .get("environmentId")
+            .or_else(|| params.get("environment_id"))
+            .and_then(|v| v.as_str())
+        {
             return Some(pandamux_core::ids::EnvironmentId::new(env_id_val));
         }
 
         // 2. Thread-scoped methods: look up thread's environment_id in store
-        let thread_id_opt = params.get("threadId").and_then(|v| v.as_str());
+        let thread_id_opt = params
+            .get("threadId")
+            .or_else(|| params.get("thread_id"))
+            .and_then(|v| v.as_str());
         if let Some(tid_str) = thread_id_opt {
             let tid = pandamux_core::ids::ThreadId::new(tid_str);
             if let Ok(Some(thread)) = self.store.get_thread(&tid) {
                 return Some(thread.environment_id);
             }
+        }
+
+        // 3. Terminal-scoped methods: look up terminal_id in remote_terminals map
+        let terminal_id_opt = params
+            .get("terminalId")
+            .or_else(|| params.get("terminal_id"))
+            .and_then(|v| v.as_str());
+        if let Some(tid_str) = terminal_id_opt
+            && let Ok(map) = self.remote_terminals.lock()
+            && let Some(env_id) = map.get(tid_str)
+        {
+            return Some(env_id.clone());
         }
 
         None
@@ -265,6 +303,24 @@ impl Router {
                             serde_json::from_value::<pandamux_core::Thread>(val.clone())
                     {
                         let _ = self.store.save_thread(&thread);
+                    }
+                    if method == "terminal.open"
+                        && let Some(val) = &resp.result
+                        && let Ok(term_res) = serde_json::from_value::<
+                            pandamux_protocol::terminal_rpc::TerminalOpenResult,
+                        >(val.clone())
+                        && let Ok(mut map) = self.remote_terminals.lock()
+                    {
+                        map.insert(term_res.terminal_id, target_env.clone());
+                    }
+                    if method == "terminal.close"
+                        && let Some(tid_str) = params
+                            .get("terminalId")
+                            .or_else(|| params.get("terminal_id"))
+                            .and_then(|v| v.as_str())
+                        && let Ok(mut map) = self.remote_terminals.lock()
+                    {
+                        map.remove(tid_str);
                     }
                     return Some(resp);
                 }
@@ -972,6 +1028,9 @@ impl Router {
     fn handle_terminal_close(&self, params: Value) -> Result<Value, RpcError> {
         let close_params: TerminalCloseParams = serde_json::from_value(params)
             .map_err(|e| RpcError::invalid_params(format!("Invalid terminal.close params: {e}")))?;
+        if let Ok(mut map) = self.remote_terminals.lock() {
+            map.remove(&close_params.terminal_id);
+        }
         self.terminal
             .close(close_params)
             .map_err(RpcError::internal_error)?;
@@ -1857,5 +1916,173 @@ mod tests {
             1
         );
         assert_eq!(turns_received.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn router_routes_remote_terminal_lifecycle() {
+        use pandamux_core::EnvironmentId;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let remote_env = EnvironmentId::new("env_remote_node");
+        let env_router = Arc::new(crate::environment_router::EnvironmentRouter::new(
+            EnvironmentId::new("env_local"),
+        ));
+
+        let open_count = Arc::new(AtomicUsize::new(0));
+        let attach_count = Arc::new(AtomicUsize::new(0));
+        let input_count = Arc::new(AtomicUsize::new(0));
+        let resize_count = Arc::new(AtomicUsize::new(0));
+        let close_count = Arc::new(AtomicUsize::new(0));
+
+        let oc = Arc::clone(&open_count);
+        let ac = Arc::clone(&attach_count);
+        let ic = Arc::clone(&input_count);
+        let rc = Arc::clone(&resize_count);
+        let cc = Arc::clone(&close_count);
+
+        let mock_transport = Arc::new(crate::environment_router::MockEnvironmentTransport::new(
+            move |req| match req.method.as_str() {
+                "terminal.open" => {
+                    oc.fetch_add(1, Ordering::SeqCst);
+                    Ok(RpcResponse::success(
+                        req.id.clone().unwrap_or(1.into()),
+                        json!({
+                            "terminalId": "term-remote-1",
+                            "cwd": "/remote/project",
+                            "rows": 30,
+                            "cols": 120
+                        }),
+                    ))
+                }
+                "terminal.attach" => {
+                    ac.fetch_add(1, Ordering::SeqCst);
+                    let since = req
+                        .params
+                        .as_ref()
+                        .and_then(|p| p.get("sinceOffset"))
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    Ok(RpcResponse::success(
+                        req.id.clone().unwrap_or(2.into()),
+                        json!({
+                            "terminalId": "term-remote-1",
+                            "rows": 30,
+                            "cols": 120,
+                            "offset": since + 45,
+                            "data": "remote prompt$ ",
+                            "truncated": false
+                        }),
+                    ))
+                }
+                "terminal.input" => {
+                    ic.fetch_add(1, Ordering::SeqCst);
+                    Ok(RpcResponse::success(
+                        req.id.clone().unwrap_or(3.into()),
+                        json!({ "success": true }),
+                    ))
+                }
+                "terminal.resize" => {
+                    rc.fetch_add(1, Ordering::SeqCst);
+                    Ok(RpcResponse::success(
+                        req.id.clone().unwrap_or(4.into()),
+                        json!({ "success": true }),
+                    ))
+                }
+                "terminal.close" => {
+                    cc.fetch_add(1, Ordering::SeqCst);
+                    Ok(RpcResponse::success(
+                        req.id.clone().unwrap_or(5.into()),
+                        json!({ "success": true }),
+                    ))
+                }
+                _ => Err(RpcError::method_not_found(&req.method)),
+            },
+        ));
+
+        env_router
+            .register_transport(remote_env.clone(), mock_transport, None)
+            .await;
+
+        let store = Store::in_memory().unwrap();
+        let hub_router = Router::new(store, ServerRole::Hub, "env_local".to_string())
+            .with_environment_router(env_router);
+
+        // 1. Open terminal on remote environment
+        let open_req = RpcRequest::new(
+            1,
+            "terminal.open",
+            Some(json!({
+                "environmentId": "env_remote_node",
+                "cwd": "/remote/project",
+                "rows": 30,
+                "cols": 120
+            })),
+        );
+        let open_res = hub_router.handle_request(open_req).await.unwrap();
+        assert!(open_res.is_success());
+        let term_id = open_res.result.unwrap()["terminalId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(term_id, "term-remote-1");
+        assert_eq!(open_count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            hub_router.remote_terminals().get("term-remote-1"),
+            Some(&remote_env)
+        );
+
+        // 2. Attach using terminalId (automatically routed to env_remote_node)
+        let attach_req = RpcRequest::new(
+            2,
+            "terminal.attach",
+            Some(json!({
+                "terminalId": "term-remote-1",
+                "sinceOffset": 0
+            })),
+        );
+        let attach_res = hub_router.handle_request(attach_req).await.unwrap();
+        assert!(attach_res.is_success());
+        assert_eq!(attach_count.load(Ordering::SeqCst), 1);
+        assert_eq!(attach_res.result.unwrap()["offset"], 45);
+
+        // 3. Input sent using terminalId
+        let input_req = RpcRequest::new(
+            3,
+            "terminal.input",
+            Some(json!({
+                "terminalId": "term-remote-1",
+                "data": "htop\r\n"
+            })),
+        );
+        let input_res = hub_router.handle_request(input_req).await.unwrap();
+        assert!(input_res.is_success());
+        assert_eq!(input_count.load(Ordering::SeqCst), 1);
+
+        // 4. Resize sent using terminalId
+        let resize_req = RpcRequest::new(
+            4,
+            "terminal.resize",
+            Some(json!({
+                "terminalId": "term-remote-1",
+                "rows": 24,
+                "cols": 80
+            })),
+        );
+        let resize_res = hub_router.handle_request(resize_req).await.unwrap();
+        assert!(resize_res.is_success());
+        assert_eq!(resize_count.load(Ordering::SeqCst), 1);
+
+        // 5. Close terminal and verify remote registration cleaned up
+        let close_req = RpcRequest::new(
+            5,
+            "terminal.close",
+            Some(json!({
+                "terminalId": "term-remote-1"
+            })),
+        );
+        let close_res = hub_router.handle_request(close_req).await.unwrap();
+        assert!(close_res.is_success());
+        assert_eq!(close_count.load(Ordering::SeqCst), 1);
+        assert!(!hub_router.remote_terminals().contains_key("term-remote-1"));
     }
 }

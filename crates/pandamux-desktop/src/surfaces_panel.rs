@@ -125,6 +125,7 @@ pub struct SurfacesPanelState {
     pub pull_request: Option<PullRequestSummary>,
     pub linked_prs: Vec<PullRequestSummary>,
     pub terminal: Option<TerminalViewState>,
+    pub terminals_by_thread: HashMap<String, TerminalViewState>,
 }
 
 impl Default for SurfacesPanelState {
@@ -148,11 +149,26 @@ impl SurfacesPanelState {
             pull_request: None,
             linked_prs: Vec::new(),
             terminal: None,
+            terminals_by_thread: HashMap::new(),
         }
     }
 
     pub fn set_terminal(&mut self, terminal: TerminalViewState) {
         self.terminal = Some(terminal);
+    }
+
+    pub fn set_terminal_for_thread(&mut self, thread_id: &str, terminal: TerminalViewState) {
+        self.terminals_by_thread
+            .insert(thread_id.to_string(), terminal.clone());
+        self.terminal = Some(terminal);
+    }
+
+    pub fn terminal_for_thread(&self, thread_id: &str) -> Option<&TerminalViewState> {
+        self.terminals_by_thread.get(thread_id)
+    }
+
+    pub fn terminal_for_thread_mut(&mut self, thread_id: &str) -> Option<&mut TerminalViewState> {
+        self.terminals_by_thread.get_mut(thread_id)
     }
 
     pub fn terminal_mut(&mut self) -> Option<&mut TerminalViewState> {
@@ -1164,7 +1180,7 @@ fn render_linked_prs_surface(prs: &[PullRequestSummary], theme: &Theme) -> AnyEl
         .into_any_element()
 }
 
-/// Local Terminal surface.
+/// Terminal surface (local or remote).
 fn render_terminal_surface(terminal: Option<&TerminalViewState>, theme: &Theme) -> AnyElement {
     if let Some(term) = terminal {
         render_terminal_view(term, theme)
@@ -1186,14 +1202,14 @@ fn render_terminal_surface(terminal: Option<&TerminalViewState>, theme: &Theme) 
                             .text_size(Typography::BODY_SIZE)
                             .font_weight(FontWeight::BOLD)
                             .text_color(theme.chrome.text_t1)
-                            .child("Local Terminal"),
+                            .child("Terminal Surface"),
                     ),
             )
             .child(
                 div()
                     .text_size(Typography::META_SIZE)
                     .text_color(theme.chrome.text_t3)
-                    .child("No active terminal session attached. Launch or open a terminal from the surfaces bar."),
+                    .child("No active terminal session attached. Launch or reattach a local or remote terminal session from the surfaces bar."),
             )
             .into_any_element()
     }
@@ -1302,5 +1318,35 @@ mod tests {
 
         state.restore_for_thread("thread-2");
         assert_eq!(state.active_tab, Some(SurfaceTab::Files));
+    }
+
+    #[test]
+    fn test_surfaces_panel_terminal_per_thread() {
+        let mut state = SurfacesPanelState::new();
+        let term1 = TerminalViewState::new("term-thread-1", "/work/1", 24, 80);
+        let term2 = TerminalViewState::new_with_env(
+            "term-thread-2",
+            "/work/2",
+            30,
+            120,
+            Some(pandamux_core::EnvironmentId::new("env_remote")),
+        );
+
+        state.set_terminal_for_thread("t1", term1);
+        state.set_terminal_for_thread("t2", term2);
+
+        assert_eq!(
+            state.terminal_for_thread("t1").unwrap().terminal_id,
+            "term-thread-1"
+        );
+        assert_eq!(
+            state.terminal_for_thread("t2").unwrap().terminal_id,
+            "term-thread-2"
+        );
+        assert!(state.terminal_for_thread("t2").unwrap().is_remote());
+        assert_eq!(
+            state.terminal.as_ref().unwrap().terminal_id,
+            "term-thread-2"
+        );
     }
 }

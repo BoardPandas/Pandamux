@@ -619,6 +619,9 @@ impl AppView {
             self.timeline_state.jump_to_bottom(total);
         }
         self.surfaces_panel.restore_for_thread(thread_id.as_str());
+        if let Some(term) = self.surfaces_panel.terminal_for_thread(thread_id.as_str()) {
+            self.surfaces_panel.set_terminal(term.clone());
+        }
         self.load_surface_files(cx);
         self.refresh_git_status(cx);
     }
@@ -647,20 +650,29 @@ impl AppView {
         cx.notify();
     }
 
-    /// Ensures a local terminal session view state exists when the Terminal surface is opened.
+    /// Ensures a terminal session view state exists when the Terminal surface is opened.
     pub fn ensure_surface_terminal(&mut self, cx: &mut Context<Self>) {
         if self.surfaces_panel.terminal.is_none() {
-            let cwd = self
+            let (cwd, env_id) = self
                 .active_thread_id
                 .as_ref()
                 .and_then(|tid| self.thread_projections.get(tid))
-                .map(|p| p.thread.workspace.effective_path().to_string())
-                .unwrap_or_else(|| ".".to_string());
+                .map(|p| {
+                    (
+                        p.thread.workspace.effective_path().to_string(),
+                        Some(p.thread.environment_id.clone()),
+                    )
+                })
+                .unwrap_or_else(|| (".".to_string(), None));
             let term_id = format!("term-{}", &uuid::Uuid::new_v4().to_string()[..8]);
-            self.surfaces_panel
-                .set_terminal(crate::terminal_view::TerminalViewState::new(
-                    term_id, cwd, 30, 120,
-                ));
+            let term = crate::terminal_view::TerminalViewState::new_with_env(
+                term_id, cwd, 30, 120, env_id,
+            );
+            if let Some(ref tid) = self.active_thread_id {
+                self.surfaces_panel
+                    .set_terminal_for_thread(tid.as_str(), term.clone());
+            }
+            self.surfaces_panel.set_terminal(term);
             cx.notify();
         }
     }

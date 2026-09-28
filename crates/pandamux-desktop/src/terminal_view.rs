@@ -3,6 +3,11 @@ use std::sync::{Arc, Mutex};
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::gpui::*;
 use gpui_kit::prelude::FluentBuilder as _;
+use pandamux_core::EnvironmentId;
+use pandamux_protocol::terminal_rpc::{
+    TerminalAttachParams, TerminalAttachResult, TerminalInputParams, TerminalOpenParams,
+    TerminalResizeParams,
+};
 use pandamux_term::grid::{
     CellColor, GridSize, ScreenCells, ScrollAmount, StyledCell, TerminalGrid,
 };
@@ -161,6 +166,8 @@ pub struct TerminalViewState {
     pub is_attached: bool,
     pub is_running: bool,
     pub exit_code: Option<u32>,
+    pub environment_id: Option<EnvironmentId>,
+    pub last_truncated: bool,
     pub cached_cells: ScreenCells,
     grid: Arc<Mutex<TerminalGrid>>,
 }
@@ -173,25 +180,59 @@ impl TerminalViewState {
         rows: u16,
         cols: u16,
     ) -> Self {
+        Self::new_with_env(terminal_id, cwd, rows, cols, None)
+    }
+
+    /// Creates a new terminal view state with an optional remote environment identifier.
+    pub fn new_with_env(
+        terminal_id: impl Into<String>,
+        cwd: impl Into<String>,
+        rows: u16,
+        cols: u16,
+        environment_id: Option<EnvironmentId>,
+    ) -> Self {
         let tid = terminal_id.into();
         let r = rows.max(1);
         let c = cols.max(1);
         let grid = TerminalGrid::new(GridSize::new(c as usize, r as usize));
         let cached_cells = grid.visible_cells();
 
+        let title = if let Some(ref env) = environment_id {
+            format!("Terminal ({tid} @ {})", env.as_str())
+        } else {
+            format!("Terminal ({tid})")
+        };
+
         Self {
-            terminal_id: tid.clone(),
+            terminal_id: tid,
             cwd: cwd.into(),
-            title: format!("Terminal ({tid})"),
+            title,
             rows: r,
             cols: c,
             attached_offset: 0,
             is_attached: true,
             is_running: true,
             exit_code: None,
+            environment_id,
+            last_truncated: false,
             cached_cells,
             grid: Arc::new(Mutex::new(grid)),
         }
+    }
+
+    /// Indicates whether this terminal is running on a remote environment.
+    pub fn is_remote(&self) -> bool {
+        self.environment_id.is_some()
+    }
+
+    /// Returns the environment identifier if this is a remote terminal session.
+    pub fn environment_id(&self) -> Option<&EnvironmentId> {
+        self.environment_id.as_ref()
+    }
+
+    /// Sets or updates the environment identifier for this session.
+    pub fn set_environment_id(&mut self, env: Option<EnvironmentId>) {
+        self.environment_id = env;
     }
 
     /// Feeds incoming terminal byte chunks, honoring monotonic offset tracking and truncation.
@@ -205,6 +246,79 @@ impl TerminalViewState {
             self.cached_cells = grid.visible_cells();
         }
         self.attached_offset = offset;
+        self.last_truncated = truncated;
+    }
+
+    /// Applies the result of a `terminal.attach` call with `since_offset` recovery.
+    ///
+    /// Returns `true` if the ring buffer was truncated, signalling that the client
+    /// must dispatch a resize nudge so full-screen TUIs (e.g. vim, htop) repaint cleanly.
+    pub fn apply_attach_result(&mut self, result: &TerminalAttachResult) -> bool {
+        self.rows = result.rows.max(1);
+        self.cols = result.cols.max(1);
+        self.is_attached = true;
+        let needs_nudge = result.truncated;
+        self.feed_bytes(result.data.as_bytes(), result.offset, result.truncated);
+        needs_nudge
+    }
+
+    /// Builds a pair of temporary resize parameters to nudge the remote PTY on truncation.
+    ///
+    /// Nudging the column size down by 1 and immediately restoring it triggers a SIGWINCH
+    /// signal on Unix nodes (or ConPTY window buffer size event on Windows), forcing full-screen
+    /// terminal applications to repaint completely without user intervention.
+    pub fn create_resize_nudge(&self) -> (TerminalResizeParams, TerminalResizeParams) {
+        let nudge_cols = self.cols.saturating_sub(1).max(1);
+        (
+            TerminalResizeParams {
+                terminal_id: self.terminal_id.clone(),
+                rows: self.rows,
+                cols: nudge_cols,
+            },
+            TerminalResizeParams {
+                terminal_id: self.terminal_id.clone(),
+                rows: self.rows,
+                cols: self.cols,
+            },
+        )
+    }
+
+    /// Constructs `TerminalAttachParams` requesting output since the current `attached_offset`.
+    pub fn build_attach_params(&self) -> TerminalAttachParams {
+        TerminalAttachParams {
+            terminal_id: self.terminal_id.clone(),
+            since_offset: Some(self.attached_offset),
+        }
+    }
+
+    /// Constructs `TerminalInputParams` to send keyboard or paste data to the PTY.
+    pub fn build_input_params(&self, data: impl Into<String>) -> TerminalInputParams {
+        TerminalInputParams {
+            terminal_id: self.terminal_id.clone(),
+            data: data.into(),
+        }
+    }
+
+    /// Constructs `TerminalResizeParams` for explicit window resizing.
+    pub fn build_resize_params(&self, rows: u16, cols: u16) -> TerminalResizeParams {
+        TerminalResizeParams {
+            terminal_id: self.terminal_id.clone(),
+            rows,
+            cols,
+        }
+    }
+
+    /// Constructs `TerminalOpenParams` for session creation on the target node.
+    pub fn build_open_params(&self) -> TerminalOpenParams {
+        TerminalOpenParams {
+            terminal_id: Some(self.terminal_id.clone()),
+            environment_id: self.environment_id.clone(),
+            cwd: Some(self.cwd.clone()),
+            shell: None,
+            rows: Some(self.rows),
+            cols: Some(self.cols),
+            env: None,
+        }
     }
 
     /// Scrolls the terminal viewport.
@@ -294,6 +408,39 @@ pub fn render_terminal_view(state: &TerminalViewState, theme: &Theme) -> AnyElem
             )
     };
 
+    let env_badge = if let Some(ref env) = state.environment_id {
+        div()
+            .h_flex()
+            .items_center()
+            .gap_1()
+            .px_2()
+            .py_0p5()
+            .rounded(Radii::CHIP)
+            .bg(rgba(0x38bdf820))
+            .child(
+                div()
+                    .text_size(Typography::META_SIZE)
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(rgb(0x38bdf8))
+                    .child(format!("🌐 Remote ({})", env.as_str())),
+            )
+    } else {
+        div()
+            .h_flex()
+            .items_center()
+            .gap_1()
+            .px_2()
+            .py_0p5()
+            .rounded(Radii::CHIP)
+            .bg(rgba(0x6b7c8020))
+            .child(
+                div()
+                    .text_size(Typography::META_SIZE)
+                    .text_color(theme.terminal.dim)
+                    .child("💻 Local"),
+            )
+    };
+
     let header = div()
         .h_flex()
         .items_center()
@@ -306,7 +453,11 @@ pub fn render_terminal_view(state: &TerminalViewState, theme: &Theme) -> AnyElem
                 .h_flex()
                 .items_center()
                 .gap_2()
-                .child(div().text_size(Typography::BODY_SIZE).child("💻"))
+                .child(
+                    div()
+                        .text_size(Typography::BODY_SIZE)
+                        .child(if state.is_remote() { "🌐" } else { "💻" }),
+                )
                 .child(
                     div()
                         .text_size(Typography::BODY_SIZE)
@@ -314,7 +465,27 @@ pub fn render_terminal_view(state: &TerminalViewState, theme: &Theme) -> AnyElem
                         .text_color(theme.chrome.text_t1)
                         .child(state.title.clone()),
                 )
-                .child(status_badge),
+                .child(status_badge)
+                .child(env_badge)
+                .when(state.last_truncated, |this| {
+                    this.child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_1()
+                            .px_2()
+                            .py_0p5()
+                            .rounded(Radii::CHIP)
+                            .bg(rgba(0xe5c07b20))
+                            .child(
+                                div()
+                                    .text_size(Typography::META_SIZE)
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(theme.terminal.warn)
+                                    .child("⚠ Grid Re-synced"),
+                            ),
+                    )
+                }),
         )
         .child(
             div()
@@ -326,6 +497,12 @@ pub fn render_terminal_view(state: &TerminalViewState, theme: &Theme) -> AnyElem
                         .text_size(Typography::META_SIZE)
                         .text_color(theme.chrome.text_t3)
                         .child(format!("📁 {}", state.cwd)),
+                )
+                .child(
+                    div()
+                        .text_size(Typography::META_SIZE)
+                        .text_color(theme.chrome.text_t4)
+                        .child(format!("Offset: {}", state.attached_offset)),
                 )
                 .child(
                     div()
@@ -480,5 +657,84 @@ mod tests {
 
         let cube_color = resolve_indexed_color(16, &theme, false);
         assert_eq!(cube_color, rgb(0x000000));
+    }
+
+    #[test]
+    fn test_terminal_view_remote_state() {
+        let env = EnvironmentId::new("env_galahad");
+        let state =
+            TerminalViewState::new_with_env("term-rem-1", "/home/chaz", 30, 100, Some(env.clone()));
+        assert!(state.is_remote());
+        assert_eq!(state.environment_id(), Some(&env));
+        assert!(state.title.contains("env_galahad"));
+    }
+
+    #[test]
+    fn test_terminal_view_apply_attach_result_not_truncated() {
+        let mut state = TerminalViewState::new("term-attach-1", "/test", 10, 40);
+        let res = TerminalAttachResult {
+            terminal_id: "term-attach-1".to_string(),
+            rows: 10,
+            cols: 40,
+            offset: 15,
+            data: "first chunk\r\n".to_string(),
+            truncated: false,
+        };
+        let nudge = state.apply_attach_result(&res);
+        assert!(!nudge);
+        assert!(!state.last_truncated);
+        assert_eq!(state.attached_offset, 15);
+        let row0: String = state.cached_cells.rows[0].iter().map(|c| c.c).collect();
+        assert!(row0.starts_with("first chunk"));
+    }
+
+    #[test]
+    fn test_terminal_view_apply_attach_result_truncated_and_resize_nudge() {
+        let mut state = TerminalViewState::new("term-attach-2", "/test", 5, 20);
+        state.feed_bytes(b"stale data\r\n", 12, false);
+
+        let res = TerminalAttachResult {
+            terminal_id: "term-attach-2".to_string(),
+            rows: 5,
+            cols: 20,
+            offset: 105,
+            data: "new data\r\n".to_string(),
+            truncated: true,
+        };
+        let nudge = state.apply_attach_result(&res);
+        assert!(nudge);
+        assert!(state.last_truncated);
+        assert_eq!(state.attached_offset, 105);
+
+        let row0: String = state.cached_cells.rows[0].iter().map(|c| c.c).collect();
+        assert!(row0.starts_with("new data"));
+        assert!(!row0.contains("stale data"));
+
+        let (p1, p2) = state.create_resize_nudge();
+        assert_eq!(p1.cols, 19);
+        assert_eq!(p2.cols, 20);
+        assert_eq!(p1.terminal_id, "term-attach-2");
+        assert_eq!(p2.terminal_id, "term-attach-2");
+    }
+
+    #[test]
+    fn test_terminal_view_param_builders() {
+        let env = EnvironmentId::new("env_remote");
+        let mut state =
+            TerminalViewState::new_with_env("term-bld-1", "/work", 24, 80, Some(env.clone()));
+        state.attached_offset = 512;
+
+        let attach_p = state.build_attach_params();
+        assert_eq!(attach_p.terminal_id, "term-bld-1");
+        assert_eq!(attach_p.since_offset, Some(512));
+
+        let input_p = state.build_input_params("clear\n");
+        assert_eq!(input_p.terminal_id, "term-bld-1");
+        assert_eq!(input_p.data, "clear\n");
+
+        let open_p = state.build_open_params();
+        assert_eq!(open_p.terminal_id, Some("term-bld-1".to_string()));
+        assert_eq!(open_p.environment_id, Some(env));
+        assert_eq!(open_p.cwd, Some("/work".to_string()));
     }
 }
