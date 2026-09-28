@@ -1,6 +1,9 @@
 use pandamux_core::provider_config::ProviderKind;
 use pandamux_providers::traits::ProviderDriver;
-use pandamux_providers::{AntigravityDriver, ClaudeDriver, CodexDriver, MockProviderDriver};
+use pandamux_providers::{
+    AntigravityDriver, ClaudeDriver, CodexDriver, CursorDriver, GrokDriver, MockProviderDriver,
+    OpenCodeDriver,
+};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -45,6 +48,18 @@ impl DriverRegistry {
         )));
         registry.register(ProviderKind::Antigravity, antigravity);
 
+        let cursor = Arc::new(CursorDriver::new(PathBuf::from(".pandamux/cursor")));
+        registry.register(ProviderKind::Cursor, cursor);
+
+        let grok = Arc::new(GrokDriver::new(PathBuf::from(".pandamux/grok")));
+        registry.register(ProviderKind::Grok, grok);
+
+        let opencode = Arc::new(OpenCodeDriver::new(
+            PathBuf::from(".pandamux/opencode"),
+            false,
+        ));
+        registry.register(ProviderKind::OpenCode, opencode);
+
         let mock = Arc::new(MockProviderDriver::new(
             ProviderKind::Custom,
             "Mock Provider",
@@ -65,6 +80,9 @@ mod tests {
         assert!(registry.get(ProviderKind::Claude).is_some());
         assert!(registry.get(ProviderKind::Codex).is_some());
         assert!(registry.get(ProviderKind::Antigravity).is_some());
+        assert!(registry.get(ProviderKind::Cursor).is_some());
+        assert!(registry.get(ProviderKind::Grok).is_some());
+        assert!(registry.get(ProviderKind::OpenCode).is_some());
         assert!(registry.get(ProviderKind::Custom).is_some());
     }
 }

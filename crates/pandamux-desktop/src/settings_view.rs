@@ -419,6 +419,9 @@ fn render_providers_tab<V: 'static>(
                                                     ProviderKind::Claude => "🟣",
                                                     ProviderKind::Codex => "🟢",
                                                     ProviderKind::Antigravity => "🔵",
+                                                    ProviderKind::Cursor => "⚡",
+                                                    ProviderKind::Grok => "🚀",
+                                                    ProviderKind::OpenCode => "💻",
                                                     _ => "🤖",
                                                 }),
                                         )

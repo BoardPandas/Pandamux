@@ -4,10 +4,10 @@ This project incorporates code and architectural patterns derived from the follo
 
 ## T3 Code
 
-Portions of the Antigravity ACP driver and provider integration logic in `pandamux-providers` are ported from T3 Code:
+Portions of the Antigravity, Cursor, Grok, and OpenCode ACP driver and provider integration logic in `pandamux-providers` are ported from T3 Code:
 
 - Source: https://github.com/pingdotgg/t3code
-- Relevant files: `apps/server/src/provider/AntigravityInstallation.ts`, `antigravityRelease.ts`, `antigravityAuthSupport.ts`, `antigravityCallback.ts`, `AntigravityAuth.ts`, `Drivers/AntigravityDriver.ts`
+- Relevant files: `apps/server/src/provider/AntigravityInstallation.ts`, `antigravityRelease.ts`, `antigravityAuthSupport.ts`, `antigravityCallback.ts`, `AntigravityAuth.ts`, `Drivers/AntigravityDriver.ts`, `Drivers/CursorDriver.ts`, `Layers/GrokAdapter.ts`, `Layers/grokUsageLimits.ts`, `OpenCodeServerOwner.ts`
 - License: MIT License
 
 ### MIT License

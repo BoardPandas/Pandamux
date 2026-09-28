@@ -9,6 +9,9 @@ use tokio::process::Command;
 pub const ENV_CLAUDE_CONFIG_DIR: &str = "CLAUDE_CONFIG_DIR";
 pub const ENV_CODEX_HOME: &str = "CODEX_HOME";
 pub const ENV_GEMINI_HOME: &str = "GEMINI_HOME";
+pub const ENV_CURSOR_CONFIG_DIR: &str = "CURSOR_CONFIG_DIR";
+pub const ENV_GROK_HOME: &str = "GROK_HOME";
+pub const ENV_OPENCODE_CONFIG_DIR: &str = "OPENCODE_CONFIG_DIR";
 
 /// Returns the deterministic isolated profile directory for a given provider instance.
 /// Path layout: `<base_dir>/profiles/<provider>/<instance_id>/`.
@@ -54,6 +57,15 @@ pub fn apply_profile_environment(
             cmd.env_remove("GEMINI_API_KEY");
             cmd.env_remove("GOOGLE_API_KEY");
             cmd.env_remove("GOOGLE_APPLICATION_CREDENTIALS");
+        }
+        ProviderKind::Cursor => {
+            cmd.env(ENV_CURSOR_CONFIG_DIR, profile_dir);
+        }
+        ProviderKind::Grok => {
+            cmd.env(ENV_GROK_HOME, profile_dir);
+        }
+        ProviderKind::OpenCode => {
+            cmd.env(ENV_OPENCODE_CONFIG_DIR, profile_dir);
         }
         _ => {}
     }

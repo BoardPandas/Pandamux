@@ -39,6 +39,12 @@ fn resolve_provider_kind(instance_id: &ProviderInstanceId) -> ProviderKind {
         ProviderKind::Codex
     } else if s.starts_with("antigravity") || s.starts_with("gemini") {
         ProviderKind::Antigravity
+    } else if s.starts_with("cursor") {
+        ProviderKind::Cursor
+    } else if s.starts_with("grok") {
+        ProviderKind::Grok
+    } else if s.starts_with("opencode") {
+        ProviderKind::OpenCode
     } else {
         ProviderKind::Custom
     }

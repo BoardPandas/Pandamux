@@ -205,21 +205,37 @@ pub fn parse_acp_line(line: &str) -> Option<ProviderEvent> {
                     });
                 }
             }
-            "request_permission" => {
+            "request_permission" | "session/request_permission" => {
                 let req_id = val.get("id").map(|v| v.to_string()).unwrap_or_default();
-                let perm_type = params
-                    .get("permissionType")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
+                let perm_type = params.get("permissionType").and_then(|v| v.as_str());
+
+                let tool_call_tool = params
+                    .get("toolCall")
+                    .and_then(|t| t.get("tool"))
+                    .and_then(|t| t.as_str());
+
                 let resource = params
                     .get("resource")
                     .and_then(|v| v.as_str())
+                    .or(tool_call_tool)
                     .unwrap_or_default();
 
-                let kind = match perm_type {
-                    "bash" | "command" => ApprovalKind::CommandExecution,
-                    "fs_write" | "file_write" => ApprovalKind::FileEdit,
-                    _ => ApprovalKind::ToolCall,
+                let kind = if let Some(pt) = perm_type {
+                    match pt {
+                        "bash" | "command" => ApprovalKind::CommandExecution,
+                        "fs_write" | "file_write" => ApprovalKind::FileEdit,
+                        _ => ApprovalKind::ToolCall,
+                    }
+                } else if let Some(tc) = tool_call_tool {
+                    match tc {
+                        "run_command" | "bash" | "execute_command" => {
+                            ApprovalKind::CommandExecution
+                        }
+                        "edit_file" | "write_file" | "replace_content" => ApprovalKind::FileEdit,
+                        _ => ApprovalKind::ToolCall,
+                    }
+                } else {
+                    ApprovalKind::ToolCall
                 };
 
                 return Some(ProviderEvent::ApprovalRequested {
@@ -288,6 +304,7 @@ pub struct AcpSession {
     events_rx: Option<mpsc::Receiver<ProviderEvent>>,
     next_id: Arc<AtomicU64>,
     session_id: String,
+    preamble: Option<String>,
 }
 
 impl AcpSession {
@@ -303,7 +320,13 @@ impl AcpSession {
             events_rx: Some(events_rx),
             next_id: Arc::new(AtomicU64::new(10)),
             session_id,
+            preamble: None,
         }
+    }
+
+    pub fn with_preamble(mut self, preamble: Option<String>) -> Self {
+        self.preamble = preamble;
+        self
     }
 }
 
@@ -311,7 +334,12 @@ impl ProviderSession for AcpSession {
     fn send_turn<'a>(&'a mut self, input: TurnInput) -> BoxFuture<'a, Result<(), ProviderError>> {
         Box::pin(async move {
             let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-            let mut prompt_text = input.text.clone();
+            let mut prompt_text = String::new();
+            if let Some(preamble) = self.preamble.take() {
+                prompt_text.push_str(&preamble);
+                prompt_text.push_str("\n\n");
+            }
+            prompt_text.push_str(&input.text);
             if !input.attachments.is_empty() {
                 prompt_text.push_str(&pandamux_core::format_attachments_summary(
                     &input.attachments,
@@ -422,5 +450,48 @@ impl ProviderSession for AcpSession {
         Box::pin(async move {
             let _ = self.child.kill().await;
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_acp_cursor_permission_line() {
+        let line = r#"{"jsonrpc":"2.0","id":105,"method":"session/request_permission","params":{"sessionId":"sess-1","permissionId":"p-1","toolCall":{"id":"tc-1","tool":"edit_file","parameters":{"path":"src/main.rs"}}}}"#;
+        let event = parse_acp_line(line).expect("Should parse permission line");
+        match event {
+            ProviderEvent::ApprovalRequested {
+                request_id,
+                kind,
+                command,
+                ..
+            } => {
+                assert_eq!(request_id, "105");
+                assert_eq!(kind, ApprovalKind::FileEdit);
+                assert_eq!(command, Some("edit_file".to_string()));
+            }
+            _ => panic!("Expected ApprovalRequested"),
+        }
+    }
+
+    #[test]
+    fn test_parse_acp_bash_permission_line() {
+        let line = r#"{"jsonrpc":"2.0","id":106,"method":"session/request_permission","params":{"sessionId":"sess-1","permissionId":"p-2","toolCall":{"id":"tc-2","tool":"run_command","parameters":{"command":"cargo test"}}}}"#;
+        let event = parse_acp_line(line).expect("Should parse bash permission line");
+        match event {
+            ProviderEvent::ApprovalRequested {
+                request_id,
+                kind,
+                command,
+                ..
+            } => {
+                assert_eq!(request_id, "106");
+                assert_eq!(kind, ApprovalKind::CommandExecution);
+                assert_eq!(command, Some("run_command".to_string()));
+            }
+            _ => panic!("Expected ApprovalRequested"),
+        }
     }
 }

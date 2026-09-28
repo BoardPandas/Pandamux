@@ -21,6 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Implemented Phase 4 Step 1 (Best-effort providers: Cursor, Grok, and OpenCode profiles on shared ACP driver).** Extended `pandamux-providers` and `pandamux-server` with driver implementations for Cursor, Grok, and OpenCode:
+  - **Shared ACP driver enhancement**: Updated `parse_acp_line` in `acp.rs` to support `session/request_permission` alongside `request_permission` and handle structured `toolCall` payloads for file editing and command execution approvals. Added `with_preamble` to `AcpSession` for preamble instruction delivery.
+  - **Cursor driver**: Implemented `CursorDriver` in `cursor.rs` using `cursor-agent acp` over stdio with fallback preamble instruction delivery (`=== PANDAMUX AGENT ROLE INSTRUCTIONS ===`, knowledge context, task prompt) and coarse permission response mapping (`ReadOnly`, `AutoEdit`, `Ask`, `FullAccess`).
+  - **Grok driver**: Implemented `GrokDriver` in `grok.rs` with preamble delivery, API key probing, and rate limits/token budget ingestion (`GrokUsageLimits` to `UsageLimits`).
+  - **OpenCode driver**: Implemented `OpenCodeDriver` in `opencode.rs` supporting both ACP stdio mode with preamble delivery and HTTP serve mode with native system prompt (`OpenCodeServeCreateRequest`), per-tool policy filtering (`OpenCodeToolPolicy`), and SSE event stream parsing (`parse_opencode_sse_event_stream`).
+  - **Profile environment and registry**: Added isolated profile directory environment variables (`CURSOR_CONFIG_DIR`, `GROK_HOME`, `OPENCODE_CONFIG_DIR`) in `profiles.rs`, registered all three drivers in `DriverRegistry::default_local()`, updated `resolve_provider_kind` in `thread_manager.rs`, and added icons in `settings_view.rs`.
+
 - **Implemented Phase 3 Step 5 (Attachments through the tunnel).** Built end-to-end attachment synchronization across the Hub-to-node tunnel:
   - **Chunked tunnel streaming**: Implemented `create_chunk_params` and `get_file_bytes` in `AttachmentManager` to split attachment files into 256 KiB base64 chunks for streaming across `EnvironmentTransport` via `attachment.put`.
   - **Pre-turn synchronization**: Implemented `sync_attachment_to_environment` in `Router`, ensuring any attachments referenced in `thread.send_turn` are streamed across the tunnel and assembled at `~/.pandamux/data/attachments/<thread>/<id>` on the remote node before the turn executes.
