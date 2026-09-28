@@ -26,6 +26,7 @@ pub struct SshConfig {
     pub auth: SshAuth,
     pub remote_cwd: Option<String>,
     pub trust_unknown_host: bool,
+    pub proxy_jump: Option<Box<SshConfig>>,
 }
 
 impl SshConfig {
@@ -37,6 +38,7 @@ impl SshConfig {
             auth,
             remote_cwd: None,
             trust_unknown_host: false,
+            proxy_jump: None,
         }
     }
 
@@ -54,6 +56,11 @@ impl SshConfig {
         self.trust_unknown_host = trust;
         self
     }
+
+    pub fn with_proxy_jump(mut self, jump: SshConfig) -> Self {
+        self.proxy_jump = Some(Box::new(jump));
+        self
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,6 +71,7 @@ pub enum SshErrorCategory {
     Authentication,
     RemotePath,
     CommandExec,
+    ProxyJump,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

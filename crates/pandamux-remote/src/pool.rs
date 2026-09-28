@@ -17,6 +17,7 @@ pub struct HostKey {
     pub port: u16,
     pub user: String,
     pub auth: String,
+    pub proxy_jump: Option<Box<HostKey>>,
 }
 
 impl HostKey {
@@ -26,11 +27,16 @@ impl HostKey {
             SshAuth::Agent { pipe_path } => format!("agent:{pipe_path}"),
             SshAuth::Password { .. } => "password".to_string(),
         };
+        let proxy_jump = config
+            .proxy_jump
+            .as_ref()
+            .map(|jump| Box::new(HostKey::from_config(jump)));
         Self {
             host: config.host.clone(),
             port: config.port,
             user: config.user.clone(),
             auth,
+            proxy_jump,
         }
     }
 }
@@ -52,7 +58,8 @@ impl SshConnectionPool {
     }
 
     /// Acquires a live, authenticated handle for `config`. Reuses existing open
-    /// handles, or dials a new connection on demand.
+    /// handles, or dials a new connection on demand. If `config.proxy_jump` is
+    /// specified, the bastion connection is also acquired and reused from the pool.
     pub async fn acquire(&self, config: &SshConfig) -> Result<PooledHandle, SshFailure> {
         let slot = {
             let mut slots = self.slots.lock().await;
@@ -68,7 +75,28 @@ impl SshConnectionPool {
             }
             *guard = None;
         }
-        let handle = Arc::new(connect_client(config).await?);
+
+        let handle = if let Some(jump) = &config.proxy_jump {
+            let jump_handle = Box::pin(self.acquire(jump)).await?;
+            let channel = jump_handle
+                .channel_open_direct_tcpip(&config.host, config.port as u32, "127.0.0.1", 0)
+                .await
+                .map_err(|error| SshFailure {
+                    code: "ssh_proxy_jump_failed",
+                    category: SshErrorCategory::ProxyJump,
+                    message: format!(
+                        "ProxyJump through {} to {}:{} failed: {error}",
+                        jump.host, config.host, config.port
+                    ),
+                    retryable: true,
+                    fingerprint: None,
+                    known_hosts_line: None,
+                })?;
+            Arc::new(connect_client_stream(config, channel.into_stream()).await?)
+        } else {
+            Arc::new(connect_client(config).await?)
+        };
+
         *guard = Some(Arc::clone(&handle));
         Ok(handle)
     }
@@ -180,6 +208,25 @@ impl client::Handler for ClientHandler {
 pub async fn connect_client(
     config: &SshConfig,
 ) -> Result<client::Handle<ClientHandler>, SshFailure> {
+    if let Some(jump) = &config.proxy_jump {
+        let jump_handle = Box::pin(connect_client(jump)).await?;
+        let channel = jump_handle
+            .channel_open_direct_tcpip(&config.host, config.port as u32, "127.0.0.1", 0)
+            .await
+            .map_err(|error| SshFailure {
+                code: "ssh_proxy_jump_failed",
+                category: SshErrorCategory::ProxyJump,
+                message: format!(
+                    "ProxyJump through {} to {}:{} failed: {error}",
+                    jump.host, config.host, config.port
+                ),
+                retryable: true,
+                fingerprint: None,
+                known_hosts_line: None,
+            })?;
+        return connect_client_stream(config, channel.into_stream()).await;
+    }
+
     let client_config = client::Config {
         inactivity_timeout: None,
         keepalive_interval: Some(Duration::from_secs(15)),
@@ -212,6 +259,55 @@ pub async fn connect_client(
                 known_hosts_line: None,
             })
     })?;
+
+    authenticate(&mut handle, config)
+        .await
+        .map_err(|message| SshFailure {
+            code: "ssh_auth_failed",
+            category: SshErrorCategory::Authentication,
+            message,
+            retryable: true,
+            fingerprint: None,
+            known_hosts_line: None,
+        })?;
+    Ok(handle)
+}
+
+pub async fn connect_client_stream<S>(
+    config: &SshConfig,
+    stream: S,
+) -> Result<client::Handle<ClientHandler>, SshFailure>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin + 'static,
+{
+    let client_config = client::Config {
+        inactivity_timeout: None,
+        keepalive_interval: Some(Duration::from_secs(15)),
+        ..Default::default()
+    };
+    let host_failure = Arc::new(Mutex::new(None));
+    let handler = ClientHandler {
+        host: config.host.clone(),
+        port: config.port,
+        trust_unknown_host: config.trust_unknown_host,
+        failure: Arc::clone(&host_failure),
+    };
+    let mut handle = client::connect_stream(Arc::new(client_config), stream, handler)
+        .await
+        .map_err(|error| {
+            host_failure
+                .lock()
+                .expect("host failure lock")
+                .clone()
+                .unwrap_or_else(|| SshFailure {
+                    code: "ssh_connection_failed",
+                    category: SshErrorCategory::Connection,
+                    message: format!("SSH stream connection to {} failed: {error}", config.host),
+                    retryable: true,
+                    fingerprint: None,
+                    known_hosts_line: None,
+                })
+        })?;
 
     authenticate(&mut handle, config)
         .await
@@ -347,6 +443,39 @@ mod tests {
         assert_eq!(key.port, 22);
         assert_eq!(key.user, "admin");
         assert_eq!(key.auth, "password");
+        assert!(key.proxy_jump.is_none());
+    }
+
+    #[test]
+    fn test_host_key_with_proxy_jump() {
+        let bastion = SshConfig::new(
+            "bastion.corp.net",
+            "jumpuser",
+            SshAuth::Password {
+                password: "secret".to_string(),
+            },
+        )
+        .with_port(2222);
+
+        let target_direct = SshConfig::new(
+            "target.internal",
+            "appuser",
+            SshAuth::Password {
+                password: "pass".to_string(),
+            },
+        );
+
+        let target_jumped = target_direct.clone().with_proxy_jump(bastion);
+
+        let key_direct = HostKey::from_config(&target_direct);
+        let key_jumped = HostKey::from_config(&target_jumped);
+
+        assert_ne!(key_direct, key_jumped);
+        assert!(key_jumped.proxy_jump.is_some());
+        let jump_key = key_jumped.proxy_jump.as_ref().unwrap();
+        assert_eq!(jump_key.host, "bastion.corp.net");
+        assert_eq!(jump_key.port, 2222);
+        assert_eq!(jump_key.user, "jumpuser");
     }
 
     #[tokio::test]
