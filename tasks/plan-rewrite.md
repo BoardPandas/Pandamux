@@ -957,7 +957,7 @@ Exit criteria: single-machine T3-style feature set; nested Claude sub-agents app
 3. [x] **Bootstrap, start/discover, versioning, teardown; Environments page.** (Completed in commit `ce9b10b`, v0.53.37)
 4. [x] **Hub routing of environment-scoped calls and event relay; per-environment provider settings; secrets policy.** (Completed in commit `1f1c938`, v0.53.38)
 5. [x] **Attachments through the tunnel.** (Completed in commit `714f5b7`, v0.53.39)
-6. **Remote Terminal surface** with `sinceOffset` reattach.
+6. [x] **Remote Terminal surface with `sinceOffset` reattach.** (Completed in commit `f71e102`, v0.53.40)
 7. **Antigravity on nodes** (5.4): node-side managed download of the pinned Linux `.par` bundle with the hub-pushed URL, size, and SHA-256; fallback hub download, verify, cache, and SFTP push when the node has no internet; remote OAuth sign-in relay (desktop one-shot loopback listener or pasted URL, hub validation, node-side GET); per-node Antigravity concurrency cap and disk preflight.
 8. Optional one-time import of hosts from `~/.ssh/config` into environments (user-initiated; this is the user's SSH config, not old-app data).
 9. Cross-host worktree delta sync (6.10): sync unpushed worktree commits across the SSH exec tunnel via `git bundle` or delta streaming; Hark native voice bridge (7.17): `pandamux-server` named pipe connection to Hark daemon with dynamic symbol spellbook synchronization.
