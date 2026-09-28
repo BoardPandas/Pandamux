@@ -30,8 +30,14 @@ pub struct UserSettings {
     pub tier_mapping: Option<crate::organization::TierMapping>,
     #[serde(default = "default_providers")]
     pub providers: Vec<crate::provider_config::ProviderInstanceConfig>,
+    #[serde(default = "default_environments")]
+    pub environments: Vec<crate::environment::Environment>,
     #[serde(default)]
     pub advanced: AdvancedSettings,
+}
+
+pub fn default_environments() -> Vec<crate::environment::Environment> {
+    vec![crate::environment::Environment::local_default()]
 }
 
 fn default_tier_mapping_opt() -> Option<crate::organization::TierMapping> {
@@ -88,6 +94,8 @@ pub fn default_providers() -> Vec<crate::provider_config::ProviderInstanceConfig
             provider: ProviderKind::Claude,
             display_name: "Claude Code".to_string(),
             profile_dir: "profiles/claude/default".to_string(),
+            environment_id: None,
+            binary_path: None,
             concurrency_limit: 3,
             env_overrides: BTreeMap::new(),
             settings: serde_json::json!({
@@ -100,6 +108,8 @@ pub fn default_providers() -> Vec<crate::provider_config::ProviderInstanceConfig
             provider: ProviderKind::Codex,
             display_name: "Codex CLI".to_string(),
             profile_dir: "profiles/codex/default".to_string(),
+            environment_id: None,
+            binary_path: None,
             concurrency_limit: 3,
             env_overrides: BTreeMap::new(),
             settings: serde_json::json!({
@@ -112,6 +122,8 @@ pub fn default_providers() -> Vec<crate::provider_config::ProviderInstanceConfig
             provider: ProviderKind::Antigravity,
             display_name: "Google Antigravity".to_string(),
             profile_dir: "profiles/antigravity/default".to_string(),
+            environment_id: None,
+            binary_path: None,
             concurrency_limit: 2,
             env_overrides: BTreeMap::new(),
             settings: serde_json::json!({
@@ -132,6 +144,7 @@ impl Default for UserSettings {
             organizations: Vec::new(),
             tier_mapping: Some(default_tier_mapping()),
             providers: default_providers(),
+            environments: default_environments(),
             advanced: AdvancedSettings::default(),
         }
     }

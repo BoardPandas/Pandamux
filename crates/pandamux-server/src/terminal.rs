@@ -300,6 +300,7 @@ mod tests {
         let open_res = manager
             .open(TerminalOpenParams {
                 terminal_id: Some("test-term-1".to_string()),
+                environment_id: None,
                 cwd: Some(".".to_string()),
                 shell: None,
                 rows: Some(24),

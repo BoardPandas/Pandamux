@@ -14,6 +14,7 @@ pub mod provider_config;
 pub mod remote_manifest;
 pub mod run;
 pub mod schedule;
+pub mod secrets;
 pub mod settings;
 pub mod ssh;
 pub mod terminal;
@@ -58,7 +59,9 @@ pub use project_registry::{
     normalize_folder_name, normalize_git_remote, parse_git_remote_url, record_location,
     resolve_project_id,
 };
-pub use provider_config::{ProviderCapabilities, ProviderInstanceConfig, ProviderKind};
+pub use provider_config::{
+    ProviderCapabilities, ProviderEnvironmentOverride, ProviderInstanceConfig, ProviderKind,
+};
 pub use remote_manifest::{
     RemoteArch, RemoteBinaryKind, RemoteBinaryManifest, RemoteBinaryMeta, RemotePlatform,
     RemoteTargetBinaries, embedded_remote_manifest,
@@ -68,6 +71,10 @@ pub use schedule::{
     PerDayBudget, PerRunBudget, ScheduleApprovalPolicy, ScheduleBudget, ScheduleCatchUpPolicy,
     ScheduleEnvironmentRef, ScheduleOverlapPolicy, ScheduleRecord, ScheduleTarget,
     ScheduleThreadMode, ScheduleTrigger,
+};
+pub use secrets::{
+    InMemorySecretStore, SecretError, SecretStore, SecretsPolicy, mask_secret, redact_secrets,
+    scrub_memory,
 };
 pub use settings::{
     AdvancedSettings, KeyboardSettings, SETTINGS_SCHEMA_VERSION, TerminalSettings, UiSettings,

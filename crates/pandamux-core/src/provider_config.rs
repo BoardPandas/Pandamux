@@ -1,4 +1,4 @@
-use crate::ids::ProviderInstanceId;
+use crate::ids::{EnvironmentId, ProviderInstanceId};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -29,6 +29,22 @@ impl ProviderKind {
     }
 }
 
+/// Optional per-environment overrides for a provider instance.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderEnvironmentOverride {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub binary_path: Option<String>,
+    #[serde(default)]
+    pub concurrency_limit: Option<u32>,
+    #[serde(default)]
+    pub env_overrides: BTreeMap<String, String>,
+    #[serde(default)]
+    pub settings: Option<serde_json::Value>,
+}
+
 /// Configuration for a specific provider instance profile.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -37,6 +53,10 @@ pub struct ProviderInstanceConfig {
     pub provider: ProviderKind,
     pub display_name: String,
     pub profile_dir: String,
+    #[serde(default)]
+    pub environment_id: Option<EnvironmentId>,
+    #[serde(default)]
+    pub binary_path: Option<String>,
     #[serde(default = "default_concurrency")]
     pub concurrency_limit: u32,
     #[serde(default)]
@@ -45,6 +65,36 @@ pub struct ProviderInstanceConfig {
     pub settings: serde_json::Value,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+}
+
+impl ProviderInstanceConfig {
+    /// Resolves the effective configuration for a target environment.
+    pub fn resolve_for_environment(
+        &self,
+        env_id: &EnvironmentId,
+        overrides: Option<&ProviderEnvironmentOverride>,
+    ) -> Self {
+        let mut resolved = self.clone();
+        if let Some(ovr) = overrides {
+            if let Some(en) = ovr.enabled {
+                resolved.enabled = en;
+            }
+            if let Some(bp) = &ovr.binary_path {
+                resolved.binary_path = Some(bp.clone());
+            }
+            if let Some(limit) = ovr.concurrency_limit {
+                resolved.concurrency_limit = limit;
+            }
+            for (k, v) in &ovr.env_overrides {
+                resolved.env_overrides.insert(k.clone(), v.clone());
+            }
+            if let Some(st) = &ovr.settings {
+                resolved.settings = st.clone();
+            }
+        }
+        resolved.environment_id = Some(env_id.clone());
+        resolved
+    }
 }
 
 fn default_concurrency() -> u32 {

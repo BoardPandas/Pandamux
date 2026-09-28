@@ -33,6 +33,7 @@ pub struct Router {
     notifications: Arc<tokio::sync::Mutex<Vec<pandamux_core::notification::NotificationInfo>>>,
     drivers: Arc<DriverRegistry>,
     terminal: TerminalServerManager,
+    environment_router: Arc<crate::environment_router::EnvironmentRouter>,
     role: ServerRole,
     environment_id: String,
     server_version: String,
@@ -83,6 +84,9 @@ impl Router {
             ThreadManager::new(store.clone(), drivers.clone(), environment_id.clone());
         let attachments = AttachmentManager::new(default_attachments_dir());
         let terminal = TerminalServerManager::new();
+        let environment_router = Arc::new(crate::environment_router::EnvironmentRouter::new(
+            pandamux_core::ids::EnvironmentId::new(environment_id.clone()),
+        ));
         Self {
             store,
             mcp,
@@ -91,10 +95,23 @@ impl Router {
             notifications: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             drivers,
             terminal,
+            environment_router,
             role,
             environment_id,
             server_version: env!("CARGO_PKG_VERSION").to_string(),
         }
+    }
+
+    pub fn with_environment_router(
+        mut self,
+        environment_router: Arc<crate::environment_router::EnvironmentRouter>,
+    ) -> Self {
+        self.environment_router = environment_router;
+        self
+    }
+
+    pub fn environment_router(&self) -> &Arc<crate::environment_router::EnvironmentRouter> {
+        &self.environment_router
     }
 
     pub fn with_attachments(mut self, attachments: AttachmentManager) -> Self {
@@ -121,12 +138,63 @@ impl Router {
             .as_millis() as u64
     }
 
+    fn resolve_target_environment(
+        &self,
+        _method: &str,
+        params: &Value,
+    ) -> Option<pandamux_core::ids::EnvironmentId> {
+        // 1. Direct environmentId in params
+        if let Some(env_id_val) = params.get("environmentId").and_then(|v| v.as_str()) {
+            return Some(pandamux_core::ids::EnvironmentId::new(env_id_val));
+        }
+
+        // 2. Thread-scoped methods: look up thread's environment_id in store
+        let thread_id_opt = params.get("threadId").and_then(|v| v.as_str());
+        if let Some(tid_str) = thread_id_opt {
+            let tid = pandamux_core::ids::ThreadId::new(tid_str);
+            if let Ok(Some(thread)) = self.store.get_thread(&tid) {
+                return Some(thread.environment_id);
+            }
+        }
+
+        None
+    }
+
     /// Handle a single parsed JSON-RPC request and return an optional response.
     pub async fn handle_request(&self, req: RpcRequest) -> Option<RpcResponse> {
         let is_notification = req.is_notification();
-        let id = req.id;
-        let method = req.method;
-        let params = req.params.unwrap_or(Value::Null);
+        let id = req.id.clone();
+        let method = req.method.clone();
+        let params = req.params.clone().unwrap_or(Value::Null);
+
+        // Hub environment routing: if targeted to a remote environment, forward across transport
+        if self.role == ServerRole::Hub
+            && let Some(target_env) = self.resolve_target_environment(&method, &params)
+            && !self.environment_router.is_local(&Some(target_env.clone()))
+        {
+            let forwarded = self
+                .environment_router
+                .forward_request(&target_env, &req)
+                .await;
+
+            if is_notification {
+                return None;
+            }
+
+            match forwarded {
+                Ok(resp) => {
+                    if method == "thread.create"
+                        && let Some(val) = &resp.result
+                        && let Ok(thread) =
+                            serde_json::from_value::<pandamux_core::Thread>(val.clone())
+                    {
+                        let _ = self.store.save_thread(&thread);
+                    }
+                    return Some(resp);
+                }
+                Err(err) => return Some(RpcResponse::error(id, err)),
+            }
+        }
 
         let result = match method.as_str() {
             "system.ping" => self.handle_ping(),
@@ -1466,5 +1534,132 @@ mod tests {
                 .len(),
             0
         );
+    }
+
+    #[tokio::test]
+    async fn test_hub_environment_routing_and_forwarding() {
+        use crate::environment_router::MockEnvironmentTransport;
+        use pandamux_core::ids::{EnvironmentId, ThreadId};
+        use pandamux_core::{Thread, ThreadWorkspace};
+
+        let store = Store::in_memory().unwrap();
+        let hub_router = Router::new(store.clone(), ServerRole::Hub, "env-local".to_string());
+        let remote_env = EnvironmentId::new("env-remote");
+
+        // 1. Remote request fails when environment is not registered
+        let req = RpcRequest::new(
+            1,
+            "thread.create",
+            Some(json!({
+                "environmentId": "env-remote",
+                "title": "Remote Thread"
+            })),
+        );
+        let resp = hub_router.handle_request(req).await.unwrap();
+        assert!(resp.error.is_some());
+        assert!(resp.error.unwrap().message.contains("unreachable"));
+
+        // 2. Register mock remote transport
+        let mock_thread = Thread {
+            id: ThreadId::new("th-remote-1"),
+            project_id: None,
+            environment_id: remote_env.clone(),
+            parent_thread_id: None,
+            title: "Remote Thread".to_string(),
+            provider_instance_id: pandamux_core::ids::ProviderInstanceId::new("claude-default"),
+            model: "claude-3-7-sonnet-latest".to_string(),
+            effort: None,
+            access_mode: pandamux_core::thread::AccessMode::WorkspaceOnly,
+            workspace: ThreadWorkspace {
+                cwd: "/remote/home/project".to_string(),
+                worktree: None,
+            },
+            status: pandamux_core::thread::ThreadStatus::Idle,
+            agent: None,
+            origin: pandamux_core::thread::ThreadOrigin::Manual,
+            created_at_ms: 100,
+            updated_at_ms: 100,
+        };
+
+        let mock_thread_clone = mock_thread.clone();
+        let mock_transport = Arc::new(MockEnvironmentTransport::new(move |req| {
+            let id = req.id.clone().unwrap_or(1.into());
+            if req.method == "thread.create" {
+                Ok(RpcResponse::success(
+                    id,
+                    serde_json::to_value(&mock_thread_clone).unwrap(),
+                ))
+            } else if req.method == "thread.get" {
+                Ok(RpcResponse::success(
+                    id,
+                    json!({
+                        "thread": mock_thread_clone,
+                        "turns": []
+                    }),
+                ))
+            } else {
+                Ok(RpcResponse::success(id, json!({ "status": "ok" })))
+            }
+        }));
+
+        hub_router
+            .environment_router()
+            .register_transport(
+                remote_env.clone(),
+                mock_transport.clone(),
+                Some(hub_router.thread_manager().broadcaster().clone()),
+            )
+            .await;
+
+        // 3. Create thread on remote environment through Hub router
+        let create_req = RpcRequest::new(
+            2,
+            "thread.create",
+            Some(json!({
+                "environmentId": "env-remote",
+                "title": "Remote Thread"
+            })),
+        );
+        let create_res = hub_router.handle_request(create_req).await.unwrap();
+        assert!(create_res.is_success());
+        let res_thread: Thread = serde_json::from_value(create_res.result.unwrap()).unwrap();
+        assert_eq!(res_thread.id.as_str(), "th-remote-1");
+        assert_eq!(res_thread.environment_id.as_str(), "env-remote");
+
+        // Hub store now has the cached thread with its environment_id
+        let cached = store.get_thread(&ThreadId::new("th-remote-1")).unwrap();
+        assert!(cached.is_some());
+        assert_eq!(cached.unwrap().environment_id.as_str(), "env-remote");
+
+        // 4. Query thread by threadId only; router resolves environment and forwards
+        let get_req = RpcRequest::new(
+            3,
+            "thread.get",
+            Some(json!({
+                "threadId": "th-remote-1"
+            })),
+        );
+        let get_res = hub_router.handle_request(get_req).await.unwrap();
+        assert!(get_res.is_success());
+        let get_val = get_res.result.unwrap();
+        assert_eq!(get_val["thread"]["id"], "th-remote-1");
+
+        // 5. Test event relaying to Hub broadcaster
+        let mut hub_events = hub_router.thread_manager().subscribe();
+        mock_transport.emit_event(pandamux_protocol::EventEnvelope {
+            subscription_id: "remote-sub".to_string(),
+            environment_id: EnvironmentId::new("node-reported-id"),
+            thread_id: Some(ThreadId::new("th-remote-1")),
+            run_id: None,
+            seq: 101,
+            at_ms: 5000,
+            kind: pandamux_core::ThreadEventKind::TurnCompleted {
+                outcome: pandamux_core::event::TurnOutcome::Success,
+            },
+        });
+
+        let relayed = hub_events.recv().await.unwrap();
+        assert_eq!(relayed.environment_id.as_str(), "env-remote");
+        assert_eq!(relayed.seq, 101);
     }
 }

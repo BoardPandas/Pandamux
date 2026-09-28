@@ -81,6 +81,11 @@ impl ThreadManager {
         self.broadcaster.subscribe()
     }
 
+    /// Access the raw broadcast channel sender for event relaying.
+    pub fn broadcaster(&self) -> &broadcast::Sender<EventEnvelope> {
+        &self.broadcaster
+    }
+
     /// Creates and persists a new thread with optional git worktree.
     pub fn create_thread(&self, params: ThreadCreateParams) -> Result<Thread, RpcError> {
         let now = now_ms();
@@ -361,6 +366,8 @@ impl ThreadManager {
                         kind.as_str(),
                         thread.provider_instance_id.as_str()
                     ),
+                    environment_id: Some(thread.environment_id.clone()),
+                    binary_path: None,
                     concurrency_limit: 2,
                     env_overrides: Default::default(),
                     settings: serde_json::Value::Null,

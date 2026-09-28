@@ -1,3 +1,4 @@
+use pandamux_core::EnvironmentId;
 use serde::{Deserialize, Serialize};
 
 /// Parameters for reading a file under workspace root confinement.
@@ -5,6 +6,8 @@ use serde::{Deserialize, Serialize};
 pub struct FsReadParams {
     pub root_path: String,
     pub path: String,
+    #[serde(default)]
+    pub environment_id: Option<EnvironmentId>,
 }
 
 impl FsReadParams {
@@ -12,6 +15,7 @@ impl FsReadParams {
         Self {
             root_path: root_path.into(),
             path: path.into(),
+            environment_id: None,
         }
     }
 }
@@ -41,6 +45,8 @@ pub struct FsListParams {
     pub root_path: String,
     #[serde(default)]
     pub path: Option<String>,
+    #[serde(default)]
+    pub environment_id: Option<EnvironmentId>,
 }
 
 impl FsListParams {
@@ -48,6 +54,7 @@ impl FsListParams {
         Self {
             root_path: root_path.into(),
             path: path.map(Into::into),
+            environment_id: None,
         }
     }
 }

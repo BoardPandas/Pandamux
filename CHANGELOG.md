@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Implemented Phase 3 Step 4 (Hub routing of environment-scoped calls and event relay; per-environment provider settings; secrets policy).** Built multi-environment routing, event bus bridging, per-environment configuration, and secrets management:
+  - **Hub environment router**: Implemented `environment_router.rs` in `pandamux-server` with `EnvironmentRouter` and `EnvironmentTransport` trait, forwarding environment-scoped RPC requests to remote daemons and relaying node event streams into the Hub's broadcast bus.
+  - **Router integration**: Updated `Router` to resolve target environments from parameters or thread metadata, transparently forwarding remote requests and caching remotely created threads for subsequent lookups.
+  - **Per-environment provider settings**: Added `ProviderEnvironmentOverride` and `resolve_for_environment` to `ProviderInstanceConfig`, added `provider_overrides` map to `Environment`, and added `environments` collection with local defaults to `UserSettings`.
+  - **Secrets policy**: Implemented `secrets.rs` in `pandamux-core` with `SecretStore` trait, `InMemorySecretStore`, secret masking (`mask_secret`) for write-only UI display, log redaction (`redact_secrets`), memory note scrubbing (`scrub_memory`), and environment variable filtering for private backups (`filter_env_vars_for_backup`).
+
 - **Implemented Phase 3 Step 3 (Remote bootstrap orchestration, daemon start/discover lifecycle, teardown, and Environments settings page).** Built full lifecycle management for remote host nodes across `pandamux-remote` and `pandamux-desktop`:
   - **Remote bootstrap engine**: Implemented `bootstrap.rs` in `pandamux-remote` orchestrating platform detection via `uname -sm`, verifying remote SHA-256 binary integrity, uploading missing binaries via SFTP (`upload_bytes_sftp`), and setting executable permissions with atomic renaming.
   - **Daemon start and discovery**: Added `start_or_discover_daemon` reading `~/.pandamux/run/server.json`, checking process liveness (`kill -0`), attaching in `Discovered` mode if compatible, or launching a background `LauncherOwned` daemon via `setsid nohup` with polling.

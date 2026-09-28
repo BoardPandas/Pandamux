@@ -1,3 +1,4 @@
+use pandamux_core::EnvironmentId;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -7,6 +8,8 @@ use std::collections::HashMap;
 pub struct TerminalOpenParams {
     #[serde(default)]
     pub terminal_id: Option<String>,
+    #[serde(default)]
+    pub environment_id: Option<EnvironmentId>,
     #[serde(default)]
     pub cwd: Option<String>,
     #[serde(default)]

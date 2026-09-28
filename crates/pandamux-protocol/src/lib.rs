@@ -163,6 +163,7 @@ mod tests {
     fn test_terminal_rpc_round_trip() {
         let open_params = TerminalOpenParams {
             terminal_id: Some("term-1".to_string()),
+            environment_id: None,
             cwd: Some("/workspace".to_string()),
             shell: Some("bash".to_string()),
             rows: Some(30),

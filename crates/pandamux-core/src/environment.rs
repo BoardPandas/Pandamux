@@ -18,6 +18,9 @@ pub struct Environment {
     pub schedules_count: Option<usize>,
     #[serde(default)]
     pub last_error: Option<String>,
+    #[serde(default)]
+    pub provider_overrides:
+        std::collections::BTreeMap<String, crate::provider_config::ProviderEnvironmentOverride>,
 }
 
 impl Environment {
@@ -35,6 +38,7 @@ impl Environment {
             server_version: Some(env!("CARGO_PKG_VERSION").to_string()),
             schedules_count: Some(0),
             last_error: None,
+            provider_overrides: std::collections::BTreeMap::new(),
         }
     }
 }
