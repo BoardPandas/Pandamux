@@ -161,6 +161,8 @@ impl Router {
             "attachment.list" => self.handle_attachment_list(params),
             "attachment.get" => self.handle_attachment_get(params),
             "subagent.tree" | "subagent.list" => self.handle_subagent_tree(params),
+            "fs.read" => self.handle_fs_read(params),
+            "fs.list" => self.handle_fs_list(params),
             unknown => Err(RpcError::method_not_found(unknown)),
         };
 
@@ -705,6 +707,22 @@ impl Router {
         serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
+    fn handle_fs_read(&self, params: Value) -> Result<Value, RpcError> {
+        let p: pandamux_protocol::FsReadParams = serde_json::from_value(params)
+            .map_err(|e| RpcError::invalid_params(format!("Invalid fs.read params: {e}")))?;
+
+        let res = crate::fs::read_confined_file(&p.root_path, &p.path)?;
+        serde_json::to_value(res).map_err(|e| RpcError::internal_error(e.to_string()))
+    }
+
+    fn handle_fs_list(&self, params: Value) -> Result<Value, RpcError> {
+        let p: pandamux_protocol::FsListParams = serde_json::from_value(params)
+            .map_err(|e| RpcError::invalid_params(format!("Invalid fs.list params: {e}")))?;
+
+        let res = crate::fs::list_confined_dir(&p.root_path, p.path.as_deref())?;
+        serde_json::to_value(res).map_err(|e| RpcError::internal_error(e.to_string()))
+    }
+
     fn handle_attachment_import_path(&self, params: Value) -> Result<Value, RpcError> {
         let p: AttachmentImportPathParams =
             serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
@@ -1234,5 +1252,61 @@ mod tests {
         assert_eq!(child.outcome.as_deref(), Some("Completed scan"));
         assert_eq!(child.elapsed_ms, Some(1200));
         assert!(child.finished);
+    }
+
+    #[tokio::test]
+    async fn router_handles_fs_read_and_list() {
+        let store = Store::in_memory().unwrap();
+        let router = Router::new(store, ServerRole::Node, "env-local".to_string());
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let root = temp_dir.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src").join("lib.rs"), "pub fn demo() {}").unwrap();
+        std::fs::write(root.join("Cargo.toml"), "[package]").unwrap();
+
+        // 1. fs.list root
+        let list_req = RpcRequest::new(
+            1,
+            "fs.list",
+            Some(json!({
+                "root_path": root.to_str().unwrap()
+            })),
+        );
+        let list_res = router.handle_request(list_req).await.unwrap();
+        assert!(list_res.is_success());
+        let list_val: pandamux_protocol::FsListResult =
+            serde_json::from_value(list_res.result.unwrap()).unwrap();
+        assert_eq!(list_val.entries.len(), 2);
+        assert_eq!(list_val.entries[0].name, "src");
+        assert!(list_val.entries[0].is_dir);
+
+        // 2. fs.read valid file
+        let read_req = RpcRequest::new(
+            2,
+            "fs.read",
+            Some(json!({
+                "root_path": root.to_str().unwrap(),
+                "path": "src/lib.rs"
+            })),
+        );
+        let read_res = router.handle_request(read_req).await.unwrap();
+        assert!(read_res.is_success());
+        let read_val: pandamux_protocol::FsReadResult =
+            serde_json::from_value(read_res.result.unwrap()).unwrap();
+        assert_eq!(read_val.content, "pub fn demo() {}");
+        assert!(!read_val.is_binary);
+
+        // 3. fs.read traversal attempt (must fail confinement)
+        let evil_req = RpcRequest::new(
+            3,
+            "fs.read",
+            Some(json!({
+                "root_path": root.to_str().unwrap(),
+                "path": "../../outside_secret.txt"
+            })),
+        );
+        let evil_res = router.handle_request(evil_req).await.unwrap();
+        assert!(evil_res.error.is_some());
     }
 }

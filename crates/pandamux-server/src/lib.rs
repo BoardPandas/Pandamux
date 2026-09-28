@@ -1,6 +1,7 @@
 pub mod attachment;
 pub mod checkpoint;
 pub mod driver_registry;
+pub mod fs;
 pub mod git;
 pub mod mcp_server;
 pub mod router;

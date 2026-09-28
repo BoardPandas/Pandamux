@@ -5,6 +5,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use pandamux_core::ThreadId;
 
 use crate::sidebar::RailTab;
+use crate::surfaces_panel::SurfaceTab;
 use crate::theme::{AccentColor, Radii, Theme, Typography};
 
 /// Available executable actions from the Command Palette.
@@ -21,6 +22,8 @@ pub enum CommandAction {
     GitRefresh,
     CheckHealth,
     OpenSettings,
+    ToggleSurfaces,
+    OpenSurface(SurfaceTab),
 }
 
 /// An individual command entry listed in the palette.
@@ -236,6 +239,48 @@ pub fn default_commands(
         category: "Providers",
         shortcut: None,
         action: CommandAction::CheckHealth,
+    });
+
+    // 6. Surfaces Panel
+    items.push(CommandItem {
+        id: "surfaces-toggle".to_string(),
+        icon: "📋",
+        title: "Surfaces: Toggle Right Panel".to_string(),
+        category: "Surfaces",
+        shortcut: Some("Ctrl+Shift+U"),
+        action: CommandAction::ToggleSurfaces,
+    });
+    items.push(CommandItem {
+        id: "surfaces-agents".to_string(),
+        icon: "🤖",
+        title: "Surfaces: Open Sub-Agents Tree".to_string(),
+        category: "Surfaces",
+        shortcut: Some("A"),
+        action: CommandAction::OpenSurface(SurfaceTab::Agents),
+    });
+    items.push(CommandItem {
+        id: "surfaces-diff".to_string(),
+        icon: "📝",
+        title: "Surfaces: Open Thread Diff".to_string(),
+        category: "Surfaces",
+        shortcut: Some("D"),
+        action: CommandAction::OpenSurface(SurfaceTab::Diff),
+    });
+    items.push(CommandItem {
+        id: "surfaces-files".to_string(),
+        icon: "📁",
+        title: "Surfaces: Open Confined Files".to_string(),
+        category: "Surfaces",
+        shortcut: Some("F"),
+        action: CommandAction::OpenSurface(SurfaceTab::Files),
+    });
+    items.push(CommandItem {
+        id: "surfaces-pr".to_string(),
+        icon: "🔀",
+        title: "Surfaces: Open Pull Request".to_string(),
+        category: "Surfaces",
+        shortcut: Some("P"),
+        action: CommandAction::OpenSurface(SurfaceTab::PullRequest),
     });
 
     items

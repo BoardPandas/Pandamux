@@ -9,6 +9,7 @@ pub mod picker;
 pub mod server_bridge;
 pub mod settings_view;
 pub mod sidebar;
+pub mod surfaces_panel;
 pub mod theme;
 pub mod timeline;
 pub mod titlebar;
@@ -33,6 +34,10 @@ pub use server_bridge::{
 };
 pub use settings_view::{SettingsCategory, SettingsViewState, render_settings_view};
 pub use sidebar::{AgentRosterItem, DEFAULT_AGENTS, RailTab, render_rail, render_sidebar};
+pub use surfaces_panel::{
+    PandamuxAgentInstance, PullRequestSummary, SurfaceTab, SurfacesPanelState,
+    render_surfaces_panel,
+};
 pub use theme::{AccentColor, ChromePalette, Radii, Spacing, Theme, ThemeMode, Typography};
 pub use timeline::{
     CachedMarkdownBlock, MarkdownHighlightCache, TimelineBenchmarkReport, TimelinePosition,

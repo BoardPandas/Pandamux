@@ -21,6 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Implemented Phase 2 Step 10 (surfaces panel: agents, diff, confined files, PR, and linked PRs).** Added complete right-side surfaces panel and root-confined filesystem RPC operations across `pandamux-protocol`, `pandamux-server`, and `pandamux-desktop`:
+  - **Protocol v3 Filesystem RPCs**: Added `fs.read` and `fs.list` RPC endpoints (`FsReadParams`, `FsReadResult`, `FsListParams`, `FsListResult`, `FsEntry`) in `pandamux-protocol` for reading and inspecting workspace directories and files with size caps (5 MB) and binary detection.
+  - **Server Root-Confinement Engine**: Implemented `fs.rs` in `pandamux-server` enforcing strict workspace root confinement with canonical path verification, rejecting directory traversal attacks (`../`) and external symlink escapes while permitting safe symlinks within the workspace root. Added tests verifying confinement, symlink traversal prevention, and directory listing.
+  - **Desktop Surfaces Panel**: Implemented `surfaces_panel.rs` in `pandamux-desktop` featuring a resizable right-side panel with Section 12 T3 design, tab navigation bar with single-key shortcuts (Agents 'A', Diff 'D', Files 'F', Pull Request 'P', Linked PRs 'L', Terminal 'T', Floor Plan 'O', Artifacts 'R'), and per-thread tab state restoration.
+  - **Agents Surface**: Displays two distinct groups: "Provider sub-agents" (recursive hierarchy of sub-agents with status dot, shape, model, elapsed duration, activity ticker, tokens, and tools) and "PandaMUX agents" (specialist and orchestrator agent instances).
+  - **Diff & Files Surfaces**: Provides full thread diff metrics (+additions, -deletions) and a confined file tree explorer with inline read-only content viewing.
+  - **Pull Request & Linked PR Surfaces**: Renders PR cards with status badges (Open/Merged/Draft), checks status, branch details, additions/deletions, and web links.
+  - **Titlebar and Command Palette Integration**: Added titlebar "📋 Surfaces" button with running agent count indicator and added dedicated surfaces panel commands in the command palette.
+
 - **Implemented Phase 2 Step 9 (provider sub-agent tree and timeline folding).** Added full support for provider sub-agent events, nested tree projections, server sub-agent tree RPCs, and collapsible timeline hierarchy across `pandamux-protocol`, `pandamux-client`, `pandamux-server`, and `pandamux-desktop`:
   - **Protocol v3 RPC Endpoints**: Added `subagent.tree` endpoint (`SubAgentTreeParams`, `SubAgentTreeItem`, and `SubAgentTreeResult`) in `pandamux-protocol` for querying hierarchical sub-agent execution trees for any thread.
   - **Client Projection Reducer**: Enhanced `ThreadProjection` in `pandamux-client` to project `SubAgentSpawned`, `SubAgentActivity`, `SubAgentUsage`, and `SubAgentFinished` events into nested sub-agent hierarchy (`SubAgentTreeNode`), tracking parent-child relationships, models, agent types, effort levels, elapsed execution duration, tokens, tool calls, and outcomes. Added `TimelineItem::SubAgent` variant to project sub-agent state directly into the timeline.

@@ -19,6 +19,7 @@ impl CustomTitlebar {
         on_toggle_palette: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
         on_toggle_theme: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
         on_open_settings: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
+        on_toggle_surfaces: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
         _window: &mut Window,
         cx: &mut Context<V>,
     ) -> impl IntoElement {
@@ -155,6 +156,15 @@ impl CustomTitlebar {
                                 .label("⚙")
                                 .on_click(cx.listener(move |this, _event, window, cx| {
                                     on_open_settings(this, window, cx);
+                                })),
+                        )
+                        // Surfaces Panel Button
+                        .child(
+                            Button::new("btn-titlebar-surfaces")
+                                .ghost()
+                                .label("📋 Surfaces")
+                                .on_click(cx.listener(move |this, _event, window, cx| {
+                                    on_toggle_surfaces(this, window, cx);
                                 })),
                         ),
                 ),

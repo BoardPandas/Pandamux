@@ -27,6 +27,7 @@ use crate::picker::PickerState;
 use crate::server_bridge::{ServerBridgeHandle, ServerStatus, spawn_server_bridge};
 use crate::settings_view::{SettingsViewState, render_settings_view};
 use crate::sidebar::{RailTab, render_rail, render_sidebar};
+use crate::surfaces_panel::{SurfaceTab, SurfacesPanelState, render_surfaces_panel};
 use crate::theme::{AccentColor, Radii, Spacing, Theme, Typography};
 use crate::timeline::{VirtualizedTimelineState, render_virtualized_timeline};
 use crate::titlebar::CustomTitlebar;
@@ -49,6 +50,7 @@ pub struct AppView {
     pub command_palette: CommandPaletteState,
     pub notifications: Vec<ToastNotification>,
     pub timeline_state: VirtualizedTimelineState,
+    pub surfaces_panel: SurfacesPanelState,
 }
 
 impl AppView {
@@ -101,6 +103,7 @@ impl AppView {
             command_palette: CommandPaletteState::new(),
             notifications: Vec::new(),
             timeline_state: VirtualizedTimelineState::new(),
+            surfaces_panel: SurfacesPanelState::new(),
         };
 
         app.load_settings(cx);
@@ -281,6 +284,13 @@ impl AppView {
             }
             CommandAction::OpenSettings => {
                 self.select_rail_tab(RailTab::Settings);
+            }
+            CommandAction::ToggleSurfaces => {
+                self.toggle_surfaces_panel(cx);
+            }
+            CommandAction::OpenSurface(tab) => {
+                self.surfaces_panel.is_open = true;
+                self.set_surface_tab(Some(tab), cx);
             }
         }
         cx.notify();
@@ -599,7 +609,130 @@ impl AppView {
             let total = proj.grouped_items().len();
             self.timeline_state.jump_to_bottom(total);
         }
+        self.surfaces_panel.restore_for_thread(thread_id.as_str());
+        self.load_surface_files(cx);
         self.refresh_git_status(cx);
+    }
+
+    /// Toggles the visibility of the right-side surfaces panel.
+    pub fn toggle_surfaces_panel(&mut self, cx: &mut Context<Self>) {
+        self.surfaces_panel.toggle_open();
+        cx.notify();
+    }
+
+    /// Selects an active tab in the surfaces panel.
+    pub fn set_surface_tab(&mut self, tab: Option<SurfaceTab>, cx: &mut Context<Self>) {
+        let tid = self.active_thread_id.as_ref().map(|t| t.as_str());
+        self.surfaces_panel.set_active_tab(tid, tab);
+        if tab == Some(SurfaceTab::Files) {
+            self.load_surface_files(cx);
+        }
+        cx.notify();
+    }
+
+    /// Selects a file in the Files surface and reads its content under root confinement.
+    pub fn select_surface_file(&mut self, path: String, cx: &mut Context<Self>) {
+        self.surfaces_panel.selected_file = Some(path.clone());
+        let Some(active_tid) = self.active_thread_id.clone() else {
+            cx.notify();
+            return;
+        };
+        let Some(proj) = self.thread_projections.get(&active_tid) else {
+            cx.notify();
+            return;
+        };
+        let root = proj.thread.workspace.effective_path().to_string();
+
+        let params = pandamux_protocol::FsReadParams::new(&root, &path);
+        let cmd_tx = self.bridge.as_ref().and_then(|b| b.request_sender());
+
+        cx.spawn(async move |this, cx| {
+            let rx = crate::server_bridge::send_request_channel(
+                &cmd_tx,
+                "fs.read",
+                serde_json::to_value(&params).ok(),
+            );
+            if let Ok(Ok(resp)) = rx.await
+                && let Some(val) = resp.result
+                && let Ok(read_res) = serde_json::from_value::<pandamux_protocol::FsReadResult>(val)
+            {
+                let _ = this.update(cx, |app, cx| {
+                    app.surfaces_panel.selected_file_content = Some(read_res.content);
+                    app.surfaces_panel.selected_file_is_binary = read_res.is_binary;
+                    cx.notify();
+                });
+            } else {
+                let _ = this.update(cx, |app, cx| {
+                    let full_path = std::path::Path::new(&root).join(&path);
+                    if let Ok(content) = std::fs::read_to_string(&full_path) {
+                        app.surfaces_panel.selected_file_content = Some(content);
+                        app.surfaces_panel.selected_file_is_binary = false;
+                    } else if let Ok(bytes) = std::fs::read(&full_path) {
+                        app.surfaces_panel.selected_file_is_binary = bytes.contains(&0);
+                        app.surfaces_panel.selected_file_content =
+                            Some(String::from_utf8_lossy(&bytes).to_string());
+                    } else {
+                        app.surfaces_panel.selected_file_content =
+                            Some("Unable to load file content.".to_string());
+                    }
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+
+        cx.notify();
+    }
+
+    /// Loads the file tree of the active workspace for the Files surface.
+    pub fn load_surface_files(&mut self, cx: &mut Context<Self>) {
+        let Some(active_tid) = self.active_thread_id.clone() else {
+            return;
+        };
+        let Some(proj) = self.thread_projections.get(&active_tid) else {
+            return;
+        };
+        let root = proj.thread.workspace.effective_path().to_string();
+        let params = pandamux_protocol::FsListParams::new(&root, None::<String>);
+        let cmd_tx = self.bridge.as_ref().and_then(|b| b.request_sender());
+
+        cx.spawn(async move |this, cx| {
+            let rx = crate::server_bridge::send_request_channel(
+                &cmd_tx,
+                "fs.list",
+                serde_json::to_value(&params).ok(),
+            );
+            if let Ok(Ok(resp)) = rx.await
+                && let Some(val) = resp.result
+                && let Ok(list_res) = serde_json::from_value::<pandamux_protocol::FsListResult>(val)
+            {
+                let _ = this.update(cx, |app, cx| {
+                    app.surfaces_panel.files = list_res.entries;
+                    cx.notify();
+                });
+            } else {
+                let _ = this.update(cx, |app, cx| {
+                    if let Ok(read_dir) = std::fs::read_dir(&root) {
+                        let mut entries = Vec::new();
+                        for entry in read_dir.flatten() {
+                            let name = entry.file_name().to_string_lossy().to_string();
+                            let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+                            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                            entries.push(pandamux_protocol::FsEntry {
+                                name: name.clone(),
+                                relative_path: name,
+                                is_dir,
+                                is_symlink: false,
+                                size_bytes: size,
+                            });
+                        }
+                        app.surfaces_panel.files = entries;
+                        cx.notify();
+                    }
+                });
+            }
+        })
+        .detach();
     }
 
     /// Copies selected timeline messages to the system clipboard.
@@ -1072,10 +1205,13 @@ impl Render for AppView {
                     this.select_rail_tab(RailTab::Settings);
                     cx.notify();
                 },
+                |this, _win, cx| {
+                    this.toggle_surfaces_panel(cx);
+                },
                 window,
                 cx,
             ))
-            // 2. Central Layout (52px Rail + 264px Sidebar + Main Workspace)
+            // 2. Central Layout (52px Rail + 264px Sidebar + Main Workspace + Surfaces Panel)
             .child(
                 div()
                     .flex_1()
@@ -1120,6 +1256,26 @@ impl Render for AppView {
                         self.render_settings_surface(&theme, cx).into_any_element()
                     } else {
                         self.render_main_surface(&theme, cx).into_any_element()
+                    })
+                    // 2d. Right-side Surfaces Panel
+                    .when(self.active_rail_tab != RailTab::Settings, |this| {
+                        this.child(render_surfaces_panel(
+                            &self.surfaces_panel,
+                            self.active_thread_id
+                                .as_ref()
+                                .and_then(|tid| self.thread_projections.get(tid)),
+                            &theme,
+                            |app, _win, cx| {
+                                app.toggle_surfaces_panel(cx);
+                            },
+                            |app, tab, _win, cx| {
+                                app.set_surface_tab(tab, cx);
+                            },
+                            |app, file, _win, cx| {
+                                app.select_surface_file(file, cx);
+                            },
+                            cx,
+                        ))
                     }),
             )
             // 3. 26px Status Bar
