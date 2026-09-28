@@ -944,7 +944,7 @@ Exit criteria: the old crates and resources are gone and the workspace builds; o
 8. [x] **Timeline virtualization with the S1 selection model; incremental markdown and highlight cache; 2,000-item performance budget.** (Completed in commit `84b8ebc`, v0.53.29)
 9. [x] **Provider sub-agent tree: `SubAgent*` events (Claude; Codex if S2 found a source), `sub_agents` projection, `subagent.tree`, timeline folding.** (Completed in commit `b93ea72`, v0.53.30)
 10. [x] **Surfaces panel with Agents ("Provider sub-agents" group), Diff, Files (root-confinement tests), Pull request, Linked pull requests.** (Completed in commit `41238e8`, v0.53.31)
-11. Sidebar live status: "Working Nm", approval and paused markers, settled counts.
+11. [x] **Sidebar live status: "Working Nm", approval and paused markers, settled counts.** (Completed in commit `143a39d`, v0.53.32)
 12. **Local Terminal surface**: `pandamux-term` feature split, node PTY sessions with ring buffer, `terminal.*`, GPUI terminal element.
 13. Tree-sitter AST diff compression for agent context handoffs, token velocity smoothing render queue in `pandamux-client` targeting 120 FPS, and system tray icon with global hotkey (`CmdOrCtrl+Shift+Panda` or `Win+Alt+P` via `tray-icon`) toggling the floating quick-summon scratchpad window.
 
