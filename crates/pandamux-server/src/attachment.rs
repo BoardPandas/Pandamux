@@ -257,6 +257,54 @@ impl AttachmentManager {
             })?;
         Ok(AttachmentGetResult { attachment })
     }
+
+    /// Reads the raw file bytes of a stored attachment.
+    pub fn get_file_bytes(&self, thread_id: &ThreadId, id: &str) -> std::io::Result<Vec<u8>> {
+        let path = self.thread_dir(thread_id).join(id);
+        fs::read(path)
+    }
+
+    /// Prepares chunked `attachment.put` parameters from raw bytes for streaming across an environment transport.
+    pub fn create_chunk_params(
+        thread_id: &ThreadId,
+        id: &str,
+        file_name: &str,
+        mime_type: &str,
+        bytes: &[u8],
+    ) -> Vec<AttachmentPutChunkParams> {
+        let chunk_size = pandamux_core::ATTACHMENT_CHUNK_SIZE_BYTES;
+        let total_chunks = if bytes.is_empty() {
+            1
+        } else {
+            bytes.len().div_ceil(chunk_size) as u32
+        };
+
+        let mut chunks = Vec::new();
+        if bytes.is_empty() {
+            chunks.push(AttachmentPutChunkParams {
+                thread_id: thread_id.clone(),
+                id: id.to_string(),
+                chunk_index: 0,
+                total_chunks: 1,
+                data_base64: String::new(),
+                mime_type: mime_type.to_string(),
+                file_name: file_name.to_string(),
+            });
+        } else {
+            for (idx, slice) in bytes.chunks(chunk_size).enumerate() {
+                chunks.push(AttachmentPutChunkParams {
+                    thread_id: thread_id.clone(),
+                    id: id.to_string(),
+                    chunk_index: idx as u32,
+                    total_chunks,
+                    data_base64: BASE64.encode(slice),
+                    mime_type: mime_type.to_string(),
+                    file_name: file_name.to_string(),
+                });
+            }
+        }
+        chunks
+    }
 }
 
 #[cfg(test)]

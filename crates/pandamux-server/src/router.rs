@@ -138,6 +138,56 @@ impl Router {
             .as_millis() as u64
     }
 
+    /// Syncs an attachment stored locally on the Hub across the tunnel to a remote environment.
+    pub async fn sync_attachment_to_environment(
+        &self,
+        env_id: &pandamux_core::ids::EnvironmentId,
+        thread_id: &pandamux_core::ids::ThreadId,
+        attachment_id: &str,
+    ) -> Result<(), RpcError> {
+        let record = self
+            .store
+            .get_attachment(thread_id, attachment_id)
+            .map_err(|e| RpcError::internal_error(e.to_string()))?
+            .ok_or_else(|| {
+                RpcError::invalid_params(format!(
+                    "Attachment '{attachment_id}' not found for thread '{}'",
+                    thread_id.as_str()
+                ))
+            })?;
+
+        let bytes = self
+            .attachments
+            .get_file_bytes(thread_id, attachment_id)
+            .map_err(|e| {
+                RpcError::internal_error(format!("Failed to read attachment file: {e}"))
+            })?;
+
+        let chunks = AttachmentManager::create_chunk_params(
+            thread_id,
+            attachment_id,
+            &record.file_name,
+            &record.mime_type,
+            &bytes,
+        );
+
+        for chunk in chunks {
+            let req = RpcRequest::new(
+                Self::now_ms() as i64,
+                "attachment.put",
+                Some(
+                    serde_json::to_value(&chunk)
+                        .map_err(|e| RpcError::internal_error(e.to_string()))?,
+                ),
+            );
+            self.environment_router
+                .forward_request(env_id, &req)
+                .await?;
+        }
+
+        Ok(())
+    }
+
     fn resolve_target_environment(
         &self,
         _method: &str,
@@ -172,6 +222,32 @@ impl Router {
             && let Some(target_env) = self.resolve_target_environment(&method, &params)
             && !self.environment_router.is_local(&Some(target_env.clone()))
         {
+            // Sync referenced attachments across tunnel before dispatching remote turn
+            if (method == "thread.send_turn" || method == "thread.sendTurn")
+                && let Some(tid_str) = params.get("threadId").and_then(|v| v.as_str())
+            {
+                let tid = pandamux_core::ids::ThreadId::new(tid_str);
+                if let Some(att_array) = params.get("attachments").and_then(|v| v.as_array()) {
+                    for att_val in att_array {
+                        let att_id_opt = att_val
+                            .as_str()
+                            .or_else(|| att_val.get("id").and_then(|v| v.as_str()));
+                        if let Some(att_id) = att_id_opt
+                            && self
+                                .store
+                                .get_attachment(&tid, att_id)
+                                .ok()
+                                .flatten()
+                                .is_some()
+                        {
+                            let _ = self
+                                .sync_attachment_to_environment(&target_env, &tid, att_id)
+                                .await;
+                        }
+                    }
+                }
+            }
+
             let forwarded = self
                 .environment_router
                 .forward_request(&target_env, &req)
@@ -228,7 +304,7 @@ impl Router {
             "git.push" => self.handle_git_push(params),
             "git.create_pr" | "git.createPr" => self.handle_git_create_pr(params),
             "attachment.import_path" | "attachment.importPath" => {
-                self.handle_attachment_import_path(params)
+                self.handle_attachment_import_path(params).await
             }
             "attachment.put" => self.handle_attachment_put(params).await,
             "attachment.list" => self.handle_attachment_list(params),
@@ -802,12 +878,28 @@ impl Router {
         serde_json::to_value(res).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
-    fn handle_attachment_import_path(&self, params: Value) -> Result<Value, RpcError> {
+    async fn handle_attachment_import_path(&self, params: Value) -> Result<Value, RpcError> {
         let p: AttachmentImportPathParams =
             serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
         let result = self
             .attachments
             .import_path(&self.store, &p.thread_id, &p.path)?;
+
+        if self.role == ServerRole::Hub
+            && let Ok(Some(thread)) = self.store.get_thread(&p.thread_id)
+            && !self
+                .environment_router
+                .is_local(&Some(thread.environment_id.clone()))
+        {
+            let _ = self
+                .sync_attachment_to_environment(
+                    &thread.environment_id,
+                    &p.thread_id,
+                    &result.attachment.id,
+                )
+                .await;
+        }
+
         serde_json::to_value(&result).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
@@ -1661,5 +1753,109 @@ mod tests {
         let relayed = hub_events.recv().await.unwrap();
         assert_eq!(relayed.environment_id.as_str(), "env-remote");
         assert_eq!(relayed.seq, 101);
+    }
+
+    #[tokio::test]
+    async fn test_attachments_through_the_tunnel() {
+        use crate::environment_router::MockEnvironmentTransport;
+        use base64::Engine;
+        use pandamux_core::ids::{EnvironmentId, ThreadId};
+        use pandamux_core::{Thread, ThreadWorkspace};
+        use tempfile::tempdir;
+
+        let temp_dir = tempdir().unwrap();
+        let att_dir = temp_dir.path().join("attachments");
+        let attachments = AttachmentManager::new(att_dir);
+        let store = Store::in_memory().unwrap();
+        let hub_router = Router::new(store.clone(), ServerRole::Hub, "env-local".to_string())
+            .with_attachments(attachments);
+
+        let remote_env = EnvironmentId::new("env-remote");
+        let thread_id = ThreadId::new("th-remote-att");
+
+        // Save remote thread in Hub store
+        let remote_thread = Thread {
+            id: thread_id.clone(),
+            project_id: None,
+            environment_id: remote_env.clone(),
+            parent_thread_id: None,
+            title: "Remote Thread With Attachments".to_string(),
+            provider_instance_id: pandamux_core::ids::ProviderInstanceId::new("claude-default"),
+            model: "claude-3-7-sonnet-latest".to_string(),
+            effort: None,
+            access_mode: pandamux_core::thread::AccessMode::WorkspaceOnly,
+            workspace: ThreadWorkspace {
+                cwd: "/remote/project".to_string(),
+                worktree: None,
+            },
+            status: pandamux_core::thread::ThreadStatus::Idle,
+            agent: None,
+            origin: pandamux_core::thread::ThreadOrigin::Manual,
+            created_at_ms: 100,
+            updated_at_ms: 100,
+        };
+        store.save_thread(&remote_thread).unwrap();
+
+        // Put attachment into Hub local storage
+        let put_req = RpcRequest::new(
+            1,
+            "attachment.put",
+            Some(json!({
+                "threadId": thread_id.as_str(),
+                "id": "att-paste-1",
+                "chunkIndex": 0,
+                "totalChunks": 1,
+                "dataBase64": base64::engine::general_purpose::STANDARD.encode(b"PNG_IMAGE_DATA_BYTES"),
+                "mimeType": "image/png",
+                "fileName": "screenshot.png",
+                "environmentId": "env-local"
+            })),
+        );
+        let put_res = hub_router.handle_request(put_req).await.unwrap();
+        assert!(put_res.is_success());
+
+        // Track forwarded attachment requests
+        let put_chunks_received = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let turns_received = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let put_chunks_clone = put_chunks_received.clone();
+        let turns_clone = turns_received.clone();
+        let mock_transport = Arc::new(MockEnvironmentTransport::new(move |req| {
+            let id = req.id.clone().unwrap_or(1.into());
+            if req.method == "attachment.put" {
+                put_chunks_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(RpcResponse::success(id, json!({ "isComplete": true })))
+            } else if req.method == "thread.send_turn" || req.method == "thread.sendTurn" {
+                turns_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(RpcResponse::success(id, json!({ "accepted": true })))
+            } else {
+                Ok(RpcResponse::success(id, json!({ "status": "ok" })))
+            }
+        }));
+
+        hub_router
+            .environment_router()
+            .register_transport(remote_env.clone(), mock_transport, None)
+            .await;
+
+        // Dispatch a turn to remote thread with attachment reference
+        let send_req = RpcRequest::new(
+            2,
+            "thread.send_turn",
+            Some(json!({
+                "threadId": thread_id.as_str(),
+                "text": "Analyze this screenshot",
+                "attachments": ["att-paste-1"]
+            })),
+        );
+        let send_res = hub_router.handle_request(send_req).await.unwrap();
+        assert!(send_res.is_success());
+
+        // Verify attachment chunks streamed through tunnel to remote node before turn
+        assert_eq!(
+            put_chunks_received.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert_eq!(turns_received.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }

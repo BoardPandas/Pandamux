@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Implemented Phase 3 Step 5 (Attachments through the tunnel).** Built end-to-end attachment synchronization across the Hub-to-node tunnel:
+  - **Chunked tunnel streaming**: Implemented `create_chunk_params` and `get_file_bytes` in `AttachmentManager` to split attachment files into 256 KiB base64 chunks for streaming across `EnvironmentTransport` via `attachment.put`.
+  - **Pre-turn synchronization**: Implemented `sync_attachment_to_environment` in `Router`, ensuring any attachments referenced in `thread.send_turn` are streamed across the tunnel and assembled at `~/.pandamux/data/attachments/<thread>/<id>` on the remote node before the turn executes.
+  - **Imported path relay**: Updated `handle_attachment_import_path` to automatically sync locally imported files to the remote node when associated with a remote thread.
+
 - **Implemented Phase 3 Step 4 (Hub routing of environment-scoped calls and event relay; per-environment provider settings; secrets policy).** Built multi-environment routing, event bus bridging, per-environment configuration, and secrets management:
   - **Hub environment router**: Implemented `environment_router.rs` in `pandamux-server` with `EnvironmentRouter` and `EnvironmentTransport` trait, forwarding environment-scoped RPC requests to remote daemons and relaying node event streams into the Hub's broadcast bus.
   - **Router integration**: Updated `Router` to resolve target environments from parameters or thread metadata, transparently forwarding remote requests and caching remotely created threads for subsequent lookups.
