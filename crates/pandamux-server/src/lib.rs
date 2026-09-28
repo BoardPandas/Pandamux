@@ -4,6 +4,7 @@ pub mod driver_registry;
 pub mod environment_router;
 pub mod fs;
 pub mod git;
+pub mod hark;
 pub mod mcp_server;
 pub mod router;
 pub mod runtime;
@@ -21,6 +22,7 @@ pub use checkpoint::{
 pub use driver_registry::DriverRegistry;
 pub use environment_router::{EnvironmentRouter, EnvironmentTransport, MockEnvironmentTransport};
 pub use git::{get_git_status, git_commit, git_create_pr, git_push};
+pub use hark::HarkBridge;
 pub use mcp_server::McpServer;
 pub use router::Router;
 pub use runtime::{RUNTIME_FILENAME, RuntimeInfo};

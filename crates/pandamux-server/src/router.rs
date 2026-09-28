@@ -14,14 +14,15 @@ use pandamux_protocol::{
     AttachmentGetParams, AttachmentImportPathParams, AttachmentListParams,
     AttachmentPutChunkParams, CheckpointDiffParams, CheckpointListParams, CheckpointRollbackParams,
     EnvironmentImportSshConfigParams, EnvironmentImportSshConfigResult, EnvironmentListResult,
-    GitCommitParams, GitCreatePrParams, GitPushParams, GitStatusParams, HelloParams, HelloResult,
-    IdentifyResult, McpCallToolParams, PROTOCOL_VERSION, PingResult, ProviderHealthParams,
-    ProviderHealthReport, ProviderHealthResult, RpcError, RpcRequest, RpcResponse,
-    ServerCapabilities, ServerRole, SettingsGetParams, SettingsGetResult, SettingsSetParams,
-    SubAgentTreeItem, SubAgentTreeParams, SubAgentTreeResult, TerminalAttachParams,
-    TerminalCloseParams, TerminalInputParams, TerminalOpenParams, TerminalResizeParams,
-    ThreadCancelTurnParams, ThreadCreateParams, ThreadGetParams, ThreadListParams,
-    ThreadRespondApprovalParams, ThreadResumeParams, ThreadSendTurnParams,
+    GitCommitParams, GitCreatePrParams, GitPushParams, GitStatusParams, HarkDictatePromptParams,
+    HarkSpellbookSyncParams, HelloParams, HelloResult, IdentifyResult, McpCallToolParams,
+    PROTOCOL_VERSION, PingResult, ProviderHealthParams, ProviderHealthReport, ProviderHealthResult,
+    RpcError, RpcRequest, RpcResponse, ServerCapabilities, ServerRole, SettingsGetParams,
+    SettingsGetResult, SettingsSetParams, SubAgentTreeItem, SubAgentTreeParams, SubAgentTreeResult,
+    TerminalAttachParams, TerminalCloseParams, TerminalInputParams, TerminalOpenParams,
+    TerminalResizeParams, ThreadCancelTurnParams, ThreadCreateParams, ThreadGetParams,
+    ThreadListParams, ThreadRespondApprovalParams, ThreadResumeParams, ThreadSendTurnParams,
+    WorktreeSyncDeltaParams, WorktreeSyncDeltaResult,
 };
 
 use crate::attachment::AttachmentManager;
@@ -41,6 +42,7 @@ pub struct Router {
     terminal: TerminalServerManager,
     environment_router: Arc<crate::environment_router::EnvironmentRouter>,
     remote_terminals: Arc<std::sync::Mutex<HashMap<String, pandamux_core::ids::EnvironmentId>>>,
+    hark: Arc<crate::hark::HarkBridge>,
     data_dir: PathBuf,
     role: ServerRole,
     environment_id: String,
@@ -117,11 +119,21 @@ impl Router {
             terminal,
             environment_router,
             remote_terminals: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            hark: Arc::new(crate::hark::HarkBridge::default()),
             data_dir: default_data_dir(),
             role,
             environment_id,
             server_version: env!("CARGO_PKG_VERSION").to_string(),
         }
+    }
+
+    pub fn with_hark(mut self, hark: Arc<crate::hark::HarkBridge>) -> Self {
+        self.hark = hark;
+        self
+    }
+
+    pub fn hark(&self) -> &Arc<crate::hark::HarkBridge> {
+        &self.hark
     }
 
     pub fn with_data_dir(mut self, dir: PathBuf) -> Self {
@@ -411,6 +423,12 @@ impl Router {
                 self.handle_environment_import_ssh_config(params)
             }
             "environment.list" => self.handle_environment_list(),
+            "worktree.sync_delta" | "worktree.syncDelta" => {
+                self.handle_worktree_sync_delta(params).await
+            }
+            "hark.status" => self.handle_hark_status(),
+            "hark.sync_spellbook" | "hark.syncSpellbook" => self.handle_hark_sync_spellbook(params),
+            "hark.dictate_prompt" | "hark.dictatePrompt" => self.handle_hark_dictate_prompt(params),
             unknown => Err(RpcError::method_not_found(unknown)),
         };
 
@@ -1256,6 +1274,110 @@ impl Router {
             environments: settings.environments,
         };
 
+        serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))
+    }
+
+    async fn handle_worktree_sync_delta(&self, params: Value) -> Result<Value, RpcError> {
+        let p: WorktreeSyncDeltaParams = serde_json::from_value(params).map_err(|e| {
+            RpcError::invalid_params(format!("Invalid worktree.sync_delta params: {e}"))
+        })?;
+
+        // If target environment is a remote node and this is the Hub:
+        if let Some(ref env_id) = p.environment_id
+            && env_id.as_str() != self.environment_id.as_str()
+            && self.environment_router.is_connected(env_id).await
+        {
+            let mut forwarded_params = p.clone();
+            if forwarded_params.bundle_bytes_base64.is_none() {
+                let local_path = PathBuf::from(&p.local_path);
+                let bundle_bytes = crate::worktree::create_git_bundle(&local_path, &p.rev_range)
+                    .map_err(|e| {
+                        RpcError::internal_error(format!("Failed to create local bundle: {e}"))
+                    })?;
+                forwarded_params.bundle_bytes_base64 = Some(base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    &bundle_bytes,
+                ));
+            }
+
+            let req = RpcRequest::new(
+                1,
+                "worktree.sync_delta",
+                Some(
+                    serde_json::to_value(&forwarded_params)
+                        .map_err(|e| RpcError::internal_error(e.to_string()))?,
+                ),
+            );
+            let resp = self
+                .environment_router
+                .forward_request(env_id, &req)
+                .await?;
+            if resp.is_success() {
+                return Ok(resp.result.unwrap_or(Value::Null));
+            } else {
+                let err = resp
+                    .error
+                    .unwrap_or_else(|| RpcError::internal_error("Remote worktree sync failed"));
+                return Err(err);
+            }
+        }
+
+        // Apply on node or locally
+        let target_repo = PathBuf::from(if !p.remote_path.is_empty() {
+            &p.remote_path
+        } else {
+            &p.local_path
+        });
+
+        let bundle_bytes = if let Some(ref b64) = p.bundle_bytes_base64 {
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64)
+                .map_err(|e| RpcError::invalid_params(format!("Invalid base64 bundle: {e}")))?
+        } else {
+            let local_path = PathBuf::from(&p.local_path);
+            crate::worktree::create_git_bundle(&local_path, &p.rev_range)
+                .map_err(|e| RpcError::internal_error(format!("Failed to create bundle: {e}")))?
+        };
+
+        let bundle_size = bundle_bytes.len();
+        let commits_applied =
+            crate::worktree::apply_git_bundle(&target_repo, &bundle_bytes, &p.target_branch)
+                .map_err(|e| {
+                    RpcError::internal_error(format!(
+                        "Failed to apply bundle to {}: {e}",
+                        target_repo.display()
+                    ))
+                })?;
+
+        let result = WorktreeSyncDeltaResult {
+            synced: true,
+            target_branch: p.target_branch,
+            bundle_size_bytes: bundle_size,
+            message: format!("Applied {commits_applied} commit(s) successfully"),
+        };
+
+        serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))
+    }
+
+    fn handle_hark_status(&self) -> Result<Value, RpcError> {
+        let status = self.hark.get_status();
+        serde_json::to_value(status).map_err(|e| RpcError::internal_error(e.to_string()))
+    }
+
+    fn handle_hark_sync_spellbook(&self, params: Value) -> Result<Value, RpcError> {
+        let p: HarkSpellbookSyncParams = serde_json::from_value(params).map_err(|e| {
+            RpcError::invalid_params(format!("Invalid hark.sync_spellbook params: {e}"))
+        })?;
+
+        let result = self.hark.sync_spellbook(p.symbols);
+        serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))
+    }
+
+    fn handle_hark_dictate_prompt(&self, params: Value) -> Result<Value, RpcError> {
+        let p: HarkDictatePromptParams = serde_json::from_value(params).map_err(|e| {
+            RpcError::invalid_params(format!("Invalid hark.dictate_prompt params: {e}"))
+        })?;
+
+        let result = self.hark.handle_dictate_prompt(p);
         serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 }
@@ -2595,5 +2717,112 @@ Host worker-node
             serde_json::from_value(reimport_res.result.unwrap()).unwrap();
         assert_eq!(reimport_out.imported_count, 0);
         assert_eq!(reimport_out.skipped_existing_count, 2);
+    }
+
+    #[tokio::test]
+    async fn router_handles_hark_voice_bridge_and_spellbook_sync() {
+        use pandamux_protocol::{
+            HarkDictatePromptResult, HarkSpellbookSyncResult, HarkStatusResult,
+        };
+        let store = Store::in_memory().unwrap();
+        let router = Router::new(store, ServerRole::Hub, "env_local".to_string());
+
+        // 1. Initial Hark status
+        let status_req = RpcRequest::new(1, "hark.status", None);
+        let status_res = router.handle_request(status_req).await.unwrap();
+        assert!(status_res.is_success());
+        let status: HarkStatusResult = serde_json::from_value(status_res.result.unwrap()).unwrap();
+        assert_eq!(status.spellbook_count, 0);
+
+        // 2. Sync spellbook symbols
+        let sync_req = RpcRequest::new(
+            2,
+            "hark.sync_spellbook",
+            Some(json!({
+                "symbols": [
+                    { "symbol": "Galahad", "category": "environment", "weight": 2.0 },
+                    { "symbol": "PandaMUX", "category": "project", "weight": 2.5 }
+                ]
+            })),
+        );
+        let sync_res = router.handle_request(sync_req).await.unwrap();
+        assert!(sync_res.is_success());
+        let sync_out: HarkSpellbookSyncResult =
+            serde_json::from_value(sync_res.result.unwrap()).unwrap();
+        assert_eq!(sync_out.synchronized_count, 2);
+
+        // 3. Status now reflects synced count
+        let status_res_2 = router
+            .handle_request(RpcRequest::new(3, "hark.status", None))
+            .await
+            .unwrap();
+        let status_2: HarkStatusResult =
+            serde_json::from_value(status_res_2.result.unwrap()).unwrap();
+        assert_eq!(status_2.spellbook_count, 2);
+
+        // 4. Dictate prompt
+        let prompt_req = RpcRequest::new(
+            4,
+            "hark.dictate_prompt",
+            Some(json!({
+                "text": "run cargo check across all workspaces",
+                "isFinal": true,
+                "confidence": 0.95
+            })),
+        );
+        let prompt_res = router.handle_request(prompt_req).await.unwrap();
+        assert!(prompt_res.is_success());
+        let prompt_out: HarkDictatePromptResult =
+            serde_json::from_value(prompt_res.result.unwrap()).unwrap();
+        assert!(prompt_out.accepted);
+        assert_eq!(prompt_out.text, "run cargo check across all workspaces");
+    }
+
+    #[tokio::test]
+    async fn router_handles_worktree_sync_delta() {
+        let origin = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+
+        let run = |dir: &std::path::Path, args: &[&str]| {
+            let res = std::process::Command::new("git")
+                .current_dir(dir)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(res.status.success());
+        };
+
+        run(origin.path(), &["init"]);
+        run(origin.path(), &["config", "user.name", "Tester"]);
+        run(origin.path(), &["config", "user.email", "test@example.com"]);
+        std::fs::write(origin.path().join("code.rs"), "fn main() {}").unwrap();
+        run(origin.path(), &["add", "code.rs"]);
+        run(origin.path(), &["commit", "-m", "add code"]);
+
+        run(target.path(), &["init"]);
+        run(target.path(), &["config", "user.name", "Tester"]);
+        run(target.path(), &["config", "user.email", "test@example.com"]);
+
+        let store = Store::in_memory().unwrap();
+        let router = Router::new(store, ServerRole::Hub, "env_local".to_string());
+
+        let sync_req = RpcRequest::new(
+            1,
+            "worktree.sync_delta",
+            Some(json!({
+                "localPath": origin.path().to_string_lossy().to_string(),
+                "remotePath": target.path().to_string_lossy().to_string(),
+                "revRange": "HEAD",
+                "targetBranch": "synced-main"
+            })),
+        );
+
+        let sync_res = router.handle_request(sync_req).await.unwrap();
+        assert!(sync_res.is_success());
+        let sync_out: WorktreeSyncDeltaResult =
+            serde_json::from_value(sync_res.result.unwrap()).unwrap();
+        assert!(sync_out.synced);
+        assert_eq!(sync_out.target_branch, "synced-main");
+        assert!(sync_out.bundle_size_bytes > 0);
     }
 }

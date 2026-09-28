@@ -4,6 +4,7 @@ pub mod exec;
 pub mod pool;
 pub mod proxy;
 pub mod sftp;
+pub mod worktree_sync;
 
 pub use bootstrap::{
     DaemonOwnership, InMemoryBinarySource, RemoteBinarySource, RemoteBootstrapResult,
@@ -18,3 +19,4 @@ pub use sftp::{
     RemoteFolderEntry, RemoteFolderListing, browse_remote_folders, read_remote_file,
     upload_bytes_sftp, upload_file_sftp,
 };
+pub use worktree_sync::{apply_worktree_bundle, create_worktree_bundle};

@@ -4,6 +4,7 @@ pub mod checkpoint_rpc;
 pub mod environment_rpc;
 pub mod fs_rpc;
 pub mod git_rpc;
+pub mod hark_rpc;
 pub mod jsonrpc;
 pub mod mcp;
 pub mod settings_rpc;
@@ -12,6 +13,7 @@ pub mod subscription;
 pub mod system;
 pub mod terminal_rpc;
 pub mod thread_rpc;
+pub mod worktree_rpc;
 
 pub use antigravity_rpc::{
     AntigravityInstallParams, AntigravityInstallResult, AntigravityOAuthRelayParams,
@@ -31,6 +33,10 @@ pub use fs_rpc::{FsEntry, FsListParams, FsListResult, FsReadParams, FsReadResult
 pub use git_rpc::{
     GitCommitParams, GitCommitResult, GitCreatePrParams, GitCreatePrResult, GitFileStatus,
     GitPushParams, GitPushResult, GitStatusParams, GitStatusResult,
+};
+pub use hark_rpc::{
+    HarkDictatePromptParams, HarkDictatePromptResult, HarkSpellbookEntry, HarkSpellbookSyncParams,
+    HarkSpellbookSyncResult, HarkStatusResult,
 };
 pub use jsonrpc::{JSONRPC_VERSION, RpcError, RpcId, RpcRequest, RpcResponse};
 pub use mcp::{McpCallToolParams, McpCallToolResult, McpContentItem, McpToolDefinition};
@@ -54,6 +60,7 @@ pub use thread_rpc::{
     ThreadRespondApprovalParams, ThreadResumeParams, ThreadResumeResult, ThreadSendTurnParams,
     ThreadSendTurnResult,
 };
+pub use worktree_rpc::{WorktreeSyncDeltaParams, WorktreeSyncDeltaResult};
 
 #[cfg(test)]
 mod tests {
