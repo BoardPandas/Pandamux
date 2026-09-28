@@ -966,7 +966,7 @@ Exit criteria: Antigravity's managed bundle is installed on Galahad by node-side
 
 ### Phase 4: Best-effort providers + usage
 
-1. Cursor, Grok, and OpenCode per S5b as profiles on the shared ACP driver built in Phase 1 (porting T3's corresponding driver logic where useful, with notices); OpenCode `serve` if needed; each with its 5.3 instruction and tool-restriction mapping.
+1. [x] **Cursor, Grok, and OpenCode per S5b as profiles on the shared ACP driver built in Phase 1 (porting T3's corresponding driver logic where useful, with notices); OpenCode `serve` if needed; each with its 5.3 instruction and tool-restriction mapping.** (Completed in commit `52656f5`, v0.53.44)
 2. Usage scanners and hub aggregation; account dedupe; pricing table.
 3. Capacity model with confidence; Codex rateLimits ingestion; plan-budget settings; capacity snapshot push to nodes.
 4. Usage page (`chart`/`plot`, capacity cards).
