@@ -942,7 +942,7 @@ Exit criteria: the old crates and resources are gone and the workspace builds; o
 6. [x] **Git actions: status, commit (drafted message), push, PR via `gh` or compare URL.** (Completed in commit `e141449`, v0.53.27)
 7. [x] **OS notifications; command palette; shortcuts; light/dark theme.** (Completed in commit `a75f9ea`, v0.53.28)
 8. [x] **Timeline virtualization with the S1 selection model; incremental markdown and highlight cache; 2,000-item performance budget.** (Completed in commit `84b8ebc`, v0.53.29)
-9. Provider sub-agent tree: `SubAgent*` events (Claude; Codex if S2 found a source), `sub_agents` projection, `subagent.tree`, timeline folding.
+9. [x] **Provider sub-agent tree: `SubAgent*` events (Claude; Codex if S2 found a source), `sub_agents` projection, `subagent.tree`, timeline folding.** (Completed in commit `b93ea72`, v0.53.30)
 10. Surfaces panel with Agents ("Provider sub-agents" group), Diff, Files (root-confinement tests), Pull request, Linked pull requests.
 11. Sidebar live status: "Working Nm", approval and paused markers, settled counts.
 12. **Local Terminal surface**: `pandamux-term` feature split, node PTY sessions with ring buffer, `terminal.*`, GPUI terminal element.
