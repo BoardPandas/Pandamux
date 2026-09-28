@@ -13,6 +13,7 @@ use pandamux_protocol::antigravity_rpc::{
 use pandamux_protocol::{
     AttachmentGetParams, AttachmentImportPathParams, AttachmentListParams,
     AttachmentPutChunkParams, CheckpointDiffParams, CheckpointListParams, CheckpointRollbackParams,
+    EnvironmentImportSshConfigParams, EnvironmentImportSshConfigResult, EnvironmentListResult,
     GitCommitParams, GitCreatePrParams, GitPushParams, GitStatusParams, HelloParams, HelloResult,
     IdentifyResult, McpCallToolParams, PROTOCOL_VERSION, PingResult, ProviderHealthParams,
     ProviderHealthReport, ProviderHealthResult, RpcError, RpcRequest, RpcResponse,
@@ -406,6 +407,10 @@ impl Router {
             "antigravity.oauth_relay" | "antigravity.oauthRelay" => {
                 self.handle_antigravity_oauth_relay(params).await
             }
+            "environment.import_ssh_config" | "environment.importSshConfig" => {
+                self.handle_environment_import_ssh_config(params)
+            }
+            "environment.list" => self.handle_environment_list(),
             unknown => Err(RpcError::method_not_found(unknown)),
         };
 
@@ -1185,6 +1190,70 @@ impl Router {
         let result = AntigravityOAuthRelayResult {
             success: true,
             message,
+        };
+
+        serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))
+    }
+
+    fn handle_environment_import_ssh_config(&self, params: Value) -> Result<Value, RpcError> {
+        let p: EnvironmentImportSshConfigParams = if params.is_null() {
+            Default::default()
+        } else {
+            serde_json::from_value(params).map_err(|e| {
+                RpcError::invalid_params(format!(
+                    "Invalid environment.import_ssh_config params: {e}"
+                ))
+            })?
+        };
+
+        let config_text =
+            if let Some(custom) = p.custom_config.as_deref().filter(|s| !s.trim().is_empty()) {
+                custom.to_string()
+            } else {
+                pandamux_core::read_default_ssh_config().unwrap_or_default()
+            };
+
+        let mut settings = self
+            .store
+            .get_settings()
+            .map_err(|e| RpcError::internal_error(e.to_string()))?
+            .unwrap_or_default();
+
+        let (new_envs, profiles, skipped_count) =
+            pandamux_core::import_ssh_config_into_environments(
+                &config_text,
+                &settings.environments,
+            );
+
+        let imported_count = new_envs.len();
+
+        if !p.dry_run && !new_envs.is_empty() {
+            settings.environments.extend(new_envs.clone());
+            settings.normalize();
+            self.store
+                .save_settings(&settings)
+                .map_err(|e| RpcError::internal_error(e.to_string()))?;
+        }
+
+        let result = EnvironmentImportSshConfigResult {
+            imported_count,
+            skipped_existing_count: skipped_count,
+            environments: new_envs,
+            profiles,
+        };
+
+        serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))
+    }
+
+    fn handle_environment_list(&self) -> Result<Value, RpcError> {
+        let settings = self
+            .store
+            .get_settings()
+            .map_err(|e| RpcError::internal_error(e.to_string()))?
+            .unwrap_or_default();
+
+        let result = EnvironmentListResult {
+            environments: settings.environments,
         };
 
         serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))
@@ -2430,5 +2499,101 @@ mod tests {
         let relay_res = hub_router.handle_request(relay_req).await.unwrap();
         assert!(relay_res.is_success());
         assert_eq!(relay_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn router_handles_environment_import_ssh_config_and_list() {
+        let store = Store::in_memory().unwrap();
+        let router = Router::new(store, ServerRole::Hub, "env_local".to_string());
+
+        // 1. Initial environments list has local machine
+        let list_req = RpcRequest::new(1, "environment.list", None);
+        let list_res = router.handle_request(list_req).await.unwrap();
+        assert!(list_res.is_success());
+        let list_out: EnvironmentListResult =
+            serde_json::from_value(list_res.result.unwrap()).unwrap();
+        assert_eq!(list_out.environments.len(), 1);
+        assert_eq!(list_out.environments[0].id.as_str(), "env_local");
+
+        // 2. Dry run import preview
+        let config_text = "\
+Host galahad
+    HostName 10.55.88.48
+    User chaz
+    Port 2222
+
+Host worker-node
+    HostName worker.example.com
+";
+        let dry_run_req = RpcRequest::new(
+            2,
+            "environment.import_ssh_config",
+            Some(json!({
+                "customConfig": config_text,
+                "dryRun": true
+            })),
+        );
+        let dry_res = router.handle_request(dry_run_req).await.unwrap();
+        assert!(dry_res.is_success());
+        let dry_out: EnvironmentImportSshConfigResult =
+            serde_json::from_value(dry_res.result.unwrap()).unwrap();
+        assert_eq!(dry_out.imported_count, 2);
+        assert_eq!(dry_out.skipped_existing_count, 0);
+
+        // List should still have only 1 environment since it was dry run
+        let list_req_2 = RpcRequest::new(3, "environment.list", None);
+        let list_res_2 = router.handle_request(list_req_2).await.unwrap();
+        let list_out_2: EnvironmentListResult =
+            serde_json::from_value(list_res_2.result.unwrap()).unwrap();
+        assert_eq!(list_out_2.environments.len(), 1);
+
+        // 3. Real import
+        let real_import_req = RpcRequest::new(
+            4,
+            "environment.import_ssh_config",
+            Some(json!({
+                "customConfig": config_text,
+                "dryRun": false
+            })),
+        );
+        let real_res = router.handle_request(real_import_req).await.unwrap();
+        assert!(real_res.is_success());
+        let real_out: EnvironmentImportSshConfigResult =
+            serde_json::from_value(real_res.result.unwrap()).unwrap();
+        assert_eq!(real_out.imported_count, 2);
+
+        // List now has 3 environments (local + galahad + worker-node)
+        let list_req_3 = RpcRequest::new(5, "environment.list", None);
+        let list_res_3 = router.handle_request(list_req_3).await.unwrap();
+        let list_out_3: EnvironmentListResult =
+            serde_json::from_value(list_res_3.result.unwrap()).unwrap();
+        assert_eq!(list_out_3.environments.len(), 3);
+        assert!(
+            list_out_3
+                .environments
+                .iter()
+                .any(|e| e.display_name == "galahad")
+        );
+        assert!(
+            list_out_3
+                .environments
+                .iter()
+                .any(|e| e.display_name == "worker-node")
+        );
+
+        // 4. Re-importing detects existing and skips them
+        let reimport_req = RpcRequest::new(
+            6,
+            "environment.import_ssh_config",
+            Some(json!({
+                "customConfig": config_text
+            })),
+        );
+        let reimport_res = router.handle_request(reimport_req).await.unwrap();
+        assert!(reimport_res.is_success());
+        let reimport_out: EnvironmentImportSshConfigResult =
+            serde_json::from_value(reimport_res.result.unwrap()).unwrap();
+        assert_eq!(reimport_out.imported_count, 0);
+        assert_eq!(reimport_out.skipped_existing_count, 2);
     }
 }

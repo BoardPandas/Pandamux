@@ -267,9 +267,120 @@ impl ClipboardConfig {
     }
 }
 
+/// Default path to user's ~/.ssh/config file.
+pub fn default_ssh_config_path() -> Option<std::path::PathBuf> {
+    home_dir().map(|h| std::path::Path::new(&h).join(".ssh").join("config"))
+}
+
+/// Reads the user's default ~/.ssh/config if it exists, returning None if missing or unreadable.
+pub fn read_default_ssh_config() -> Option<String> {
+    let path = default_ssh_config_path()?;
+    std::fs::read_to_string(path).ok()
+}
+
+/// Imports SSH host profiles from an SSH config string into a list of Environments.
+/// Returns (new_environments, parsed_profiles, skipped_existing_count).
+/// Existing environments with matching display_name (case-insensitive) or ID are preserved.
+pub fn import_ssh_config_into_environments(
+    config_text: &str,
+    existing_environments: &[crate::environment::Environment],
+) -> (
+    Vec<crate::environment::Environment>,
+    Vec<SshHostProfile>,
+    usize,
+) {
+    let profiles = parse_ssh_config(config_text);
+    let mut imported = Vec::new();
+    let mut skipped_count = 0;
+
+    for profile in &profiles {
+        let clean_name = profile.name.trim();
+        if clean_name.is_empty() {
+            continue;
+        }
+
+        let clean_id_suffix = clean_name
+            .to_lowercase()
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '_' })
+            .collect::<String>();
+        let target_id = format!("env_ssh_{clean_id_suffix}");
+
+        // Check if an environment already exists with this name or id
+        let already_exists = existing_environments.iter().any(|env| {
+            env.display_name.eq_ignore_ascii_case(clean_name)
+                || env.id.as_str().eq_ignore_ascii_case(&target_id)
+        }) || imported
+            .iter()
+            .any(|env: &crate::environment::Environment| {
+                env.display_name.eq_ignore_ascii_case(clean_name)
+                    || env.id.as_str().eq_ignore_ascii_case(&target_id)
+            });
+
+        if already_exists {
+            skipped_count += 1;
+        } else {
+            let env_id = crate::ids::EnvironmentId::new(target_id);
+            let env = crate::environment::Environment {
+                id: env_id,
+                kind: crate::environment::EnvironmentKind::Ssh {
+                    profile_id: profile.id.clone(),
+                },
+                display_name: clean_name.to_string(),
+                status: crate::environment::EnvironmentStatus::Disconnected,
+                platform: None,
+                server_version: None,
+                schedules_count: Some(0),
+                last_error: None,
+                provider_overrides: std::collections::BTreeMap::new(),
+            };
+            imported.push(env);
+        }
+    }
+
+    (imported, profiles, skipped_count)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_import_ssh_config_into_environments() {
+        let config = "\
+Host galahad
+    HostName 10.55.88.48
+    User chaz
+
+Host *
+    ForwardAgent yes
+
+Host jumpbox.corp
+    HostName jump.example.com
+";
+        let existing = vec![crate::environment::Environment::local_default()];
+        let (new_envs, profiles, skipped) = import_ssh_config_into_environments(config, &existing);
+        assert_eq!(profiles.len(), 2);
+        assert_eq!(new_envs.len(), 2);
+        assert_eq!(skipped, 0);
+
+        assert_eq!(new_envs[0].display_name, "galahad");
+        assert_eq!(new_envs[0].id.as_str(), "env_ssh_galahad");
+        assert_eq!(
+            new_envs[0].status,
+            crate::environment::EnvironmentStatus::Disconnected
+        );
+
+        assert_eq!(new_envs[1].display_name, "jumpbox.corp");
+        assert_eq!(new_envs[1].id.as_str(), "env_ssh_jumpbox_corp");
+
+        // Re-importing with existing environments should skip duplicate names
+        let mut combined = existing;
+        combined.extend(new_envs);
+        let (reimported, _, re_skipped) = import_ssh_config_into_environments(config, &combined);
+        assert_eq!(reimported.len(), 0);
+        assert_eq!(re_skipped, 2);
+    }
 
     #[test]
     fn parses_hosts_with_hostname_user_port_and_identity() {

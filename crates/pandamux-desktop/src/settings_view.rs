@@ -96,6 +96,39 @@ impl SettingsViewState {
         self.active_category = cat;
         self.status_banner = None;
     }
+
+    /// Import SSH host configurations into environments.
+    pub fn import_ssh_hosts(&mut self, config_text: Option<&str>) -> usize {
+        let text = if let Some(t) = config_text {
+            t.to_string()
+        } else {
+            pandamux_core::read_default_ssh_config().unwrap_or_default()
+        };
+
+        let (new_envs, _, skipped) =
+            pandamux_core::import_ssh_config_into_environments(&text, &self.environments);
+        let count = new_envs.len();
+        if count > 0 {
+            self.environments.extend(new_envs);
+            self.status_banner = Some((
+                format!(
+                    "Successfully imported {count} environment(s) from ~/.ssh/config ({skipped} already existed)"
+                ),
+                false,
+            ));
+        } else if skipped > 0 {
+            self.status_banner = Some((
+                format!("All {skipped} host(s) in ~/.ssh/config already exist in environments"),
+                false,
+            ));
+        } else {
+            self.status_banner = Some((
+                "No connectable hosts found in ~/.ssh/config".to_string(),
+                false,
+            ));
+        }
+        count
+    }
 }
 
 fn format_number(n: impl Into<u64>) -> String {
@@ -1322,10 +1355,21 @@ fn render_environments_tab<V: 'static>(
                         .gap_2()
                         .child(
                             div()
-                                .text_size(Typography::TITLE_SIZE)
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(theme.chrome.text_t1)
-                                .child("Execution Environments & Fleet Nodes"),
+                                .h_flex()
+                                .items_center()
+                                .justify_between()
+                                .child(
+                                    div()
+                                        .text_size(Typography::TITLE_SIZE)
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(theme.chrome.text_t1)
+                                        .child("Execution Environments & Fleet Nodes"),
+                                )
+                                .child(
+                                    Button::new("btn_import_ssh_config")
+                                        .secondary()
+                                        .label("Import from ~/.ssh/config"),
+                                ),
                         )
                         .child(
                             div()
@@ -1337,6 +1381,32 @@ fn render_environments_tab<V: 'static>(
                         ),
                 ),
         )
+        .when(state.environments.len() <= 1, |this| {
+            this.child(
+                div()
+                    .p_3()
+                    .rounded(Radii::ROW)
+                    .bg(rgba(0x4d9fff12))
+                    .border_1()
+                    .border_color(rgba(0x4d9fff25))
+                    .h_flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_size(Typography::BODY_SIZE)
+                            .text_color(rgb(0x4d9fff))
+                            .child(
+                                "💡 Tip: Import hosts configured in your ~/.ssh/config file into PandaMUX to enable remote execution with a single click.",
+                            ),
+                    )
+                    .child(
+                        Button::new("btn_import_ssh_config_banner")
+                            .primary()
+                            .label("Import SSH Hosts"),
+                    ),
+            )
+        })
         .child(
             // Environments List
             div()
@@ -1486,5 +1556,27 @@ mod tests {
         assert_eq!(state.active_category, SettingsCategory::Environments);
         assert_eq!(state.active_category.icon(), "🖥️");
         assert_eq!(state.active_category.title(), "Remote Environments & Nodes");
+    }
+
+    #[test]
+    fn test_settings_view_import_ssh_hosts() {
+        let mut state = SettingsViewState::default();
+        assert_eq!(state.environments.len(), 1);
+
+        let config = "\
+Host galahad
+    HostName 10.55.88.48
+    User chaz
+";
+        let imported = state.import_ssh_hosts(Some(config));
+        assert_eq!(imported, 1);
+        assert_eq!(state.environments.len(), 2);
+        assert_eq!(state.environments[1].display_name, "galahad");
+        assert!(state.status_banner.is_some());
+
+        // Second import skips
+        let reimported = state.import_ssh_hosts(Some(config));
+        assert_eq!(reimported, 0);
+        assert_eq!(state.environments.len(), 2);
     }
 }

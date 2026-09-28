@@ -80,7 +80,10 @@ pub use settings::{
     AdvancedSettings, KeyboardSettings, SETTINGS_SCHEMA_VERSION, TerminalSettings, UiSettings,
     UserSettings, default_providers, default_tier_mapping, settings_get, settings_set,
 };
-pub use ssh::{ClipboardConfig, SshAuthConfig, SshHostProfile, SshProfiles, parse_ssh_config};
+pub use ssh::{
+    ClipboardConfig, SshAuthConfig, SshHostProfile, SshProfiles, default_ssh_config_path,
+    import_ssh_config_into_environments, parse_ssh_config, read_default_ssh_config,
+};
 pub use terminal::{RingBufferConfig, TerminalResize, TerminalSessionMeta};
 pub use thread::{
     AccessMode, AgentInstanceRef, Thread, ThreadOrigin, ThreadStatus, ThreadWorkspace, Turn,

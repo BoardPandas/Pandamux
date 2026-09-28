@@ -1,6 +1,7 @@
 pub mod antigravity_rpc;
 pub mod attachment_rpc;
 pub mod checkpoint_rpc;
+pub mod environment_rpc;
 pub mod fs_rpc;
 pub mod git_rpc;
 pub mod jsonrpc;
@@ -22,6 +23,10 @@ pub use attachment_rpc::{
     AttachmentListParams, AttachmentListResult, AttachmentPutChunkParams, AttachmentPutResult,
 };
 pub use checkpoint_rpc::{CheckpointDiffParams, CheckpointListParams, CheckpointRollbackParams};
+pub use environment_rpc::{
+    EnvironmentImportSshConfigParams, EnvironmentImportSshConfigResult, EnvironmentListParams,
+    EnvironmentListResult,
+};
 pub use fs_rpc::{FsEntry, FsListParams, FsListResult, FsReadParams, FsReadResult};
 pub use git_rpc::{
     GitCommitParams, GitCommitResult, GitCreatePrParams, GitCreatePrResult, GitFileStatus,
