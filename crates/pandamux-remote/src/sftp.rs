@@ -132,17 +132,13 @@ pub async fn read_remote_file(
     String::from_utf8(bytes).map_err(|error| sftp_failure(format!("decode {path}: {error}")))
 }
 
-pub async fn upload_file_sftp(
+pub async fn upload_bytes_sftp(
     pool: &SshConnectionPool,
-    config: SshConfig,
-    local_path: &Path,
+    config: &SshConfig,
     remote_path: &str,
+    bytes: &[u8],
 ) -> Result<(), SshFailure> {
-    let bytes = tokio::fs::read(local_path).await.map_err(|error| {
-        sftp_failure(format!("read local file {}: {error}", local_path.display()))
-    })?;
-
-    let handle = pool.acquire(&config).await?;
+    let handle = pool.acquire(config).await?;
     let channel = handle
         .channel_open_session()
         .await
@@ -158,7 +154,7 @@ pub async fn upload_file_sftp(
         .create(remote_path)
         .await
         .map_err(|error| sftp_failure(format!("create remote {remote_path}: {error}")))?;
-    file.write_all(&bytes)
+    file.write_all(bytes)
         .await
         .map_err(|error| sftp_failure(format!("write remote {remote_path}: {error}")))?;
     file.shutdown()
@@ -166,4 +162,16 @@ pub async fn upload_file_sftp(
         .map_err(|error| sftp_failure(format!("finalize remote {remote_path}: {error}")))?;
     let _ = sftp.close().await;
     Ok(())
+}
+
+pub async fn upload_file_sftp(
+    pool: &SshConnectionPool,
+    config: SshConfig,
+    local_path: &Path,
+    remote_path: &str,
+) -> Result<(), SshFailure> {
+    let bytes = tokio::fs::read(local_path).await.map_err(|error| {
+        sftp_failure(format!("read local file {}: {error}", local_path.display()))
+    })?;
+    upload_bytes_sftp(pool, &config, remote_path, &bytes).await
 }

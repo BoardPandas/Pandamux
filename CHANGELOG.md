@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Implemented Phase 3 Step 3 (Remote bootstrap orchestration, daemon start/discover lifecycle, teardown, and Environments settings page).** Built full lifecycle management for remote host nodes across `pandamux-remote` and `pandamux-desktop`:
+  - **Remote bootstrap engine**: Implemented `bootstrap.rs` in `pandamux-remote` orchestrating platform detection via `uname -sm`, verifying remote SHA-256 binary integrity, uploading missing binaries via SFTP (`upload_bytes_sftp`), and setting executable permissions with atomic renaming.
+  - **Daemon start and discovery**: Added `start_or_discover_daemon` reading `~/.pandamux/run/server.json`, checking process liveness (`kill -0`), attaching in `Discovered` mode if compatible, or launching a background `LauncherOwned` daemon via `setsid nohup` with polling.
+  - **Daemon teardown**: Implemented `teardown_remote_daemon` to cleanly signal SIGTERM and remove runtime files for launcher-owned daemons.
+  - **Environments settings page**: Added `SettingsCategory::Environments` in `pandamux-desktop` with full UI page rendering local and remote nodes, lifecycle badges (`Connecting`, `Bootstrapping`, `Ready`, `Degraded`, `Offline`), version chips, stored schedules counts, error alerts, and action triggers.
+
 - **Implemented Phase 3 Step 2 (Linux musl builds of `pandamux-server` and `pandamux-cli`, remote binary manifest, and embedded SHA-256 hashes).** Added compilation support and integrity verification for remote Linux musl nodes:
   - **Remote binary manifest**: Implemented `remote_manifest.rs` in `pandamux-core` defining `RemoteBinaryManifest`, `RemoteTargetBinaries`, `RemoteBinaryMeta`, and `RemotePlatform` with platform detection from `uname -sm` (Linux x86_64, aarch64). Provides standard remote path resolution (`install_dir`, `server_binary_path`, `cli_binary_path`, and `agent_path_env` prepending to PATH for agent processes).
   - **Embedded integrity verification**: Added `embedded_remote_manifest()` and `compute_sha256` in `pandamux-core` for remote verification scripts (`remote_verify_sha256_cmd`) and atomic binary placement (`remote_install_cmd`). Added `resources/remote-binaries/manifest.json`.

@@ -13,6 +13,7 @@ use crate::theme::{AccentColor, Radii, Theme, Typography};
 pub enum SettingsCategory {
     #[default]
     Providers,
+    Environments,
     Terminal,
     General,
     Advanced,
@@ -22,6 +23,7 @@ impl SettingsCategory {
     pub fn title(&self) -> &'static str {
         match self {
             Self::Providers => "Providers & Tier Mapping",
+            Self::Environments => "Remote Environments & Nodes",
             Self::Terminal => "Terminal Configuration",
             Self::General => "General & Appearance",
             Self::Advanced => "Advanced Engine & Diagnostics",
@@ -32,6 +34,9 @@ impl SettingsCategory {
         match self {
             Self::Providers => {
                 "Configure scoped provider instances, model targets, and run zero-spawn offline health checks."
+            }
+            Self::Environments => {
+                "Manage local and remote SSH environments, daemon versions, bootstrap states, and host connectivity."
             }
             Self::Terminal => {
                 "Configure scrollback history buffer, default shell family, and interaction options."
@@ -48,6 +53,7 @@ impl SettingsCategory {
     pub fn icon(&self) -> &'static str {
         match self {
             Self::Providers => "🔑",
+            Self::Environments => "🖥️",
             Self::Terminal => "📟",
             Self::General => "🎨",
             Self::Advanced => "⚙️",
@@ -61,6 +67,7 @@ pub struct SettingsViewState {
     pub active_category: SettingsCategory,
     pub settings: UserSettings,
     pub health_reports: Vec<ProviderHealthReport>,
+    pub environments: Vec<pandamux_core::Environment>,
     pub is_checking_health: bool,
     pub is_saving: bool,
     pub status_banner: Option<(String, bool)>, // (message, is_error)
@@ -72,6 +79,7 @@ impl Default for SettingsViewState {
             active_category: SettingsCategory::Providers,
             settings: UserSettings::default(),
             health_reports: Vec::new(),
+            environments: vec![pandamux_core::Environment::local_default()],
             is_checking_health: false,
             is_saving: false,
             status_banner: None,
@@ -174,6 +182,9 @@ pub fn render_settings_view<V: 'static>(
             SettingsCategory::Providers => {
                 render_providers_tab(state, theme, on_check_health, on_modify, cx)
                     .into_any_element()
+            }
+            SettingsCategory::Environments => {
+                render_environments_tab(state, theme, cx).into_any_element()
             }
             SettingsCategory::Terminal => {
                 render_terminal_tab(state, theme, on_modify, cx).into_any_element()
@@ -1286,4 +1297,194 @@ fn render_advanced_tab<V: 'static>(
                         .child("Protocol Version 3 (JSON-RPC 2.0 over named pipe / Unix domain socket with monotonic event ordering)."),
                 ),
         )
+}
+
+/// Renders the Environments settings panel for local and remote SSH nodes.
+fn render_environments_tab<V: 'static>(
+    state: &SettingsViewState,
+    theme: &Theme,
+    _cx: &mut Context<V>,
+) -> impl IntoElement {
+    div()
+        .v_flex()
+        .gap_4()
+        .child(
+            // Top Overview Card
+            div()
+                .p_4()
+                .rounded(Radii::PANE)
+                .bg(theme.chrome.panel)
+                .border_1()
+                .border_color(rgba(0xffffff0d))
+                .child(
+                    div()
+                        .v_flex()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_size(Typography::TITLE_SIZE)
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(theme.chrome.text_t1)
+                                .child("Execution Environments & Fleet Nodes"),
+                        )
+                        .child(
+                            div()
+                                .text_size(Typography::BODY_SIZE)
+                                .text_color(theme.chrome.text_t2)
+                                .child(
+                                    "PandaMUX threads, agent tasks, worktrees, and scheduled jobs run either on your local machine or across remote SSH nodes. The daemon binary is bootstrapped automatically and verified with embedded SHA-256 manifests.",
+                                ),
+                        ),
+                ),
+        )
+        .child(
+            // Environments List
+            div()
+                .v_flex()
+                .gap_3()
+                .children(state.environments.iter().map(|env| {
+                    let (status_text, status_icon, status_color) = match &env.status {
+                        pandamux_core::EnvironmentStatus::Ready => ("Ready", "●", rgb(0x7fd88f)),
+                        pandamux_core::EnvironmentStatus::Connected => ("Connected", "●", rgb(0x4d9fff)),
+                        pandamux_core::EnvironmentStatus::Connecting => ("Connecting", "◐", rgb(0xd8b45e)),
+                        pandamux_core::EnvironmentStatus::Bootstrapping => ("Bootstrapping", "▲", rgb(0x43d9c9)),
+                        pandamux_core::EnvironmentStatus::Degraded => ("Degraded", "⚠", rgb(0xd8b45e)),
+                        pandamux_core::EnvironmentStatus::Offline => ("Offline", "○", theme.chrome.text_t3),
+                        pandamux_core::EnvironmentStatus::Disconnected => ("Disconnected", "○", theme.chrome.text_t3),
+                        pandamux_core::EnvironmentStatus::Unreachable => ("Unreachable", "✕", rgb(0xef4444)),
+                        pandamux_core::EnvironmentStatus::Error { .. } => ("Error", "✕", rgb(0xef4444)),
+                    };
+
+                    let version_label = env.server_version.as_deref().unwrap_or("v0.53.36");
+                    let schedules_label = format!("{} schedules stored", env.schedules_count.unwrap_or(0));
+                    let platform_label = env.platform.as_deref().unwrap_or("Linux x86_64");
+
+                    div()
+                        .p_3()
+                        .rounded(Radii::ROW)
+                        .bg(theme.chrome.panel)
+                        .border_1()
+                        .border_color(rgba(0xffffff0a))
+                        .v_flex()
+                        .gap_2()
+                        .child(
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .justify_between()
+                                .child(
+                                    div()
+                                        .h_flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .text_size(Typography::BODY_SIZE)
+                                                .font_weight(FontWeight::BOLD)
+                                                .text_color(theme.chrome.text_t1)
+                                                .child(env.display_name.clone()),
+                                        )
+                                        .child(
+                                            div()
+                                                .px_2()
+                                                .py_0p5()
+                                                .rounded(Radii::CHIP)
+                                                .bg(rgba(0xffffff08))
+                                                .border_1()
+                                                .border_color(rgba(0xffffff08))
+                                                .text_size(Typography::META_SIZE)
+                                                .text_color(status_color)
+                                                .child(format!("{status_icon} {status_text}")),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .h_flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .px_2()
+                                                .py_0p5()
+                                                .rounded(Radii::CHIP)
+                                                .bg(theme.chrome.panel2)
+                                                .text_size(Typography::META_SIZE)
+                                                .font_family(Typography::MONO_FAMILY)
+                                                .text_color(theme.chrome.text_t2)
+                                                .child(version_label.to_string()),
+                                        )
+                                        .child(
+                                            div()
+                                                .px_2()
+                                                .py_0p5()
+                                                .rounded(Radii::CHIP)
+                                                .bg(theme.chrome.panel2)
+                                                .text_size(Typography::META_SIZE)
+                                                .text_color(theme.chrome.text_t3)
+                                                .child(schedules_label),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .justify_between()
+                                .text_size(Typography::SECONDARY_SIZE)
+                                .text_color(theme.chrome.text_t3)
+                                .child(format!("Platform: {platform_label} · ID: {}", env.id.as_str()))
+                                .child(
+                                    div()
+                                        .h_flex()
+                                        .gap_2()
+                                        .child(
+                                            Button::new(format!("btn_bootstrap_{}", env.id.as_str()))
+                                                .secondary()
+                                                .label("Bootstrap & Connect"),
+                                        )
+                                        .child(
+                                            Button::new(format!("btn_teardown_{}", env.id.as_str()))
+                                                .ghost()
+                                                .label("Teardown"),
+                                        ),
+                                ),
+                        )
+                        .when_some(env.last_error.as_ref(), |this, err| {
+                            this.child(
+                                div()
+                                    .p_2()
+                                    .rounded(Radii::CHIP)
+                                    .bg(rgba(0xef444415))
+                                    .border_1()
+                                    .border_color(rgba(0xef444430))
+                                    .text_size(Typography::SECONDARY_SIZE)
+                                    .text_color(rgb(0xef4444))
+                                    .child(format!("Last Error: {err}")),
+                            )
+                        })
+                })),
+        )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::prelude::v1::test;
+
+    #[test]
+    fn test_settings_environments_category() {
+        let mut state = SettingsViewState::default();
+        assert_eq!(state.active_category, SettingsCategory::Providers);
+        assert_eq!(state.environments.len(), 1);
+        assert_eq!(state.environments[0].display_name, "Local Machine");
+        assert_eq!(
+            state.environments[0].status,
+            pandamux_core::EnvironmentStatus::Ready
+        );
+
+        state.set_category(SettingsCategory::Environments);
+        assert_eq!(state.active_category, SettingsCategory::Environments);
+        assert_eq!(state.active_category.icon(), "🖥️");
+        assert_eq!(state.active_category.title(), "Remote Environments & Nodes");
+    }
 }

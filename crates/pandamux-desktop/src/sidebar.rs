@@ -986,6 +986,7 @@ fn render_settings_sidebar<V: 'static>(
 ) -> impl IntoElement {
     let sections = [
         (SettingsCategory::Providers, "🔑", "Providers & Tiers"),
+        (SettingsCategory::Environments, "🖥️", "Environments"),
         (SettingsCategory::Terminal, "📟", "Terminal"),
         (SettingsCategory::General, "🎨", "General & UI"),
         (SettingsCategory::Advanced, "⚙️", "Advanced Engine"),
