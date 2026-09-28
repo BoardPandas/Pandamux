@@ -946,7 +946,7 @@ Exit criteria: the old crates and resources are gone and the workspace builds; o
 10. [x] **Surfaces panel with Agents ("Provider sub-agents" group), Diff, Files (root-confinement tests), Pull request, Linked pull requests.** (Completed in commit `41238e8`, v0.53.31)
 11. [x] **Sidebar live status: "Working Nm", approval and paused markers, settled counts.** (Completed in commit `143a39d`, v0.53.32)
 12. [x] **Local Terminal surface: `pandamux-term` feature split, node PTY sessions with ring buffer, `terminal.*`, GPUI terminal element.** (Completed in commit `470ef64`, v0.53.33)
-13. Tree-sitter AST diff compression for agent context handoffs, token velocity smoothing render queue in `pandamux-client` targeting 120 FPS, and system tray icon with global hotkey (`CmdOrCtrl+Shift+Panda` or `Win+Alt+P` via `tray-icon`) toggling the floating quick-summon scratchpad window.
+13. [x] **Tree-sitter AST diff compression for agent context handoffs, token velocity smoothing render queue in `pandamux-client` targeting 120 FPS, and system tray icon with global hotkey (`CmdOrCtrl+Shift+Panda` or `Win+Alt+P` via `tray-icon`) toggling the floating quick-summon scratchpad window.** (Completed in commit `523f9a5`, v0.53.34)
 
 Exit criteria: single-machine T3-style feature set; nested Claude sub-agents appear live with type, model, elapsed, latest activity, tokens, tool count, then settle; `fs.read` refuses paths outside the root (including symlinks); `vim` and `htop` (or Windows TUIs) run in a local terminal and reattach with scrollback after closing the window; `cat` of a 20 MB file stalls the UI no more than 100ms; the keyboard a11y bar passes and S1 screen-reader findings are documented; global hotkey summons the scratchpad. Ships: internal CI artifacts only.
 
