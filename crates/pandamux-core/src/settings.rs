@@ -26,8 +26,100 @@ pub struct UserSettings {
     pub keyboard: KeyboardSettings,
     #[serde(default)]
     pub organizations: Vec<crate::organization::OrganizationSubscription>,
-    #[serde(default)]
+    #[serde(default = "default_tier_mapping_opt")]
     pub tier_mapping: Option<crate::organization::TierMapping>,
+    #[serde(default = "default_providers")]
+    pub providers: Vec<crate::provider_config::ProviderInstanceConfig>,
+    #[serde(default)]
+    pub advanced: AdvancedSettings,
+}
+
+fn default_tier_mapping_opt() -> Option<crate::organization::TierMapping> {
+    Some(default_tier_mapping())
+}
+
+pub fn default_tier_mapping() -> crate::organization::TierMapping {
+    use crate::ids::ProviderInstanceId;
+    use crate::organization::{ModelTarget, TierMapping};
+
+    let mut tiers = BTreeMap::new();
+    tiers.insert(
+        "fast".to_string(),
+        ModelTarget {
+            provider_instance_id: ProviderInstanceId::new("claude-default"),
+            model: "claude-3-5-haiku-latest".to_string(),
+            effort: None,
+        },
+    );
+    tiers.insert(
+        "smart".to_string(),
+        ModelTarget {
+            provider_instance_id: ProviderInstanceId::new("claude-default"),
+            model: "claude-3-5-sonnet-latest".to_string(),
+            effort: None,
+        },
+    );
+    tiers.insert(
+        "reasoning".to_string(),
+        ModelTarget {
+            provider_instance_id: ProviderInstanceId::new("codex-default"),
+            model: "o3-mini".to_string(),
+            effort: Some("high".to_string()),
+        },
+    );
+    tiers.insert(
+        "orchestrator".to_string(),
+        ModelTarget {
+            provider_instance_id: ProviderInstanceId::new("claude-default"),
+            model: "claude-3-7-sonnet-latest".to_string(),
+            effort: None,
+        },
+    );
+    TierMapping { tiers }
+}
+
+pub fn default_providers() -> Vec<crate::provider_config::ProviderInstanceConfig> {
+    use crate::ids::ProviderInstanceId;
+    use crate::provider_config::{ProviderInstanceConfig, ProviderKind};
+
+    vec![
+        ProviderInstanceConfig {
+            id: ProviderInstanceId::new("claude-default"),
+            provider: ProviderKind::Claude,
+            display_name: "Claude Code".to_string(),
+            profile_dir: "profiles/claude/default".to_string(),
+            concurrency_limit: 3,
+            env_overrides: BTreeMap::new(),
+            settings: serde_json::json!({
+                "defaultModel": "claude-3-7-sonnet-latest"
+            }),
+            enabled: true,
+        },
+        ProviderInstanceConfig {
+            id: ProviderInstanceId::new("codex-default"),
+            provider: ProviderKind::Codex,
+            display_name: "Codex CLI".to_string(),
+            profile_dir: "profiles/codex/default".to_string(),
+            concurrency_limit: 3,
+            env_overrides: BTreeMap::new(),
+            settings: serde_json::json!({
+                "defaultModel": "o3-mini"
+            }),
+            enabled: true,
+        },
+        ProviderInstanceConfig {
+            id: ProviderInstanceId::new("antigravity-default"),
+            provider: ProviderKind::Antigravity,
+            display_name: "Google Antigravity".to_string(),
+            profile_dir: "profiles/antigravity/default".to_string(),
+            concurrency_limit: 2,
+            env_overrides: BTreeMap::new(),
+            settings: serde_json::json!({
+                "defaultModel": "gemini-2.0-flash"
+            }),
+            enabled: true,
+        },
+    ]
 }
 
 impl Default for UserSettings {
@@ -38,7 +130,9 @@ impl Default for UserSettings {
             terminal: TerminalSettings::default(),
             keyboard: KeyboardSettings::default(),
             organizations: Vec::new(),
-            tier_mapping: None,
+            tier_mapping: Some(default_tier_mapping()),
+            providers: default_providers(),
+            advanced: AdvancedSettings::default(),
         }
     }
 }
@@ -50,6 +144,12 @@ impl UserSettings {
             .terminal
             .scrollback_lines
             .clamp(SCROLLBACK_LINES_MIN, SCROLLBACK_LINES_MAX);
+        if self.advanced.global_concurrency_limit == 0 {
+            self.advanced.global_concurrency_limit = 1;
+        }
+        if self.advanced.max_checkpoints_per_thread == 0 {
+            self.advanced.max_checkpoints_per_thread = 10;
+        }
     }
 }
 
@@ -61,9 +161,11 @@ impl UserSettings {
 pub struct UiSettings {
     /// "dark" | "light"
     pub theme: String,
-    /// "teal" | "gold" | "blue" | "mauve"
+    /// "teal" | "gold" | "blue" | "purple"
     pub accent: String,
     pub show_status_bar: bool,
+    pub sound_effects_enabled: bool,
+    pub notifications_enabled: bool,
 }
 
 impl Default for UiSettings {
@@ -72,6 +174,8 @@ impl Default for UiSettings {
             theme: "dark".to_string(),
             accent: "teal".to_string(),
             show_status_bar: true,
+            sound_effects_enabled: true,
+            notifications_enabled: true,
         }
     }
 }
@@ -88,6 +192,8 @@ pub struct TerminalSettings {
     pub right_click_paste_optin: bool,
     /// Confirm closing a tab whose shell is still running (spec 2.6).
     pub confirm_close_on_running: bool,
+    /// Preferred shell to launch in new bare terminals.
+    pub preferred_shell: Option<String>,
 }
 
 impl Default for TerminalSettings {
@@ -97,6 +203,30 @@ impl Default for TerminalSettings {
             welcome_prompt_enabled: true,
             right_click_paste_optin: false,
             confirm_close_on_running: true,
+            preferred_shell: None,
+        }
+    }
+}
+
+/// Advanced engine, storage, and concurrency settings.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AdvancedSettings {
+    pub global_concurrency_limit: u32,
+    pub max_checkpoints_per_thread: usize,
+    pub max_image_size_bytes: u64,
+    pub max_file_size_bytes: u64,
+    pub max_turn_attachments_bytes: u64,
+}
+
+impl Default for AdvancedSettings {
+    fn default() -> Self {
+        Self {
+            global_concurrency_limit: 8,
+            max_checkpoints_per_thread: 50,
+            max_image_size_bytes: crate::attachment::MAX_IMAGE_SIZE_BYTES,
+            max_file_size_bytes: crate::attachment::MAX_FILE_SIZE_BYTES,
+            max_turn_attachments_bytes: crate::attachment::MAX_TOTAL_ATTACHMENTS_PER_TURN_BYTES,
         }
     }
 }

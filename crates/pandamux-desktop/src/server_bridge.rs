@@ -24,6 +24,23 @@ pub enum ServerStatus {
     Failed(String),
 }
 
+impl std::fmt::Display for ServerStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Connecting => write!(f, "Connecting..."),
+            Self::Connected {
+                server_version,
+                pid,
+                ..
+            } => {
+                write!(f, "Connected (v{}, PID {})", server_version, pid)
+            }
+            Self::Disconnected => write!(f, "Disconnected"),
+            Self::Failed(err) => write!(f, "Failed: {}", err),
+        }
+    }
+}
+
 /// Runtime metadata read from `~/.pandamux/server.json` or `%LOCALAPPDATA%/pandamux/server.json`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

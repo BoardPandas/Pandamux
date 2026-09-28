@@ -5,6 +5,7 @@ pub mod composer;
 pub mod diff_view;
 pub mod picker;
 pub mod server_bridge;
+pub mod settings_view;
 pub mod sidebar;
 pub mod theme;
 pub mod timeline;
@@ -21,6 +22,7 @@ pub use server_bridge::{
     BridgeCommand, RuntimeInfo, ServerBridgeHandle, ServerStatus, discover_server_runtime,
     spawn_server_bridge,
 };
+pub use settings_view::{SettingsCategory, SettingsViewState, render_settings_view};
 pub use sidebar::{AgentRosterItem, DEFAULT_AGENTS, RailTab, render_rail, render_sidebar};
 pub use theme::{AccentColor, ChromePalette, Radii, Spacing, Theme, ThemeMode, Typography};
 pub use timeline::render_timeline_item;

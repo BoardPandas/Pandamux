@@ -60,8 +60,8 @@ pub use schedule::{
     ScheduleThreadMode, ScheduleTrigger,
 };
 pub use settings::{
-    KeyboardSettings, SETTINGS_SCHEMA_VERSION, TerminalSettings, UiSettings, UserSettings,
-    settings_get, settings_set,
+    AdvancedSettings, KeyboardSettings, SETTINGS_SCHEMA_VERSION, TerminalSettings, UiSettings,
+    UserSettings, default_providers, default_tier_mapping, settings_get, settings_set,
 };
 pub use ssh::{ClipboardConfig, SshAuthConfig, SshHostProfile, SshProfiles, parse_ssh_config};
 pub use terminal::{RingBufferConfig, TerminalResize, TerminalSessionMeta};

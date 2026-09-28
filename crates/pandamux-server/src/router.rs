@@ -8,9 +8,10 @@ use pandamux_protocol::{
     AttachmentGetParams, AttachmentImportPathParams, AttachmentListParams,
     AttachmentPutChunkParams, CheckpointDiffParams, CheckpointListParams, CheckpointRollbackParams,
     HelloParams, HelloResult, IdentifyResult, McpCallToolParams, PROTOCOL_VERSION, PingResult,
-    RpcError, RpcRequest, RpcResponse, ServerCapabilities, ServerRole, ThreadCancelTurnParams,
-    ThreadCreateParams, ThreadGetParams, ThreadListParams, ThreadRespondApprovalParams,
-    ThreadResumeParams, ThreadSendTurnParams,
+    ProviderHealthParams, ProviderHealthReport, ProviderHealthResult, RpcError, RpcRequest,
+    RpcResponse, ServerCapabilities, ServerRole, SettingsGetParams, SettingsGetResult,
+    SettingsSetParams, ThreadCancelTurnParams, ThreadCreateParams, ThreadGetParams,
+    ThreadListParams, ThreadRespondApprovalParams, ThreadResumeParams, ThreadSendTurnParams,
 };
 
 use crate::attachment::AttachmentManager;
@@ -25,6 +26,7 @@ pub struct Router {
     thread_manager: ThreadManager,
     attachments: AttachmentManager,
     notifications: Arc<tokio::sync::Mutex<Vec<pandamux_core::notification::NotificationInfo>>>,
+    drivers: Arc<DriverRegistry>,
     role: ServerRole,
     environment_id: String,
     server_version: String,
@@ -47,6 +49,17 @@ fn default_attachments_dir() -> PathBuf {
     }
 }
 
+fn account_badge_label(label: Option<&str>, sub: Option<&str>) -> Option<String> {
+    match (label, sub) {
+        (Some(l), Some(s)) if !l.is_empty() && !s.is_empty() && l != s => {
+            Some(format!("{l} ({s})"))
+        }
+        (Some(l), _) if !l.is_empty() => Some(l.to_string()),
+        (_, Some(s)) if !s.is_empty() => Some(s.to_string()),
+        _ => None,
+    }
+}
+
 impl Router {
     pub fn new(store: Store, role: ServerRole, environment_id: String) -> Self {
         let drivers = Arc::new(DriverRegistry::default_local());
@@ -60,7 +73,8 @@ impl Router {
         drivers: Arc<DriverRegistry>,
     ) -> Self {
         let mcp = McpServer::new(store.clone());
-        let thread_manager = ThreadManager::new(store.clone(), drivers, environment_id.clone());
+        let thread_manager =
+            ThreadManager::new(store.clone(), drivers.clone(), environment_id.clone());
         let attachments = AttachmentManager::new(default_attachments_dir());
         Self {
             store,
@@ -68,6 +82,7 @@ impl Router {
             thread_manager,
             attachments,
             notifications: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+            drivers,
             role,
             environment_id,
             server_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -85,6 +100,10 @@ impl Router {
 
     pub fn thread_manager(&self) -> &ThreadManager {
         &self.thread_manager
+    }
+
+    pub fn drivers(&self) -> &Arc<DriverRegistry> {
+        &self.drivers
     }
 
     fn now_ms() -> u64 {
@@ -117,8 +136,9 @@ impl Router {
                 self.handle_thread_respond_approval(params).await
             }
             "thread.resume" => self.handle_thread_resume(params),
-            "settings.get" => self.handle_settings_get(),
-            "settings.set" => self.handle_settings_set(params),
+            "settings.get" | "config.get" => self.handle_settings_get(params),
+            "settings.set" | "config.set" => self.handle_settings_set(params),
+            "provider.health" | "provider.probe" => self.handle_provider_health(params).await,
             "mcp.list_tools" => self.handle_mcp_list_tools(),
             "mcp.call_tool" => self.handle_mcp_call_tool(params),
             "notification.post" => self.handle_notification_post(params).await,
@@ -255,22 +275,153 @@ impl Router {
         serde_json::to_value(&result).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
-    fn handle_settings_get(&self) -> Result<Value, RpcError> {
+    fn handle_settings_get(&self, params: Value) -> Result<Value, RpcError> {
+        let req_params: SettingsGetParams = serde_json::from_value(params).unwrap_or_default();
         let settings = self
             .store
             .get_settings()
             .map_err(|e| RpcError::internal_error(e.to_string()))?
             .unwrap_or_default();
-        serde_json::to_value(settings).map_err(|e| RpcError::internal_error(e.to_string()))
+
+        if let Some(key) = req_params.key {
+            let val =
+                pandamux_core::settings_get(&settings, &key).map_err(RpcError::invalid_params)?;
+            let res = SettingsGetResult {
+                settings,
+                value: Some(val),
+            };
+            serde_json::to_value(res).map_err(|e| RpcError::internal_error(e.to_string()))
+        } else {
+            let res = SettingsGetResult {
+                settings,
+                value: None,
+            };
+            serde_json::to_value(res).map_err(|e| RpcError::internal_error(e.to_string()))
+        }
     }
 
     fn handle_settings_set(&self, params: Value) -> Result<Value, RpcError> {
-        let settings: UserSettings =
-            serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
-        self.store
-            .save_settings(&settings)
-            .map_err(|e| RpcError::internal_error(e.to_string()))?;
-        Ok(json!({ "success": true }))
+        let mut current = self
+            .store
+            .get_settings()
+            .map_err(|e| RpcError::internal_error(e.to_string()))?
+            .unwrap_or_default();
+
+        // 1. Try parsing as SettingsSetParams { settings, key, value }
+        if let Ok(p) = serde_json::from_value::<SettingsSetParams>(params.clone()) {
+            if let Some(mut updated) = p.settings {
+                updated.normalize();
+                self.store
+                    .save_settings(&updated)
+                    .map_err(|e| RpcError::internal_error(e.to_string()))?;
+                return Ok(json!({ "success": true }));
+            } else if let (Some(key), Some(value)) = (p.key, p.value) {
+                pandamux_core::settings_set(&mut current, &key, value)
+                    .map_err(RpcError::invalid_params)?;
+                current.normalize();
+                self.store
+                    .save_settings(&current)
+                    .map_err(|e| RpcError::internal_error(e.to_string()))?;
+                return Ok(json!({ "success": true }));
+            }
+        }
+
+        // 2. Try parsing directly as UserSettings
+        if let Ok(mut settings) = serde_json::from_value::<UserSettings>(params) {
+            settings.normalize();
+            self.store
+                .save_settings(&settings)
+                .map_err(|e| RpcError::internal_error(e.to_string()))?;
+            return Ok(json!({ "success": true }));
+        }
+
+        Err(RpcError::invalid_params("Invalid settings payload"))
+    }
+
+    async fn handle_provider_health(&self, params: Value) -> Result<Value, RpcError> {
+        let filter: ProviderHealthParams = serde_json::from_value(params).unwrap_or_default();
+        let settings = self
+            .store
+            .get_settings()
+            .map_err(|e| RpcError::internal_error(e.to_string()))?
+            .unwrap_or_default();
+
+        let mut reports = Vec::new();
+
+        for inst in &settings.providers {
+            if let Some(ref target_id) = filter.instance_id
+                && &inst.id != target_id
+            {
+                continue;
+            }
+
+            if let Some(driver) = self.drivers.get(inst.provider) {
+                let snapshot = driver.probe(inst).await;
+                let (status, reason) = match &snapshot.health {
+                    pandamux_providers::models::ProviderHealth::Healthy => match &snapshot.auth {
+                        pandamux_providers::models::ProviderAuthStatus::Authenticated {
+                            ..
+                        } => ("healthy".to_string(), None),
+                        pandamux_providers::models::ProviderAuthStatus::Unauthenticated => (
+                            "unauthenticated".to_string(),
+                            Some("Not logged in".to_string()),
+                        ),
+                        pandamux_providers::models::ProviderAuthStatus::Unknown => {
+                            ("healthy".to_string(), None)
+                        }
+                    },
+                    pandamux_providers::models::ProviderHealth::Degraded { reason } => {
+                        ("degraded".to_string(), Some(reason.clone()))
+                    }
+                    pandamux_providers::models::ProviderHealth::Unavailable { reason } => {
+                        ("unavailable".to_string(), Some(reason.clone()))
+                    }
+                };
+
+                let (account_badge, subscription) = match &snapshot.auth {
+                    pandamux_providers::models::ProviderAuthStatus::Authenticated {
+                        account_label,
+                        email: _,
+                        subscription,
+                    } => (
+                        account_badge_label(account_label.as_deref(), subscription.as_deref()),
+                        subscription.clone(),
+                    ),
+                    _ => (None, None),
+                };
+
+                reports.push(ProviderHealthReport {
+                    instance_id: inst.id.clone(),
+                    provider: inst.provider,
+                    display_name: inst.display_name.clone(),
+                    enabled: inst.enabled,
+                    installed: snapshot.installed,
+                    version: snapshot.version,
+                    status,
+                    account_badge,
+                    subscription,
+                    reason,
+                    checked_at_ms: snapshot.checked_at_ms,
+                });
+            } else {
+                reports.push(ProviderHealthReport {
+                    instance_id: inst.id.clone(),
+                    provider: inst.provider,
+                    display_name: inst.display_name.clone(),
+                    enabled: inst.enabled,
+                    installed: false,
+                    version: None,
+                    status: "unavailable".to_string(),
+                    account_badge: None,
+                    subscription: None,
+                    reason: Some("No registered driver for provider".to_string()),
+                    checked_at_ms: Self::now_ms(),
+                });
+            }
+        }
+
+        let res = ProviderHealthResult { reports };
+        serde_json::to_value(&res).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
     fn handle_mcp_list_tools(&self) -> Result<Value, RpcError> {
@@ -625,5 +776,57 @@ mod tests {
         );
         let send_res = router.handle_request(send_req).await.unwrap();
         assert!(send_res.is_success());
+    }
+
+    #[tokio::test]
+    async fn router_handles_settings_and_provider_health() {
+        let store = Store::in_memory().unwrap();
+        let drivers = Arc::new(DriverRegistry::default_local());
+        let router = Router::with_drivers(store, ServerRole::Hub, "env-test".to_string(), drivers);
+
+        // 1. Get initial settings
+        let get_req = RpcRequest::new(1, "settings.get", None);
+        let get_res = router.handle_request(get_req).await.unwrap();
+        assert!(get_res.is_success());
+        let get_val = get_res.result.unwrap();
+        assert_eq!(get_val["settings"]["version"], 2);
+        assert_eq!(get_val["settings"]["terminal"]["scrollbackLines"], 10_000);
+
+        // 2. Update a specific key using config.set dotted path
+        let set_req = RpcRequest::new(
+            2,
+            "config.set",
+            Some(json!({
+                "key": "terminal.scrollbackLines",
+                "value": 25_000
+            })),
+        );
+        let set_res = router.handle_request(set_req).await.unwrap();
+        assert!(set_res.is_success());
+
+        // 3. Query the updated key via config.get
+        let get_key_req = RpcRequest::new(
+            3,
+            "config.get",
+            Some(json!({ "key": "terminal.scrollbackLines" })),
+        );
+        let get_key_res = router.handle_request(get_key_req).await.unwrap();
+        assert!(get_key_res.is_success());
+        let key_val = get_key_res.result.unwrap();
+        assert_eq!(key_val["value"], 25_000);
+
+        // 4. Run provider health checks (offline, never triggers auth)
+        let health_req = RpcRequest::new(4, "provider.health", None);
+        let health_res = router.handle_request(health_req).await.unwrap();
+        assert!(health_res.is_success());
+        let health_val = health_res.result.unwrap();
+        let reports = health_val["reports"].as_array().unwrap();
+        assert!(!reports.is_empty());
+        // Verify report structure
+        for report in reports {
+            assert!(report.get("instanceId").is_some());
+            assert!(report.get("provider").is_some());
+            assert!(report.get("status").is_some());
+        }
     }
 }

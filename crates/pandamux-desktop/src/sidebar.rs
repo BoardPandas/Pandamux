@@ -6,6 +6,7 @@ use gpui_kit::gpui::*;
 use pandamux_client::projections::ThreadProjection;
 use pandamux_core::{ThreadId, ThreadStatus};
 
+use crate::settings_view::SettingsCategory;
 use crate::theme::{Radii, Spacing, Theme, Typography};
 
 /// Active navigation rail tab.
@@ -199,6 +200,10 @@ pub fn render_sidebar<V: 'static>(
     on_new_thread: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
     on_select_thread: impl Fn(&mut V, ThreadId, &mut Window, &mut Context<V>) + 'static + Copy,
     on_assign_agent: impl Fn(&mut V, &'static str, &mut Window, &mut Context<V>) + 'static + Copy,
+    active_settings_category: SettingsCategory,
+    on_select_settings_category: impl Fn(&mut V, SettingsCategory, &mut Window, &mut Context<V>)
+    + 'static
+    + Copy,
     cx: &mut Context<V>,
 ) -> impl IntoElement {
     div()
@@ -221,7 +226,13 @@ pub fn render_sidebar<V: 'static>(
             .into_any_element(),
             RailTab::Agents => render_agents_sidebar(theme, on_assign_agent, cx).into_any_element(),
             RailTab::Terminal => render_terminal_sidebar(theme).into_any_element(),
-            RailTab::Settings => render_settings_sidebar(theme).into_any_element(),
+            RailTab::Settings => render_settings_sidebar(
+                active_settings_category,
+                theme,
+                on_select_settings_category,
+                cx,
+            )
+            .into_any_element(),
         })
 }
 
@@ -605,16 +616,18 @@ fn render_terminal_sidebar(theme: &Theme) -> impl IntoElement {
         )
 }
 
-/// Renders the Settings navigation sidebar stub.
-fn render_settings_sidebar(theme: &Theme) -> impl IntoElement {
-    let sections = &[
-        ("🔑", "Providers & API Keys"),
-        ("🧭", "Orchestrator Policies"),
-        ("🌐", "Environments & SSH"),
-        ("⏰", "Schedules & Cron"),
-        ("🎨", "Theme & Appearance"),
-        ("⌨️", "Keybindings & Shortcuts"),
-        ("ℹ️", "About PandaMUX"),
+/// Renders the Settings navigation sidebar.
+fn render_settings_sidebar<V: 'static>(
+    active_category: SettingsCategory,
+    theme: &Theme,
+    on_select_category: impl Fn(&mut V, SettingsCategory, &mut Window, &mut Context<V>) + 'static + Copy,
+    cx: &mut Context<V>,
+) -> impl IntoElement {
+    let sections = [
+        (SettingsCategory::Providers, "🔑", "Providers & Tiers"),
+        (SettingsCategory::Terminal, "📟", "Terminal"),
+        (SettingsCategory::General, "🎨", "General & UI"),
+        (SettingsCategory::Advanced, "⚙️", "Advanced Engine"),
     ];
 
     div()
@@ -638,7 +651,8 @@ fn render_settings_sidebar(theme: &Theme) -> impl IntoElement {
                 .v_flex()
                 .p_2()
                 .gap_1()
-                .children(sections.iter().map(|(icon, title)| {
+                .children(sections.iter().map(|&(cat, icon, title)| {
+                    let is_active = active_category == cat;
                     div()
                         .h_flex()
                         .items_center()
@@ -646,15 +660,25 @@ fn render_settings_sidebar(theme: &Theme) -> impl IntoElement {
                         .px_2p5()
                         .py_2()
                         .rounded(Radii::CHIP)
-                        .bg(theme.chrome.panel2)
+                        .bg(if is_active {
+                            rgba(0xffffff1a)
+                        } else {
+                            theme.chrome.panel2
+                        })
                         .border_1()
-                        .border_color(rgba(0xffffff08))
-                        .child(div().child(*icon))
+                        .border_color(if is_active {
+                            theme.accent_color()
+                        } else {
+                            rgba(0xffffff08)
+                        })
+                        .child(div().child(icon))
                         .child(
-                            div()
-                                .text_size(Typography::BODY_SIZE)
-                                .text_color(theme.chrome.text_t1)
-                                .child(*title),
+                            Button::new(format!("settings-tab-{}", cat.title()))
+                                .ghost()
+                                .label(title)
+                                .on_click(cx.listener(move |this, _event, window, cx| {
+                                    on_select_category(this, cat, window, cx);
+                                })),
                         )
                 })),
         )

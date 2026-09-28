@@ -220,4 +220,9 @@ impl Theme {
             shells,
         }
     }
+
+    /// Returns the RGBA color for the currently active accent.
+    pub fn accent_color(&self) -> Rgba {
+        self.accent.color()
+    }
 }

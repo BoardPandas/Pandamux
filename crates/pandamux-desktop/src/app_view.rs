@@ -9,13 +9,14 @@ use pandamux_core::{
 };
 use pandamux_protocol::{
     AttachmentImportPathParams, AttachmentImportResult, AttachmentPutChunkParams,
-    AttachmentPutResult, EventEnvelope, ThreadCancelTurnParams, ThreadCreateParams,
-    ThreadRespondApprovalParams, ThreadSendTurnParams,
+    AttachmentPutResult, EventEnvelope, ProviderHealthResult, SettingsGetResult, SettingsSetParams,
+    ThreadCancelTurnParams, ThreadCreateParams, ThreadRespondApprovalParams, ThreadSendTurnParams,
 };
 
 use crate::composer::{ComposerState, render_composer};
 use crate::picker::PickerState;
 use crate::server_bridge::{ServerBridgeHandle, ServerStatus, spawn_server_bridge};
+use crate::settings_view::{SettingsViewState, render_settings_view};
 use crate::sidebar::{RailTab, render_rail, render_sidebar};
 use crate::theme::{AccentColor, Radii, Spacing, Theme, Typography};
 use crate::timeline::render_timeline_item;
@@ -32,6 +33,7 @@ pub struct AppView {
     composer: ComposerState,
     picker: PickerState,
     active_rail_tab: RailTab,
+    pub settings_view: SettingsViewState,
 }
 
 impl AppView {
@@ -67,7 +69,7 @@ impl AppView {
         })
         .detach();
 
-        Self {
+        let mut app = Self {
             theme: Theme::dark(AccentColor::Teal),
             server_status: ServerStatus::Connecting,
             bridge: Some(bridge),
@@ -77,7 +79,12 @@ impl AppView {
             composer: ComposerState::new(),
             picker: PickerState::new(),
             active_rail_tab: RailTab::Threads,
-        }
+            settings_view: SettingsViewState::new(),
+        };
+
+        app.load_settings(cx);
+        app.run_health_checks(cx);
+        app
     }
 
     /// Ingests incoming EventEnvelope into the corresponding client-side projection.
@@ -410,6 +417,129 @@ impl AppView {
     pub fn select_rail_tab(&mut self, tab: RailTab) {
         self.active_rail_tab = tab;
     }
+
+    /// Synchronizes the active GPUI Theme from the loaded user settings.
+    pub fn sync_theme_from_settings(&mut self) {
+        let accent = match self.settings_view.settings.ui.accent.as_str() {
+            "gold" => AccentColor::Gold,
+            "blue" => AccentColor::Blue,
+            "purple" => AccentColor::Purple,
+            _ => AccentColor::Teal,
+        };
+        let is_light = self.settings_view.settings.ui.theme == "light";
+        self.theme = if is_light {
+            Theme::light(accent)
+        } else {
+            Theme::dark(accent)
+        };
+    }
+
+    /// Loads settings from the server daemon.
+    pub fn load_settings(&mut self, cx: &mut Context<Self>) {
+        if let Some(bridge) = &self.bridge {
+            let rx = bridge.send_request("settings.get", None);
+            cx.spawn(async move |this, cx| {
+                if let Ok(Ok(resp)) = rx.await
+                    && let Some(val) = resp.result
+                    && let Ok(res) = serde_json::from_value::<SettingsGetResult>(val)
+                {
+                    let _ = this.update(cx, |app, cx| {
+                        app.settings_view.settings = res.settings;
+                        app.sync_theme_from_settings();
+                        cx.notify();
+                    });
+                }
+            })
+            .detach();
+        }
+    }
+
+    /// Saves settings to the server daemon.
+    pub fn save_settings(&mut self, cx: &mut Context<Self>) {
+        if let Some(bridge) = &self.bridge {
+            self.settings_view.is_saving = true;
+            let params = SettingsSetParams {
+                settings: Some(self.settings_view.settings.clone()),
+                key: None,
+                value: None,
+            };
+            let rx = bridge.send_request("settings.set", serde_json::to_value(&params).ok());
+            cx.spawn(async move |this, cx| {
+                if let Ok(Ok(resp)) = rx.await
+                    && resp.is_success()
+                {
+                    let _ = this.update(cx, |app, cx| {
+                        app.settings_view.is_saving = false;
+                        app.settings_view.status_banner =
+                            Some(("Settings saved successfully".to_string(), false));
+                        app.sync_theme_from_settings();
+                        cx.notify();
+                    });
+                } else {
+                    let _ = this.update(cx, |app, cx| {
+                        app.settings_view.is_saving = false;
+                        app.settings_view.status_banner =
+                            Some(("Failed to save settings".to_string(), true));
+                        cx.notify();
+                    });
+                }
+            })
+            .detach();
+        }
+    }
+
+    /// Triggers zero-spawn, offline health checks for all configured providers.
+    pub fn run_health_checks(&mut self, cx: &mut Context<Self>) {
+        if let Some(bridge) = &self.bridge {
+            self.settings_view.is_checking_health = true;
+            let rx = bridge.send_request("provider.health", None);
+            cx.spawn(async move |this, cx| {
+                if let Ok(Ok(resp)) = rx.await
+                    && let Some(val) = resp.result
+                    && let Ok(res) = serde_json::from_value::<ProviderHealthResult>(val)
+                {
+                    let _ = this.update(cx, |app, cx| {
+                        app.settings_view.health_reports = res.reports;
+                        app.settings_view.is_checking_health = false;
+                        app.settings_view.status_banner = Some((
+                            "Offline health checks complete (Rule 1: zero-spawn, zero-auth)"
+                                .to_string(),
+                            false,
+                        ));
+                        cx.notify();
+                    });
+                } else {
+                    let _ = this.update(cx, |app, cx| {
+                        app.settings_view.is_checking_health = false;
+                        cx.notify();
+                    });
+                }
+            })
+            .detach();
+        }
+    }
+
+    /// Renders the Settings workspace surface.
+    fn render_settings_surface(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+        let server_status_label = format!("{}", self.server_status);
+        render_settings_view(
+            &self.settings_view,
+            theme,
+            server_status_label,
+            |this, _win, cx| {
+                this.save_settings(cx);
+            },
+            |this, _win, cx| {
+                this.run_health_checks(cx);
+            },
+            |this, modifier, _win, cx| {
+                modifier(&mut this.settings_view.settings);
+                this.sync_theme_from_settings();
+                cx.notify();
+            },
+            cx,
+        )
+    }
 }
 
 impl Render for AppView {
@@ -469,10 +599,19 @@ impl Render for AppView {
                         |this, agent_id, _win, cx| {
                             this.create_agent_thread(agent_id, cx);
                         },
+                        self.settings_view.active_category,
+                        |this, cat, _win, cx| {
+                            this.settings_view.set_category(cat);
+                            cx.notify();
+                        },
                         cx,
                     ))
-                    // 2c. Main Surface (Timeline + Header + Composer)
-                    .child(self.render_main_surface(&theme, cx)),
+                    // 2c. Main Surface (Timeline + Header + Composer OR Settings View)
+                    .child(if self.active_rail_tab == RailTab::Settings {
+                        self.render_settings_surface(&theme, cx).into_any_element()
+                    } else {
+                        self.render_main_surface(&theme, cx).into_any_element()
+                    }),
             )
             // 3. 26px Status Bar
             .child(self.render_statusbar(&theme))
