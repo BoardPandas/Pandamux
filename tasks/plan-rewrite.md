@@ -954,7 +954,7 @@ Exit criteria: single-machine T3-style feature set; nested Claude sub-agents app
 
 1. [x] **Extend `pandamux-remote` (moved in Phase 1): exec-without-PTY, proxy, ProxyJump.** (Completed in commit `96f20bf`, v0.53.35)
 2. [x] **Linux musl builds (x64, arm64) of `pandamux-server` and `pandamux-cli`; manifest; hashes embedded in the desktop build; the node's CLI is installed next to the server and put on `PATH` for agent processes.** (Completed in commit `2d693c3`, v0.53.36)
-3. Bootstrap, start/discover, versioning, teardown; Environments page.
+3. [x] **Bootstrap, start/discover, versioning, teardown; Environments page.** (Completed in commit `ce9b10b`, v0.53.37)
 4. Hub routing of environment-scoped calls and event relay; per-environment provider settings; secrets policy.
 5. Attachments through the tunnel.
 6. **Remote Terminal surface** with `sinceOffset` reattach.
