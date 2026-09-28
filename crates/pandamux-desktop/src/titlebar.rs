@@ -11,12 +11,16 @@ pub struct CustomTitlebar;
 
 impl CustomTitlebar {
     /// Builds the 40px custom titlebar element.
-    pub fn render(
+    #[allow(clippy::too_many_arguments)]
+    pub fn render<V: 'static>(
         theme: &Theme,
         server_status: &ServerStatus,
         active_title: Option<&str>,
+        on_toggle_palette: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
+        on_toggle_theme: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
+        on_open_settings: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
         _window: &mut Window,
-        _cx: &mut App,
+        cx: &mut Context<V>,
     ) -> impl IntoElement {
         let status_color = match server_status {
             ServerStatus::Connected { .. } => theme.terminal.success,
@@ -123,14 +127,35 @@ impl CustomTitlebar {
                                         .child(status_label),
                                 ),
                         )
+                        // Command Palette Button
+                        .child(
+                            Button::new("btn-titlebar-palette")
+                                .ghost()
+                                .label("🔍 Ctrl+K")
+                                .on_click(cx.listener(move |this, _event, window, cx| {
+                                    on_toggle_palette(this, window, cx);
+                                })),
+                        )
+                        // Theme Toggle Button
+                        .child(
+                            Button::new("btn-titlebar-theme")
+                                .ghost()
+                                .label(match theme.mode {
+                                    crate::theme::ThemeMode::Dark => "☀️ Light",
+                                    crate::theme::ThemeMode::Light => "🌙 Dark",
+                                })
+                                .on_click(cx.listener(move |this, _event, window, cx| {
+                                    on_toggle_theme(this, window, cx);
+                                })),
+                        )
                         // Settings Button
                         .child(
                             Button::new("btn-titlebar-settings")
                                 .ghost()
                                 .label("⚙")
-                                .on_click(|_event, _window, _cx| {
-                                    // Settings intent
-                                }),
+                                .on_click(cx.listener(move |this, _event, window, cx| {
+                                    on_open_settings(this, window, cx);
+                                })),
                         ),
                 ),
         )

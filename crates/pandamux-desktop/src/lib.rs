@@ -1,8 +1,10 @@
-#![recursion_limit = "256"]
+#![recursion_limit = "1024"]
 
 pub mod app_view;
+pub mod command_palette;
 pub mod composer;
 pub mod diff_view;
+pub mod notification;
 pub mod picker;
 pub mod server_bridge;
 pub mod settings_view;
@@ -12,10 +14,17 @@ pub mod timeline;
 pub mod titlebar;
 
 pub use app_view::AppView;
+pub use command_palette::{
+    CommandAction, CommandItem, CommandPaletteState, default_commands, filter_commands,
+    render_command_palette,
+};
 pub use composer::{ComposerState, render_composer};
 pub use diff_view::{
     DiffFile, DiffHunk, DiffLine, DiffLineKind, DiffViewMode, DiffViewerState, DiffWord,
     SplitDiffRow, parse_unified_diff, render_diff_file, render_diff_viewer,
+};
+pub use notification::{
+    NotificationLevel, ToastNotification, dispatch_os_notification, render_toast_overlay,
 };
 pub use picker::{ModelChoice, PickerState, ProviderChoice};
 pub use server_bridge::{
@@ -320,5 +329,84 @@ mod tests {
 
         let bridge = spawn_server_bridge(event_tx, status_tx);
         assert_eq!(bridge.last_seen_seq(), 0);
+    }
+
+    #[test]
+    fn test_command_palette_catalog_and_filtering() {
+        let threads = vec![
+            (ThreadId::from("t-1"), "Feature Development".to_string()),
+            (ThreadId::from("t-2"), "Bugfix Review".to_string()),
+        ];
+        let commands = default_commands(&threads, Some(&ThreadId::from("t-1")));
+
+        // Ensure key categories are populated
+        let categories: Vec<&str> = commands.iter().map(|c| c.category).collect();
+        assert!(categories.contains(&"Navigation"));
+        assert!(categories.contains(&"Threads"));
+        assert!(categories.contains(&"Appearance"));
+        assert!(categories.contains(&"Git"));
+        assert!(categories.contains(&"Providers"));
+
+        // Verify query filtering
+        let git_cmds = filter_commands(&commands, "git");
+        assert!(git_cmds.len() >= 4);
+
+        let thread_cmds = filter_commands(&commands, "bugfix");
+        assert_eq!(thread_cmds.len(), 1);
+        assert_eq!(thread_cmds[0].id, "switch-thread-t-2");
+
+        let appearance_cmds = filter_commands(&commands, "accent");
+        assert_eq!(appearance_cmds.len(), 4);
+    }
+
+    #[test]
+    fn test_toast_notifications_stack() {
+        let mut list = Vec::new();
+        let toast1 =
+            ToastNotification::new("Turn Done", "3 tools executed", NotificationLevel::Success);
+        let toast2 = ToastNotification::new(
+            "Approval",
+            "Bash command requested",
+            NotificationLevel::Warn,
+        );
+        let toast3 =
+            ToastNotification::new("Failed", "Connection timeout", NotificationLevel::Error);
+
+        assert_eq!(toast1.level.icon(), "✅");
+        assert_eq!(toast2.level.icon(), "⚠️");
+        assert_eq!(toast3.level.icon(), "🚨");
+
+        let theme = Theme::dark(AccentColor::Teal);
+        assert_eq!(toast1.level.color(&theme), rgb(0x7fd88f));
+
+        list.push(toast1);
+        list.push(toast2);
+        list.push(toast3);
+        assert_eq!(list.len(), 3);
+
+        let dismiss_id = list[1].id.clone();
+        list.retain(|t| t.id != dismiss_id);
+        assert_eq!(list.len(), 2);
+    }
+
+    #[test]
+    fn test_theme_and_accent_switching() {
+        let accents = [
+            AccentColor::Teal,
+            AccentColor::Gold,
+            AccentColor::Blue,
+            AccentColor::Purple,
+        ];
+
+        for accent in accents {
+            assert!(!accent.name().is_empty());
+            assert!(accent.hex() > 0);
+            let dark = Theme::dark(accent);
+            let light = Theme::light(accent);
+            assert_eq!(dark.accent, accent);
+            assert_eq!(light.accent, accent);
+            assert_eq!(dark.mode, ThemeMode::Dark);
+            assert_eq!(light.mode, ThemeMode::Light);
+        }
     }
 }

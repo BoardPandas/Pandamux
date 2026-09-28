@@ -16,7 +16,13 @@ use pandamux_protocol::{
     ThreadCreateParams, ThreadRespondApprovalParams, ThreadSendTurnParams,
 };
 
+use crate::command_palette::{
+    CommandAction, CommandPaletteState, default_commands, render_command_palette,
+};
 use crate::composer::{ComposerState, render_composer};
+use crate::notification::{
+    NotificationLevel, ToastNotification, dispatch_os_notification, render_toast_overlay,
+};
 use crate::picker::PickerState;
 use crate::server_bridge::{ServerBridgeHandle, ServerStatus, spawn_server_bridge};
 use crate::settings_view::{SettingsViewState, render_settings_view};
@@ -40,6 +46,8 @@ pub struct AppView {
     pub git_status: Option<GitStatusResult>,
     pub git_action_msg: Option<String>,
     pub is_git_busy: bool,
+    pub command_palette: CommandPaletteState,
+    pub notifications: Vec<ToastNotification>,
 }
 
 impl AppView {
@@ -67,7 +75,7 @@ impl AppView {
             while let Ok(envelope) = event_rx.recv().await {
                 cx.update(|cx| {
                     let _ = this.update(cx, |this: &mut AppView, cx| {
-                        this.handle_event_envelope(envelope);
+                        this.handle_event_envelope(envelope, cx);
                         cx.notify();
                     });
                 });
@@ -89,6 +97,8 @@ impl AppView {
             git_status: None,
             git_action_msg: None,
             is_git_busy: false,
+            command_palette: CommandPaletteState::new(),
+            notifications: Vec::new(),
         };
 
         app.load_settings(cx);
@@ -96,19 +106,180 @@ impl AppView {
         app
     }
 
-    /// Ingests incoming EventEnvelope into the corresponding client-side projection.
-    pub fn handle_event_envelope(&mut self, envelope: EventEnvelope) {
-        if let Some(thread_id) = &envelope.thread_id
-            && let Some(proj) = self.thread_projections.get_mut(thread_id)
-        {
-            let event = ThreadEvent {
-                thread_id: thread_id.clone(),
-                seq: envelope.seq,
-                at_ms: envelope.at_ms,
-                kind: envelope.kind,
-            };
-            proj.apply_event(&event);
+    /// Ingests incoming EventEnvelope into the corresponding client-side projection and notifies user.
+    pub fn handle_event_envelope(&mut self, envelope: EventEnvelope, cx: &mut Context<Self>) {
+        if let Some(thread_id) = &envelope.thread_id {
+            if let Some(proj) = self.thread_projections.get_mut(thread_id) {
+                let event = ThreadEvent {
+                    thread_id: thread_id.clone(),
+                    seq: envelope.seq,
+                    at_ms: envelope.at_ms,
+                    kind: envelope.kind.clone(),
+                };
+                proj.apply_event(&event);
+            }
+
+            match &envelope.kind {
+                pandamux_core::ThreadEventKind::TurnCompleted { outcome } => {
+                    let (title, message, level) = match outcome {
+                        pandamux_core::TurnOutcome::Success => (
+                            "Turn Completed".to_string(),
+                            format!(
+                                "Turn finished successfully in thread {}",
+                                thread_id.as_str()
+                            ),
+                            NotificationLevel::Success,
+                        ),
+                        pandamux_core::TurnOutcome::Failed => (
+                            "Turn Failed".to_string(),
+                            format!("Turn failed in thread {}", thread_id.as_str()),
+                            NotificationLevel::Error,
+                        ),
+                        pandamux_core::TurnOutcome::Cancelled
+                        | pandamux_core::TurnOutcome::Interrupted => (
+                            "Turn Interrupted".to_string(),
+                            format!("Turn was stopped in thread {}", thread_id.as_str()),
+                            NotificationLevel::Warn,
+                        ),
+                    };
+                    self.notify_user(&title, &message, level, cx);
+                }
+                pandamux_core::ThreadEventKind::ApprovalRequested { kind, .. } => {
+                    self.notify_user(
+                        "Approval Required",
+                        &format!("Permission requested: {kind:?}"),
+                        NotificationLevel::Warn,
+                        cx,
+                    );
+                }
+                pandamux_core::ThreadEventKind::Error { class, message, .. } => {
+                    self.notify_user(
+                        &format!("Error: {class}"),
+                        message,
+                        NotificationLevel::Error,
+                        cx,
+                    );
+                }
+                _ => {}
+            }
         }
+    }
+
+    /// Toggles the Command Palette modal overlay open or closed.
+    pub fn toggle_command_palette(&mut self, cx: &mut Context<Self>) {
+        self.command_palette.toggle();
+        cx.notify();
+    }
+
+    /// Closes the Command Palette modal overlay.
+    pub fn close_command_palette(&mut self, cx: &mut Context<Self>) {
+        self.command_palette.close();
+        cx.notify();
+    }
+
+    /// Sets the search query filter in the Command Palette.
+    pub fn set_palette_query(&mut self, query: String, cx: &mut Context<Self>) {
+        self.command_palette.set_query(query);
+        cx.notify();
+    }
+
+    /// Toggles between light and dark theme mode and persists.
+    pub fn toggle_theme(&mut self, cx: &mut Context<Self>) {
+        let new_theme = if self.settings_view.settings.ui.theme == "light" {
+            "dark".to_string()
+        } else {
+            "light".to_string()
+        };
+        self.settings_view.settings.ui.theme = new_theme.clone();
+        self.sync_theme_from_settings();
+        self.notify_user(
+            "Theme Updated",
+            &format!("Switched to {new_theme} theme"),
+            NotificationLevel::Info,
+            cx,
+        );
+        cx.notify();
+    }
+
+    /// Updates the accent color and persists.
+    pub fn set_accent(&mut self, accent: AccentColor, cx: &mut Context<Self>) {
+        self.settings_view.settings.ui.accent = accent.name().to_string();
+        self.sync_theme_from_settings();
+        self.notify_user(
+            "Accent Color Updated",
+            &format!("Accent color set to {}", accent.name()),
+            NotificationLevel::Info,
+            cx,
+        );
+        cx.notify();
+    }
+
+    /// Dispatches an OS notification and displays an in-app toast notification.
+    pub fn notify_user(
+        &mut self,
+        title: &str,
+        message: &str,
+        level: NotificationLevel,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.settings_view.settings.ui.notifications_enabled {
+            return;
+        }
+        let sound = self.settings_view.settings.ui.sound_effects_enabled;
+        dispatch_os_notification(title, message, sound);
+        self.notifications
+            .push(ToastNotification::new(title, message, level));
+        if self.notifications.len() > 5 {
+            self.notifications.remove(0);
+        }
+        cx.notify();
+    }
+
+    /// Dismisses a toast notification by id.
+    pub fn dismiss_notification(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.notifications.retain(|t| t.id != id);
+        cx.notify();
+    }
+
+    /// Executes an action triggered from the Command Palette.
+    pub fn execute_command_action(&mut self, action: CommandAction, cx: &mut Context<Self>) {
+        self.command_palette.close();
+        match action {
+            CommandAction::SelectRail(tab) => {
+                self.select_rail_tab(tab);
+            }
+            CommandAction::ToggleTheme => {
+                self.toggle_theme(cx);
+            }
+            CommandAction::SetAccent(accent) => {
+                self.set_accent(accent, cx);
+            }
+            CommandAction::NewThread => {
+                self.create_default_thread(cx);
+            }
+            CommandAction::SelectThread(thread_id) => {
+                self.select_thread(thread_id, cx);
+            }
+            CommandAction::GitCommit => {
+                self.commit_git(None, cx);
+            }
+            CommandAction::GitPush => {
+                self.push_git(cx);
+            }
+            CommandAction::GitPr => {
+                self.create_pr_git(cx);
+            }
+            CommandAction::GitRefresh => {
+                self.refresh_git_status(cx);
+            }
+            CommandAction::CheckHealth => {
+                self.run_health_checks(cx);
+            }
+            CommandAction::OpenSettings => {
+                self.select_rail_tab(RailTab::Settings);
+            }
+        }
+        cx.notify();
     }
 
     /// Registers a new thread projection locally and tracks it.
@@ -838,6 +1009,19 @@ impl Render for AppView {
 
         let theme = self.theme.clone();
         let server_status = self.server_status.clone();
+        let is_palette_open = self.command_palette.is_open;
+        let has_notifications = !self.notifications.is_empty();
+
+        let threads: Vec<(ThreadId, String)> = self
+            .thread_order
+            .iter()
+            .filter_map(|id| {
+                self.thread_projections
+                    .get(id)
+                    .map(|p| (id.clone(), p.thread.title.clone()))
+            })
+            .collect();
+        let commands = default_commands(&threads, self.active_thread_id.as_ref());
 
         div()
             .size_full()
@@ -849,6 +1033,16 @@ impl Render for AppView {
                 &theme,
                 &server_status,
                 active_title,
+                |this, _win, cx| {
+                    this.toggle_command_palette(cx);
+                },
+                |this, _win, cx| {
+                    this.toggle_theme(cx);
+                },
+                |this, _win, cx| {
+                    this.select_rail_tab(RailTab::Settings);
+                    cx.notify();
+                },
                 window,
                 cx,
             ))
@@ -901,6 +1095,35 @@ impl Render for AppView {
             )
             // 3. 26px Status Bar
             .child(self.render_statusbar(&theme))
+            // 4. Command Palette Overlay Modal
+            .when(is_palette_open, |this| {
+                this.child(render_command_palette(
+                    &self.command_palette,
+                    &commands,
+                    &theme,
+                    |this, action, _win, cx| {
+                        this.execute_command_action(action, cx);
+                    },
+                    |this, query, _win, cx| {
+                        this.set_palette_query(query, cx);
+                    },
+                    |this, _win, cx| {
+                        this.close_command_palette(cx);
+                    },
+                    cx,
+                ))
+            })
+            // 5. Toast Notifications Floating Overlay
+            .when(has_notifications, |this| {
+                this.child(render_toast_overlay(
+                    &self.notifications,
+                    &theme,
+                    |this, id, _win, cx| {
+                        this.dismiss_notification(&id, cx);
+                    },
+                    cx,
+                ))
+            })
     }
 }
 

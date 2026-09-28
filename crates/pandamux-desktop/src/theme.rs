@@ -22,6 +22,15 @@ pub enum AccentColor {
 }
 
 impl AccentColor {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Teal => "teal",
+            Self::Gold => "gold",
+            Self::Blue => "blue",
+            Self::Purple => "purple",
+        }
+    }
+
     pub fn hex(&self) -> u32 {
         match self {
             Self::Teal => 0x43d9c9,
