@@ -20,6 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         || args
             .windows(2)
             .any(|pair| pair[0] == "--role" && pair[1] == "node");
+    let launcher_owned = args.iter().any(|arg| arg == "--launcher-owned");
 
     let mut role = if node_mode {
         ServerRole::Node
@@ -100,10 +101,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let server = Arc::new(Server::new(config)?);
     let token = uuid::Uuid::new_v4().to_string();
-    server.register_runtime_with_proxy(
+    server.register_runtime_with_proxy_and_ownership(
         &pipe_path,
         proxy_path.as_ref().and_then(|path| path.to_str()),
         &token,
+        launcher_owned,
     )?;
 
     println!("PandaMUX Server started ({role:?}) at {pipe_path}");
@@ -112,12 +114,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::select! {
             result = run_ipc_listener(server.clone(), &pipe_path) => result,
             result = run_proxy_listener(server.clone(), proxy_path) => result,
-            result = tokio::signal::ctrl_c() => result,
+            result = shutdown_signal() => result,
         }
     } else {
         tokio::select! {
             result = run_ipc_listener(server.clone(), &pipe_path) => result,
-            result = tokio::signal::ctrl_c() => result,
+            result = shutdown_signal() => result,
         }
     };
 
@@ -129,8 +131,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(proxy_path) = proxy_path.as_ref() {
         cleanup_socket_path(&proxy_path.to_string_lossy());
     }
+    println!("PandaMUX Server stopped gracefully");
     listener_result?;
     Ok(())
+}
+
+async fn shutdown_signal() -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result,
+            _ = terminate.recv() => Ok(()),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await
+    }
 }
 
 fn run_antigravity_browser_helper(url: Option<&String>) -> Result<(), Box<dyn std::error::Error>> {

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 use crate::config::{SshConfig, SshErrorCategory, SshFailure};
-use crate::exec::execute_remote_command;
+use crate::exec::{ExecOutput, execute_remote_command as execute_raw_remote_command};
 use crate::pool::SshConnectionPool;
 use crate::sftp::upload_bytes_sftp;
 use pandamux_core::remote_manifest::{
@@ -16,6 +16,8 @@ pub struct RemoteServerRuntime {
     pub pid: u32,
     #[serde(alias = "serverVersion")]
     pub version: String,
+    #[serde(default, alias = "protocolVersion")]
+    pub protocol_version: u32,
     #[serde(default, alias = "environmentId")]
     pub environment_id: String,
     #[serde(alias = "pipePath")]
@@ -23,6 +25,8 @@ pub struct RemoteServerRuntime {
     #[serde(default, alias = "proxyPath")]
     pub proxy_path: Option<String>,
     pub token: String,
+    #[serde(default, alias = "launcherOwned")]
+    pub launcher_owned: bool,
     #[serde(default, alias = "startedAtMs")]
     pub started_at: u64,
 }
@@ -97,12 +101,20 @@ fn bootstrap_failure(category: SshErrorCategory, message: String) -> SshFailure 
     }
 }
 
+async fn execute_bootstrap_command(
+    pool: &SshConnectionPool,
+    config: &SshConfig,
+    command: &str,
+) -> Result<ExecOutput, SshFailure> {
+    execute_raw_remote_command(pool, config, &format!("sh -lc {}", shell_quote(command))).await
+}
+
 /// Detect remote OS and architecture via `uname -sm` and retrieve `$HOME`.
 pub async fn detect_remote_platform(
     pool: &SshConnectionPool,
     config: &SshConfig,
 ) -> Result<(RemotePlatform, String), SshFailure> {
-    let uname_res = execute_remote_command(pool, config, "uname -sm").await?;
+    let uname_res = execute_bootstrap_command(pool, config, "uname -sm").await?;
     if uname_res.exit_code != 0 {
         return Err(bootstrap_failure(
             SshErrorCategory::CommandExec,
@@ -122,7 +134,7 @@ pub async fn detect_remote_platform(
         )
     })?;
 
-    let home_res = execute_remote_command(pool, config, "printf %s \"$HOME\"").await?;
+    let home_res = execute_bootstrap_command(pool, config, "printf %s \"$HOME\"").await?;
     let home = String::from_utf8_lossy(&home_res.stdout).trim().to_string();
     if home.is_empty() {
         return Err(bootstrap_failure(
@@ -156,7 +168,7 @@ pub async fn install_remote_binaries_if_needed(
 
     // Ensure remote installation directory exists
     let mkdir_cmd = format!("mkdir -p \"{install_dir}\"");
-    execute_remote_command(pool, config, &mkdir_cmd).await?;
+    execute_bootstrap_command(pool, config, &mkdir_cmd).await?;
 
     // Check and install server
     install_single_binary(
@@ -195,7 +207,7 @@ async fn install_single_binary(
     expected_sha256: &str,
 ) -> Result<(), SshFailure> {
     let verify_cmd = RemoteBinaryManifest::remote_verify_sha256_cmd(target_path, expected_sha256);
-    let check_res = execute_remote_command(pool, config, &verify_cmd).await?;
+    let check_res = execute_bootstrap_command(pool, config, &verify_cmd).await?;
 
     if check_res.exit_code == 0 {
         return Ok(());
@@ -215,9 +227,9 @@ async fn install_single_binary(
         "chmod 755 \"{temp_path}\" && {}",
         RemoteBinaryManifest::remote_verify_sha256_cmd(&temp_path, expected_sha256)
     );
-    let prep_res = execute_remote_command(pool, config, &prep_cmd).await?;
+    let prep_res = execute_bootstrap_command(pool, config, &prep_cmd).await?;
     if prep_res.exit_code != 0 {
-        let _ = execute_remote_command(pool, config, &format!("rm -f \"{temp_path}\"")).await;
+        let _ = execute_bootstrap_command(pool, config, &format!("rm -f \"{temp_path}\"")).await;
         return Err(bootstrap_failure(
             SshErrorCategory::CommandExec,
             format!(
@@ -227,7 +239,7 @@ async fn install_single_binary(
     }
 
     let move_cmd = RemoteBinaryManifest::remote_install_cmd(&temp_path, target_path);
-    let move_res = execute_remote_command(pool, config, &move_cmd).await?;
+    let move_res = execute_bootstrap_command(pool, config, &move_cmd).await?;
     if move_res.exit_code != 0 {
         return Err(bootstrap_failure(
             SshErrorCategory::CommandExec,
@@ -252,22 +264,59 @@ pub async fn start_or_discover_daemon(
 
     // Check if server.json exists and daemon is alive
     let cat_res =
-        execute_remote_command(pool, config, &format!("cat \"{runtime_path}\" 2>/dev/null"))
+        execute_bootstrap_command(pool, config, &format!("cat \"{runtime_path}\" 2>/dev/null"))
             .await?;
     if cat_res.exit_code == 0
         && let Ok(runtime) = serde_json::from_slice::<RemoteServerRuntime>(&cat_res.stdout)
     {
-        let pid_check = execute_remote_command(
+        let pid_check = execute_bootstrap_command(
             pool,
             config,
             &format!("kill -0 {} 2>/dev/null", runtime.pid),
         )
         .await?;
-        if pid_check.exit_code == 0
-            && runtime.version == version
-            && runtime.environment_id == environment_id
-        {
-            return Ok((DaemonOwnership::Discovered, runtime));
+        if pid_check.exit_code == 0 {
+            if runtime.environment_id != environment_id {
+                return Err(SshFailure {
+                    code: "ssh_daemon_environment_conflict",
+                    category: SshErrorCategory::Connection,
+                    message: format!(
+                        "running PandaMUX node belongs to environment '{}', expected '{environment_id}'",
+                        runtime.environment_id
+                    ),
+                    retryable: false,
+                    fingerprint: None,
+                    known_hosts_line: None,
+                });
+            }
+            if runtime.version == version {
+                let ownership = if runtime.launcher_owned {
+                    DaemonOwnership::LauncherOwned
+                } else {
+                    DaemonOwnership::Discovered
+                };
+                return Ok((ownership, runtime));
+            }
+            if !runtime.launcher_owned {
+                if runtime.protocol_version != pandamux_protocol::PROTOCOL_VERSION {
+                    return Err(SshFailure {
+                        code: "ssh_daemon_upgrade_required",
+                        category: SshErrorCategory::Connection,
+                        message: format!(
+                            "discovered PandaMUX node {} uses protocol {}, while this Hub requires protocol {}",
+                            runtime.version,
+                            runtime.protocol_version,
+                            pandamux_protocol::PROTOCOL_VERSION
+                        ),
+                        retryable: false,
+                        fingerprint: None,
+                        known_hosts_line: None,
+                    });
+                }
+                return Ok((DaemonOwnership::Discovered, runtime));
+            }
+
+            stop_idle_launcher_owned_daemon(pool, config, &runtime).await?;
         }
     }
 
@@ -278,19 +327,19 @@ pub async fn start_or_discover_daemon(
         shell_quote(&run_dir),
         shell_quote(&data_dir)
     );
-    execute_remote_command(pool, config, &mkdir_cmd).await?;
+    execute_bootstrap_command(pool, config, &mkdir_cmd).await?;
 
     let log_path = format!("{run_dir}/daemon.log");
     let db_path = format!("{data_dir}/node.db");
     let launch_cmd = format!(
-        "setsid nohup {} daemon --environment-id {} --runtime-dir {} --db {} > {} 2>&1 &",
+        "setsid nohup {} daemon --launcher-owned --environment-id {} --runtime-dir {} --db {} > {} 2>&1 &",
         shell_quote(server_path),
         shell_quote(environment_id),
         shell_quote(&run_dir),
         shell_quote(&db_path),
         shell_quote(&log_path)
     );
-    let launch_res = execute_remote_command(pool, config, &launch_cmd).await?;
+    let launch_res = execute_bootstrap_command(pool, config, &launch_cmd).await?;
     if launch_res.exit_code != 0 {
         return Err(bootstrap_failure(
             SshErrorCategory::CommandExec,
@@ -305,10 +354,13 @@ pub async fn start_or_discover_daemon(
     for _ in 0..20 {
         tokio::time::sleep(Duration::from_millis(500)).await;
         let read_res =
-            execute_remote_command(pool, config, &format!("cat \"{runtime_path}\" 2>/dev/null"))
+            execute_bootstrap_command(pool, config, &format!("cat \"{runtime_path}\" 2>/dev/null"))
                 .await?;
         if read_res.exit_code == 0
             && let Ok(runtime) = serde_json::from_slice::<RemoteServerRuntime>(&read_res.stdout)
+            && runtime.version == version
+            && runtime.environment_id == environment_id
+            && runtime.launcher_owned
         {
             return Ok((DaemonOwnership::LauncherOwned, runtime));
         }
@@ -320,6 +372,82 @@ pub async fn start_or_discover_daemon(
     ))
 }
 
+async fn stop_idle_launcher_owned_daemon(
+    pool: &SshConnectionPool,
+    config: &SshConfig,
+    runtime: &RemoteServerRuntime,
+) -> Result<(), SshFailure> {
+    let activity_command = format!(
+        concat!(
+            "children=$(ps -o pid= --ppid {} 2>/dev/null) || exit 2; ",
+            "test -z \"$children\" || exit 1; ",
+            "test -r /proc/net/unix || exit 2; ",
+            "awk -v p={} '$6 == \"03\" && $8 == p {{ found=1 }} END {{ exit found ? 0 : 1 }}' /proc/net/unix; ",
+            "socket_status=$?; test $socket_status -eq 1 || {{ test $socket_status -eq 0 && exit 1; exit 2; }}; ",
+            "awk -v p={} '$6 == \"03\" && $8 == p {{ found=1 }} END {{ exit found ? 0 : 1 }}' /proc/net/unix; ",
+            "socket_status=$?; test $socket_status -eq 1 || {{ test $socket_status -eq 0 && exit 1; exit 2; }}; ",
+            "exit 0"
+        ),
+        runtime.pid,
+        shell_quote(&runtime.socket_path),
+        shell_quote(runtime.proxy_path.as_deref().unwrap_or(""))
+    );
+    let activity = execute_bootstrap_command(pool, config, &activity_command).await?;
+    match activity.exit_code {
+        0 => {}
+        1 => {
+            return Err(SshFailure {
+                code: "ssh_daemon_upgrade_deferred",
+                category: SshErrorCategory::Connection,
+                message: format!(
+                    "PandaMUX node {} owns active work; upgrade to the requested version is deferred",
+                    runtime.version
+                ),
+                retryable: true,
+                fingerprint: None,
+                known_hosts_line: None,
+            });
+        }
+        code => {
+            return Err(bootstrap_failure(
+                SshErrorCategory::CommandExec,
+                format!(
+                    "could not determine whether PandaMUX node {} is idle: remote check exited {code}",
+                    runtime.version
+                ),
+            ));
+        }
+    }
+
+    let terminate =
+        execute_bootstrap_command(pool, config, &format!("kill {}", runtime.pid)).await?;
+    if terminate.exit_code != 0 {
+        return Err(bootstrap_failure(
+            SshErrorCategory::CommandExec,
+            format!("could not terminate idle PandaMUX node {}", runtime.pid),
+        ));
+    }
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let check = execute_bootstrap_command(
+            pool,
+            config,
+            &format!("kill -0 {} 2>/dev/null", runtime.pid),
+        )
+        .await?;
+        if check.exit_code != 0 {
+            return Ok(());
+        }
+    }
+    Err(bootstrap_failure(
+        SshErrorCategory::Connection,
+        format!(
+            "timed out waiting for idle PandaMUX node {} to stop gracefully",
+            runtime.pid
+        ),
+    ))
+}
+
 /// Teardown a launcher-owned remote daemon by sending SIGTERM and cleaning runtime file.
 pub async fn teardown_remote_daemon(
     pool: &SshConnectionPool,
@@ -327,12 +455,33 @@ pub async fn teardown_remote_daemon(
     home: &str,
     pid: u32,
 ) -> Result<(), SshFailure> {
-    let kill_cmd = format!(
-        "kill {} 2>/dev/null; rm -f \"{home}/.pandamux/run/server.json\"",
-        pid
-    );
-    execute_remote_command(pool, config, &kill_cmd).await?;
-    Ok(())
+    let terminate =
+        execute_bootstrap_command(pool, config, &format!("kill {pid} 2>/dev/null")).await?;
+    if terminate.exit_code != 0 {
+        return Err(bootstrap_failure(
+            SshErrorCategory::CommandExec,
+            format!("could not terminate launcher-owned PandaMUX node {pid}"),
+        ));
+    }
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let check =
+            execute_bootstrap_command(pool, config, &format!("kill -0 {pid} 2>/dev/null")).await?;
+        if check.exit_code != 0 {
+            let runtime_path = format!("{home}/.pandamux/run/server.json");
+            let _ = execute_bootstrap_command(
+                pool,
+                config,
+                &format!("rm -f {}", shell_quote(&runtime_path)),
+            )
+            .await;
+            return Ok(());
+        }
+    }
+    Err(bootstrap_failure(
+        SshErrorCategory::Connection,
+        format!("timed out waiting for PandaMUX node {pid} to stop gracefully"),
+    ))
 }
 
 /// High-level orchestration for bootstrapping a remote environment.
@@ -383,10 +532,12 @@ mod tests {
         let json = r#"{
             "pid": 12345,
             "version": "0.53.36",
+            "protocolVersion": 3,
             "environmentId": "env-remote",
             "socketPath": "/home/panda/.pandamux/run/server.sock",
             "proxyPath": "/home/panda/.pandamux/run/proxy.sock",
             "token": "tok_xyz789",
+            "launcherOwned": true,
             "startedAt": 1700000000
         }"#;
 
@@ -394,12 +545,30 @@ mod tests {
         assert_eq!(parsed.pid, 12345);
         assert_eq!(parsed.environment_id, "env-remote");
         assert_eq!(parsed.version, "0.53.36");
+        assert_eq!(parsed.protocol_version, 3);
         assert_eq!(parsed.socket_path, "/home/panda/.pandamux/run/server.sock");
         assert_eq!(
             parsed.proxy_path.as_deref(),
             Some("/home/panda/.pandamux/run/proxy.sock")
         );
         assert_eq!(parsed.token, "tok_xyz789");
+        assert!(parsed.launcher_owned);
+    }
+
+    #[test]
+    fn legacy_runtime_is_never_assumed_launcher_owned() {
+        let parsed: RemoteServerRuntime = serde_json::from_str(
+            r#"{
+                "pid": 7,
+                "serverVersion": "0.53.41",
+                "environmentId": "env-remote",
+                "pipePath": "/home/panda/.pandamux/run/server.sock",
+                "token": "legacy-token"
+            }"#,
+        )
+        .expect("legacy runtime parses");
+        assert!(!parsed.launcher_owned);
+        assert_eq!(parsed.protocol_version, 0);
     }
 
     #[test]

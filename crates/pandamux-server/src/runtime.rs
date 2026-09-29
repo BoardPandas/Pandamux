@@ -21,6 +21,8 @@ pub struct RuntimeInfo {
     pub token: String,
     #[serde(default)]
     pub mcp_token: String,
+    #[serde(default)]
+    pub launcher_owned: bool,
     pub started_at_ms: u64,
 }
 
@@ -141,6 +143,7 @@ mod tests {
             proxy_path: None,
             token: "control-token".to_string(),
             mcp_token: "mcp-token".to_string(),
+            launcher_owned: false,
             started_at_ms: 1,
         }
     }

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -7,7 +8,7 @@ use russh::client;
 use russh::keys::agent::AgentIdentity;
 #[cfg(windows)]
 use russh::keys::agent::client::AgentClient;
-use russh::keys::{PrivateKeyWithHashAlg, load_secret_key};
+use russh::keys::{PrivateKeyWithHashAlg, load_openssh_certificate, load_secret_key};
 
 use crate::config::{SshAuth, SshConfig, SshErrorCategory, SshFailure};
 
@@ -328,24 +329,72 @@ async fn authenticate(
 ) -> Result<(), String> {
     match &config.auth {
         SshAuth::KeyFile { path, passphrase } => {
-            let key = load_secret_key(path, passphrase.as_deref())
-                .map_err(|error| format!("load key {}: {error}", path.display()))?;
+            let key_path = path.clone();
+            let key_passphrase = passphrase.clone();
+            let key = tokio::task::spawn_blocking(move || {
+                load_secret_key(&key_path, key_passphrase.as_deref())
+                    .map_err(|error| format!("load key {}: {error}", key_path.display()))
+            })
+            .await
+            .map_err(|error| format!("join private-key loader: {error}"))??;
             let hash = handle
                 .best_supported_rsa_hash()
                 .await
                 .map_err(|error| format!("rsa hash negotiation: {error}"))?
                 .flatten();
+            let key = Arc::new(key);
             let result = handle
                 .authenticate_publickey(
                     &config.user,
-                    PrivateKeyWithHashAlg::new(Arc::new(key), hash),
+                    PrivateKeyWithHashAlg::new(Arc::clone(&key), hash),
                 )
                 .await
                 .map_err(|error| format!("publickey auth: {error}"))?;
             if result.success() {
+                return Ok(());
+            }
+
+            let certificate_path = openssh_certificate_path(path);
+            if !tokio::fs::try_exists(&certificate_path)
+                .await
+                .map_err(|error| {
+                    format!(
+                        "inspect OpenSSH certificate {}: {error}",
+                        certificate_path.display()
+                    )
+                })?
+            {
+                return Err(format!("publickey auth failed for {}", config.user));
+            }
+            let certificate_path_for_loader = certificate_path.clone();
+            let certificate = tokio::task::spawn_blocking(move || {
+                load_openssh_certificate(&certificate_path_for_loader).map_err(|error| {
+                    format!(
+                        "load OpenSSH certificate {}: {error}",
+                        certificate_path_for_loader.display()
+                    )
+                })
+            })
+            .await
+            .map_err(|error| format!("join OpenSSH certificate loader: {error}"))??;
+            if certificate.public_key() != key.public_key().key_data() {
+                return Err(format!(
+                    "OpenSSH certificate {} does not match private key {}",
+                    certificate_path.display(),
+                    path.display()
+                ));
+            }
+            let result = handle
+                .authenticate_openssh_cert(&config.user, key, certificate)
+                .await
+                .map_err(|error| format!("OpenSSH certificate auth: {error}"))?;
+            if result.success() {
                 Ok(())
             } else {
-                Err(format!("publickey auth failed for {}", config.user))
+                Err(format!(
+                    "publickey and OpenSSH certificate auth failed for {}",
+                    config.user
+                ))
             }
         }
         SshAuth::Agent { pipe_path } => {
@@ -363,6 +412,12 @@ async fn authenticate(
             }
         }
     }
+}
+
+fn openssh_certificate_path(private_key_path: &Path) -> PathBuf {
+    let mut certificate_path = private_key_path.as_os_str().to_os_string();
+    certificate_path.push("-cert.pub");
+    PathBuf::from(certificate_path)
 }
 
 #[cfg(windows)]
@@ -482,5 +537,13 @@ mod tests {
     async fn test_pool_creation_and_slots() {
         let pool = SshConnectionPool::new();
         assert_eq!(pool.active_connections_count().await, 0);
+    }
+
+    #[test]
+    fn openssh_certificate_uses_the_standard_sibling_name() {
+        assert_eq!(
+            openssh_certificate_path(Path::new("/home/user/.ssh/id_ed25519")),
+            PathBuf::from("/home/user/.ssh/id_ed25519-cert.pub")
+        );
     }
 }

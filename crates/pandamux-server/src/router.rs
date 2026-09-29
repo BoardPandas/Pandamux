@@ -541,7 +541,15 @@ impl Router {
         }
 
         // Hub environment routing: if targeted to a remote environment, forward across transport
+        let requires_hub_preprocessing = matches!(
+            method.as_str(),
+            "attachment.import_path"
+                | "attachment.importPath"
+                | "worktree.sync_delta"
+                | "worktree.syncDelta"
+        );
         if self.role == ServerRole::Hub
+            && !requires_hub_preprocessing
             && let Some(target_env) = self.resolve_target_environment(&method, &params)
             && !self.environment_router.is_local(&Some(target_env.clone()))
         {
@@ -550,22 +558,36 @@ impl Router {
                 && let Some(tid_str) = params.get("threadId").and_then(|v| v.as_str())
             {
                 let tid = pandamux_core::ids::ThreadId::new(tid_str);
-                if let Some(att_array) = params.get("attachments").and_then(|v| v.as_array()) {
+                if let Some(att_array) = params
+                    .get("attachmentIds")
+                    .or_else(|| params.get("attachment_ids"))
+                    .or_else(|| params.get("attachments"))
+                    .and_then(|v| v.as_array())
+                {
                     for att_val in att_array {
                         let att_id_opt = att_val
                             .as_str()
                             .or_else(|| att_val.get("id").and_then(|v| v.as_str()));
-                        if let Some(att_id) = att_id_opt
-                            && self
-                                .store
-                                .get_attachment(&tid, att_id)
-                                .ok()
-                                .flatten()
-                                .is_some()
+                        let Some(att_id) = att_id_opt else {
+                            continue;
+                        };
+                        let stored_on_hub = self
+                            .store
+                            .get_attachment(&tid, att_id)
+                            .ok()
+                            .flatten()
+                            .is_some();
+                        if !stored_on_hub {
+                            continue;
+                        }
+                        if let Err(error) = self
+                            .sync_attachment_to_environment(&target_env, &tid, att_id)
+                            .await
                         {
-                            let _ = self
-                                .sync_attachment_to_environment(&target_env, &tid, att_id)
-                                .await;
+                            if is_notification {
+                                return None;
+                            }
+                            return Some(RpcResponse::error(id, error));
                         }
                     }
                 }
@@ -1303,13 +1325,12 @@ impl Router {
                 .environment_router
                 .is_local(&Some(thread.environment_id.clone()))
         {
-            let _ = self
-                .sync_attachment_to_environment(
-                    &thread.environment_id,
-                    &p.thread_id,
-                    &result.attachment.id,
-                )
-                .await;
+            self.sync_attachment_to_environment(
+                &thread.environment_id,
+                &p.thread_id,
+                &result.attachment.id,
+            )
+            .await?;
         }
 
         serde_json::to_value(&result).map_err(|e| RpcError::internal_error(e.to_string()))
@@ -2657,7 +2678,7 @@ mod tests {
             Some(json!({
                 "threadId": thread_id.as_str(),
                 "text": "Analyze this screenshot",
-                "attachments": ["att-paste-1"]
+                "attachmentIds": ["att-paste-1"]
             })),
         );
         let send_res = hub_router.handle_request(send_req).await.unwrap();
@@ -2669,6 +2690,83 @@ mod tests {
             1
         );
         assert_eq!(turns_received.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn remote_attachment_path_is_imported_on_the_hub_before_forwarding() {
+        use crate::environment_router::MockEnvironmentTransport;
+        use pandamux_core::ids::{EnvironmentId, ThreadId};
+        use pandamux_core::{Thread, ThreadWorkspace};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let source_path = temp_dir.path().join("source.png");
+        std::fs::write(&source_path, b"PNG_BYTES").unwrap();
+        let store = Store::in_memory().unwrap();
+        let hub_router = Router::new(store.clone(), ServerRole::Hub, "env-local".to_string())
+            .with_attachments(AttachmentManager::new(temp_dir.path().join("attachments")));
+        let remote_env = EnvironmentId::new("env-remote");
+        let thread_id = ThreadId::new("th-remote-import");
+        store
+            .save_thread(&Thread {
+                id: thread_id.clone(),
+                project_id: None,
+                environment_id: remote_env.clone(),
+                parent_thread_id: None,
+                title: "Remote import".to_string(),
+                provider_instance_id: pandamux_core::ProviderInstanceId::new("claude-default"),
+                model: "claude-test".to_string(),
+                effort: None,
+                access_mode: pandamux_core::thread::AccessMode::WorkspaceOnly,
+                workspace: ThreadWorkspace {
+                    cwd: "/remote/project".to_string(),
+                    worktree: None,
+                },
+                status: pandamux_core::thread::ThreadStatus::Idle,
+                agent: None,
+                origin: pandamux_core::thread::ThreadOrigin::Manual,
+                created_at_ms: 100,
+                updated_at_ms: 100,
+            })
+            .unwrap();
+
+        let import_calls = Arc::new(AtomicUsize::new(0));
+        let put_calls = Arc::new(AtomicUsize::new(0));
+        let import_calls_for_transport = Arc::clone(&import_calls);
+        let put_calls_for_transport = Arc::clone(&put_calls);
+        let transport = Arc::new(MockEnvironmentTransport::new(move |request| {
+            let id = request.id.clone().unwrap_or(1.into());
+            match request.method.as_str() {
+                "attachment.import_path" | "attachment.importPath" => {
+                    import_calls_for_transport.fetch_add(1, Ordering::SeqCst);
+                }
+                "attachment.put" => {
+                    put_calls_for_transport.fetch_add(1, Ordering::SeqCst);
+                }
+                _ => {}
+            }
+            Ok(RpcResponse::success(id, json!({"isComplete": true})))
+        }));
+        hub_router
+            .environment_router()
+            .register_transport(remote_env, transport, None)
+            .await;
+
+        let response = hub_router
+            .handle_request(RpcRequest::new(
+                1,
+                "attachment.import_path",
+                Some(json!({
+                    "threadId": thread_id,
+                    "path": source_path
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(response.is_success());
+        assert!(response.result.unwrap().get("attachment").is_some());
+        assert_eq!(import_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(put_calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
@@ -3178,5 +3276,79 @@ Host worker-node
         assert!(sync_out.synced);
         assert_eq!(sync_out.target_branch, "synced-main");
         assert!(sync_out.bundle_size_bytes > 0);
+    }
+
+    #[tokio::test]
+    async fn remote_worktree_sync_builds_the_bundle_on_the_hub() {
+        use crate::environment_router::MockEnvironmentTransport;
+        use pandamux_core::EnvironmentId;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let origin = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| {
+            let result = std::process::Command::new("git")
+                .current_dir(origin.path())
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        };
+        run(&["init"]);
+        run(&["config", "user.name", "Tester"]);
+        run(&["config", "user.email", "test@example.com"]);
+        std::fs::write(origin.path().join("delta.txt"), "unpushed delta").unwrap();
+        run(&["add", "delta.txt"]);
+        run(&["commit", "-m", "add unpushed delta"]);
+
+        let store = Store::in_memory().unwrap();
+        let router = Router::new(store, ServerRole::Hub, "env-local".to_string());
+        let remote_env = EnvironmentId::new("env-remote-sync");
+        let received_bundle = Arc::new(AtomicBool::new(false));
+        let received_bundle_for_transport = Arc::clone(&received_bundle);
+        let transport = Arc::new(MockEnvironmentTransport::new(move |request| {
+            let id = request.id.clone().unwrap_or(1.into());
+            let params = request.params.as_ref().unwrap();
+            received_bundle_for_transport.store(
+                params
+                    .get("bundleBytesBase64")
+                    .and_then(Value::as_str)
+                    .is_some_and(|bundle| !bundle.is_empty()),
+                Ordering::SeqCst,
+            );
+            Ok(RpcResponse::success(
+                id,
+                json!({
+                    "synced": true,
+                    "targetBranch": "r0-live-delta",
+                    "bundleSizeBytes": 1,
+                    "message": "Applied 1 commit(s) successfully"
+                }),
+            ))
+        }));
+        router
+            .environment_router()
+            .register_transport(remote_env.clone(), transport, None)
+            .await;
+
+        let response = router
+            .handle_request(RpcRequest::new(
+                1,
+                "worktree.sync_delta",
+                Some(json!({
+                    "environmentId": remote_env,
+                    "localPath": origin.path(),
+                    "remotePath": "/remote/repository",
+                    "revRange": "HEAD",
+                    "targetBranch": "r0-live-delta"
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(response.is_success());
+        assert!(received_bundle.load(Ordering::SeqCst));
     }
 }

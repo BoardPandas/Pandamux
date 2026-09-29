@@ -199,6 +199,16 @@ impl Server {
         proxy_path: Option<&str>,
         token: &str,
     ) -> std::io::Result<PathBuf> {
+        self.register_runtime_with_proxy_and_ownership(pipe_path, proxy_path, token, false)
+    }
+
+    pub fn register_runtime_with_proxy_and_ownership(
+        &self,
+        pipe_path: &str,
+        proxy_path: Option<&str>,
+        token: &str,
+        launcher_owned: bool,
+    ) -> std::io::Result<PathBuf> {
         let mcp_token = uuid::Uuid::new_v4().to_string();
         self.capability_authority().configure_local_capabilities(
             pipe_path.to_string(),
@@ -218,6 +228,7 @@ impl Server {
             proxy_path: proxy_path.map(str::to_string),
             token: token.to_string(),
             mcp_token,
+            launcher_owned,
             started_at_ms: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()

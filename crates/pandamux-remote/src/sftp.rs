@@ -196,10 +196,7 @@ pub async fn upload_file_sftp(
     let sftp = SftpSession::new(channel.into_stream())
         .await
         .map_err(|error| sftp_failure(format!("start sftp session: {error}")))?;
-    let attributes = FileAttributes {
-        permissions: Some(0o600),
-        ..FileAttributes::default()
-    };
+    let attributes = private_file_attributes();
     let mut remote = sftp
         .open_with_flags_and_attributes(
             remote_path,
@@ -247,4 +244,26 @@ pub async fn upload_file_sftp(
         )));
     }
     Ok(())
+}
+
+fn private_file_attributes() -> FileAttributes {
+    let mut attributes = FileAttributes::empty();
+    attributes.permissions = Some(0o600);
+    attributes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn private_upload_attributes_only_set_the_mode() {
+        let attributes = private_file_attributes();
+        assert_eq!(attributes.permissions, Some(0o600));
+        assert_eq!(attributes.size, None);
+        assert_eq!(attributes.uid, None);
+        assert_eq!(attributes.gid, None);
+        assert_eq!(attributes.atime, None);
+        assert_eq!(attributes.mtime, None);
+    }
 }

@@ -8,6 +8,7 @@ rust-version.workspace = true
 
 [dependencies]
 pandamux-core = { path = "../pandamux-core" }
+pandamux-protocol = { path = "../pandamux-protocol" }
 russh = { version = "=0.62.2", default-features = false, features = ["ring"] }
 russh-sftp = "=2.3.0"
 serde.workspace = true

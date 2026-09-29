@@ -189,6 +189,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Remote bootstrap now works with standard OpenSSH user certificates and private SFTP
+  uploads.** Key-file authentication retries with the matching sibling `-cert.pub` file,
+  and streamed fallback uploads no longer include accidental root ownership metadata.
+- **Remote attachment and worktree synchronization now cross the Hub boundary correctly.**
+  Attachment imports run on the desktop host before verified chunk forwarding, turn
+  preflight honors the protocol's `attachmentIds` field and surfaces transfer failures,
+  and worktree bundles are created on the Hub before the request reaches a node.
+- **Launcher-owned node upgrades are safe and observable.** Runtime records preserve
+  ownership, active child work defers replacement, compatible discovered daemons remain
+  attached, and idle upgrades wait for graceful `SIGTERM` cleanup before starting the
+  requested version.
 - Restored the launcher double-submit regression test to the current two-step launch flow (spec 2.7): it now drives a folder submit followed by two session-type choices and confirms only one project is created.
 - The knowledge-base rule that is supposed to fire before code edits was scoped to `src/`, `lib/`, `app/`, `worker/` and `api/`, none of which exist in the Rust workspace, so it had never applied to a single source file. It now points at `crates/` and the other real source trees. (Internal tooling; no runtime change.)
 - A commit blocked for a missing changelog entry now explains why. The check wrote its reason to stdout, which is discarded for a blocking hook, so the commit was refused with no message attached. (Internal tooling; no runtime change.)
