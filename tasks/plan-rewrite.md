@@ -981,7 +981,7 @@ Exit criteria: Antigravity's managed bundle is installed on Galahad by node-side
 
 ### Recovery Gate R0: prove the Phase 3 foundation before extending it
 
-**Why this gate exists:** Phase 3 has implementation commits, but the production hub does not yet compose a remote transport, the server does not complete the proxy command, thread execution does not resolve the selected provider instance, and the documented live matrix has not been archived. Phase 4 usage, capacity, and failover would otherwise observe and route a placeholder system.
+**Why this gate exists:** When R0 opened, Phase 3 had implementation commits, but the production hub did not compose a remote transport, the server did not complete the proxy command, thread execution did not resolve the selected provider instance, and the documented live matrix had not been archived. Phase 4 usage, capacity, and failover would otherwise have observed and routed a placeholder system. R0.2 through R0.4 now correct those foundations; R0.5 remains open for the physical laptop and native Windows rows.
 
 #### R0.1 Preserve and classify the unfinished Phase 4 attempt
 
@@ -1053,7 +1053,7 @@ Acceptance:
 
 Live results and required evidence are tracked in [`docs/operations/PHASE3_ACCEPTANCE.md`](../docs/operations/PHASE3_ACCEPTANCE.md). The record is open; no live Windows or Galahad row has been inferred from fixture coverage.
 
-R0.5 preflight found that the recovered Antigravity path used placeholder release metadata, shell-script stand-ins for the Google bundle, a fabricated OAuth flow, and success responses without a live ACP process. The recovery implementation now uses the pinned Google ACP 1.1.1 bundles, streaming size and SHA-256 verification, two-entry hardened extraction, real initialize and session traffic, strict OAuth relay validation, workspace-confined file capabilities, opaque permission option IDs, cancellation and process cleanup, node download plus verified hub-to-node SFTP fallback, and private profile and scratch directories. Exact-commit Galahad runs prove both managed-install paths, idle and busy lifecycle behavior, the remote transfer layer, stored best-effort-provider disabled states, and the full Codex provider row on `0.54.7`. Claude and Antigravity authentication and provider interaction, the required physical laptop disconnect and sleep checks, and native Windows rows remain gating.
+R0.5 preflight found that the recovered Antigravity path used placeholder release metadata, shell-script stand-ins for the Google bundle, a fabricated OAuth flow, and success responses without a live ACP process. The recovery implementation now uses the pinned Google ACP 1.1.1 bundles, streaming size and SHA-256 verification, two-entry hardened extraction, real initialize and session traffic, strict OAuth relay validation, workspace-confined file capabilities, opaque permission option IDs, cancellation and process cleanup, node download plus verified hub-to-node SFTP fallback, and private profile and scratch directories. Exact-commit Galahad runs prove both managed-install paths, idle and busy lifecycle behavior, the remote transfer layer, stored best-effort-provider disabled states, the full Codex row on `0.54.7`, and the authenticated Claude and Antigravity rows on `0.54.11`. The required physical laptop disconnect and sleep checks and native Windows rows remain gating.
 
 Run the matrix against local Windows and Galahad with exact binary SHAs and captured artifacts:
 
@@ -1073,21 +1073,33 @@ Gate exit:
 ##### R0.5 Galahad progress record, 2026-09-28
 
 - **Exact node lifecycle:** clean commit
-  `f9aa2b20a72e008ac6a80fc7a4858f28b0635e37` produced publication-disabled `0.54.7`
+  `28614286b6ce2e9b14f1c4279bee4cd69709eb34` produced publication-disabled `0.54.11`
   musl server and CLI artifacts with fresh size and SHA-256 evidence. Galahad serves the
   exact launcher-owned artifact, and authenticated ping, identity, protocol, executable
   path, hash, and child cleanup checks pass. The earlier busy-PTY request still proves
-  `ssh_daemon_upgrade_deferred`, while later idle transitions reached `0.54.7`.
+  `ssh_daemon_upgrade_deferred`, while later idle transitions reached `0.54.11`.
 - **Acceptance-driven provider fixes:** exact live runs found and corrected Codex Ask
   mode using an approval policy that could execute mutations without surfacing PandaMUX,
   duplicate durable event sequences when a provider resumed immediately after approval,
-  and explicit cancellation being overwritten by expected stream closure. The deciding
-  fixes are `495b6e6`, `10904b9`, and `f9aa2b2`.
+  explicit cancellation being overwritten by expected stream closure, Claude permission
+  modes, current structured stream and control envelopes, full-access opt-in, error
+  termination, and its ReadOnly `ExitPlanMode` escape. The deciding fixes are `495b6e6`,
+  `10904b9`, `f9aa2b2`, `9c196e8`, `8b5d104`, and `2861428`.
 - **Codex provider row:** exact `0.54.7` proves configured instance and model identity,
   basic streaming, one approval with contiguous persisted events, a read-only ceiling,
   explicit cancellation and settlement, image receipt, and replay after a short Hub
   disconnect. The 20-second reconnect is supporting evidence only and does not replace
   the required 30-minute physical laptop check.
+- **Claude provider row:** exact `0.54.11` proves isolated authenticated instance
+  `claude-default`, current structured input and nested output, basic streaming, one Ask
+  approval with exact pending tool input, a fail-closed ReadOnly ceiling, cancellation
+  and durable interrupted state, and replay after a 20-second Hub disconnect. The final
+  cleanup daemon has no provider children.
+- **Antigravity provider row:** the production OAuth relay completed for isolated
+  `antigravity-default`, whose private token then authenticated Google ACP 1.1.1 health
+  and live turns. Exact `0.54.11` proves multi-delta output, opaque permission option
+  responses, pre-tool ReadOnly denial, cancellation with no surviving sleep process,
+  and contiguous replay after a 20-second Hub disconnect.
 - **Managed Antigravity install:** fresh isolated exact-commit nodes passed both the
   direct Google ACP 1.1.1 download and the blocked-node Hub-cache plus SFTP path. The
   pinned 681,969,407-byte archive hash, both extracted sizes, executable modes, private
@@ -1100,13 +1112,14 @@ Gate exit:
 - **Best-effort providers:** settings schema v3 now persists Cursor, Grok, and OpenCode
   disabled by default with typed code, message, and remediation fields, and provider
   health exposes each structured reason on the exact deployed artifact.
-- **Verification:** exact `0.54.7` passed 296 workspace tests with zero failures and two
+- **Verification:** exact `0.54.11` passed 302 workspace tests with zero failures and two
   intentional real-shell ignores, strict Clippy, formatting, whitespace, crate-boundary,
   and wiring guards. `cargo-deny` is unavailable on this host, so no advisory result is
   claimed.
-- **Gate remains open:** Claude browser login, Antigravity remote OAuth and provider
-  interaction, the required 30-minute laptop disconnect and full-screen-terminal sleep,
-  and native Windows behavior still require interactive or external-host evidence.
+- **Gate remains open:** the required 30-minute physical laptop disconnect and
+  full-screen-terminal sleep and native Windows behavior still require interactive or
+  external-host evidence. Browser authentication and all three Galahad provider rows
+  are complete.
 
 ### Phase 4: Provider observability, usage, capacity, policy, and safe failover
 

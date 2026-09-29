@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Changed
 
+- **Archived authenticated Claude and Antigravity R0 evidence.** The Phase 3 acceptance
+  record now identifies the exact `0.54.11` Galahad artifact and captures both live
+  provider matrices while keeping the required physical laptop and native Windows rows
+  explicitly open.
 - **Closed Claude's ReadOnly plan-mode approval escape.** ReadOnly sessions now add
   `ExitPlanMode` to Claude's disallowed tools without replacing configured tool
   restrictions, preventing a plan-only turn from asking to leave the enforced
