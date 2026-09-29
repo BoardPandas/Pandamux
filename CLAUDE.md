@@ -127,6 +127,16 @@ Per-instance permits are held for the complete provider-process lifetime, includ
 
 Phase 4A extends that typed identity into normalized usage observations and subscription mappings. It uses additive migration 6 because R0.3 already applied migration 5 for provider execution audit. The recovered usage prototype remains evidence only; its append-only buckets, caller-supplied provenance, floating-point pricing, and in-memory path cursors are not the implementation contract.
 
+Phase 4B puts transcript scanning under `pandamux-server`. Provider parsing in
+`pandamux-providers::usage_transcript` is pure and fixture-tested. One bounded blocking
+worker owns filesystem enumeration, startup and turn-completion triggers, periodic
+jitter, durable file-identity cursors, parser state, quarantine, diagnostics, and joined
+shutdown. Managed turn usage is written before transcript backfill and remains
+authoritative during reconciliation. Scanner RPC projections never include transcript
+text, profile paths, canonical source paths, or unmasked account labels. Additive
+migration 7 carries the scanner state and reconciliation indexes; migrations 4 through
+6 remain immutable.
+
 ## Remote composition
 
 `pandamux-remote` owns SSH mechanics, but `pandamux-server` owns their production composition.

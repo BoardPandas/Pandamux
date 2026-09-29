@@ -16,6 +16,7 @@ pub mod server;
 pub mod store;
 pub mod terminal;
 pub mod thread_manager;
+pub mod usage_scanner;
 #[cfg(windows)]
 pub mod windows_security;
 pub mod worktree;
@@ -46,6 +47,10 @@ pub use server::{Server, ServerConfig};
 pub use store::{ProviderExecutionAudit, Store, StoreError};
 pub use terminal::TerminalServerManager;
 pub use thread_manager::ThreadManager;
+pub use usage_scanner::{
+    PlatformFileIdentity, UsageScanRunReport, UsageScanSource, UsageScanTrigger,
+    UsageScannerHandle, UsageScannerLimits, UsageScannerRuntimeConfig, UsageScannerService,
+};
 
 #[cfg(test)]
 mod tests {

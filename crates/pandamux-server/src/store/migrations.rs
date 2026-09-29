@@ -3,7 +3,7 @@ use rusqlite::{Connection, Result, Transaction, params};
 use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -875,6 +875,126 @@ fn apply_migrations_to(conn: &mut Connection, target_version: i64) -> Result<()>
         tx.execute(
             "INSERT INTO _migrations (version, applied_at_ms) VALUES (6, ?1)",
             [applied_at_ms],
+        )?;
+        tx.commit()?;
+    }
+
+    if current < 7 && target_version >= 7 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(
+            "ALTER TABLE usage_observations ADD COLUMN reconciliation_key TEXT;
+            ALTER TABLE usage_observations ADD COLUMN turn_id TEXT;
+            ALTER TABLE usage_observations ADD COLUMN unknown_fields_json TEXT NOT NULL
+                DEFAULT '[]';
+
+            CREATE UNIQUE INDEX idx_usage_observations_reconciliation
+                ON usage_observations(
+                    environment_id,
+                    provider_instance_id,
+                    reconciliation_key
+                )
+                WHERE reconciliation_key IS NOT NULL;
+
+            CREATE UNIQUE INDEX idx_usage_observations_managed_turn
+                ON usage_observations(environment_id, turn_id)
+                WHERE source_kind = 'managed_turn' AND turn_id IS NOT NULL;
+
+            CREATE TABLE usage_scanner_file_cursors (
+                environment_id TEXT NOT NULL CHECK(environment_id <> ''),
+                provider_instance_id TEXT NOT NULL CHECK(provider_instance_id <> ''),
+                source_kind TEXT NOT NULL CHECK(source_kind <> ''),
+                node_store_id TEXT NOT NULL CHECK(node_store_id <> ''),
+                file_identity TEXT NOT NULL CHECK(file_identity <> ''),
+                canonical_path TEXT NOT NULL,
+                committed_offset INTEGER NOT NULL CHECK(committed_offset >= 0),
+                committed_prefix_sha256 TEXT NOT NULL,
+                parser_version INTEGER NOT NULL CHECK(parser_version > 0),
+                parser_state_json TEXT NOT NULL,
+                observed_size INTEGER NOT NULL CHECK(observed_size >= 0),
+                observed_modified_at_ms INTEGER CHECK(observed_modified_at_ms >= 0),
+                updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0),
+                PRIMARY KEY(
+                    environment_id,
+                    provider_instance_id,
+                    source_kind,
+                    file_identity
+                )
+            );
+
+            CREATE TABLE usage_scanner_diagnostics (
+                environment_id TEXT NOT NULL CHECK(environment_id <> ''),
+                provider_instance_id TEXT NOT NULL CHECK(provider_instance_id <> ''),
+                source_kind TEXT NOT NULL CHECK(source_kind <> ''),
+                coverage_state TEXT NOT NULL CHECK(
+                    coverage_state IN ('complete', 'partial', 'unavailable')
+                ),
+                parser_version INTEGER NOT NULL CHECK(parser_version > 0),
+                last_scan_started_at_ms INTEGER NOT NULL CHECK(last_scan_started_at_ms >= 0),
+                last_success_at_ms INTEGER CHECK(last_success_at_ms >= 0),
+                latest_source_at_ms INTEGER CHECK(latest_source_at_ms >= 0),
+                source_lag_ms INTEGER CHECK(source_lag_ms >= 0),
+                files_scanned INTEGER NOT NULL CHECK(files_scanned >= 0),
+                bytes_scanned INTEGER NOT NULL CHECK(bytes_scanned >= 0),
+                quarantined_count INTEGER NOT NULL CHECK(quarantined_count >= 0),
+                last_safe_error_code TEXT,
+                updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0),
+                PRIMARY KEY(environment_id, provider_instance_id, source_kind)
+            );
+
+            ALTER TABLE usage_quarantine ADD COLUMN environment_id TEXT;
+            ALTER TABLE usage_quarantine ADD COLUMN provider_instance_id TEXT;
+            ALTER TABLE usage_quarantine ADD COLUMN file_identity_sha256 TEXT;
+            ALTER TABLE usage_quarantine ADD COLUMN record_offset INTEGER
+                CHECK(record_offset >= 0);
+            ALTER TABLE usage_quarantine ADD COLUMN parser_version INTEGER
+                CHECK(parser_version > 0);
+
+            CREATE UNIQUE INDEX idx_usage_quarantine_scanner_identity
+                ON usage_quarantine(
+                    environment_id,
+                    provider_instance_id,
+                    source_kind,
+                    file_identity_sha256,
+                    record_offset,
+                    parser_version,
+                    reason_code
+                )
+                WHERE legacy_bucket_id IS NULL;",
+        )?;
+
+        // A normalized fact can be revised in place when a later managed turn
+        // supersedes its transcript copy. Preserve every revision notification
+        // so a hub that already consumed the earlier sequence observes the
+        // authoritative replacement under the same observation id.
+        tx.execute_batch(
+            "CREATE TABLE usage_outbox_v7 (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                environment_id TEXT NOT NULL,
+                observation_id TEXT NOT NULL,
+                enqueued_at_ms INTEGER NOT NULL CHECK(enqueued_at_ms >= 0),
+                acknowledged_at_ms INTEGER CHECK(acknowledged_at_ms >= 0),
+                FOREIGN KEY(environment_id, observation_id)
+                    REFERENCES usage_observations(environment_id, observation_id)
+                    ON DELETE CASCADE
+            );
+
+            INSERT INTO usage_outbox_v7 (
+                seq, environment_id, observation_id, enqueued_at_ms, acknowledged_at_ms
+            )
+            SELECT seq, environment_id, observation_id, enqueued_at_ms, acknowledged_at_ms
+            FROM usage_outbox;
+
+            DROP TABLE usage_outbox;
+            ALTER TABLE usage_outbox_v7 RENAME TO usage_outbox;
+
+            CREATE INDEX idx_usage_outbox_observation
+                ON usage_outbox(environment_id, observation_id, seq);
+            CREATE INDEX idx_usage_outbox_acknowledgement
+                ON usage_outbox(acknowledged_at_ms, seq);",
+        )?;
+        tx.execute(
+            "INSERT INTO _migrations (version, applied_at_ms) VALUES (7, ?1)",
+            [now_ms() as i64],
         )?;
         tx.commit()?;
     }

@@ -178,4 +178,23 @@ pub struct TurnUsage {
     pub cache_write_tokens: Option<u64>,
     #[serde(default)]
     pub cost_usd: Option<f64>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub unknown_fields: std::collections::BTreeSet<crate::usage::UsageUnknownField>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_reported_micro_usd: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<TurnUsageProvenance>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnUsageProvenance {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_native_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_native_turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurred_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }

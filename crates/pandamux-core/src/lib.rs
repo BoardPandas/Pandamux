@@ -93,10 +93,10 @@ pub use ssh::{
 pub use terminal::{RingBufferConfig, TerminalResize, TerminalSessionMeta};
 pub use thread::{
     AccessMode, AgentInstanceRef, Thread, ThreadOrigin, ThreadStatus, ThreadWorkspace, Turn,
-    TurnInput, TurnStatus, TurnUsage, WorktreeRef,
+    TurnInput, TurnStatus, TurnUsage, TurnUsageProvenance, WorktreeRef,
 };
 pub use usage::{
     CapacityConfidence, CapacitySnapshot, DailyBudgetLedger, TokenCounts, TokenUsageSummary,
     UsageArithmeticError, UsageBucket, UsageObservation, UsageObservationError, UsageProvider,
-    UsageRecord, UsageSourceKind, UsageSubscription,
+    UsageRecord, UsageSourceKind, UsageSubscription, UsageUnknownField,
 };

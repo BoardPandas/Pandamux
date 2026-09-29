@@ -4,18 +4,22 @@ use pandamux_core::{
     AgentId, AttachmentRecord, CapacityConfidence, CapacitySnapshot, EnvironmentId, FailoverPool,
     NodeStoreId, OrganizationPolicy, ProjectId, ProviderCapabilities, ProviderInstanceId,
     ProviderKind, ScheduleId, ScheduleRecord, SubscriptionKey, Thread, ThreadEvent,
-    ThreadEventKind, ThreadId, TokenCounts, Turn, TurnId, TurnStatus, UsageObservation,
-    UsageObservationId, UsageProvider, UsageSourceKind, UsageSubscription, UserSettings,
+    ThreadEventKind, ThreadId, ThreadOrigin, TokenCounts, Turn, TurnId, TurnStatus, TurnUsage,
+    UsageObservation, UsageObservationId, UsageProvider, UsageSourceKind, UsageSubscription,
+    UsageUnknownField, UserSettings,
 };
 use pandamux_protocol::{
     CapacityQueryCursor, CapacityQueryParams, CapacityQueryResult, EventEnvelope, UsageExportItem,
     UsageExportParams, UsageExportResult, UsageQueryCursor, UsageQueryItem, UsageQueryParams,
-    UsageQueryResult,
+    UsageQueryResult, UsageScannerDiagnostic, UsageSourceCoverageState,
 };
 use rusqlite::{Connection, OptionalExtension, params};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+
+const MAX_RETAINED_SCANNER_QUARANTINES_PER_SOURCE: i64 = 4_096;
 
 #[derive(Debug)]
 pub enum StoreError {
@@ -66,11 +70,16 @@ pub struct ProviderExecutionAudit {
 /// Durable scanner position committed in the same transaction as accepted facts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UsageScannerCursor {
+    pub environment_id: EnvironmentId,
+    pub provider_instance_id: ProviderInstanceId,
     pub source_kind: UsageSourceKind,
+    pub node_store_id: NodeStoreId,
     pub file_identity: String,
     pub canonical_path: String,
     pub committed_offset: u64,
+    pub committed_prefix_sha256: String,
     pub parser_version: u32,
+    pub parser_state_json: String,
     pub observed_size: u64,
     pub observed_modified_at_ms: Option<u64>,
     pub updated_at_ms: u64,
@@ -80,7 +89,44 @@ pub struct UsageScannerCursor {
 pub struct UsageBatchResult {
     pub inserted: u64,
     pub duplicates: u64,
+    pub reconciled: u64,
+    pub reconciliation_mismatches: u64,
+    pub quarantined: u64,
     pub last_outbox_seq: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UsageQuarantineRecord {
+    pub environment_id: EnvironmentId,
+    pub provider_instance_id: ProviderInstanceId,
+    pub source_kind: UsageSourceKind,
+    pub file_identity_sha256: String,
+    pub record_offset: u64,
+    pub parser_version: u32,
+    pub reason_code: String,
+    pub reason_detail: String,
+    pub safe_excerpt_sha256: String,
+    pub created_at_ms: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ManagedUsageBackfillResult {
+    pub batch: UsageBatchResult,
+    pub unmapped: u64,
+    pub invalid: u64,
+}
+
+struct ManagedUsageCandidate {
+    turn_id: TurnId,
+    thread_id: ThreadId,
+    environment_id: EnvironmentId,
+    provider_instance_id: ProviderInstanceId,
+    ended_at_ms: Option<u64>,
+    usage: TurnUsage,
+    provider_kind: ProviderKind,
+    model: String,
+    agent_id: Option<AgentId>,
+    schedule_id: Option<ScheduleId>,
 }
 
 /// A thread-safe, single-writer SQLite store wrapper.
@@ -878,48 +924,95 @@ impl Store {
         Ok(NodeStoreId::from(value))
     }
 
+    pub fn usage_subscription_for_provider(
+        &self,
+        environment_id: &EnvironmentId,
+        provider_instance_id: &ProviderInstanceId,
+    ) -> Result<Option<(SubscriptionKey, UsageProvider)>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT m.subscription_key, s.provider
+             FROM provider_subscription_mappings m
+             JOIN usage_subscriptions s
+               ON s.subscription_key = m.subscription_key
+             WHERE m.environment_id = ?1 AND m.provider_instance_id = ?2",
+            params![environment_id.as_str(), provider_instance_id.as_str()],
+            |row| {
+                Ok((
+                    SubscriptionKey::from(row.get::<_, String>(0)?),
+                    UsageProvider::from(row.get::<_, String>(1)?),
+                ))
+            },
+        )
+        .optional()
+        .map_err(StoreError::from)
+    }
+
     pub fn get_usage_scanner_cursor(
         &self,
+        environment_id: &EnvironmentId,
+        provider_instance_id: &ProviderInstanceId,
         source_kind: &UsageSourceKind,
         file_identity: &str,
     ) -> Result<Option<UsageScannerCursor>, StoreError> {
         let conn = self.conn.lock().unwrap();
         let row = conn
             .query_row(
-                "SELECT source_kind, file_identity, canonical_path, committed_offset,
-                        parser_version, observed_size, observed_modified_at_ms, updated_at_ms
-                 FROM usage_scanner_cursors
-                 WHERE source_kind = ?1 AND file_identity = ?2",
-                params![source_kind.as_str(), file_identity],
+                "SELECT environment_id, provider_instance_id, source_kind, file_identity,
+                        node_store_id, canonical_path, committed_offset,
+                        committed_prefix_sha256, parser_version, parser_state_json,
+                        observed_size, observed_modified_at_ms, updated_at_ms
+                 FROM usage_scanner_file_cursors
+                 WHERE environment_id = ?1 AND provider_instance_id = ?2
+                   AND source_kind = ?3 AND file_identity = ?4",
+                params![
+                    environment_id.as_str(),
+                    provider_instance_id.as_str(),
+                    source_kind.as_str(),
+                    file_identity
+                ],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, String>(2)?,
-                        row.get::<_, i64>(3)?,
-                        row.get::<_, i64>(4)?,
-                        row.get::<_, i64>(5)?,
-                        row.get::<_, Option<i64>>(6)?,
-                        row.get::<_, i64>(7)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, i64>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, i64>(8)?,
+                        row.get::<_, String>(9)?,
+                        row.get::<_, i64>(10)?,
+                        row.get::<_, Option<i64>>(11)?,
+                        row.get::<_, i64>(12)?,
                     ))
                 },
             )
             .optional()?;
         row.map(|row| {
             Ok(UsageScannerCursor {
-                source_kind: UsageSourceKind::from(row.0),
-                file_identity: row.1,
-                canonical_path: row.2,
-                committed_offset: checked_u64(row.3, "usage_scanner_cursors.committed_offset")?,
-                parser_version: checked_u32(row.4, "usage_scanner_cursors.parser_version")?,
-                observed_size: checked_u64(row.5, "usage_scanner_cursors.observed_size")?,
+                environment_id: EnvironmentId::from(row.0),
+                provider_instance_id: ProviderInstanceId::from(row.1),
+                source_kind: UsageSourceKind::from(row.2),
+                file_identity: row.3,
+                node_store_id: NodeStoreId::from(row.4),
+                canonical_path: row.5,
+                committed_offset: checked_u64(
+                    row.6,
+                    "usage_scanner_file_cursors.committed_offset",
+                )?,
+                committed_prefix_sha256: row.7,
+                parser_version: checked_u32(row.8, "usage_scanner_file_cursors.parser_version")?,
+                parser_state_json: row.9,
+                observed_size: checked_u64(row.10, "usage_scanner_file_cursors.observed_size")?,
                 observed_modified_at_ms: row
-                    .6
+                    .11
                     .map(|value| {
-                        checked_u64(value, "usage_scanner_cursors.observed_modified_at_ms")
+                        checked_u64(value, "usage_scanner_file_cursors.observed_modified_at_ms")
                     })
                     .transpose()?,
-                updated_at_ms: checked_u64(row.7, "usage_scanner_cursors.updated_at_ms")?,
+                updated_at_ms: checked_u64(row.12, "usage_scanner_file_cursors.updated_at_ms")?,
             })
         })
         .transpose()
@@ -931,6 +1024,36 @@ impl Store {
         observations: &[UsageObservation],
         cursor: Option<&UsageScannerCursor>,
     ) -> Result<UsageBatchResult, StoreError> {
+        self.record_usage_transaction(environment_id, observations, cursor, &[], None, None)
+    }
+
+    pub fn record_usage_scan_batch(
+        &self,
+        environment_id: &EnvironmentId,
+        observations: &[UsageObservation],
+        cursor: Option<&UsageScannerCursor>,
+        quarantines: &[UsageQuarantineRecord],
+        diagnostic: Option<&UsageScannerDiagnostic>,
+    ) -> Result<UsageBatchResult, StoreError> {
+        self.record_usage_transaction(
+            environment_id,
+            observations,
+            cursor,
+            quarantines,
+            diagnostic,
+            None,
+        )
+    }
+
+    fn record_usage_transaction(
+        &self,
+        environment_id: &EnvironmentId,
+        observations: &[UsageObservation],
+        cursor: Option<&UsageScannerCursor>,
+        quarantines: &[UsageQuarantineRecord],
+        diagnostic: Option<&UsageScannerDiagnostic>,
+        fail_after_observations: Option<usize>,
+    ) -> Result<UsageBatchResult, StoreError> {
         if environment_id.as_str().trim().is_empty() {
             return Err(StoreError::Data(
                 "authenticated environment id must not be empty".to_string(),
@@ -938,19 +1061,70 @@ impl Store {
         }
         if let Some(cursor) = cursor {
             validate_usage_cursor(cursor)?;
+            if &cursor.environment_id != environment_id {
+                return Err(StoreError::Data(
+                    "usage cursor environment does not match authenticated environment".to_string(),
+                ));
+            }
         }
         for observation in observations {
             observation
                 .validate()
                 .map_err(|error| StoreError::Data(error.to_string()))?;
+            if cursor.is_some_and(|cursor| {
+                cursor.provider_instance_id != observation.provider_instance_id
+                    || cursor.source_kind != observation.source_kind
+            }) {
+                return Err(StoreError::Data(
+                    "usage observation does not match its scanner cursor scope".to_string(),
+                ));
+            }
+        }
+        for quarantine in quarantines {
+            validate_usage_quarantine(quarantine)?;
+            if &quarantine.environment_id != environment_id {
+                return Err(StoreError::Data(
+                    "usage quarantine environment does not match authenticated environment"
+                        .to_string(),
+                ));
+            }
+            if cursor.is_some_and(|cursor| {
+                cursor.provider_instance_id != quarantine.provider_instance_id
+                    || cursor.source_kind != quarantine.source_kind
+            }) {
+                return Err(StoreError::Data(
+                    "usage quarantine does not match its scanner cursor scope".to_string(),
+                ));
+            }
+        }
+        if let Some(diagnostic) = diagnostic {
+            validate_usage_diagnostic(diagnostic)?;
+            if &diagnostic.environment_id != environment_id {
+                return Err(StoreError::Data(
+                    "usage diagnostic environment does not match authenticated environment"
+                        .to_string(),
+                ));
+            }
         }
 
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
+        if let Some(cursor) = cursor {
+            let node_store_id = tx.query_row(
+                "SELECT node_store_id FROM usage_store_meta WHERE singleton = 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )?;
+            if cursor.node_store_id.as_str() != node_store_id {
+                return Err(StoreError::Data(
+                    "usage cursor node store identity changed".to_string(),
+                ));
+            }
+        }
         let mut result = UsageBatchResult::default();
         let created_at_ms = checked_i64(store_now_ms(), "usage_observations.created_at_ms")?;
 
-        for observation in observations {
+        for (index, observation) in observations.iter().enumerate() {
             let mapped_subscription = tx
                 .query_row(
                     "SELECT m.subscription_key, s.provider
@@ -979,18 +1153,94 @@ impl Store {
                 )));
             }
 
+            let reconciliation_key = usage_reconciliation_key(observation)?;
+            if let Some(reconciliation_key) = reconciliation_key.as_deref()
+                && let Some(existing) = load_usage_observation_by_reconciliation(
+                    &tx,
+                    environment_id,
+                    &observation.provider_instance_id,
+                    reconciliation_key,
+                )?
+            {
+                if existing.id == observation.id {
+                    if existing != *observation {
+                        return Err(StoreError::Data(format!(
+                            "usage observation id collision for {}",
+                            observation.id
+                        )));
+                    }
+                    result.duplicates =
+                        checked_increment(result.duplicates, "usage duplicate count overflow")?;
+                    continue;
+                }
+                if existing.source_kind == UsageSourceKind::ManagedTurn
+                    && observation.source_kind != UsageSourceKind::ManagedTurn
+                {
+                    result.reconciled = checked_increment(
+                        result.reconciled,
+                        "usage reconciliation count overflow",
+                    )?;
+                    if !usage_measurement_equivalent(&existing, observation) {
+                        result.reconciliation_mismatches = checked_increment(
+                            result.reconciliation_mismatches,
+                            "usage reconciliation mismatch count overflow",
+                        )?;
+                    }
+                    continue;
+                }
+                if observation.source_kind == UsageSourceKind::ManagedTurn
+                    && existing.source_kind != UsageSourceKind::ManagedTurn
+                {
+                    let measurements_match = usage_measurement_equivalent(&existing, observation);
+                    let outbox_seq = promote_usage_observation_to_managed(
+                        &tx,
+                        environment_id,
+                        &existing.id,
+                        observation,
+                        reconciliation_key,
+                        created_at_ms,
+                    )?;
+                    result.reconciled = checked_increment(
+                        result.reconciled,
+                        "usage reconciliation count overflow",
+                    )?;
+                    if !measurements_match {
+                        result.reconciliation_mismatches = checked_increment(
+                            result.reconciliation_mismatches,
+                            "usage reconciliation mismatch count overflow",
+                        )?;
+                    }
+                    result.last_outbox_seq = result.last_outbox_seq.max(outbox_seq);
+                    continue;
+                }
+                if usage_measurement_equivalent(&existing, observation) {
+                    result.reconciled = checked_increment(
+                        result.reconciled,
+                        "usage reconciliation count overflow",
+                    )?;
+                    continue;
+                }
+                return Err(StoreError::Data(format!(
+                    "usage reconciliation collision for {}",
+                    observation.id
+                )));
+            }
+
             let other_tokens_json = serde_json::to_string(&observation.tokens.other)?;
+            let unknown_fields_json = serde_json::to_string(&observation.unknown_fields)?;
             let inserted = tx.execute(
                 "INSERT INTO usage_observations (
                     environment_id, observation_id, source_kind, parser_version,
                     provider_native_session_id, provider_native_turn_id, occurred_at_ms,
                     provider, provider_instance_id, subscription_key, model,
                     input_tokens, cached_input_tokens, cache_write_tokens, output_tokens,
-                    reasoning_tokens, other_tokens_json, provider_reported_micro_usd,
-                    source_record_count, thread_id, agent_id, schedule_id, created_at_ms
+                    reasoning_tokens, other_tokens_json, unknown_fields_json,
+                    provider_reported_micro_usd, source_record_count, thread_id,
+                    turn_id, agent_id, schedule_id, created_at_ms, reconciliation_key
                  ) VALUES (
                     ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-                    ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23
+                    ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23,
+                    ?24, ?25, ?26
                  ) ON CONFLICT(environment_id, observation_id) DO NOTHING",
                 params![
                     environment_id.as_str(),
@@ -1010,15 +1260,18 @@ impl Store {
                     checked_i64(observation.tokens.output, "output_tokens")?,
                     checked_i64(observation.tokens.reasoning, "reasoning_tokens")?,
                     other_tokens_json,
+                    unknown_fields_json,
                     optional_checked_i64(
                         observation.provider_reported_micro_usd,
                         "provider_reported_micro_usd"
                     )?,
                     checked_i64(observation.source_record_count, "source_record_count")?,
                     observation.thread_id.as_ref().map(ThreadId::as_str),
+                    observation.turn_id.as_ref().map(TurnId::as_str),
                     observation.agent_id.as_ref().map(|id| id.as_str()),
                     observation.schedule_id.as_ref().map(ScheduleId::as_str),
                     created_at_ms,
+                    reconciliation_key,
                 ],
             )?;
             if inserted == 0 {
@@ -1035,9 +1288,8 @@ impl Store {
                         observation.id
                     )));
                 }
-                result.duplicates = result.duplicates.checked_add(1).ok_or_else(|| {
-                    StoreError::Data("usage duplicate count overflow".to_string())
-                })?;
+                result.duplicates =
+                    checked_increment(result.duplicates, "usage duplicate count overflow")?;
                 continue;
             }
 
@@ -1050,32 +1302,107 @@ impl Store {
                     created_at_ms
                 ],
             )?;
-            result.inserted = result
-                .inserted
-                .checked_add(1)
-                .ok_or_else(|| StoreError::Data("usage insert count overflow".to_string()))?;
+            result.inserted = checked_increment(result.inserted, "usage insert count overflow")?;
             result.last_outbox_seq = checked_u64(tx.last_insert_rowid(), "usage_outbox.seq")?;
+
+            if fail_after_observations == Some(index + 1) {
+                return Err(StoreError::Data(
+                    "injected usage transaction failure".to_string(),
+                ));
+            }
+        }
+
+        for quarantine in quarantines {
+            let inserted = tx.execute(
+                "INSERT INTO usage_quarantine (
+                    legacy_bucket_id, source_kind, reason_code, reason_detail,
+                    safe_excerpt_sha256, created_at_ms, environment_id,
+                    provider_instance_id, file_identity_sha256, record_offset,
+                    parser_version
+                 ) VALUES (
+                    NULL, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10
+                 ) ON CONFLICT DO NOTHING",
+                params![
+                    quarantine.source_kind.as_str(),
+                    quarantine.reason_code,
+                    quarantine.reason_detail,
+                    quarantine.safe_excerpt_sha256,
+                    checked_i64(quarantine.created_at_ms, "quarantine created_at_ms")?,
+                    quarantine.environment_id.as_str(),
+                    quarantine.provider_instance_id.as_str(),
+                    quarantine.file_identity_sha256,
+                    checked_i64(quarantine.record_offset, "quarantine record_offset")?,
+                    i64::from(quarantine.parser_version),
+                ],
+            )?;
+            if inserted > 0 {
+                result.quarantined =
+                    checked_increment(result.quarantined, "usage quarantine count overflow")?;
+            }
+        }
+
+        let quarantine_scopes = quarantines
+            .iter()
+            .map(|quarantine| {
+                (
+                    quarantine.environment_id.clone(),
+                    quarantine.provider_instance_id.clone(),
+                    quarantine.source_kind.clone(),
+                )
+            })
+            .collect::<BTreeSet<_>>();
+        for (environment_id, provider_instance_id, source_kind) in quarantine_scopes {
+            tx.execute(
+                "DELETE FROM usage_quarantine
+                 WHERE id IN (
+                    SELECT id FROM usage_quarantine
+                    WHERE legacy_bucket_id IS NULL
+                      AND environment_id = ?1
+                      AND provider_instance_id = ?2
+                      AND source_kind = ?3
+                    ORDER BY created_at_ms DESC, id DESC
+                    LIMIT -1 OFFSET ?4
+                 )",
+                params![
+                    environment_id.as_str(),
+                    provider_instance_id.as_str(),
+                    source_kind.as_str(),
+                    MAX_RETAINED_SCANNER_QUARANTINES_PER_SOURCE,
+                ],
+            )?;
         }
 
         if let Some(cursor) = cursor {
             tx.execute(
-                "INSERT INTO usage_scanner_cursors (
-                    source_kind, file_identity, canonical_path, committed_offset,
-                    parser_version, observed_size, observed_modified_at_ms, updated_at_ms
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-                 ON CONFLICT(source_kind, file_identity) DO UPDATE SET
+                "INSERT INTO usage_scanner_file_cursors (
+                    environment_id, provider_instance_id, source_kind, node_store_id,
+                    file_identity, canonical_path, committed_offset,
+                    committed_prefix_sha256, parser_version, parser_state_json,
+                    observed_size, observed_modified_at_ms, updated_at_ms
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                 ON CONFLICT(
+                    environment_id, provider_instance_id, source_kind, file_identity
+                 ) DO UPDATE SET
+                    node_store_id = excluded.node_store_id,
                     canonical_path = excluded.canonical_path,
                     committed_offset = excluded.committed_offset,
+                    committed_prefix_sha256 = excluded.committed_prefix_sha256,
                     parser_version = excluded.parser_version,
+                    parser_state_json = excluded.parser_state_json,
                     observed_size = excluded.observed_size,
                     observed_modified_at_ms = excluded.observed_modified_at_ms,
                     updated_at_ms = excluded.updated_at_ms",
                 params![
+                    cursor.environment_id.as_str(),
+                    cursor.provider_instance_id.as_str(),
                     cursor.source_kind.as_str(),
+                    cursor.node_store_id.as_str(),
                     cursor.file_identity,
                     cursor.canonical_path,
                     checked_i64(cursor.committed_offset, "committed_offset")?,
+                    cursor.committed_prefix_sha256,
                     i64::from(cursor.parser_version),
+                    cursor.parser_state_json,
                     checked_i64(cursor.observed_size, "observed_size")?,
                     optional_checked_i64(
                         cursor.observed_modified_at_ms,
@@ -1085,7 +1412,202 @@ impl Store {
                 ],
             )?;
         }
+
+        if let Some(diagnostic) = diagnostic {
+            let quarantined_count = checked_u64(
+                tx.query_row(
+                    "SELECT COUNT(*) FROM usage_quarantine
+                     WHERE environment_id = ?1 AND provider_instance_id = ?2
+                       AND source_kind = ?3",
+                    params![
+                        diagnostic.environment_id.as_str(),
+                        diagnostic.provider_instance_id.as_str(),
+                        diagnostic.source_kind.as_str(),
+                    ],
+                    |row| row.get(0),
+                )?,
+                "scanner quarantine count",
+            )?;
+            let mut diagnostic = diagnostic.clone();
+            diagnostic.quarantined_count = quarantined_count;
+            if result.reconciliation_mismatches > 0 {
+                diagnostic.coverage_state = UsageSourceCoverageState::Partial;
+                diagnostic.last_safe_error_code = Some("managed_transcript_mismatch".to_string());
+            }
+            upsert_usage_diagnostic(&tx, &diagnostic)?;
+        }
         tx.commit()?;
+        Ok(result)
+    }
+
+    pub fn backfill_managed_turn_usage(
+        &self,
+        environment_id: &EnvironmentId,
+        limit: u32,
+    ) -> Result<ManagedUsageBackfillResult, StoreError> {
+        if !(1..=10_000).contains(&limit) {
+            return Err(StoreError::Data(
+                "managed usage backfill limit must be between 1 and 10000".to_string(),
+            ));
+        }
+        let candidates = {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn.prepare(
+                "SELECT t.id, t.thread_id, t.environment_id, t.provider_instance_id,
+                        t.ended_at_ms, t.usage_json, a.provider_kind, a.model,
+                        th.agent_json, th.origin_json
+                 FROM turns t
+                 JOIN provider_execution_audit a ON a.turn_id = t.id
+                 JOIN threads th ON th.id = t.thread_id
+                 LEFT JOIN usage_observations o
+                   ON o.environment_id = t.environment_id
+                  AND o.turn_id = t.id
+                  AND o.source_kind = 'managed_turn'
+                 WHERE t.environment_id = ?1
+                   AND t.usage_json IS NOT NULL AND o.observation_id IS NULL
+                 ORDER BY t.started_at_ms, t.id
+                 LIMIT ?2",
+            )?;
+            let rows =
+                stmt.query_map(params![environment_id.as_str(), i64::from(limit)], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, Option<i64>>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, Option<String>>(8)?,
+                        row.get::<_, String>(9)?,
+                    ))
+                })?;
+            let mut candidates = Vec::new();
+            for row in rows {
+                let row = row?;
+                let agent_id = row
+                    .8
+                    .as_deref()
+                    .map(serde_json::from_str::<pandamux_core::AgentInstanceRef>)
+                    .transpose()?
+                    .map(|agent| agent.agent_id);
+                let origin: ThreadOrigin = serde_json::from_str(&row.9)?;
+                let schedule_id = match origin {
+                    ThreadOrigin::Schedule { schedule_id, .. } => Some(schedule_id),
+                    _ => None,
+                };
+                candidates.push(ManagedUsageCandidate {
+                    turn_id: TurnId::from(row.0),
+                    thread_id: ThreadId::from(row.1),
+                    environment_id: EnvironmentId::from(row.2),
+                    provider_instance_id: ProviderInstanceId::from(row.3),
+                    ended_at_ms: row
+                        .4
+                        .map(|value| checked_u64(value, "managed usage ended_at_ms"))
+                        .transpose()?,
+                    usage: serde_json::from_str(&row.5)?,
+                    provider_kind: serde_json::from_str(&row.6)?,
+                    model: row.7,
+                    agent_id,
+                    schedule_id,
+                });
+            }
+            candidates
+        };
+
+        let mut result = ManagedUsageBackfillResult::default();
+        for candidate in candidates {
+            let provider = UsageProvider::from(candidate.provider_kind);
+            let Some((subscription_key, mapped_provider)) = self.usage_subscription_for_provider(
+                &candidate.environment_id,
+                &candidate.provider_instance_id,
+            )?
+            else {
+                result.unmapped =
+                    checked_increment(result.unmapped, "managed usage unmapped count overflow")?;
+                continue;
+            };
+            if mapped_provider != provider {
+                result.unmapped =
+                    checked_increment(result.unmapped, "managed usage unmapped count overflow")?;
+                continue;
+            }
+            let provenance = candidate.usage.provenance.as_ref();
+            let provider_reported_micro_usd = candidate
+                .usage
+                .provider_reported_micro_usd
+                .or_else(|| candidate.usage.cost_usd.and_then(cost_usd_to_micro));
+            if candidate.usage.cost_usd.is_some()
+                && candidate.usage.provider_reported_micro_usd.is_none()
+                && provider_reported_micro_usd.is_none()
+            {
+                result.invalid =
+                    checked_increment(result.invalid, "managed usage invalid count overflow")?;
+            }
+            let model = provenance
+                .and_then(|value| value.model.as_deref())
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_string)
+                .or_else(|| {
+                    (!candidate.model.trim().is_empty()).then_some(candidate.model.clone())
+                });
+            let provider_native_session_id = provenance
+                .and_then(|value| value.provider_native_session_id.clone())
+                .filter(|value| !value.trim().is_empty());
+            let provider_native_turn_id = provenance
+                .and_then(|value| value.provider_native_turn_id.clone())
+                .filter(|value| !value.trim().is_empty());
+            let mut unknown_fields = candidate.usage.unknown_fields.clone();
+            if provider_native_turn_id.is_none() {
+                unknown_fields.insert(UsageUnknownField::Identity);
+            }
+            let observation = UsageObservation {
+                id: UsageObservationId::new(format!(
+                    "usage-managed-{}",
+                    stable_usage_hash(&[
+                        candidate.environment_id.as_str(),
+                        candidate.turn_id.as_str(),
+                    ])
+                )),
+                source_kind: UsageSourceKind::ManagedTurn,
+                parser_version: 1,
+                provider_native_session_id,
+                provider_native_turn_id,
+                occurred_at_ms: provenance
+                    .and_then(|value| value.occurred_at_ms)
+                    .or(candidate.ended_at_ms),
+                provider,
+                provider_instance_id: candidate.provider_instance_id,
+                subscription_key,
+                model,
+                tokens: TokenCounts {
+                    input: candidate.usage.input_tokens,
+                    cached_input: candidate.usage.cache_read_tokens.unwrap_or(0),
+                    cache_write: candidate.usage.cache_write_tokens.unwrap_or(0),
+                    output: candidate.usage.output_tokens,
+                    ..TokenCounts::default()
+                },
+                unknown_fields,
+                provider_reported_micro_usd,
+                source_record_count: 1,
+                thread_id: Some(candidate.thread_id),
+                turn_id: Some(candidate.turn_id),
+                agent_id: candidate.agent_id,
+                schedule_id: candidate.schedule_id,
+            };
+            if observation.validate().is_err() {
+                result.invalid =
+                    checked_increment(result.invalid, "managed usage invalid count overflow")?;
+                continue;
+            }
+            let batch = self.record_usage_batch(
+                &candidate.environment_id,
+                std::slice::from_ref(&observation),
+                None,
+            )?;
+            merge_usage_batch(&mut result.batch, &batch)?;
+        }
         Ok(result)
     }
 
@@ -1109,9 +1631,9 @@ impl Store {
                     o.occurred_at_ms, o.provider, o.provider_instance_id,
                     o.subscription_key, o.model, o.input_tokens,
                     o.cached_input_tokens, o.cache_write_tokens, o.output_tokens,
-                    o.reasoning_tokens, o.other_tokens_json,
+                    o.reasoning_tokens, o.other_tokens_json, o.unknown_fields_json,
                     o.provider_reported_micro_usd, o.source_record_count,
-                    o.thread_id, o.agent_id, o.schedule_id
+                    o.thread_id, o.turn_id, o.agent_id, o.schedule_id
              FROM usage_outbox x
              JOIN usage_observations o
                ON o.environment_id = x.environment_id
@@ -1167,8 +1689,8 @@ impl Store {
                     occurred_at_ms, provider, provider_instance_id, subscription_key,
                     model, input_tokens, cached_input_tokens, cache_write_tokens,
                     output_tokens, reasoning_tokens, other_tokens_json,
-                    provider_reported_micro_usd, source_record_count,
-                    thread_id, agent_id, schedule_id
+                    unknown_fields_json, provider_reported_micro_usd, source_record_count,
+                    thread_id, turn_id, agent_id, schedule_id
              FROM usage_observations WHERE 1 = 1",
         );
         let mut values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -1286,6 +1808,7 @@ impl Store {
             })?,
             "usage_quarantine count",
         )?;
+        let scanner_diagnostics = load_usage_scanner_diagnostics(&conn, params)?;
         Ok(UsageQueryResult {
             items,
             next,
@@ -1293,6 +1816,7 @@ impl Store {
             coverage: pandamux_protocol::UsageCoverage {
                 quarantined_count,
                 included_environments: included_environments.into_iter().collect(),
+                scanner_diagnostics,
             },
         })
     }
@@ -1820,12 +2344,15 @@ impl Store {
 }
 
 fn validate_usage_cursor(cursor: &UsageScannerCursor) -> Result<(), StoreError> {
-    if cursor.source_kind.as_str().trim().is_empty()
+    if cursor.environment_id.as_str().trim().is_empty()
+        || cursor.provider_instance_id.as_str().trim().is_empty()
+        || cursor.source_kind.as_str().trim().is_empty()
+        || cursor.node_store_id.as_str().trim().is_empty()
         || cursor.file_identity.trim().is_empty()
         || cursor.canonical_path.trim().is_empty()
     {
         return Err(StoreError::Data(
-            "usage cursor source, file identity, and diagnostic path must not be empty".to_string(),
+            "usage cursor scope, file identity, and diagnostic path must not be empty".to_string(),
         ));
     }
     if cursor.parser_version == 0 {
@@ -1838,6 +2365,345 @@ fn validate_usage_cursor(cursor: &UsageScannerCursor) -> Result<(), StoreError> 
             "usage cursor offset must not exceed observed file size".to_string(),
         ));
     }
+    if !is_sha256(&cursor.committed_prefix_sha256) {
+        return Err(StoreError::Data(
+            "usage cursor prefix hash must be lowercase SHA-256".to_string(),
+        ));
+    }
+    if cursor.parser_state_json.len() > 65_536
+        || serde_json::from_str::<serde_json::Value>(&cursor.parser_state_json).is_err()
+    {
+        return Err(StoreError::Data(
+            "usage cursor parser state must be bounded valid JSON".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_usage_quarantine(quarantine: &UsageQuarantineRecord) -> Result<(), StoreError> {
+    if quarantine.environment_id.as_str().trim().is_empty()
+        || quarantine.provider_instance_id.as_str().trim().is_empty()
+        || quarantine.source_kind.as_str().trim().is_empty()
+        || quarantine.reason_code.trim().is_empty()
+        || quarantine.reason_code.len() > 64
+        || quarantine.reason_detail.trim().is_empty()
+        || quarantine.reason_detail.len() > 256
+    {
+        return Err(StoreError::Data(
+            "usage quarantine scope and bounded reason must not be empty".to_string(),
+        ));
+    }
+    if quarantine.parser_version == 0 {
+        return Err(StoreError::Data(
+            "usage quarantine parser version must be greater than zero".to_string(),
+        ));
+    }
+    if !is_sha256(&quarantine.file_identity_sha256) || !is_sha256(&quarantine.safe_excerpt_sha256) {
+        return Err(StoreError::Data(
+            "usage quarantine hashes must be lowercase SHA-256".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_usage_diagnostic(diagnostic: &UsageScannerDiagnostic) -> Result<(), StoreError> {
+    if diagnostic.environment_id.as_str().trim().is_empty()
+        || diagnostic.provider_instance_id.as_str().trim().is_empty()
+        || diagnostic.source_kind.as_str().trim().is_empty()
+        || diagnostic.parser_version == 0
+    {
+        return Err(StoreError::Data(
+            "usage scanner diagnostic scope and parser version must be valid".to_string(),
+        ));
+    }
+    if diagnostic
+        .last_safe_error_code
+        .as_ref()
+        .is_some_and(|code| code.trim().is_empty() || code.len() > 64)
+    {
+        return Err(StoreError::Data(
+            "usage scanner safe error code must be absent or bounded".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn is_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn checked_increment(value: u64, message: &str) -> Result<u64, StoreError> {
+    value
+        .checked_add(1)
+        .ok_or_else(|| StoreError::Data(message.to_string()))
+}
+
+fn merge_usage_batch(
+    target: &mut UsageBatchResult,
+    source: &UsageBatchResult,
+) -> Result<(), StoreError> {
+    target.inserted = target
+        .inserted
+        .checked_add(source.inserted)
+        .ok_or_else(|| StoreError::Data("usage insert count overflow".to_string()))?;
+    target.duplicates = target
+        .duplicates
+        .checked_add(source.duplicates)
+        .ok_or_else(|| StoreError::Data("usage duplicate count overflow".to_string()))?;
+    target.reconciled = target
+        .reconciled
+        .checked_add(source.reconciled)
+        .ok_or_else(|| StoreError::Data("usage reconciliation count overflow".to_string()))?;
+    target.reconciliation_mismatches = target
+        .reconciliation_mismatches
+        .checked_add(source.reconciliation_mismatches)
+        .ok_or_else(|| {
+            StoreError::Data("usage reconciliation mismatch count overflow".to_string())
+        })?;
+    target.quarantined = target
+        .quarantined
+        .checked_add(source.quarantined)
+        .ok_or_else(|| StoreError::Data("usage quarantine count overflow".to_string()))?;
+    target.last_outbox_seq = target.last_outbox_seq.max(source.last_outbox_seq);
+    Ok(())
+}
+
+fn cost_usd_to_micro(value: f64) -> Option<u64> {
+    if !value.is_finite() || value < 0.0 || value > (u64::MAX as f64) / 1_000_000.0 {
+        return None;
+    }
+    Some((value * 1_000_000.0).round() as u64)
+}
+
+fn usage_reconciliation_key(observation: &UsageObservation) -> Result<Option<String>, StoreError> {
+    if let Some(turn_id) = observation
+        .provider_native_turn_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(Some(format!(
+            "native:v1:{}",
+            stable_usage_hash(&[
+                observation.provider.as_str(),
+                observation.provider_instance_id.as_str(),
+                observation
+                    .provider_native_session_id
+                    .as_deref()
+                    .unwrap_or(""),
+                turn_id,
+            ])
+        )));
+    }
+    let Some(session_id) = observation
+        .provider_native_session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    let Some(occurred_at_ms) = observation.occurred_at_ms else {
+        return Ok(None);
+    };
+    let other_tokens = serde_json::to_string(&observation.tokens.other)?;
+    let unknown_fields = serde_json::to_string(&observation.unknown_fields)?;
+    Ok(Some(format!(
+        "fingerprint:v1:{}",
+        stable_usage_hash(&[
+            observation.provider.as_str(),
+            observation.provider_instance_id.as_str(),
+            session_id,
+            &occurred_at_ms.to_string(),
+            observation.model.as_deref().unwrap_or(""),
+            &observation.tokens.input.to_string(),
+            &observation.tokens.cached_input.to_string(),
+            &observation.tokens.cache_write.to_string(),
+            &observation.tokens.output.to_string(),
+            &observation.tokens.reasoning.to_string(),
+            &other_tokens,
+            &unknown_fields,
+            &observation
+                .provider_reported_micro_usd
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+        ])
+    )))
+}
+
+fn stable_usage_hash(parts: &[&str]) -> String {
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update((part.len() as u64).to_le_bytes());
+        hasher.update(part.as_bytes());
+    }
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn usage_measurement_equivalent(existing: &UsageObservation, incoming: &UsageObservation) -> bool {
+    existing.provider_native_session_id == incoming.provider_native_session_id
+        && existing.provider_native_turn_id == incoming.provider_native_turn_id
+        && existing.occurred_at_ms == incoming.occurred_at_ms
+        && existing.provider == incoming.provider
+        && existing.provider_instance_id == incoming.provider_instance_id
+        && existing.subscription_key == incoming.subscription_key
+        && existing.model == incoming.model
+        && existing.tokens == incoming.tokens
+        && existing.unknown_fields == incoming.unknown_fields
+        && existing.provider_reported_micro_usd == incoming.provider_reported_micro_usd
+}
+
+fn promote_usage_observation_to_managed(
+    tx: &rusqlite::Transaction<'_>,
+    environment_id: &EnvironmentId,
+    existing_id: &UsageObservationId,
+    managed: &UsageObservation,
+    reconciliation_key: &str,
+    enqueued_at_ms: i64,
+) -> Result<u64, StoreError> {
+    let other_tokens_json = serde_json::to_string(&managed.tokens.other)?;
+    let unknown_fields_json = serde_json::to_string(&managed.unknown_fields)?;
+    let updated = tx.execute(
+        "UPDATE usage_observations SET
+            source_kind = ?1,
+            parser_version = ?2,
+            provider_native_session_id = ?3,
+            provider_native_turn_id = ?4,
+            occurred_at_ms = ?5,
+            provider = ?6,
+            provider_instance_id = ?7,
+            subscription_key = ?8,
+            model = ?9,
+            input_tokens = ?10,
+            cached_input_tokens = ?11,
+            cache_write_tokens = ?12,
+            output_tokens = ?13,
+            reasoning_tokens = ?14,
+            other_tokens_json = ?15,
+            unknown_fields_json = ?16,
+            provider_reported_micro_usd = ?17,
+            source_record_count = ?18,
+            thread_id = ?19,
+            turn_id = ?20,
+            agent_id = ?21,
+            schedule_id = ?22,
+            reconciliation_key = ?23
+         WHERE environment_id = ?24 AND observation_id = ?25",
+        params![
+            managed.source_kind.as_str(),
+            i64::from(managed.parser_version),
+            managed.provider_native_session_id,
+            managed.provider_native_turn_id,
+            optional_checked_i64(managed.occurred_at_ms, "occurred_at_ms")?,
+            managed.provider.as_str(),
+            managed.provider_instance_id.as_str(),
+            managed.subscription_key.as_str(),
+            managed.model,
+            checked_i64(managed.tokens.input, "input_tokens")?,
+            checked_i64(managed.tokens.cached_input, "cached_input_tokens")?,
+            checked_i64(managed.tokens.cache_write, "cache_write_tokens")?,
+            checked_i64(managed.tokens.output, "output_tokens")?,
+            checked_i64(managed.tokens.reasoning, "reasoning_tokens")?,
+            other_tokens_json,
+            unknown_fields_json,
+            optional_checked_i64(
+                managed.provider_reported_micro_usd,
+                "provider_reported_micro_usd"
+            )?,
+            checked_i64(managed.source_record_count, "source_record_count")?,
+            managed.thread_id.as_ref().map(ThreadId::as_str),
+            managed.turn_id.as_ref().map(TurnId::as_str),
+            managed.agent_id.as_ref().map(|id| id.as_str()),
+            managed.schedule_id.as_ref().map(ScheduleId::as_str),
+            reconciliation_key,
+            environment_id.as_str(),
+            existing_id.as_str(),
+        ],
+    )?;
+    if updated != 1 {
+        return Err(StoreError::Data(
+            "managed usage reconciliation target disappeared".to_string(),
+        ));
+    }
+    tx.execute(
+        "INSERT INTO usage_outbox (environment_id, observation_id, enqueued_at_ms)
+         VALUES (?1, ?2, ?3)",
+        params![
+            environment_id.as_str(),
+            existing_id.as_str(),
+            enqueued_at_ms
+        ],
+    )?;
+    checked_u64(tx.last_insert_rowid(), "usage_outbox.seq")
+}
+
+fn coverage_state_value(state: UsageSourceCoverageState) -> &'static str {
+    match state {
+        UsageSourceCoverageState::Complete => "complete",
+        UsageSourceCoverageState::Partial => "partial",
+        UsageSourceCoverageState::Unavailable => "unavailable",
+    }
+}
+
+fn upsert_usage_diagnostic(
+    tx: &rusqlite::Transaction<'_>,
+    diagnostic: &UsageScannerDiagnostic,
+) -> Result<(), StoreError> {
+    tx.execute(
+        "INSERT INTO usage_scanner_diagnostics (
+            environment_id, provider_instance_id, source_kind, coverage_state,
+            parser_version, last_scan_started_at_ms, last_success_at_ms,
+            latest_source_at_ms, source_lag_ms, files_scanned, bytes_scanned,
+            quarantined_count, last_safe_error_code, updated_at_ms
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+         ON CONFLICT(environment_id, provider_instance_id, source_kind) DO UPDATE SET
+            coverage_state = excluded.coverage_state,
+            parser_version = excluded.parser_version,
+            last_scan_started_at_ms = excluded.last_scan_started_at_ms,
+            last_success_at_ms = COALESCE(
+                excluded.last_success_at_ms,
+                usage_scanner_diagnostics.last_success_at_ms
+            ),
+            latest_source_at_ms = excluded.latest_source_at_ms,
+            source_lag_ms = excluded.source_lag_ms,
+            files_scanned = excluded.files_scanned,
+            bytes_scanned = excluded.bytes_scanned,
+            quarantined_count = excluded.quarantined_count,
+            last_safe_error_code = excluded.last_safe_error_code,
+            updated_at_ms = excluded.updated_at_ms",
+        params![
+            diagnostic.environment_id.as_str(),
+            diagnostic.provider_instance_id.as_str(),
+            diagnostic.source_kind.as_str(),
+            coverage_state_value(diagnostic.coverage_state),
+            i64::from(diagnostic.parser_version),
+            checked_i64(
+                diagnostic.last_scan_started_at_ms,
+                "diagnostic last_scan_started_at_ms"
+            )?,
+            optional_checked_i64(
+                diagnostic.last_success_at_ms,
+                "diagnostic last_success_at_ms"
+            )?,
+            optional_checked_i64(
+                diagnostic.latest_source_at_ms,
+                "diagnostic latest_source_at_ms"
+            )?,
+            optional_checked_i64(diagnostic.source_lag_ms, "diagnostic source_lag_ms")?,
+            checked_i64(diagnostic.files_scanned, "diagnostic files_scanned")?,
+            checked_i64(diagnostic.bytes_scanned, "diagnostic bytes_scanned")?,
+            checked_i64(diagnostic.quarantined_count, "diagnostic quarantined_count")?,
+            diagnostic.last_safe_error_code,
+            checked_i64(store_now_ms(), "diagnostic updated_at_ms")?,
+        ],
+    )?;
     Ok(())
 }
 
@@ -1859,12 +2725,40 @@ fn load_usage_observation(
                 occurred_at_ms, provider, provider_instance_id, subscription_key,
                 model, input_tokens, cached_input_tokens, cache_write_tokens,
                 output_tokens, reasoning_tokens, other_tokens_json,
-                provider_reported_micro_usd, source_record_count,
-                thread_id, agent_id, schedule_id
+                unknown_fields_json, provider_reported_micro_usd, source_record_count,
+                thread_id, turn_id, agent_id, schedule_id
          FROM usage_observations
          WHERE environment_id = ?1 AND observation_id = ?2",
     )?;
     let mut rows = stmt.query(params![environment_id.as_str(), observation_id.as_str()])?;
+    rows.next()?
+        .map(|row| decode_usage_observation(row, 0))
+        .transpose()
+}
+
+fn load_usage_observation_by_reconciliation(
+    conn: &Connection,
+    environment_id: &EnvironmentId,
+    provider_instance_id: &ProviderInstanceId,
+    reconciliation_key: &str,
+) -> Result<Option<UsageObservation>, StoreError> {
+    let mut stmt = conn.prepare(
+        "SELECT observation_id, source_kind, parser_version,
+                provider_native_session_id, provider_native_turn_id,
+                occurred_at_ms, provider, provider_instance_id, subscription_key,
+                model, input_tokens, cached_input_tokens, cache_write_tokens,
+                output_tokens, reasoning_tokens, other_tokens_json,
+                unknown_fields_json, provider_reported_micro_usd, source_record_count,
+                thread_id, turn_id, agent_id, schedule_id
+         FROM usage_observations
+         WHERE environment_id = ?1 AND provider_instance_id = ?2
+           AND reconciliation_key = ?3",
+    )?;
+    let mut rows = stmt.query(params![
+        environment_id.as_str(),
+        provider_instance_id.as_str(),
+        reconciliation_key,
+    ])?;
     rows.next()?
         .map(|row| decode_usage_observation(row, 0))
         .transpose()
@@ -1876,6 +2770,7 @@ fn decode_usage_observation(
 ) -> Result<UsageObservation, StoreError> {
     let parser_version = checked_u32(row.get(offset + 2)?, "usage_observations.parser_version")?;
     let other_tokens_json: String = row.get(offset + 15)?;
+    let unknown_fields_json: String = row.get(offset + 16)?;
     let observation = UsageObservation {
         id: UsageObservationId::from(row.get::<_, String>(offset)?),
         source_kind: UsageSourceKind::from(row.get::<_, String>(offset + 1)?),
@@ -1904,28 +2799,118 @@ fn decode_usage_observation(
             reasoning: checked_u64(row.get(offset + 14)?, "usage_observations.reasoning_tokens")?,
             other: serde_json::from_str::<BTreeMap<String, u64>>(&other_tokens_json)?,
         },
+        unknown_fields: serde_json::from_str::<BTreeSet<UsageUnknownField>>(&unknown_fields_json)?,
         provider_reported_micro_usd: row
-            .get::<_, Option<i64>>(offset + 16)?
+            .get::<_, Option<i64>>(offset + 17)?
             .map(|value| checked_u64(value, "usage_observations.provider_reported_micro_usd"))
             .transpose()?,
         source_record_count: checked_u64(
-            row.get(offset + 17)?,
+            row.get(offset + 18)?,
             "usage_observations.source_record_count",
         )?,
         thread_id: row
-            .get::<_, Option<String>>(offset + 18)?
-            .map(ThreadId::from),
-        agent_id: row
             .get::<_, Option<String>>(offset + 19)?
+            .map(ThreadId::from),
+        turn_id: row.get::<_, Option<String>>(offset + 20)?.map(TurnId::from),
+        agent_id: row
+            .get::<_, Option<String>>(offset + 21)?
             .map(AgentId::from),
         schedule_id: row
-            .get::<_, Option<String>>(offset + 20)?
+            .get::<_, Option<String>>(offset + 22)?
             .map(ScheduleId::from),
     };
     observation
         .validate()
         .map_err(|error| StoreError::Data(error.to_string()))?;
     Ok(observation)
+}
+
+fn load_usage_scanner_diagnostics(
+    conn: &Connection,
+    params: &UsageQueryParams,
+) -> Result<Vec<UsageScannerDiagnostic>, StoreError> {
+    let mut stmt = conn.prepare(
+        "SELECT environment_id, provider_instance_id, source_kind, coverage_state,
+                parser_version, last_scan_started_at_ms, last_success_at_ms,
+                latest_source_at_ms, source_lag_ms, files_scanned, bytes_scanned,
+                quarantined_count, last_safe_error_code
+         FROM usage_scanner_diagnostics
+         ORDER BY environment_id, provider_instance_id, source_kind",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, i64>(4)?,
+            row.get::<_, i64>(5)?,
+            row.get::<_, Option<i64>>(6)?,
+            row.get::<_, Option<i64>>(7)?,
+            row.get::<_, Option<i64>>(8)?,
+            row.get::<_, i64>(9)?,
+            row.get::<_, i64>(10)?,
+            row.get::<_, i64>(11)?,
+            row.get::<_, Option<String>>(12)?,
+        ))
+    })?;
+    let mut diagnostics = Vec::new();
+    for row in rows {
+        let row = row?;
+        let environment_id = EnvironmentId::from(row.0);
+        let provider_instance_id = ProviderInstanceId::from(row.1);
+        let source_kind = UsageSourceKind::from(row.2);
+        if params
+            .environment_id
+            .as_ref()
+            .is_some_and(|filter| filter != &environment_id)
+            || params
+                .provider_instance_id
+                .as_ref()
+                .is_some_and(|filter| filter != &provider_instance_id)
+            || params
+                .source_kind
+                .as_ref()
+                .is_some_and(|filter| filter != &source_kind)
+        {
+            continue;
+        }
+        let coverage_state = match row.3.as_str() {
+            "complete" => UsageSourceCoverageState::Complete,
+            "partial" => UsageSourceCoverageState::Partial,
+            "unavailable" => UsageSourceCoverageState::Unavailable,
+            other => {
+                return Err(StoreError::Data(format!(
+                    "unknown usage scanner coverage state {other}"
+                )));
+            }
+        };
+        diagnostics.push(UsageScannerDiagnostic {
+            environment_id,
+            provider_instance_id,
+            source_kind,
+            coverage_state,
+            parser_version: checked_u32(row.4, "diagnostic parser_version")?,
+            last_scan_started_at_ms: checked_u64(row.5, "diagnostic last_scan_started_at_ms")?,
+            last_success_at_ms: row
+                .6
+                .map(|value| checked_u64(value, "diagnostic last_success_at_ms"))
+                .transpose()?,
+            latest_source_at_ms: row
+                .7
+                .map(|value| checked_u64(value, "diagnostic latest_source_at_ms"))
+                .transpose()?,
+            source_lag_ms: row
+                .8
+                .map(|value| checked_u64(value, "diagnostic source_lag_ms"))
+                .transpose()?,
+            files_scanned: checked_u64(row.9, "diagnostic files_scanned")?,
+            bytes_scanned: checked_u64(row.10, "diagnostic bytes_scanned")?,
+            quarantined_count: checked_u64(row.11, "diagnostic quarantined_count")?,
+            last_safe_error_code: row.12,
+        });
+    }
+    Ok(diagnostics)
 }
 
 fn decode_capacity_snapshot(
@@ -2017,6 +3002,7 @@ mod tests {
     use super::*;
     use pandamux_core::{
         EnvironmentId, ProviderInstanceId, ThreadStatus, ThreadWorkspace, TurnId, TurnInput,
+        TurnUsage, TurnUsageProvenance,
     };
 
     fn dummy_thread(id: &str) -> Thread {
@@ -2421,9 +3407,11 @@ mod tests {
                 output: 5,
                 ..TokenCounts::default()
             },
+            unknown_fields: BTreeSet::new(),
             provider_reported_micro_usd: None,
             source_record_count: 1,
             thread_id: None,
+            turn_id: None,
             agent_id: None,
             schedule_id: None,
         }
@@ -2464,17 +3452,73 @@ mod tests {
         );
     }
 
-    fn usage_cursor(offset: u64) -> UsageScannerCursor {
+    fn usage_cursor(store: &Store, offset: u64) -> UsageScannerCursor {
         UsageScannerCursor {
+            environment_id: EnvironmentId::new("env-local"),
+            provider_instance_id: ProviderInstanceId::new("claude-work"),
             source_kind: UsageSourceKind::ClaudeTranscript,
+            node_store_id: store.usage_node_store_id().expect("node store identity"),
             file_identity: "unix:42:99".to_string(),
             canonical_path: "/private/transcript.jsonl".to_string(),
             committed_offset: offset,
+            committed_prefix_sha256: "0".repeat(64),
             parser_version: 2,
+            parser_state_json: "{}".to_string(),
             observed_size: offset,
             observed_modified_at_ms: Some(2000),
             updated_at_ms: 3000,
         }
+    }
+
+    fn save_managed_usage_fixture(store: &Store) -> Turn {
+        let mut thread = dummy_thread("thread-managed");
+        thread.environment_id = EnvironmentId::new("env-local");
+        thread.provider_instance_id = ProviderInstanceId::new("claude-work");
+        thread.model = "claude-model".to_string();
+        store.save_thread(&thread).expect("save managed thread");
+        let turn = Turn {
+            id: TurnId::new("turn-managed"),
+            thread_id: thread.id.clone(),
+            environment_id: thread.environment_id.clone(),
+            provider_instance_id: thread.provider_instance_id.clone(),
+            seq: 1,
+            input: TurnInput {
+                text: "fixture".to_string(),
+                ..TurnInput::default()
+            },
+            status: TurnStatus::Completed,
+            started_at_ms: 900,
+            ended_at_ms: Some(1_000),
+            usage: Some(TurnUsage {
+                input_tokens: 10,
+                output_tokens: 5,
+                provenance: Some(TurnUsageProvenance {
+                    provider_native_session_id: Some("session-fixture".to_string()),
+                    provider_native_turn_id: Some("native-managed".to_string()),
+                    occurred_at_ms: Some(1_000),
+                    model: Some("claude-model".to_string()),
+                }),
+                ..TurnUsage::default()
+            }),
+            checkpoint_before: None,
+            checkpoint_after: None,
+        };
+        store.save_turn(&turn).expect("save managed turn");
+        store
+            .record_provider_execution(&ProviderExecutionAudit {
+                turn_id: turn.id.clone(),
+                thread_id: thread.id,
+                environment_id: thread.environment_id,
+                provider_instance_id: thread.provider_instance_id,
+                provider_kind: ProviderKind::Claude,
+                profile_dir: "/profiles/claude/work".to_string(),
+                binary_path: None,
+                capabilities: ProviderCapabilities::default(),
+                model: "claude-model".to_string(),
+                created_at_ms: 900,
+            })
+            .expect("save provider execution");
+        turn
     }
 
     #[test]
@@ -2488,7 +3532,7 @@ mod tests {
             .record_usage_batch(
                 &environment_id,
                 std::slice::from_ref(&observation),
-                Some(&usage_cursor(100)),
+                Some(&usage_cursor(&store, 100)),
             )
             .expect("record usage");
         assert_eq!(inserted.inserted, 1);
@@ -2496,7 +3540,12 @@ mod tests {
         assert_eq!(inserted.last_outbox_seq, 1);
         assert_eq!(
             store
-                .get_usage_scanner_cursor(&UsageSourceKind::ClaudeTranscript, "unix:42:99")
+                .get_usage_scanner_cursor(
+                    &environment_id,
+                    &ProviderInstanceId::new("claude-work"),
+                    &UsageSourceKind::ClaudeTranscript,
+                    "unix:42:99",
+                )
                 .expect("load cursor")
                 .expect("cursor")
                 .committed_offset,
@@ -2507,7 +3556,7 @@ mod tests {
             .record_usage_batch(
                 &environment_id,
                 std::slice::from_ref(&observation),
-                Some(&usage_cursor(120)),
+                Some(&usage_cursor(&store, 120)),
             )
             .expect("replay usage");
         assert_eq!(duplicate.inserted, 0);
@@ -2525,12 +3574,21 @@ mod tests {
         collision.tokens.input = 999;
         assert!(
             store
-                .record_usage_batch(&environment_id, &[collision], Some(&usage_cursor(140)))
+                .record_usage_batch(
+                    &environment_id,
+                    &[collision],
+                    Some(&usage_cursor(&store, 140)),
+                )
                 .is_err()
         );
         assert_eq!(
             store
-                .get_usage_scanner_cursor(&UsageSourceKind::ClaudeTranscript, "unix:42:99")
+                .get_usage_scanner_cursor(
+                    &environment_id,
+                    &ProviderInstanceId::new("claude-work"),
+                    &UsageSourceKind::ClaudeTranscript,
+                    "unix:42:99",
+                )
                 .expect("load cursor")
                 .expect("cursor")
                 .committed_offset,
@@ -2553,12 +3611,21 @@ mod tests {
         let observation = usage_observation("usage-unmapped", 10);
         assert!(
             store
-                .record_usage_batch(&environment_id, &[observation], Some(&usage_cursor(100)))
+                .record_usage_batch(
+                    &environment_id,
+                    &[observation],
+                    Some(&usage_cursor(&store, 100)),
+                )
                 .is_err()
         );
         assert!(
             store
-                .get_usage_scanner_cursor(&UsageSourceKind::ClaudeTranscript, "unix:42:99")
+                .get_usage_scanner_cursor(
+                    &environment_id,
+                    &ProviderInstanceId::new("claude-work"),
+                    &UsageSourceKind::ClaudeTranscript,
+                    "unix:42:99",
+                )
                 .expect("load cursor")
                 .is_none()
         );
@@ -2568,6 +3635,226 @@ mod tests {
                 .expect("export usage")
                 .items
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn injected_scan_transaction_failure_restarts_without_loss_or_duplicates() {
+        let file = tempfile::NamedTempFile::new().expect("temporary scanner database");
+        let path = file.path().to_path_buf();
+        let environment_id = EnvironmentId::new("env-local");
+        let observation = usage_observation("usage-restart", 10);
+        let quarantine = UsageQuarantineRecord {
+            environment_id: environment_id.clone(),
+            provider_instance_id: ProviderInstanceId::new("claude-work"),
+            source_kind: UsageSourceKind::ClaudeTranscript,
+            file_identity_sha256: "1".repeat(64),
+            record_offset: 50,
+            parser_version: 2,
+            reason_code: "invalid_json".to_string(),
+            reason_detail: "complete JSONL record failed provider parsing".to_string(),
+            safe_excerpt_sha256: "2".repeat(64),
+            created_at_ms: 3_000,
+        };
+        let diagnostic = UsageScannerDiagnostic {
+            environment_id: environment_id.clone(),
+            provider_instance_id: ProviderInstanceId::new("claude-work"),
+            source_kind: UsageSourceKind::ClaudeTranscript,
+            coverage_state: UsageSourceCoverageState::Partial,
+            parser_version: 2,
+            last_scan_started_at_ms: 2_000,
+            last_success_at_ms: Some(3_000),
+            latest_source_at_ms: Some(1_000),
+            source_lag_ms: Some(2_000),
+            files_scanned: 1,
+            bytes_scanned: 100,
+            quarantined_count: 0,
+            last_safe_error_code: Some("invalid_json".to_string()),
+        };
+        {
+            let store = Store::open(&path).expect("open scanner store");
+            configure_usage_mapping(&store);
+            let cursor = usage_cursor(&store, 100);
+            assert!(
+                store
+                    .record_usage_transaction(
+                        &environment_id,
+                        std::slice::from_ref(&observation),
+                        Some(&cursor),
+                        std::slice::from_ref(&quarantine),
+                        Some(&diagnostic),
+                        Some(1),
+                    )
+                    .is_err()
+            );
+        }
+
+        let store = Store::open(&path).expect("reopen scanner store");
+        let cursor = usage_cursor(&store, 100);
+        assert!(
+            store
+                .query_usage(&UsageQueryParams::default())
+                .expect("query rolled back usage")
+                .items
+                .is_empty()
+        );
+        assert!(
+            store
+                .get_usage_scanner_cursor(
+                    &environment_id,
+                    &ProviderInstanceId::new("claude-work"),
+                    &UsageSourceKind::ClaudeTranscript,
+                    "unix:42:99",
+                )
+                .expect("query rolled back cursor")
+                .is_none()
+        );
+
+        let retry = store
+            .record_usage_scan_batch(
+                &environment_id,
+                std::slice::from_ref(&observation),
+                Some(&cursor),
+                std::slice::from_ref(&quarantine),
+                Some(&diagnostic),
+            )
+            .expect("retry scan transaction");
+        assert_eq!(retry.inserted, 1);
+        assert_eq!(retry.quarantined, 1);
+        let replay = store
+            .record_usage_scan_batch(
+                &environment_id,
+                std::slice::from_ref(&observation),
+                Some(&cursor),
+                std::slice::from_ref(&quarantine),
+                Some(&diagnostic),
+            )
+            .expect("replay scan transaction");
+        assert_eq!(replay.inserted, 0);
+        assert_eq!(replay.duplicates, 1);
+        assert_eq!(replay.quarantined, 0);
+        let query = store
+            .query_usage(&UsageQueryParams::default())
+            .expect("query retried usage");
+        assert_eq!(query.items.len(), 1);
+        assert_eq!(query.coverage.quarantined_count, 1);
+        assert_eq!(query.coverage.scanner_diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn scanner_quarantine_retention_is_durably_bounded() {
+        let store = Store::in_memory().expect("open store");
+        let environment_id = EnvironmentId::new("env-local");
+        let total = u64::try_from(MAX_RETAINED_SCANNER_QUARANTINES_PER_SOURCE)
+            .expect("positive quarantine limit")
+            + 3;
+        let quarantines = (0..total)
+            .map(|record_offset| UsageQuarantineRecord {
+                environment_id: environment_id.clone(),
+                provider_instance_id: ProviderInstanceId::new("claude-work"),
+                source_kind: UsageSourceKind::ClaudeTranscript,
+                file_identity_sha256: "1".repeat(64),
+                record_offset,
+                parser_version: 2,
+                reason_code: "invalid_json".to_string(),
+                reason_detail: "complete JSONL record failed provider parsing".to_string(),
+                safe_excerpt_sha256: format!("{record_offset:064x}"),
+                created_at_ms: record_offset,
+            })
+            .collect::<Vec<_>>();
+        let result = store
+            .record_usage_scan_batch(&environment_id, &[], None, &quarantines, None)
+            .expect("record bounded scanner quarantines");
+        assert_eq!(result.quarantined, total);
+
+        let retained = store
+            .conn
+            .lock()
+            .expect("store lock")
+            .query_row(
+                "SELECT COUNT(*) FROM usage_quarantine WHERE legacy_bucket_id IS NULL",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("retained quarantine count");
+        assert_eq!(retained, MAX_RETAINED_SCANNER_QUARANTINES_PER_SOURCE);
+    }
+
+    #[test]
+    fn managed_turn_is_authoritative_when_transcript_repeats_it() {
+        let store = Store::in_memory().expect("open store");
+        configure_usage_mapping(&store);
+        let turn = save_managed_usage_fixture(&store);
+
+        let managed = store
+            .backfill_managed_turn_usage(&EnvironmentId::new("env-local"), 100)
+            .expect("backfill managed usage");
+        assert_eq!(managed.batch.inserted, 1);
+
+        let mut transcript = usage_observation("usage-transcript-copy", 10);
+        transcript.provider_native_turn_id = Some("native-managed".to_string());
+        transcript.occurred_at_ms = Some(1_000);
+        let reconciled = store
+            .record_usage_batch(&EnvironmentId::new("env-local"), &[transcript], None)
+            .expect("reconcile transcript copy");
+        assert_eq!(reconciled.inserted, 0);
+        assert_eq!(reconciled.reconciled, 1);
+        let query = store
+            .query_usage(&UsageQueryParams::default())
+            .expect("query reconciled usage");
+        assert_eq!(query.items.len(), 1);
+        assert_eq!(
+            query.items[0].observation.source_kind,
+            UsageSourceKind::ManagedTurn
+        );
+        assert_eq!(query.items[0].observation.turn_id.as_ref(), Some(&turn.id));
+        assert_eq!(
+            store
+                .backfill_managed_turn_usage(&EnvironmentId::new("env-local"), 100)
+                .expect("repeat managed backfill")
+                .batch
+                .inserted,
+            0
+        );
+    }
+
+    #[test]
+    fn managed_turn_promotes_an_earlier_transcript_copy() {
+        let store = Store::in_memory().expect("open store");
+        configure_usage_mapping(&store);
+        let turn = save_managed_usage_fixture(&store);
+
+        let mut transcript = usage_observation("usage-transcript-first", 10);
+        transcript.provider_native_turn_id = Some("native-managed".to_string());
+        transcript.occurred_at_ms = Some(1_000);
+        store
+            .record_usage_batch(&EnvironmentId::new("env-local"), &[transcript], None)
+            .expect("record transcript before managed fact");
+
+        let managed = store
+            .backfill_managed_turn_usage(&EnvironmentId::new("env-local"), 100)
+            .expect("promote transcript to managed fact");
+        assert_eq!(managed.batch.inserted, 0);
+        assert_eq!(managed.batch.reconciled, 1);
+
+        let query = store
+            .query_usage(&UsageQueryParams::default())
+            .expect("query promoted usage");
+        assert_eq!(query.items.len(), 1);
+        assert_eq!(
+            query.items[0].observation.source_kind,
+            UsageSourceKind::ManagedTurn
+        );
+        assert_eq!(query.items[0].observation.turn_id.as_ref(), Some(&turn.id));
+
+        let exported = store
+            .export_usage(&UsageExportParams::default())
+            .expect("export transcript and managed revisions");
+        assert_eq!(exported.items.len(), 2);
+        assert_eq!(exported.items[0].observation, exported.items[1].observation);
+        assert_eq!(
+            exported.items[1].observation.source_kind,
+            UsageSourceKind::ManagedTurn
         );
     }
 

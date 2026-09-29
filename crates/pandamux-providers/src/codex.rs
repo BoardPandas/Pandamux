@@ -1,11 +1,12 @@
 use pandamux_core::{
+    UsageUnknownField,
     event::{ApprovalDecision, ApprovalKind, TurnOutcome},
     provider_config::{ProviderCapabilities, ProviderInstanceConfig, ProviderKind},
-    thread::{AccessMode, TurnInput, TurnUsage},
+    thread::{AccessMode, TurnInput, TurnUsage, TurnUsageProvenance},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -709,15 +710,23 @@ struct PendingApproval {
 
 fn turn_usage_from_notification(params: &Value) -> Option<TurnUsage> {
     let last = params.get("tokenUsage")?.get("last")?;
+    let input_tokens = last.get("inputTokens").and_then(Value::as_u64);
+    let output_tokens = last.get("outputTokens").and_then(Value::as_u64);
+    let mut unknown_fields = BTreeSet::new();
+    if input_tokens.is_none() {
+        unknown_fields.insert(UsageUnknownField::InputTokens);
+    }
+    if output_tokens.is_none() {
+        unknown_fields.insert(UsageUnknownField::OutputTokens);
+    }
     Some(TurnUsage {
-        input_tokens: last.get("inputTokens").and_then(Value::as_u64).unwrap_or(0),
-        output_tokens: last
-            .get("outputTokens")
-            .and_then(Value::as_u64)
-            .unwrap_or(0),
+        input_tokens: input_tokens.unwrap_or(0),
+        output_tokens: output_tokens.unwrap_or(0),
         cache_read_tokens: last.get("cachedInputTokens").and_then(Value::as_u64),
         cache_write_tokens: last.get("cacheWriteInputTokens").and_then(Value::as_u64),
         cost_usd: None,
+        unknown_fields,
+        ..Default::default()
     })
 }
 
@@ -733,14 +742,20 @@ fn turn_outcome(params: &Value) -> TurnOutcome {
     }
 }
 
+struct CodexTurnUsageState {
+    current_turn_id: Arc<Mutex<Option<String>>>,
+    latest_usage: Arc<Mutex<Option<TurnUsage>>>,
+    provider_session_id: String,
+    model: String,
+}
+
 async fn run_codex_reader(
     mut lines: Lines<BufReader<ChildStdout>>,
     stdin: Arc<Mutex<tokio::process::ChildStdin>>,
     events: mpsc::Sender<ProviderEvent>,
     pending_responses: Arc<Mutex<HashMap<u64, PendingResponse>>>,
     pending_approvals: Arc<Mutex<HashMap<String, PendingApproval>>>,
-    current_turn_id: Arc<Mutex<Option<String>>>,
-    latest_usage: Arc<Mutex<Option<TurnUsage>>>,
+    usage_state: CodexTurnUsageState,
 ) {
     while let Ok(Some(line)) = lines.next_line().await {
         let Ok(message) = serde_json::from_str::<Value>(&line) else {
@@ -838,102 +853,112 @@ async fn run_codex_reader(
             continue;
         }
 
-        let provider_event =
-            match method {
-                "item/agentMessage/delta" => {
-                    params.get("delta").and_then(Value::as_str).map(|delta| {
-                        ProviderEvent::TextDelta {
-                            delta: delta.to_string(),
-                        }
-                    })
-                }
-                "item/reasoning/summaryTextDelta" => params
+        let provider_event = match method {
+            "item/agentMessage/delta" => {
+                params
                     .get("delta")
                     .and_then(Value::as_str)
-                    .map(|delta| ProviderEvent::ReasoningDelta {
+                    .map(|delta| ProviderEvent::TextDelta {
                         delta: delta.to_string(),
-                    }),
-                "item/started" => params.get("item").and_then(|item| {
-                    let item_type = item.get("type")?.as_str()?;
-                    if !matches!(item_type, "commandExecution" | "fileChange" | "mcpToolCall") {
-                        return None;
-                    }
-                    Some(ProviderEvent::ToolCallStarted {
-                        id: item.get("id")?.as_str()?.to_string(),
-                        name: item_type.to_string(),
-                        input: item.clone(),
                     })
-                }),
-                "item/completed" => params.get("item").and_then(|item| {
-                    let item_type = item.get("type")?.as_str()?;
-                    if !matches!(item_type, "commandExecution" | "fileChange" | "mcpToolCall") {
-                        return None;
+            }
+            "item/reasoning/summaryTextDelta" => {
+                params.get("delta").and_then(Value::as_str).map(|delta| {
+                    ProviderEvent::ReasoningDelta {
+                        delta: delta.to_string(),
                     }
-                    let error = item
-                        .get("error")
-                        .filter(|value| !value.is_null())
-                        .map(Value::to_string);
-                    let output = item
-                        .get("aggregatedOutput")
-                        .or_else(|| item.get("result"))
-                        .filter(|value| !value.is_null())
-                        .map(|value| {
-                            value
-                                .as_str()
-                                .map(str::to_string)
-                                .unwrap_or_else(|| value.to_string())
-                        });
-                    Some(ProviderEvent::ToolCallFinished {
-                        id: item.get("id")?.as_str()?.to_string(),
-                        output,
-                        error,
-                    })
-                }),
-                "thread/tokenUsage/updated" => {
-                    *latest_usage.lock().await = turn_usage_from_notification(&params);
-                    None
+                })
+            }
+            "item/started" => params.get("item").and_then(|item| {
+                let item_type = item.get("type")?.as_str()?;
+                if !matches!(item_type, "commandExecution" | "fileChange" | "mcpToolCall") {
+                    return None;
                 }
-                "account/rateLimits/updated" => Some(ProviderEvent::RateLimitObserved {
-                    details: params.get("rateLimits").cloned().unwrap_or(params),
-                }),
-                "turn/started" => {
-                    if let Some(turn_id) = params
-                        .get("turn")
-                        .and_then(|turn| turn.get("id"))
-                        .and_then(Value::as_str)
-                    {
-                        *current_turn_id.lock().await = Some(turn_id.to_string());
-                    }
-                    None
+                Some(ProviderEvent::ToolCallStarted {
+                    id: item.get("id")?.as_str()?.to_string(),
+                    name: item_type.to_string(),
+                    input: item.clone(),
+                })
+            }),
+            "item/completed" => params.get("item").and_then(|item| {
+                let item_type = item.get("type")?.as_str()?;
+                if !matches!(item_type, "commandExecution" | "fileChange" | "mcpToolCall") {
+                    return None;
                 }
-                "configWarning" | "warning" => Some(ProviderEvent::Notice {
-                    level: "warning".to_string(),
-                    message: params
-                        .get("summary")
-                        .or_else(|| params.get("message"))
-                        .and_then(Value::as_str)
-                        .unwrap_or("Codex reported a warning")
-                        .to_string(),
-                }),
-                "error" => Some(ProviderEvent::Error {
-                    message: params
-                        .get("error")
-                        .and_then(|error| error.get("message"))
-                        .and_then(Value::as_str)
-                        .unwrap_or("Codex turn failed")
-                        .to_string(),
-                    recoverable: false,
-                }),
-                "turn/completed" => {
-                    *current_turn_id.lock().await = None;
-                    pending_approvals.lock().await.clear();
-                    Some(ProviderEvent::TurnCompleted {
-                        outcome: turn_outcome(&params),
-                        usage: latest_usage.lock().await.take(),
-                    })
+                let error = item
+                    .get("error")
+                    .filter(|value| !value.is_null())
+                    .map(Value::to_string);
+                let output = item
+                    .get("aggregatedOutput")
+                    .or_else(|| item.get("result"))
+                    .filter(|value| !value.is_null())
+                    .map(|value| {
+                        value
+                            .as_str()
+                            .map(str::to_string)
+                            .unwrap_or_else(|| value.to_string())
+                    });
+                Some(ProviderEvent::ToolCallFinished {
+                    id: item.get("id")?.as_str()?.to_string(),
+                    output,
+                    error,
+                })
+            }),
+            "thread/tokenUsage/updated" => {
+                *usage_state.latest_usage.lock().await = turn_usage_from_notification(&params);
+                None
+            }
+            "account/rateLimits/updated" => Some(ProviderEvent::RateLimitObserved {
+                details: params.get("rateLimits").cloned().unwrap_or(params),
+            }),
+            "turn/started" => {
+                if let Some(turn_id) = params
+                    .get("turn")
+                    .and_then(|turn| turn.get("id"))
+                    .and_then(Value::as_str)
+                {
+                    *usage_state.current_turn_id.lock().await = Some(turn_id.to_string());
                 }
-                _ => None,
-            };
+                None
+            }
+            "configWarning" | "warning" => Some(ProviderEvent::Notice {
+                level: "warning".to_string(),
+                message: params
+                    .get("summary")
+                    .or_else(|| params.get("message"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("Codex reported a warning")
+                    .to_string(),
+            }),
+            "error" => Some(ProviderEvent::Error {
+                message: params
+                    .get("error")
+                    .and_then(|error| error.get("message"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("Codex turn failed")
+                    .to_string(),
+                recoverable: false,
+            }),
+            "turn/completed" => {
+                let completed_turn_id = usage_state.current_turn_id.lock().await.take();
+                pending_approvals.lock().await.clear();
+                let mut usage = usage_state.latest_usage.lock().await.take();
+                if let Some(usage) = usage.as_mut() {
+                    usage.provenance = Some(TurnUsageProvenance {
+                        provider_native_session_id: Some(usage_state.provider_session_id.clone()),
+                        provider_native_turn_id: completed_turn_id,
+                        occurred_at_ms: Some(now_ms()),
+                        model: Some(usage_state.model.clone()),
+                    });
+                }
+                Some(ProviderEvent::TurnCompleted {
+                    outcome: turn_outcome(&params),
+                    usage,
+                })
+            }
+            _ => None,
+        };
 
         if let Some(event) = provider_event
             && events.send(event).await.is_err()
@@ -1118,8 +1143,12 @@ impl ProviderDriver for CodexDriver {
                 tx,
                 pending_responses.clone(),
                 pending_approvals.clone(),
-                current_turn_id.clone(),
-                latest_usage,
+                CodexTurnUsageState {
+                    current_turn_id: current_turn_id.clone(),
+                    latest_usage,
+                    provider_session_id: thread_id.clone(),
+                    model: spec.model.clone(),
+                },
             ));
 
             Ok(Box::new(CodexSession {

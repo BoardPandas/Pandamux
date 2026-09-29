@@ -107,6 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &token,
         launcher_owned,
     )?;
+    server.start_usage_scanner()?;
 
     println!("PandaMUX Server started ({role:?}) at {pipe_path}");
 
@@ -125,6 +126,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     server.shutdown();
     server.shutdown_provider_sessions().await;
+    server.shutdown_usage_scanner().await?;
     server.shutdown_remote_environments().await;
     server.cleanup_runtime();
     cleanup_socket_path(&pipe_path);

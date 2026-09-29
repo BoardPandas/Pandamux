@@ -1,10 +1,11 @@
 use pandamux_core::{
+    UsageUnknownField,
     event::{ApprovalDecision, ApprovalKind, TurnOutcome},
     provider_config::{ProviderCapabilities, ProviderInstanceConfig, ProviderKind},
-    thread::{AccessMode, TurnInput, TurnUsage},
+    thread::{AccessMode, TurnInput, TurnUsage, TurnUsageProvenance},
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -21,6 +22,7 @@ use crate::profiles::{
 use crate::shim_resolver::resolve_command_shim;
 use crate::supervision::{SupervisedChild, create_supervised_command};
 use crate::traits::{BoxFuture, ProviderDriver, ProviderSession};
+use crate::usage_transcript::{parse_provider_reported_micro_usd, parse_provider_timestamp_ms};
 
 /// Claude authentication status returned by `claude auth status --json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -539,20 +541,43 @@ pub fn parse_stream_json_line(line: &str) -> Option<ProviderEvent> {
             None
         }
         "result" => {
-            let usage = val.get("usage").map(|u| TurnUsage {
-                input_tokens: u
-                    .get("input_tokens")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or_default(),
-                output_tokens: u
-                    .get("output_tokens")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or_default(),
-                cost_usd: u
-                    .get("cost_usd")
-                    .and_then(|v| v.as_f64())
-                    .or_else(|| val.get("total_cost_usd").and_then(|v| v.as_f64())),
-                ..Default::default()
+            let usage = val.get("usage").map(|u| {
+                let cost = u.get("cost_usd").or_else(|| val.get("total_cost_usd"));
+                let input_tokens = u.get("input_tokens").and_then(|v| v.as_u64());
+                let output_tokens = u.get("output_tokens").and_then(|v| v.as_u64());
+                let mut unknown_fields = BTreeSet::new();
+                if input_tokens.is_none() {
+                    unknown_fields.insert(UsageUnknownField::InputTokens);
+                }
+                if output_tokens.is_none() {
+                    unknown_fields.insert(UsageUnknownField::OutputTokens);
+                }
+                TurnUsage {
+                    input_tokens: input_tokens.unwrap_or_default(),
+                    output_tokens: output_tokens.unwrap_or_default(),
+                    cost_usd: cost.and_then(|v| v.as_f64()),
+                    unknown_fields,
+                    provider_reported_micro_usd: cost.and_then(parse_provider_reported_micro_usd),
+                    provenance: Some(TurnUsageProvenance {
+                        provider_native_session_id: val
+                            .get("session_id")
+                            .or_else(|| val.get("sessionId"))
+                            .and_then(|value| value.as_str())
+                            .map(str::to_string),
+                        provider_native_turn_id: val
+                            .get("turn_id")
+                            .or_else(|| val.get("turnId"))
+                            .or_else(|| val.get("uuid"))
+                            .and_then(|value| value.as_str())
+                            .map(str::to_string),
+                        occurred_at_ms: val.get("timestamp").and_then(parse_provider_timestamp_ms),
+                        model: val
+                            .get("model")
+                            .and_then(|value| value.as_str())
+                            .map(str::to_string),
+                    }),
+                    ..Default::default()
+                }
             });
             let is_error = val.get("is_error").and_then(|v| v.as_bool()) == Some(true)
                 || val

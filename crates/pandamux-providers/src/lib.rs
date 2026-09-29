@@ -14,6 +14,7 @@ pub mod profiles;
 pub mod shim_resolver;
 pub mod supervision;
 pub mod traits;
+pub mod usage_transcript;
 
 pub use acp::{
     AcpInitializeResult, AcpMode, AcpPermissionRequest, AcpSession, build_initialize_request,
@@ -58,3 +59,8 @@ pub use profiles::{
 pub use shim_resolver::{ResolvedCommand, ShimType, resolve_command_shim};
 pub use supervision::{CREATE_NO_WINDOW, SupervisedChild, create_supervised_command};
 pub use traits::{BoxFuture, ProviderDriver, ProviderSession};
+pub use usage_transcript::{
+    CLAUDE_TRANSCRIPT_PARSER_VERSION, CODEX_TRANSCRIPT_PARSER_VERSION, ParsedTranscriptUsage,
+    TranscriptParser, TranscriptProvider, TranscriptRecordError, TranscriptRecordOutcome,
+    UnknownUsageField, parse_provider_reported_micro_usd, parse_provider_timestamp_ms,
+};

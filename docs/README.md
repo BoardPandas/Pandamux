@@ -31,7 +31,7 @@ The server is the production owner of remote composition and durable state. The 
 
 ## Active Phase 4 status
 
-The unfinished Phase 4 prototype was preserved under Recovery Gate R0.1. R0.2 through R0.4 establish production remote routing, exact provider-instance resolution, and authenticated local control. R0.5 has exact live evidence for Galahad and native Windows IPC. The user approved deferring its remaining physical laptop checks on 2026-09-29, which closes the development gate but does not satisfy production acceptance or release. Phase 4A now supplies the normalized usage, policy, migration, and authenticated bounded-protocol foundation.
+The unfinished Phase 4 prototype was preserved under Recovery Gate R0.1. R0.2 through R0.4 establish production remote routing, exact provider-instance resolution, and authenticated local control. R0.5 has exact live evidence for Galahad and native Windows IPC. The user approved deferring its remaining physical laptop checks on 2026-09-29, which closes the development gate but does not satisfy production acceptance or release. Phase 4A supplies the normalized usage, policy, migration, and authenticated bounded-protocol foundation. Phase 4B adds the node-owned scanner, source reconciliation, and safe coverage diagnostics described in [`features/USAGE_OBSERVABILITY.md`](features/USAGE_OBSERVABILITY.md).
 
 The authoritative completion records, unresolved rows, and exact acceptance criteria are in [`tasks/plan-rewrite.md`](../tasks/plan-rewrite.md).
 

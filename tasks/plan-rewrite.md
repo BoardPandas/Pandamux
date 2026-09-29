@@ -1226,6 +1226,44 @@ Checkpoint acceptance:
 - A managed turn present in both the event store and provider transcript contributes exactly once.
 - Scanner shutdown completes within the owned drain budget with no detached blocking task.
 
+##### Checkpoint 4B completion record, 2026-09-29
+
+- Provider transcript parsing is pure and fixture-tested for Claude and Codex. The
+  server owns profile-root discovery, bounded filesystem enumeration, durable cursors,
+  startup and turn-completion triggers, deterministic periodic jitter, and a joined
+  scanner thread with bounded trigger lifetime, queueing, drain, and shutdown.
+- Additive migration 7 preserves every earlier migration and adds platform-identity
+  cursors, parser state, reconciliation keys, typed unknown fields, bounded scanner
+  diagnostics, and scanner quarantine identity. Cursor advancement, observations,
+  quarantine, and diagnostics commit atomically, including after an injected failure,
+  close, reopen, and retry.
+- Unix cursors use device and inode. Windows cursors use volume serial and file index.
+  Paths remain local diagnostics only. Tests cover append, restart, rename, rotation,
+  truncation, replacement, parser-version and node-store reset, partial records,
+  malformed and oversized records, permission denial, disappearance, and link rejection.
+- Completed managed turns are normalized before transcript backfill and remain
+  authoritative. Native provider ids are preferred, with a versioned strong fingerprint
+  fallback. Both managed-first and transcript-first fixtures reconcile to one fact, and
+  an authoritative managed revision produces a new ordered outbox revision without
+  changing the observation identity.
+- Missing time, model, identity, and token fields are stored as typed unknowns rather
+  than fabricated values. Coverage reports scanner success, lag, quarantine count,
+  parser version, and bounded safe diagnostics without exposing paths or transcript
+  content. Scanner quarantine retains at most 4,096 rows per environment, provider,
+  and source.
+- **Local verification:** at workspace version `0.56.0`, formatting and strict workspace
+  Clippy passed, and `cargo test --workspace` passed 344 tests with zero failures and two
+  intentionally ignored real-shell terminal tests. The Rust crate-boundary and Claude
+  wiring guards passed. The full `pandamux-server` target set type-checks for the Windows
+  GNU ABI. `cargo-deny` is unavailable on this host, so no advisory or license result is
+  claimed.
+- **Acceptance boundary:** the Windows MSVC target was not built on this Linux host
+  because its native `lib.exe` toolchain is unavailable. The earlier R0.5 native Windows
+  run covers commit `b314ae7`, not this scanner implementation. This completion record
+  is source and local verification evidence only; it does not satisfy the deferred
+  physical R0.5 rows, native Phase 4B runtime acceptance, Phase 4C, production
+  acceptance, push, deployment, or release.
+
 #### Checkpoint 4C: hub synchronization, aggregation, and pricing
 
 1. The hub pulls bounded pages from every connected node, upserts `(environmentId, observationId)`, and advances that node's high-water mark transactionally. Reconnect resumes from the committed mark; a changed `nodeStoreId` enters an explicit reconciliation state.

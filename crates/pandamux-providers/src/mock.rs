@@ -255,6 +255,7 @@ impl ProviderSession for MockProviderSession {
                         cache_read_tokens: None,
                         cache_write_tokens: None,
                         cost_usd: Some(0.001),
+                        ..Default::default()
                     }),
                 })
                 .await;
@@ -298,6 +299,7 @@ impl ProviderSession for MockProviderSession {
                                 cache_read_tokens: None,
                                 cache_write_tokens: None,
                                 cost_usd: Some(0.0015),
+                                ..Default::default()
                             }),
                         })
                         .await;

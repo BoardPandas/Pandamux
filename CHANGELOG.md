@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Added
 
+- **Added the Phase 4B node-owned usage scanner and reconciliation service.** PandaMUX
+  now scans Claude and Codex transcript sources on one bounded server-owned worker at
+  startup, after managed turns, and on a jittered fallback cadence. Durable platform
+  file identities, parser state, transactional cursors, incomplete-record handling,
+  bounded quarantine retention, safe coverage diagnostics, and joined shutdown make
+  restart, append, rotation, truncation, replacement, malformed data, and source loss
+  explicit without exposing transcript paths or content. Managed PandaMUX turns remain
+  authoritative when the same provider usage also appears in a transcript.
+
 - **Added the normalized Phase 4A usage and policy foundation.** PandaMUX now stores
   retry-safe usage observations with checked integer token and cost values, durable
   scanner cursors and hub outbox state, opaque subscription mappings, capacity facts,

@@ -15,6 +15,7 @@ use tokio::sync::broadcast;
 
 use crate::ProxyEnvironmentTransport;
 use crate::request_context::{CapabilityAuthority, ClientIdentity};
+use crate::usage_scanner::{UsageScannerRuntimeConfig, UsageScannerService};
 
 pub struct ServerConfig {
     pub role: ServerRole,
@@ -30,6 +31,7 @@ pub struct Server {
     shutdown_tx: broadcast::Sender<()>,
     is_shutting_down: Arc<AtomicBool>,
     remote_event_cursors: Mutex<HashMap<EnvironmentId, Arc<AtomicU64>>>,
+    usage_scanner: Mutex<Option<UsageScannerService>>,
 }
 
 impl Server {
@@ -54,6 +56,7 @@ impl Server {
             shutdown_tx,
             is_shutting_down: Arc::new(AtomicBool::new(false)),
             remote_event_cursors: Mutex::new(HashMap::new()),
+            usage_scanner: Mutex::new(None),
         })
     }
 
@@ -179,6 +182,40 @@ impl Server {
     pub async fn shutdown_provider_sessions(&self) {
         self.router.thread_manager().shutdown_all().await;
         self.router.shutdown_antigravity_auth().await;
+    }
+
+    pub fn start_usage_scanner(&self) -> std::io::Result<()> {
+        let mut scanner = self
+            .usage_scanner
+            .lock()
+            .expect("usage scanner service lock");
+        if scanner.is_some() {
+            return Ok(());
+        }
+        let service = UsageScannerService::start(
+            self.store.clone(),
+            EnvironmentId::new(self.config.environment_id.clone()),
+            self.router.data_dir().to_path_buf(),
+            UsageScannerRuntimeConfig::default(),
+        )?;
+        self.router
+            .thread_manager()
+            .set_usage_scanner(Some(service.handle()));
+        *scanner = Some(service);
+        Ok(())
+    }
+
+    pub async fn shutdown_usage_scanner(&self) -> std::io::Result<()> {
+        self.router.thread_manager().set_usage_scanner(None);
+        let scanner = self
+            .usage_scanner
+            .lock()
+            .expect("usage scanner service lock")
+            .take();
+        if let Some(scanner) = scanner {
+            scanner.shutdown().await?;
+        }
+        Ok(())
     }
 
     /// Trigger provable graceful shutdown.

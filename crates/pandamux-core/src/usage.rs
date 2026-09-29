@@ -4,7 +4,7 @@ use crate::ids::{
 };
 use crate::provider_config::ProviderKind;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 /// Provider identity retained on normalized usage facts.
@@ -171,6 +171,17 @@ pub struct TokenCounts {
     pub other: BTreeMap<String, u64>,
 }
 
+/// Provider fields that were absent from an otherwise usable usage record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UsageUnknownField {
+    OccurredAt,
+    Model,
+    Identity,
+    InputTokens,
+    OutputTokens,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UsageArithmeticError {
     pub category: String,
@@ -267,12 +278,16 @@ pub struct UsageObservation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     pub tokens: TokenCounts,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub unknown_fields: BTreeSet<UsageUnknownField>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_reported_micro_usd: Option<u64>,
     #[serde(default = "default_source_record_count")]
     pub source_record_count: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread_id: Option<ThreadId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<crate::ids::TurnId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<AgentId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -337,6 +352,13 @@ impl UsageObservation {
             .is_some_and(|model| model.trim().is_empty())
         {
             return Err(UsageObservationError::EmptyModel);
+        }
+        if self
+            .turn_id
+            .as_ref()
+            .is_some_and(|turn_id| turn_id.as_str().trim().is_empty())
+        {
+            return Err(UsageObservationError::EmptyIdentifier("turn id"));
         }
         let total = self
             .tokens
@@ -510,9 +532,11 @@ mod tests {
                 reasoning: 3,
                 other: BTreeMap::from([("futureCategory".to_string(), 5)]),
             },
+            unknown_fields: BTreeSet::new(),
             provider_reported_micro_usd: Some(42),
             source_record_count: 1,
             thread_id: Some(ThreadId::new("thread-1")),
+            turn_id: None,
             agent_id: None,
             schedule_id: None,
         }

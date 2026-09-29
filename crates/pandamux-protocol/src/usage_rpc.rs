@@ -227,6 +227,38 @@ pub struct UsageCoverage {
     pub quarantined_count: u64,
     #[serde(default)]
     pub included_environments: Vec<EnvironmentId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scanner_diagnostics: Vec<UsageScannerDiagnostic>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UsageSourceCoverageState {
+    Complete,
+    Partial,
+    Unavailable,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageScannerDiagnostic {
+    pub environment_id: EnvironmentId,
+    pub provider_instance_id: ProviderInstanceId,
+    pub source_kind: UsageSourceKind,
+    pub coverage_state: UsageSourceCoverageState,
+    pub parser_version: u32,
+    pub last_scan_started_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_success_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_source_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_lag_ms: Option<u64>,
+    pub files_scanned: u64,
+    pub bytes_scanned: u64,
+    pub quarantined_count: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_safe_error_code: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -318,9 +350,11 @@ mod tests {
                 output: 2,
                 ..TokenCounts::default()
             },
+            unknown_fields: std::collections::BTreeSet::new(),
             provider_reported_micro_usd: None,
             source_record_count: 1,
             thread_id: None,
+            turn_id: None,
             agent_id: None,
             schedule_id: None,
         }

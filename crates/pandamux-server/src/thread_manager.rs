@@ -23,6 +23,7 @@ use pandamux_providers::{ProviderEvent, SessionSpec};
 use crate::provider_resolver::{ProviderResolver, ResolvedProviderExecution};
 use crate::request_context::CapabilityAuthority;
 use crate::store::{ProviderExecutionAudit, Store};
+use crate::usage_scanner::{UsageScanTrigger, UsageScannerHandle};
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -83,6 +84,7 @@ pub struct ThreadManager {
     environment_id: String,
     active_sessions: Arc<Mutex<HashMap<ThreadId, ActiveThreadSession>>>,
     broadcaster: broadcast::Sender<EventEnvelope>,
+    usage_scanner: Arc<std::sync::RwLock<Option<UsageScannerHandle>>>,
 }
 
 impl ThreadManager {
@@ -104,7 +106,15 @@ impl ThreadManager {
             environment_id,
             active_sessions: Arc::new(Mutex::new(HashMap::new())),
             broadcaster,
+            usage_scanner: Arc::new(std::sync::RwLock::new(None)),
         }
+    }
+
+    pub fn set_usage_scanner(&self, scanner: Option<UsageScannerHandle>) {
+        *self
+            .usage_scanner
+            .write()
+            .expect("usage scanner handle lock") = scanner;
     }
 
     /// Subscribes to the broadcast stream of thread event envelopes.
@@ -550,6 +560,7 @@ impl ThreadManager {
         let generation = active_sess.generation;
         let turn_id_for_task = turn_id.clone();
         let event_writer = active_sess.event_writer.clone();
+        let usage_scanner = self.usage_scanner.clone();
 
         tokio::spawn(async move {
             let turn_id = turn_id_for_task;
@@ -773,6 +784,13 @@ impl ThreadManager {
                             tr.ended_at_ms = Some(at);
                             tr.usage = usage;
                             let _ = store.save_turn(&tr);
+                        }
+                        if let Some(scanner) = usage_scanner
+                            .read()
+                            .expect("usage scanner handle lock")
+                            .as_ref()
+                        {
+                            let _ = scanner.trigger(UsageScanTrigger::TurnCompleted);
                         }
 
                         let ev = ThreadEvent {

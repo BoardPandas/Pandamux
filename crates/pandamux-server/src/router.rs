@@ -284,6 +284,10 @@ impl Router {
         &self.provider_resolver
     }
 
+    pub fn data_dir(&self) -> &std::path::Path {
+        &self.data_dir
+    }
+
     pub async fn shutdown_antigravity_auth(&self) {
         self.antigravity_auth.shutdown().await;
     }
@@ -2042,9 +2046,11 @@ mod tests {
                         output: 2,
                         ..pandamux_core::TokenCounts::default()
                     },
+                    unknown_fields: std::collections::BTreeSet::new(),
                     provider_reported_micro_usd: None,
                     source_record_count: 1,
                     thread_id: None,
+                    turn_id: None,
                     agent_id: None,
                     schedule_id: None,
                 }],

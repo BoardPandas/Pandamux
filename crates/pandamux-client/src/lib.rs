@@ -230,6 +230,7 @@ mod tests {
                     cache_read_tokens: None,
                     cache_write_tokens: None,
                     cost_usd: Some(0.002),
+                    ..Default::default()
                 },
             },
         });

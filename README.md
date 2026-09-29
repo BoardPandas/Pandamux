@@ -18,6 +18,7 @@ R0 development gate:
 - R0.4 secures local IPC with server-assigned request contexts, distinct capabilities, OS-user boundaries, and redacted MCP reads.
 - R0.5 has exact live evidence for Galahad and native Windows IPC. On 2026-09-29, the user approved deferring the required 30-minute physical laptop disconnect and sleep checks so Phase 4 development could continue. Those checks still block production-accepted, released, or shipped claims.
 - Phase 4A provides normalized usage observations, durable transactional cursors and outbox state, canonical organization and failover policy, migration-4 reconciliation through additive migration 6, and bounded authenticated usage, capacity, and health protocol pages.
+- Phase 4B adds node-owned Claude and Codex transcript scanners with durable platform file identity, bounded lifecycle and retention, explicit coverage diagnostics, transactional cursor advancement, and managed-turn reconciliation. Raw transcript text and paths remain node-local.
 
 See the completion records and acceptance criteria in [`tasks/plan-rewrite.md`](tasks/plan-rewrite.md).
 
