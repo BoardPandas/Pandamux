@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
 
-use pandamux_core::event::ThreadEventKind;
+use pandamux_core::event::{ThreadEventKind, TurnOutcome};
 use pandamux_core::provider_config::{ProviderInstanceConfig, ProviderKind};
 use pandamux_core::thread::WorktreeRef;
 use pandamux_core::{ProviderInstanceId, ThreadId, UserSettings};
@@ -252,12 +252,38 @@ async fn test_thread_interrupt_flow() {
         .expect("cancel response");
     assert!(cancel_res.is_success());
 
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
     // 4. Verify thread is back to Idle and turn is Interrupted
     let get_req = RpcRequest::new(4, "thread.get", Some(json!({ "threadId": thread_id })));
     let get_res = router.handle_request(get_req).await.expect("get response");
     let res_val = get_res.result.unwrap();
     assert_eq!(res_val["thread"]["status"], "idle");
     assert_eq!(res_val["turns"][0]["status"], "interrupted");
+
+    let persisted = store
+        .get_events(&ThreadId::from(thread_id.as_str()), None)
+        .expect("load cancellation lifecycle events");
+    assert!(
+        persisted
+            .windows(2)
+            .all(|events| events[1].seq == events[0].seq + 1),
+        "cancellation events must remain contiguous"
+    );
+    assert!(persisted.iter().any(|event| matches!(
+        event.kind,
+        ThreadEventKind::TurnCompleted {
+            outcome: TurnOutcome::Interrupted
+        }
+    )));
+    assert!(matches!(
+        persisted.last().map(|event| &event.kind),
+        Some(ThreadEventKind::TurnSettled { .. })
+    ));
+    assert!(!persisted.iter().any(|event| matches!(
+        &event.kind,
+        ThreadEventKind::Error { class, .. } if class == "provider_process"
+    )));
 }
 
 #[tokio::test]

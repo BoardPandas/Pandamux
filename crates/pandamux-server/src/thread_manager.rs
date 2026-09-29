@@ -557,6 +557,15 @@ impl ThreadManager {
             let mut terminal_outcome = None;
             while let Some(prov_event) = rx.recv().await {
                 let _event_guard = event_writer.lock().await;
+                let still_active = {
+                    let active = active_sessions.lock().await;
+                    active
+                        .get(&thread_id)
+                        .is_some_and(|session| session.generation == generation)
+                };
+                if !still_active {
+                    break;
+                }
                 let mut stream_seq = match store
                     .get_latest_seq(&thread_id)
                     .ok()
@@ -973,6 +982,15 @@ impl ThreadManager {
                     }
                 }
                 None => {
+                    let still_active = {
+                        let active = active_sessions.lock().await;
+                        active
+                            .get(&thread_id)
+                            .is_some_and(|session| session.generation == generation)
+                    };
+                    if !still_active {
+                        return;
+                    }
                     if let Ok(Some(mut turn)) = store.get_turn(&turn_id) {
                         turn.status = TurnStatus::Failed;
                         turn.ended_at_ms = Some(finished_at);
@@ -1102,28 +1120,133 @@ impl ThreadManager {
             active.remove(&params.thread_id)
         };
 
+        let event_writer = session
+            .as_ref()
+            .map(|active_session| active_session.event_writer.clone());
+        let _event_guard = if let Some(event_writer) = event_writer.as_ref() {
+            Some(event_writer.lock().await)
+        } else {
+            None
+        };
+
         if let Some(active_session) = session {
             shutdown_active_session(active_session, true).await;
         }
 
         let now = now_ms();
-        if let Ok(Some(mut th)) = self.store.get_thread(&params.thread_id) {
+        let thread = self
+            .store
+            .get_thread(&params.thread_id)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        if let Some(mut th) = thread.clone() {
             th.status = ThreadStatus::Idle;
             th.updated_at_ms = now;
-            let _ = self.store.save_thread(&th);
+            self.store
+                .save_thread(&th)
+                .map_err(|error| RpcError::internal_error(error.to_string()))?;
         }
 
-        if let Ok(turns) = self.store.list_turns(&params.thread_id) {
-            for mut tr in turns {
-                if matches!(
-                    tr.status,
-                    TurnStatus::Running | TurnStatus::AwaitingApproval | TurnStatus::Requested
-                ) {
-                    tr.status = TurnStatus::Interrupted;
-                    tr.ended_at_ms = Some(now);
-                    let _ = self.store.save_turn(&tr);
+        let mut interrupted = false;
+        let mut changed_files = Vec::new();
+        let worktree_dir = thread
+            .as_ref()
+            .map(|thread| PathBuf::from(thread.workspace.effective_path()));
+        let turns = self
+            .store
+            .list_turns(&params.thread_id)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        for mut turn in turns {
+            if matches!(
+                turn.status,
+                TurnStatus::Running | TurnStatus::AwaitingApproval | TurnStatus::Requested
+            ) {
+                if let Some(worktree_dir) = worktree_dir.as_ref() {
+                    let checkpoint_after = crate::checkpoint::create_checkpoint(
+                        worktree_dir,
+                        &params.thread_id,
+                        &turn.id,
+                        crate::checkpoint::CheckpointPhase::After,
+                    )
+                    .unwrap_or(None);
+                    if let (Some(before), Some(after)) =
+                        (&turn.checkpoint_before, &checkpoint_after)
+                        && let Ok(stats) =
+                            crate::checkpoint::compute_changed_files(worktree_dir, before, after)
+                    {
+                        changed_files = stats
+                            .iter()
+                            .map(|stat| {
+                                if stat.additions > 0 || stat.deletions > 0 {
+                                    format!(
+                                        "{} (+{} -{})",
+                                        stat.path, stat.additions, stat.deletions
+                                    )
+                                } else {
+                                    stat.path.clone()
+                                }
+                            })
+                            .collect();
+                    }
+                    turn.checkpoint_after = checkpoint_after;
                 }
+                turn.status = TurnStatus::Interrupted;
+                turn.ended_at_ms = Some(now);
+                self.store
+                    .save_turn(&turn)
+                    .map_err(|error| RpcError::internal_error(error.to_string()))?;
+                interrupted = true;
             }
+        }
+
+        if interrupted {
+            let completed_seq = self
+                .store
+                .get_latest_seq(&params.thread_id)
+                .map_err(|error| RpcError::internal_error(error.to_string()))?
+                .checked_add(1)
+                .ok_or_else(|| RpcError::internal_error("Thread event sequence overflow"))?;
+            let completed = ThreadEvent {
+                thread_id: params.thread_id.clone(),
+                seq: completed_seq,
+                at_ms: now,
+                kind: ThreadEventKind::TurnCompleted {
+                    outcome: TurnOutcome::Interrupted,
+                },
+            };
+            self.store
+                .append_event(&completed)
+                .map_err(|error| RpcError::internal_error(error.to_string()))?;
+            let _ = self.broadcaster.send(EventEnvelope {
+                subscription_id: String::new(),
+                environment_id: self.environment_id.clone().into(),
+                thread_id: Some(params.thread_id.clone()),
+                run_id: None,
+                seq: completed_seq,
+                at_ms: now,
+                kind: completed.kind,
+            });
+
+            let settled_seq = completed_seq
+                .checked_add(1)
+                .ok_or_else(|| RpcError::internal_error("Thread event sequence overflow"))?;
+            let settled = ThreadEvent {
+                thread_id: params.thread_id.clone(),
+                seq: settled_seq,
+                at_ms: now,
+                kind: ThreadEventKind::TurnSettled { changed_files },
+            };
+            self.store
+                .append_event(&settled)
+                .map_err(|error| RpcError::internal_error(error.to_string()))?;
+            let _ = self.broadcaster.send(EventEnvelope {
+                subscription_id: String::new(),
+                environment_id: self.environment_id.clone().into(),
+                thread_id: Some(params.thread_id.clone()),
+                run_id: None,
+                seq: settled_seq,
+                at_ms: now,
+                kind: settled.kind,
+            });
         }
 
         Ok(())

@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   event writer that refreshes the durable sequence before every provider event. Approval
   decisions cannot collide with an immediately resumed tool event, and an event that
   fails SQLite persistence is no longer broadcast as though it were replayable.
+- **Made explicit turn cancellation authoritative.** Once cancellation removes a session
+  generation, its late provider events and expected stream closure cannot overwrite the
+  interrupted state as a failure. The cancel path now persists terminal and settled
+  events, including the post-cancel worktree checkpoint, before returning success.
 - **Recovered and hardened the Phase 3 production foundation.** The Hub now composes the
   SSH-backed node transport, the node proxy uses a versioned bounded protocol with replay
   and explicit stale state, and remote calls no longer fall back to local execution.
