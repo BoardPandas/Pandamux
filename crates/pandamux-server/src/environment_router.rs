@@ -167,6 +167,26 @@ impl EnvironmentRouter {
             .is_some_and(|entry| entry.transport.state() == EnvironmentTransportState::Connected)
     }
 
+    /// Returns a stable snapshot of currently connected remote environment ids.
+    pub async fn connected_environment_ids(&self) -> Vec<EnvironmentId> {
+        let map = self.transports.read().await;
+        let mut ids = map
+            .iter()
+            .filter(|(_, entry)| entry.transport.state() == EnvironmentTransportState::Connected)
+            .map(|(environment_id, _)| environment_id.clone())
+            .collect::<Vec<_>>();
+        ids.sort();
+        ids
+    }
+
+    /// Returns a stable snapshot of every registered remote environment.
+    pub async fn registered_environment_ids(&self) -> Vec<EnvironmentId> {
+        let map = self.transports.read().await;
+        let mut ids = map.keys().cloned().collect::<Vec<_>>();
+        ids.sort();
+        ids
+    }
+
     pub async fn transport_state(&self, env_id: &EnvironmentId) -> EnvironmentTransportState {
         let map = self.transports.read().await;
         map.get(env_id).map_or_else(

@@ -97,6 +97,7 @@ pub use thread::{
 };
 pub use usage::{
     CapacityConfidence, CapacitySnapshot, DailyBudgetLedger, TokenCounts, TokenUsageSummary,
-    UsageArithmeticError, UsageBucket, UsageObservation, UsageObservationError, UsageProvider,
-    UsageRecord, UsageSourceKind, UsageSubscription, UsageUnknownField,
+    UsageArithmeticError, UsageBucket, UsageObservation, UsageObservationError, UsagePricingRates,
+    UsagePricingRule, UsagePricingVersion, UsageProvider, UsageRecord, UsageSourceKind,
+    UsageSubscription, UsageUnknownField, estimate_usage_micro_usd,
 };

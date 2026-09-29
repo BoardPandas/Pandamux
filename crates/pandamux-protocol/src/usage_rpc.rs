@@ -1,6 +1,7 @@
 use pandamux_core::{
-    AgentId, CapacitySnapshot, EnvironmentId, NodeStoreId, ProviderInstanceId, ScheduleId,
-    SubscriptionKey, UsageObservation, UsageObservationId, UsageProvider, UsageSourceKind,
+    AgentId, CapacitySnapshot, EnvironmentId, NodeStoreId, PricingVersionId, ProviderInstanceId,
+    ScheduleId, SubscriptionKey, TokenCounts, UsageObservation, UsageObservationId, UsageProvider,
+    UsageSourceKind,
 };
 use serde::{Deserialize, Serialize};
 
@@ -75,6 +76,92 @@ pub struct UsageExportResult {
     pub items: Vec<UsageExportItem>,
     pub next_after_seq: u64,
     pub has_more: bool,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub retained_from_seq: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub latest_seq: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage_gap: Option<UsageCoverageGap>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_coverage: Option<UsageNodeCoverageSnapshot>,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
+/// Explicit notice that an incremental sequence is no longer retained on the node.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageCoverageGap {
+    pub requested_after_seq: u64,
+    pub retained_from_seq: u64,
+    pub latest_seq: u64,
+}
+
+/// Stable keyset used while reconciling a bounded full-fact snapshot.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageBackfillCursor {
+    pub observation_id: UsageObservationId,
+}
+
+/// Hub-only request for one bounded snapshot page after a retention gap or store reset.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageBackfillParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_through_seq: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<UsageBackfillCursor>,
+    #[serde(default = "default_page_size")]
+    pub limit: u32,
+}
+
+impl Default for UsageBackfillParams {
+    fn default() -> Self {
+        Self {
+            snapshot_through_seq: None,
+            after: None,
+            limit: DEFAULT_USAGE_PAGE_SIZE,
+        }
+    }
+}
+
+impl UsageBackfillParams {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_limit(self.limit)?;
+        if let Some(value) = self.snapshot_through_seq {
+            validate_persisted_u64("snapshotThroughSeq", value)?;
+        }
+        if let Some(after) = &self.after {
+            if self.snapshot_through_seq.is_none() {
+                return Err("after requires snapshotThroughSeq".to_string());
+            }
+            validate_optional_id("after.observationId", Some(after.observation_id.as_str()))?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageBackfillItem {
+    pub latest_seq: u64,
+    pub observation: UsageObservation,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageBackfillResult {
+    pub node_store_id: NodeStoreId,
+    pub snapshot_through_seq: u64,
+    pub items: Vec<UsageBackfillItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next: Option<UsageBackfillCursor>,
+    pub has_more: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_coverage: Option<UsageNodeCoverageSnapshot>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,6 +181,10 @@ impl UsageAckParams {
 pub struct UsageAckResult {
     pub acknowledged: u64,
     pub through_seq: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub compacted: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub retained_from_seq: u64,
 }
 
 /// Stable keyset cursor for observation queries.
@@ -228,7 +319,58 @@ pub struct UsageCoverage {
     #[serde(default)]
     pub included_environments: Vec<EnvironmentId>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub observation_sources: Vec<UsageSourceKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_source_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub unknown_price_tokens: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub priceable_tokens: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unknown_price_token_millionths: Option<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub environment_sync: Vec<UsageEnvironmentSyncCoverage>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub scanner_diagnostics: Vec<UsageScannerDiagnostic>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UsageEnvironmentSyncState {
+    Ready,
+    Reconciling,
+    CoverageGap,
+    Stale,
+    Unreachable,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageEnvironmentSyncCoverage {
+    pub environment_id: EnvironmentId,
+    pub state: UsageEnvironmentSyncState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_success_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_safe_error_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage_gap: Option<UsageCoverageGap>,
+}
+
+/// SQL-aggregated totals for the complete filtered result set.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageAggregate {
+    pub observation_count: u64,
+    pub tokens: TokenCounts,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_reported_micro_usd: Option<u64>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub provider_reported_observation_count: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_equivalent_estimated_micro_usd: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pricing_version_ids: Vec<PricingVersionId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -261,6 +403,17 @@ pub struct UsageScannerDiagnostic {
     pub last_safe_error_code: Option<String>,
 }
 
+/// Path-free node coverage carried alongside internal synchronization pages.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageNodeCoverageSnapshot {
+    pub quarantined_count: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_source_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scanner_diagnostics: Vec<UsageScannerDiagnostic>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageQueryResult {
@@ -268,6 +421,8 @@ pub struct UsageQueryResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next: Option<UsageQueryCursor>,
     pub has_more: bool,
+    #[serde(default)]
+    pub aggregate: UsageAggregate,
     pub coverage: UsageCoverage,
 }
 
@@ -370,6 +525,10 @@ mod tests {
             }],
             next_after_seq: 7,
             has_more: false,
+            retained_from_seq: 0,
+            latest_seq: 0,
+            coverage_gap: None,
+            node_coverage: None,
         };
         let json = serde_json::to_string(&result).expect("serialize export");
         assert_eq!(
@@ -384,12 +543,24 @@ mod tests {
     #[test]
     fn every_usage_page_is_bounded() {
         assert!(UsageExportParams::default().validate().is_ok());
+        assert!(UsageBackfillParams::default().validate().is_ok());
         assert!(UsageQueryParams::default().validate().is_ok());
         assert!(CapacityQueryParams::default().validate().is_ok());
         assert!(
             UsageExportParams {
                 after_seq: 0,
                 limit: 0
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            UsageBackfillParams {
+                snapshot_through_seq: None,
+                after: Some(UsageBackfillCursor {
+                    observation_id: UsageObservationId::new("usage-cursor"),
+                }),
+                limit: 10,
             }
             .validate()
             .is_err()

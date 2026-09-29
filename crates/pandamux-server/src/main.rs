@@ -78,13 +78,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return run_proxy_bridge(&runtime_dir).await;
     }
 
-    if role == ServerRole::Node && db_path.is_none() {
+    if db_path.is_none() {
         let data_dir = runtime_dir
             .parent()
             .unwrap_or(runtime_dir.as_path())
             .join("data");
         std::fs::create_dir_all(&data_dir)?;
-        db_path = Some(data_dir.join("node.db"));
+        db_path = Some(data_dir.join(if role == ServerRole::Node {
+            "node.db"
+        } else {
+            "hub.db"
+        }));
     }
 
     let pipe_path = default_pipe_path(&runtime_dir, role)?;
@@ -108,6 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         launcher_owned,
     )?;
     server.start_usage_scanner()?;
+    server.start_usage_sync()?;
 
     println!("PandaMUX Server started ({role:?}) at {pipe_path}");
 
@@ -127,6 +132,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     server.shutdown();
     server.shutdown_provider_sessions().await;
     server.shutdown_usage_scanner().await?;
+    server.shutdown_usage_sync().await?;
     server.shutdown_remote_environments().await;
     server.cleanup_runtime();
     cleanup_socket_path(&pipe_path);

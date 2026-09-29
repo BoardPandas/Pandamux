@@ -1,6 +1,6 @@
 use crate::ids::{
-    AgentId, EnvironmentId, ProviderInstanceId, ScheduleId, SubscriptionKey, ThreadId,
-    UsageObservationId,
+    AgentId, EnvironmentId, PricingVersionId, ProviderInstanceId, ScheduleId, SubscriptionKey,
+    ThreadId, UsageObservationId,
 };
 use crate::provider_config::ProviderKind;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -256,6 +256,166 @@ impl TokenCounts {
         .into_iter()
         .chain(self.other.iter().map(|(key, value)| (key.clone(), *value)))
     }
+}
+
+/// Per-million-token rates expressed in integer micro-USD.
+///
+/// An absent rate is deliberately unknown. A zero rate is a known free category.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsagePricingRates {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_micro_usd_per_million: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_input_micro_usd_per_million: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_micro_usd_per_million: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_micro_usd_per_million: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_micro_usd_per_million: Option<u64>,
+}
+
+/// Exact canonical model match and its explicitly declared aliases.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsagePricingRule {
+    pub canonical_model_id: String,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub aliases: BTreeSet<String>,
+    pub rates: UsagePricingRates,
+}
+
+/// Source-dated, effective-dated provider pricing revision.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsagePricingVersion {
+    pub id: PricingVersionId,
+    pub provider: UsageProvider,
+    pub source_published_at_ms: u64,
+    pub effective_from_ms: u64,
+    pub rules: Vec<UsagePricingRule>,
+}
+
+impl UsagePricingVersion {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.id.as_str().trim().is_empty() {
+            return Err("pricing version id must not be empty".to_string());
+        }
+        if matches!(&self.provider, UsageProvider::Unknown(value) if value.trim().is_empty()) {
+            return Err("unknown pricing provider must not be empty".to_string());
+        }
+        if self.rules.is_empty() {
+            return Err("pricing version must contain at least one rule".to_string());
+        }
+
+        let mut model_ids = BTreeSet::new();
+        for rule in &self.rules {
+            let canonical = rule.canonical_model_id.trim();
+            if canonical.is_empty() {
+                return Err("canonical pricing model id must not be empty".to_string());
+            }
+            if !model_ids.insert(canonical.to_string()) {
+                return Err(format!("duplicate pricing model id {canonical}"));
+            }
+            if !pricing_rates_have_known_category(&rule.rates) {
+                return Err(format!(
+                    "pricing rule {canonical} must contain at least one known rate"
+                ));
+            }
+            for alias in &rule.aliases {
+                let alias = alias.trim();
+                if alias.is_empty() {
+                    return Err("pricing alias must not be empty".to_string());
+                }
+                if !model_ids.insert(alias.to_string()) {
+                    return Err(format!("duplicate pricing model id or alias {alias}"));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn pricing_rates_have_known_category(rates: &UsagePricingRates) -> bool {
+    rates.input_micro_usd_per_million.is_some()
+        || rates.cached_input_micro_usd_per_million.is_some()
+        || rates.cache_write_micro_usd_per_million.is_some()
+        || rates.output_micro_usd_per_million.is_some()
+        || rates.reasoning_micro_usd_per_million.is_some()
+}
+
+/// Prices one already-aggregated rate group with checked integer arithmetic.
+///
+/// Products are summed at full precision, then rounded once to the nearest micro-USD.
+/// Exact half-micro-USD values round upward. A nonzero category without an explicit rate,
+/// including any provider-specific `other` category, makes the estimate unknown.
+pub fn estimate_usage_micro_usd(
+    tokens: &TokenCounts,
+    rates: &UsagePricingRates,
+) -> Result<Option<u64>, UsageArithmeticError> {
+    if tokens.other.values().any(|value| *value != 0) {
+        return Ok(None);
+    }
+    let categories = [
+        (
+            "inputPrice",
+            tokens.input,
+            rates.input_micro_usd_per_million,
+        ),
+        (
+            "cachedInputPrice",
+            tokens.cached_input,
+            rates.cached_input_micro_usd_per_million,
+        ),
+        (
+            "cacheWritePrice",
+            tokens.cache_write,
+            rates.cache_write_micro_usd_per_million,
+        ),
+        (
+            "outputPrice",
+            tokens.output,
+            rates.output_micro_usd_per_million,
+        ),
+        (
+            "reasoningPrice",
+            tokens.reasoning,
+            rates.reasoning_micro_usd_per_million,
+        ),
+    ];
+    let mut numerator = 0_u128;
+    for (category, count, rate) in categories {
+        if count == 0 {
+            continue;
+        }
+        let Some(rate) = rate else {
+            return Ok(None);
+        };
+        let product = u128::from(count)
+            .checked_mul(u128::from(rate))
+            .ok_or_else(|| UsageArithmeticError {
+                category: category.to_string(),
+            })?;
+        numerator = numerator
+            .checked_add(product)
+            .ok_or_else(|| UsageArithmeticError {
+                category: category.to_string(),
+            })?;
+    }
+
+    const TOKENS_PER_MILLION: u128 = 1_000_000;
+    let rounded = numerator
+        .checked_add(TOKENS_PER_MILLION / 2)
+        .ok_or_else(|| UsageArithmeticError {
+            category: "priceRounding".to_string(),
+        })?
+        / TOKENS_PER_MILLION;
+    u64::try_from(rounded)
+        .map(Some)
+        .map_err(|_| UsageArithmeticError {
+            category: "priceTotal".to_string(),
+        })
 }
 
 /// Immutable ingestion fact. Environment identity is assigned by the authenticated
@@ -606,5 +766,91 @@ mod tests {
         empty.tokens = TokenCounts::default();
         empty.provider_reported_micro_usd = None;
         assert_eq!(empty.validate(), Err(UsageObservationError::EmptyFact));
+    }
+
+    #[test]
+    fn pricing_is_exact_half_up_and_unknown_stays_unknown() {
+        let rates = UsagePricingRates {
+            input_micro_usd_per_million: Some(500_000),
+            output_micro_usd_per_million: Some(1_000_000),
+            ..UsagePricingRates::default()
+        };
+        assert_eq!(
+            estimate_usage_micro_usd(
+                &TokenCounts {
+                    input: 1,
+                    ..TokenCounts::default()
+                },
+                &rates,
+            )
+            .expect("price one token"),
+            Some(1)
+        );
+        assert_eq!(
+            estimate_usage_micro_usd(
+                &TokenCounts {
+                    cached_input: 1,
+                    ..TokenCounts::default()
+                },
+                &rates,
+            )
+            .expect("unknown cached rate"),
+            None
+        );
+        assert_eq!(
+            estimate_usage_micro_usd(
+                &TokenCounts {
+                    other: BTreeMap::from([("future".to_string(), 1)]),
+                    ..TokenCounts::default()
+                },
+                &rates,
+            )
+            .expect("unknown other category"),
+            None
+        );
+    }
+
+    #[test]
+    fn pricing_rejects_alias_collisions_and_checked_overflow() {
+        let version = UsagePricingVersion {
+            id: PricingVersionId::new("price-one"),
+            provider: UsageProvider::Codex,
+            source_published_at_ms: 10,
+            effective_from_ms: 20,
+            rules: vec![
+                UsagePricingRule {
+                    canonical_model_id: "gpt-one".to_string(),
+                    aliases: BTreeSet::from(["shared".to_string()]),
+                    rates: UsagePricingRates {
+                        input_micro_usd_per_million: Some(1),
+                        ..UsagePricingRates::default()
+                    },
+                },
+                UsagePricingRule {
+                    canonical_model_id: "gpt-two".to_string(),
+                    aliases: BTreeSet::from(["shared".to_string()]),
+                    rates: UsagePricingRates {
+                        input_micro_usd_per_million: Some(1),
+                        ..UsagePricingRates::default()
+                    },
+                },
+            ],
+        };
+        assert!(version.validate().is_err());
+
+        let overflow = estimate_usage_micro_usd(
+            &TokenCounts {
+                input: u64::MAX,
+                output: u64::MAX,
+                ..TokenCounts::default()
+            },
+            &UsagePricingRates {
+                input_micro_usd_per_million: Some(u64::MAX),
+                output_micro_usd_per_million: Some(u64::MAX),
+                ..UsagePricingRates::default()
+            },
+        )
+        .expect_err("price numerator overflow must fail");
+        assert_eq!(overflow.category, "outputPrice");
     }
 }

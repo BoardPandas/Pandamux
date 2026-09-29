@@ -66,10 +66,12 @@ pub use thread_rpc::{
     ThreadSendTurnResult,
 };
 pub use usage_rpc::{
-    CapacityQueryCursor, CapacityQueryParams, CapacityQueryResult, UsageAckParams, UsageAckResult,
-    UsageCoverage, UsageExportItem, UsageExportParams, UsageExportResult, UsageQueryCursor,
-    UsageQueryItem, UsageQueryParams, UsageQueryResult, UsageScannerDiagnostic,
-    UsageSourceCoverageState,
+    CapacityQueryCursor, CapacityQueryParams, CapacityQueryResult, DEFAULT_USAGE_PAGE_SIZE,
+    MAX_USAGE_PAGE_SIZE, UsageAckParams, UsageAckResult, UsageAggregate, UsageBackfillCursor,
+    UsageBackfillItem, UsageBackfillParams, UsageBackfillResult, UsageCoverage, UsageCoverageGap,
+    UsageEnvironmentSyncCoverage, UsageEnvironmentSyncState, UsageExportItem, UsageExportParams,
+    UsageExportResult, UsageNodeCoverageSnapshot, UsageQueryCursor, UsageQueryItem,
+    UsageQueryParams, UsageQueryResult, UsageScannerDiagnostic, UsageSourceCoverageState,
 };
 pub use worktree_rpc::{WorktreeSyncDeltaParams, WorktreeSyncDeltaResult};
 

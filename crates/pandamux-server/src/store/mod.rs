@@ -1,4 +1,11 @@
 pub mod migrations;
+mod usage_phase4c;
+mod usage_query_phase4c;
+
+pub use usage_phase4c::{
+    DEFAULT_USAGE_OUTBOX_MAX_AGE_MS, DEFAULT_USAGE_OUTBOX_MAX_BYTES, DEFAULT_USAGE_OUTBOX_MAX_ROWS,
+    UsageHubIngestOutcome, UsageHubSyncState, UsageOutboxCompaction, UsageOutboxRetention,
+};
 
 use pandamux_core::{
     AgentId, AttachmentRecord, CapacityConfidence, CapacitySnapshot, EnvironmentId, FailoverPool,
@@ -1294,16 +1301,31 @@ impl Store {
             }
 
             tx.execute(
-                "INSERT INTO usage_outbox (environment_id, observation_id, enqueued_at_ms)
-                 VALUES (?1, ?2, ?3)",
+                "INSERT INTO usage_outbox (
+                    environment_id, observation_id, enqueued_at_ms, payload_bytes
+                 ) VALUES (?1, ?2, ?3, ?4)",
                 params![
                     environment_id.as_str(),
                     observation.id.as_str(),
-                    created_at_ms
+                    created_at_ms,
+                    usage_observation_payload_bytes(observation)?,
                 ],
             )?;
             result.inserted = checked_increment(result.inserted, "usage insert count overflow")?;
             result.last_outbox_seq = checked_u64(tx.last_insert_rowid(), "usage_outbox.seq")?;
+            tx.execute(
+                "UPDATE usage_observations
+                 SET source_node_store_id = (
+                         SELECT node_store_id FROM usage_store_meta WHERE singleton = 1
+                     ),
+                     source_outbox_seq = ?1
+                 WHERE environment_id = ?2 AND observation_id = ?3",
+                params![
+                    checked_i64(result.last_outbox_seq, "usage_outbox.seq")?,
+                    environment_id.as_str(),
+                    observation.id.as_str(),
+                ],
+            )?;
 
             if fail_after_observations == Some(index + 1) {
                 return Err(StoreError::Data(
@@ -1618,12 +1640,37 @@ impl Store {
         params.validate().map_err(StoreError::Data)?;
         let after_seq = checked_i64(params.after_seq, "usage export after_seq")?;
         let query_limit = i64::from(params.limit) + 1;
+        let (retained_from_seq, latest_seq) = self.usage_outbox_window()?;
+        let node_coverage = self.usage_node_coverage_snapshot()?;
         let conn = self.conn.lock().unwrap();
         let node_store_id = conn.query_row(
             "SELECT node_store_id FROM usage_store_meta WHERE singleton = 1",
             [],
             |row| row.get::<_, String>(0),
         )?;
+        let coverage_gap = if params.after_seq < latest_seq
+            && params.after_seq.saturating_add(1) < retained_from_seq
+        {
+            Some(pandamux_protocol::UsageCoverageGap {
+                requested_after_seq: params.after_seq,
+                retained_from_seq,
+                latest_seq,
+            })
+        } else {
+            None
+        };
+        if coverage_gap.is_some() {
+            return Ok(UsageExportResult {
+                node_store_id: NodeStoreId::from(node_store_id),
+                items: Vec::new(),
+                next_after_seq: params.after_seq,
+                has_more: false,
+                retained_from_seq,
+                latest_seq,
+                coverage_gap,
+                node_coverage: Some(node_coverage),
+            });
+        }
         let mut stmt = conn.prepare(
             "SELECT x.seq,
                     o.observation_id, o.source_kind, o.parser_version,
@@ -1663,21 +1710,17 @@ impl Store {
             items,
             next_after_seq,
             has_more,
+            retained_from_seq,
+            latest_seq,
+            coverage_gap: None,
+            node_coverage: Some(node_coverage),
         })
     }
 
     pub fn acknowledge_usage(&self, through_seq: u64) -> Result<u64, StoreError> {
-        let through_seq = checked_i64(through_seq, "usage acknowledgement sequence")?;
-        let acknowledged_at_ms = checked_i64(store_now_ms(), "usage acknowledgement time")?;
-        let conn = self.conn.lock().unwrap();
-        let count = conn.execute(
-            "UPDATE usage_outbox
-             SET acknowledged_at_ms = ?1
-             WHERE seq <= ?2 AND acknowledged_at_ms IS NULL",
-            params![acknowledged_at_ms, through_seq],
-        )?;
-        u64::try_from(count)
-            .map_err(|_| StoreError::Data("usage acknowledgement count overflow".to_string()))
+        Ok(self
+            .acknowledge_and_compact_usage(through_seq, UsageOutboxRetention::default())?
+            .acknowledged)
     }
 
     pub fn query_usage(&self, params: &UsageQueryParams) -> Result<UsageQueryResult, StoreError> {
@@ -1798,24 +1841,28 @@ impl Store {
             environment_id: item.environment_id.clone(),
             observation_id: item.observation.id.clone(),
         });
-        let included_environments: BTreeSet<EnvironmentId> = items
-            .iter()
-            .map(|item| item.environment_id.clone())
-            .collect();
-        let quarantined_count = checked_u64(
-            conn.query_row("SELECT COUNT(*) FROM usage_quarantine", [], |row| {
-                row.get(0)
-            })?,
-            "usage_quarantine count",
-        )?;
+        let aggregate = usage_query_phase4c::load_usage_aggregate(&conn, params)?;
         let scanner_diagnostics = load_usage_scanner_diagnostics(&conn, params)?;
+        let latest_source_at_ms = aggregate.latest_source_at_ms.max(
+            scanner_diagnostics
+                .iter()
+                .filter_map(|diagnostic| diagnostic.latest_source_at_ms)
+                .max(),
+        );
         Ok(UsageQueryResult {
             items,
             next,
             has_more,
+            aggregate: aggregate.aggregate,
             coverage: pandamux_protocol::UsageCoverage {
-                quarantined_count,
-                included_environments: included_environments.into_iter().collect(),
+                quarantined_count: aggregate.quarantined_count,
+                included_environments: aggregate.included_environments,
+                observation_sources: aggregate.observation_sources,
+                latest_source_at_ms,
+                unknown_price_tokens: aggregate.unknown_price_tokens,
+                priceable_tokens: aggregate.priceable_tokens,
+                unknown_price_token_millionths: aggregate.unknown_price_token_millionths,
+                environment_sync: aggregate.environment_sync,
                 scanner_diagnostics,
             },
         })
@@ -2384,8 +2431,7 @@ fn validate_usage_quarantine(quarantine: &UsageQuarantineRecord) -> Result<(), S
     if quarantine.environment_id.as_str().trim().is_empty()
         || quarantine.provider_instance_id.as_str().trim().is_empty()
         || quarantine.source_kind.as_str().trim().is_empty()
-        || quarantine.reason_code.trim().is_empty()
-        || quarantine.reason_code.len() > 64
+        || !is_safe_diagnostic_code(&quarantine.reason_code)
         || quarantine.reason_detail.trim().is_empty()
         || quarantine.reason_detail.len() > 256
     {
@@ -2419,13 +2465,21 @@ fn validate_usage_diagnostic(diagnostic: &UsageScannerDiagnostic) -> Result<(), 
     if diagnostic
         .last_safe_error_code
         .as_ref()
-        .is_some_and(|code| code.trim().is_empty() || code.len() > 64)
+        .is_some_and(|code| !is_safe_diagnostic_code(code))
     {
         return Err(StoreError::Data(
             "usage scanner safe error code must be absent or bounded".to_string(),
         ));
     }
     Ok(())
+}
+
+fn is_safe_diagnostic_code(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
 }
 
 fn is_sha256(value: &str) -> bool {
@@ -2632,16 +2686,43 @@ fn promote_usage_observation_to_managed(
             "managed usage reconciliation target disappeared".to_string(),
         ));
     }
+    let payload_bytes = usage_observation_payload_bytes(managed)?;
     tx.execute(
-        "INSERT INTO usage_outbox (environment_id, observation_id, enqueued_at_ms)
-         VALUES (?1, ?2, ?3)",
+        "UPDATE usage_outbox SET payload_bytes = ?1
+         WHERE environment_id = ?2 AND observation_id = ?3",
+        params![payload_bytes, environment_id.as_str(), existing_id.as_str()],
+    )?;
+    tx.execute(
+        "INSERT INTO usage_outbox (
+            environment_id, observation_id, enqueued_at_ms, payload_bytes
+         ) VALUES (?1, ?2, ?3, ?4)",
         params![
             environment_id.as_str(),
             existing_id.as_str(),
-            enqueued_at_ms
+            enqueued_at_ms,
+            payload_bytes,
         ],
     )?;
-    checked_u64(tx.last_insert_rowid(), "usage_outbox.seq")
+    let outbox_seq = checked_u64(tx.last_insert_rowid(), "usage_outbox.seq")?;
+    tx.execute(
+        "UPDATE usage_observations
+         SET source_node_store_id = (
+                 SELECT node_store_id FROM usage_store_meta WHERE singleton = 1
+             ),
+             source_outbox_seq = ?1
+         WHERE environment_id = ?2 AND observation_id = ?3",
+        params![
+            checked_i64(outbox_seq, "usage_outbox.seq")?,
+            environment_id.as_str(),
+            existing_id.as_str(),
+        ],
+    )?;
+    Ok(outbox_seq)
+}
+
+fn usage_observation_payload_bytes(observation: &UsageObservation) -> Result<i64, StoreError> {
+    i64::try_from(serde_json::to_vec(observation)?.len())
+        .map_err(|_| StoreError::Data("usage observation payload size overflow".to_string()))
 }
 
 fn coverage_state_value(state: UsageSourceCoverageState) -> &'static str {

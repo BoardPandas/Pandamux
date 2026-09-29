@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Added
 
+- **Added the Phase 4C Hub usage synchronization, aggregation, and pricing layer.**
+  The Hub now pulls bounded pages from every registered node, assigns authenticated
+  environment identity, commits facts with each durable high-water mark, resumes after
+  reconnect or restart, and reconciles changed node-store identities through bounded
+  snapshots. Acknowledged node outboxes compact by age, count, and serialized bytes;
+  retention gaps remain explicit until backfill completes. Indexed SQL totals apply all
+  usage filters, preserve provider-reported spend separately, calculate effective-dated
+  API-equivalent estimates with checked integer arithmetic, and report cross-node
+  freshness, quarantine, source, reachability, and unknown-price coverage.
+
 - **Added the Phase 4B node-owned usage scanner and reconciliation service.** PandaMUX
   now scans Claude and Codex transcript sources on one bounded server-owned worker at
   startup, after managed turns, and on a jittered fallback cadence. Durable platform

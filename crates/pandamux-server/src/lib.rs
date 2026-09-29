@@ -17,6 +17,7 @@ pub mod store;
 pub mod terminal;
 pub mod thread_manager;
 pub mod usage_scanner;
+pub mod usage_sync;
 #[cfg(windows)]
 pub mod windows_security;
 pub mod worktree;
@@ -50,6 +51,10 @@ pub use thread_manager::ThreadManager;
 pub use usage_scanner::{
     PlatformFileIdentity, UsageScanRunReport, UsageScanSource, UsageScanTrigger,
     UsageScannerHandle, UsageScannerLimits, UsageScannerRuntimeConfig, UsageScannerService,
+};
+pub use usage_sync::{
+    UsageHubSyncService, UsageHubSynchronizer, UsageSyncHandle, UsageSyncReport,
+    UsageSyncRuntimeConfig,
 };
 
 #[cfg(test)]

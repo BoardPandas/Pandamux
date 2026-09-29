@@ -70,7 +70,8 @@ impl RequestContext {
         let allowed = match &self.capability_scope {
             CapabilityScope::Internal => true,
             CapabilityScope::Control => {
-                !method.starts_with("mcp.") && !matches!(method, "usage.export" | "usage.ack")
+                !method.starts_with("mcp.")
+                    && !matches!(method, "usage.export" | "usage.backfill" | "usage.ack")
             }
             CapabilityScope::Mcp => matches!(
                 method,
@@ -327,6 +328,7 @@ mod tests {
             .expect("control method");
         assert!(control.authorize("mcp.list_tools", &Value::Null).is_err());
         assert!(control.authorize("usage.export", &Value::Null).is_err());
+        assert!(control.authorize("usage.backfill", &Value::Null).is_err());
         assert!(control.authorize("usage.ack", &Value::Null).is_err());
 
         let mcp = authority

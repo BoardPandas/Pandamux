@@ -1280,6 +1280,52 @@ Checkpoint acceptance:
 - A pricing update changes only the estimate projection, never raw usage facts.
 - Raw transcripts, filesystem paths, and unmasked account labels never leave their node.
 
+##### Checkpoint 4C completion record, 2026-09-29
+
+- The Hub now owns a bounded asynchronous synchronization service and persists its
+  default database at `data/hub.db`. Connection and periodic triggers pull authenticated
+  node pages. Observation upserts and per-environment high-water advances share one
+  transaction, reconnect resumes the committed sequence, and stale or unreachable
+  environments remain explicit in coverage.
+- Changed node-store identity and acknowledged retention loss enter durable bounded
+  backfill. Snapshot sequence, run identity, and observation cursor persist after every
+  page. Final cleanup and high-water advancement commit together, then newer revisions
+  resume incrementally. Duplicate items are idempotent, reordered items are sorted, and
+  an early page cannot advance past a missing sequence.
+- Node outboxes compact only acknowledged rows and apply count, age, and serialized-byte
+  limits. A request older than the retained sequence window returns an explicit coverage
+  gap plus a path-free node coverage snapshot rather than silently omitting facts.
+- Additive migration 8 preserves migrations 4 through 7 and adds remote revision
+  identity, outbox size accounting, durable synchronization and backfill status, query
+  indexes, source-dated pricing metadata, normalized exact-model rules, and explicit
+  aliases.
+- `usage.query` keeps its bounded fact page and computes complete totals in indexed
+  SQLite queries for time, environment, provider, provider instance, subscription,
+  agent, schedule, model, and source filters. Results include observation sources,
+  included environments, stale or unreachable nodes, latest source time, quarantine,
+  and unknown-price token share.
+- Provider-reported spend remains separate from API-equivalent estimates. Effective
+  provider pricing matches exact canonical model ids or declared aliases. Integer token
+  and micro-USD arithmetic is checked; each effective rule group rounds once to the
+  nearest micro-USD with exact halves upward. Any nonzero unpriced category makes the
+  aggregate estimate absent, and pricing updates revalue only the query projection.
+- Acceptance fixtures cover duplicate and reordered pages, reconnect, Hub restart,
+  node-store reset, persisted backfill restart, count, age, and byte retention, every
+  usage filter, a UTC day boundary, aggregation conservation, checked overflow,
+  effective pricing replacement, unknown-price share, and path and account-label
+  privacy.
+- **Local verification:** at workspace version `0.57.0`, formatting and strict workspace
+  Clippy passed, and `cargo test --workspace` passed 361 tests with zero failures and two
+  intentionally ignored real-shell terminal tests. The Rust crate-boundary and Claude
+  wiring guards passed. The full `pandamux-server` target set type-checks for the Windows
+  GNU ABI. `cargo-deny` is unavailable on this host, so no advisory or license result is
+  claimed.
+- **Acceptance boundary:** no current Phase 4C executable was run natively on Windows or
+  against a live multi-node production topology. This completion record is source and
+  local verification evidence only; it does not satisfy the deferred physical R0.5
+  rows, native Phase 4C runtime acceptance, Phase 4D, production acceptance, push,
+  deployment, or release.
+
 #### Checkpoint 4D: capacity, provider health, and actionable login
 
 1. Implement provider adapters for quota reports only where fixtures prove the semantics. Codex rate-limit events may be Reported. Grok remains unverified until fixtures and a live smoke pass. Claude and Antigravity use Estimated or Unknown unless a defensible provider source appears.

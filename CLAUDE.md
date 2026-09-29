@@ -137,6 +137,17 @@ text, profile paths, canonical source paths, or unmasked account labels. Additiv
 migration 7 carries the scanner state and reconciliation indexes; migrations 4 through
 6 remain immutable.
 
+Phase 4C keeps node outboxes and Hub ingestion bounded. The Hub owns one asynchronous
+synchronization service, persists its database at `data/hub.db` by default, and commits
+each authenticated environment's observations with its node-store identity and
+high-water mark. Reconnect resumes incrementally. Store replacement or acknowledged
+retention loss enters durable bounded backfill before old facts are removed. Migration 8
+adds synchronization state, retention accounting, query indexes, and normalized
+effective-dated pricing rules without rewriting prior migrations. `usage.query` pages
+facts but computes complete filtered totals in SQLite. Provider-reported spend and
+API-equivalent estimates remain separate, and any nonzero token category without an
+exact effective rule keeps the estimate unknown.
+
 ## Remote composition
 
 `pandamux-remote` owns SSH mechanics, but `pandamux-server` owns their production composition.

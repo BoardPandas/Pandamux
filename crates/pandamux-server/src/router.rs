@@ -23,8 +23,8 @@ use pandamux_protocol::{
     SubAgentTreeResult, TerminalAttachParams, TerminalCloseParams, TerminalInputParams,
     TerminalOpenParams, TerminalResizeParams, ThreadCancelTurnParams, ThreadCreateParams,
     ThreadGetParams, ThreadListParams, ThreadRespondApprovalParams, ThreadResumeParams,
-    ThreadSendTurnParams, UsageAckParams, UsageAckResult, UsageExportParams, UsageQueryParams,
-    WorktreeSyncDeltaParams, WorktreeSyncDeltaResult,
+    ThreadSendTurnParams, UsageAckParams, UsageAckResult, UsageBackfillParams, UsageExportParams,
+    UsageQueryParams, WorktreeSyncDeltaParams, WorktreeSyncDeltaResult,
 };
 
 use crate::attachment::AttachmentManager;
@@ -528,7 +528,7 @@ impl Router {
     ) -> Option<pandamux_core::ids::EnvironmentId> {
         if matches!(
             method,
-            "usage.export" | "usage.ack" | "usage.query" | "capacity.query"
+            "usage.export" | "usage.backfill" | "usage.ack" | "usage.query" | "capacity.query"
         ) {
             return None;
         }
@@ -711,6 +711,7 @@ impl Router {
             "settings.set" | "config.set" => self.handle_settings_set(params),
             "provider.health" | "provider.probe" => self.handle_provider_health(params).await,
             "usage.export" => self.handle_usage_export(context, params),
+            "usage.backfill" => self.handle_usage_backfill(context, params),
             "usage.ack" => self.handle_usage_ack(context, params),
             "usage.query" => self.handle_usage_query(context, params),
             "capacity.query" => self.handle_capacity_query(context, params),
@@ -1169,6 +1170,23 @@ impl Router {
         serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
     }
 
+    fn handle_usage_backfill(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        self.require_hub_usage_peer(context)?;
+        let params: UsageBackfillParams = parse_usage_params(params, "usage.backfill")?;
+        params
+            .validate()
+            .map_err(|error| usage_params_error("usage_backfill_invalid", error))?;
+        let result = self
+            .store
+            .export_usage_backfill(&params)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
     fn handle_usage_ack(&self, context: &RequestContext, params: Value) -> Result<Value, RpcError> {
         self.require_hub_usage_peer(context)?;
         let params: UsageAckParams = serde_json::from_value(params).map_err(|error| {
@@ -1180,13 +1198,18 @@ impl Router {
         params
             .validate()
             .map_err(|error| usage_params_error("usage_ack_invalid", error))?;
-        let acknowledged = self
+        let outcome = self
             .store
-            .acknowledge_usage(params.through_seq)
+            .acknowledge_and_compact_usage(
+                params.through_seq,
+                crate::store::UsageOutboxRetention::default(),
+            )
             .map_err(|error| RpcError::internal_error(error.to_string()))?;
         serde_json::to_value(UsageAckResult {
-            acknowledged,
+            acknowledged: outcome.acknowledged,
             through_seq: params.through_seq,
+            compacted: outcome.compacted,
+            retained_from_seq: outcome.retained_from_seq,
         })
         .map_err(|error| RpcError::internal_error(error.to_string()))
     }
@@ -2106,6 +2129,15 @@ mod tests {
             .expect("export response");
         assert_eq!(denied_export.error.expect("denied export").code, -32001);
 
+        let denied_backfill = router
+            .handle_request_with_context(
+                &control,
+                RpcRequest::new(10, "usage.backfill", Some(json!({ "limit": 10 }))),
+            )
+            .await
+            .expect("backfill response");
+        assert_eq!(denied_backfill.error.expect("denied backfill").code, -32001);
+
         let denied_routed_export = router
             .handle_request_with_context(
                 &control,
@@ -2136,6 +2168,22 @@ mod tests {
         assert!(export.is_success());
         assert_eq!(
             export.result.as_ref().unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let backfill = router
+            .handle_request_with_context(
+                &node,
+                RpcRequest::new(13, "usage.backfill", Some(json!({ "limit": 10 }))),
+            )
+            .await
+            .expect("backfill response");
+        assert!(backfill.is_success());
+        assert_eq!(
+            backfill.result.as_ref().unwrap()["items"]
                 .as_array()
                 .unwrap()
                 .len(),

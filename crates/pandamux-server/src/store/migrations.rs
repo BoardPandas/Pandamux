@@ -3,7 +3,7 @@ use rusqlite::{Connection, Result, Transaction, params};
 use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const SCHEMA_VERSION: i64 = 7;
+pub const SCHEMA_VERSION: i64 = 8;
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -994,6 +994,172 @@ fn apply_migrations_to(conn: &mut Connection, target_version: i64) -> Result<()>
         )?;
         tx.execute(
             "INSERT INTO _migrations (version, applied_at_ms) VALUES (7, ?1)",
+            [now_ms() as i64],
+        )?;
+        tx.commit()?;
+    }
+
+    if current < 8 && target_version >= 8 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(
+            "ALTER TABLE usage_observations ADD COLUMN source_node_store_id TEXT;
+            ALTER TABLE usage_observations ADD COLUMN source_outbox_seq INTEGER
+                CHECK(source_outbox_seq >= 0);
+            ALTER TABLE usage_observations ADD COLUMN hub_sync_run_id TEXT;
+
+            CREATE INDEX idx_usage_observations_environment_time
+                ON usage_observations(environment_id, occurred_at_ms, observation_id);
+            CREATE INDEX idx_usage_observations_model_time
+                ON usage_observations(model, occurred_at_ms);
+            CREATE INDEX idx_usage_observations_source_time
+                ON usage_observations(source_kind, occurred_at_ms);
+            CREATE INDEX idx_usage_observations_instance_time
+                ON usage_observations(provider_instance_id, occurred_at_ms);
+            CREATE INDEX idx_usage_observations_schedule_time
+                ON usage_observations(schedule_id, occurred_at_ms);
+            CREATE INDEX idx_usage_observations_remote_revision
+                ON usage_observations(
+                    environment_id,
+                    source_node_store_id,
+                    source_outbox_seq
+                );
+            CREATE INDEX idx_usage_observations_sync_run
+                ON usage_observations(environment_id, hub_sync_run_id);
+
+            ALTER TABLE usage_outbox ADD COLUMN payload_bytes INTEGER NOT NULL
+                DEFAULT 0 CHECK(payload_bytes >= 0);
+            UPDATE usage_outbox
+            SET payload_bytes = COALESCE((
+                SELECT 512 + 6 * (
+                    length(CAST(o.observation_id AS BLOB))
+                    + length(CAST(o.source_kind AS BLOB))
+                    + length(CAST(COALESCE(o.provider_native_session_id, '') AS BLOB))
+                    + length(CAST(COALESCE(o.provider_native_turn_id, '') AS BLOB))
+                    + length(CAST(o.provider AS BLOB))
+                    + length(CAST(o.provider_instance_id AS BLOB))
+                    + length(CAST(o.subscription_key AS BLOB))
+                    + length(CAST(COALESCE(o.model, '') AS BLOB))
+                    + length(CAST(o.other_tokens_json AS BLOB))
+                    + length(CAST(o.unknown_fields_json AS BLOB))
+                    + length(CAST(COALESCE(o.thread_id, '') AS BLOB))
+                    + length(CAST(COALESCE(o.turn_id, '') AS BLOB))
+                    + length(CAST(COALESCE(o.agent_id, '') AS BLOB))
+                    + length(CAST(COALESCE(o.schedule_id, '') AS BLOB))
+                )
+                FROM usage_observations o
+                WHERE o.environment_id = usage_outbox.environment_id
+                  AND o.observation_id = usage_outbox.observation_id
+            ), 0);
+            UPDATE usage_observations
+            SET source_node_store_id = (
+                    SELECT node_store_id
+                    FROM usage_store_meta
+                    WHERE singleton = 1
+                ),
+                source_outbox_seq = (
+                    SELECT MAX(x.seq)
+                    FROM usage_outbox x
+                    WHERE x.environment_id = usage_observations.environment_id
+                      AND x.observation_id = usage_observations.observation_id
+                )
+            WHERE source_outbox_seq IS NULL;
+            CREATE INDEX idx_usage_outbox_retention
+                ON usage_outbox(acknowledged_at_ms, enqueued_at_ms, seq);
+
+            ALTER TABLE usage_hub_high_water ADD COLUMN last_attempt_at_ms INTEGER
+                CHECK(last_attempt_at_ms >= 0);
+            ALTER TABLE usage_hub_high_water ADD COLUMN last_success_at_ms INTEGER
+                CHECK(last_success_at_ms >= 0);
+            ALTER TABLE usage_hub_high_water ADD COLUMN last_safe_error_code TEXT;
+            ALTER TABLE usage_hub_high_water ADD COLUMN gap_requested_after_seq INTEGER
+                CHECK(gap_requested_after_seq >= 0);
+            ALTER TABLE usage_hub_high_water ADD COLUMN gap_retained_from_seq INTEGER
+                CHECK(gap_retained_from_seq >= 0);
+            ALTER TABLE usage_hub_high_water ADD COLUMN gap_latest_seq INTEGER
+                CHECK(gap_latest_seq >= 0);
+            ALTER TABLE usage_hub_high_water ADD COLUMN backfill_run_id TEXT;
+            ALTER TABLE usage_hub_high_water ADD COLUMN backfill_after_observation_id TEXT;
+            ALTER TABLE usage_hub_high_water ADD COLUMN backfill_through_seq INTEGER
+                CHECK(backfill_through_seq >= 0);
+            ALTER TABLE usage_hub_high_water ADD COLUMN quarantined_count INTEGER NOT NULL
+                DEFAULT 0 CHECK(quarantined_count >= 0);
+            ALTER TABLE usage_hub_high_water ADD COLUMN latest_source_at_ms INTEGER
+                CHECK(latest_source_at_ms >= 0);
+
+            CREATE TABLE usage_hub_environment_status (
+                environment_id TEXT PRIMARY KEY CHECK(environment_id <> ''),
+                sync_state TEXT NOT NULL CHECK(sync_state IN (
+                    'ready', 'reconciling', 'coverage_gap', 'stale', 'unreachable'
+                )),
+                last_attempt_at_ms INTEGER CHECK(last_attempt_at_ms >= 0),
+                last_success_at_ms INTEGER CHECK(last_success_at_ms >= 0),
+                last_safe_error_code TEXT,
+                updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0)
+            );
+            INSERT INTO usage_hub_environment_status (
+                environment_id, sync_state, last_attempt_at_ms,
+                last_success_at_ms, last_safe_error_code, updated_at_ms
+            )
+            SELECT environment_id,
+                   CASE
+                       WHEN reconciliation_state IN (
+                           'ready', 'reconciling', 'coverage_gap', 'stale', 'unreachable'
+                       ) THEN reconciliation_state
+                       ELSE 'stale'
+                   END,
+                   last_attempt_at_ms,
+                   last_success_at_ms, last_safe_error_code, updated_at_ms
+            FROM usage_hub_high_water;
+
+            ALTER TABLE usage_pricing_versions ADD COLUMN source_published_at_ms INTEGER
+                CHECK(source_published_at_ms >= 0);
+            UPDATE usage_pricing_versions
+            SET source_published_at_ms = effective_from_ms
+            WHERE source_published_at_ms IS NULL;
+
+            CREATE TABLE usage_pricing_rules (
+                pricing_version_id TEXT NOT NULL
+                    REFERENCES usage_pricing_versions(id) ON DELETE CASCADE,
+                canonical_model_id TEXT NOT NULL CHECK(canonical_model_id <> ''),
+                input_micro_usd_per_million INTEGER
+                    CHECK(input_micro_usd_per_million >= 0),
+                cached_input_micro_usd_per_million INTEGER
+                    CHECK(cached_input_micro_usd_per_million >= 0),
+                cache_write_micro_usd_per_million INTEGER
+                    CHECK(cache_write_micro_usd_per_million >= 0),
+                output_micro_usd_per_million INTEGER
+                    CHECK(output_micro_usd_per_million >= 0),
+                reasoning_micro_usd_per_million INTEGER
+                    CHECK(reasoning_micro_usd_per_million >= 0),
+                PRIMARY KEY(pricing_version_id, canonical_model_id),
+                CHECK(
+                    input_micro_usd_per_million IS NOT NULL OR
+                    cached_input_micro_usd_per_million IS NOT NULL OR
+                    cache_write_micro_usd_per_million IS NOT NULL OR
+                    output_micro_usd_per_million IS NOT NULL OR
+                    reasoning_micro_usd_per_million IS NOT NULL
+                )
+            );
+
+            CREATE TABLE usage_pricing_aliases (
+                pricing_version_id TEXT NOT NULL,
+                alias_model_id TEXT NOT NULL CHECK(alias_model_id <> ''),
+                canonical_model_id TEXT NOT NULL CHECK(canonical_model_id <> ''),
+                PRIMARY KEY(pricing_version_id, alias_model_id),
+                FOREIGN KEY(pricing_version_id, canonical_model_id)
+                    REFERENCES usage_pricing_rules(
+                        pricing_version_id,
+                        canonical_model_id
+                    ) ON DELETE CASCADE
+            );
+
+            CREATE INDEX idx_usage_pricing_versions_effective
+                ON usage_pricing_versions(provider, effective_from_ms DESC, id);
+            CREATE INDEX idx_usage_pricing_aliases_canonical
+                ON usage_pricing_aliases(pricing_version_id, canonical_model_id);",
+        )?;
+        tx.execute(
+            "INSERT INTO _migrations (version, applied_at_ms) VALUES (8, ?1)",
             [now_ms() as i64],
         )?;
         tx.commit()?;

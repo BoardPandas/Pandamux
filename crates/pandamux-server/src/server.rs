@@ -16,6 +16,7 @@ use tokio::sync::broadcast;
 use crate::ProxyEnvironmentTransport;
 use crate::request_context::{CapabilityAuthority, ClientIdentity};
 use crate::usage_scanner::{UsageScannerRuntimeConfig, UsageScannerService};
+use crate::usage_sync::{UsageHubSyncService, UsageSyncRuntimeConfig};
 
 pub struct ServerConfig {
     pub role: ServerRole,
@@ -32,6 +33,7 @@ pub struct Server {
     is_shutting_down: Arc<AtomicBool>,
     remote_event_cursors: Mutex<HashMap<EnvironmentId, Arc<AtomicU64>>>,
     usage_scanner: Mutex<Option<UsageScannerService>>,
+    usage_sync: Mutex<Option<UsageHubSyncService>>,
 }
 
 impl Server {
@@ -57,6 +59,7 @@ impl Server {
             is_shutting_down: Arc::new(AtomicBool::new(false)),
             remote_event_cursors: Mutex::new(HashMap::new()),
             usage_scanner: Mutex::new(None),
+            usage_sync: Mutex::new(None),
         })
     }
 
@@ -90,6 +93,11 @@ impl Server {
         let tunnel = open_exec_proxy_tunnel(pool, config, proxy_command)
             .await
             .map_err(|error| {
+                let _ = self.store.record_usage_sync_failure(
+                    &environment_id,
+                    true,
+                    "usage_sync_unreachable",
+                );
                 RpcError::with_data(
                     -32010,
                     format!(
@@ -160,11 +168,19 @@ impl Server {
         self.router
             .environment_router()
             .register_transport(
-                environment_id,
+                environment_id.clone(),
                 transport.clone(),
                 Some(self.router.thread_manager().broadcaster().clone()),
             )
             .await;
+        if let Some(sync) = self
+            .usage_sync
+            .lock()
+            .expect("usage synchronization service lock")
+            .as_ref()
+        {
+            sync.handle().trigger_environment(environment_id);
+        }
         Ok(transport)
     }
 
@@ -173,6 +189,9 @@ impl Server {
             .environment_router()
             .unregister_transport(environment_id)
             .await;
+        let _ =
+            self.store
+                .record_usage_sync_failure(environment_id, true, "usage_sync_unreachable");
     }
 
     pub async fn shutdown_remote_environments(&self) {
@@ -214,6 +233,37 @@ impl Server {
             .take();
         if let Some(scanner) = scanner {
             scanner.shutdown().await?;
+        }
+        Ok(())
+    }
+
+    pub fn start_usage_sync(&self) -> std::io::Result<()> {
+        if self.config.role != ServerRole::Hub {
+            return Ok(());
+        }
+        let mut sync = self
+            .usage_sync
+            .lock()
+            .expect("usage synchronization service lock");
+        if sync.is_some() {
+            return Ok(());
+        }
+        *sync = Some(UsageHubSyncService::start(
+            self.store.clone(),
+            self.router.environment_router().clone(),
+            UsageSyncRuntimeConfig::default(),
+        )?);
+        Ok(())
+    }
+
+    pub async fn shutdown_usage_sync(&self) -> std::io::Result<()> {
+        let sync = self
+            .usage_sync
+            .lock()
+            .expect("usage synchronization service lock")
+            .take();
+        if let Some(sync) = sync {
+            sync.shutdown().await?;
         }
         Ok(())
     }
