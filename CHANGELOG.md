@@ -189,6 +189,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Codex sessions now speak the authenticated App Server 0.158.0 contract.** Sessions
+  complete the required initialize handshake, retain server-issued thread and turn IDs,
+  use current sandbox and approval fields, answer server-initiated approvals, interrupt
+  active turns, resume native threads, send remote images as `localImage` input, query
+  live models and rate limits, and map current streamed events and token usage into
+  PandaMUX events. Recorded fixtures now match the generated v2 schema projection
+  instead of the retired prototype protocol.
 - **Idle launcher-owned nodes can now upgrade on Linux without weakening the busy-work
   guard.** The lifecycle probe reads child PIDs across every daemon thread through
   `/proc` instead of treating `ps` exit code 1 for an empty selection as an indeterminate

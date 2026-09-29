@@ -1,16 +1,16 @@
 {
-  "rateLimits": [
-    {
-      "limitName": "tokens",
-      "usedPercent": 34.2,
+  "rateLimits": {
+    "limitId": "codex",
+    "limitName": "Codex",
+    "primary": {
+      "usedPercent": 34,
       "windowDurationMins": 300,
-      "resetsAt": "2026-09-26T04:00:00Z"
+      "resetsAt": 1790395200
     },
-    {
-      "limitName": "requests",
-      "usedPercent": 18.5,
-      "windowDurationMins": 60,
-      "resetsAt": "2026-09-26T01:00:00Z"
+    "secondary": {
+      "usedPercent": 18,
+      "windowDurationMins": 10080,
+      "resetsAt": 1790913600
     }
-  ]
+  }
 }

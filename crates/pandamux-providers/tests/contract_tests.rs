@@ -1,4 +1,9 @@
-use pandamux_core::{ids::ProviderInstanceId, provider_config::ProviderKind};
+use pandamux_core::{
+    AttachmentRecord,
+    event::TurnOutcome,
+    ids::{ProviderInstanceId, ThreadId},
+    provider_config::ProviderKind,
+};
 use pandamux_providers::{
     ENV_CLAUDE_CONFIG_DIR, ENV_CODEX_HOME, ENV_GEMINI_HOME, apply_profile_environment,
     build_claude_launch_args,
@@ -6,7 +11,8 @@ use pandamux_providers::{
     codex::{
         CodexApprovalPolicy, CodexNotificationEvent, CodexSandboxPolicy, JsonRpcResponse,
         build_approval_response, build_thread_start_request, build_turn_start_request,
-        parse_codex_notification, parse_rate_limits_response,
+        build_turn_start_request_with_attachments, parse_codex_notification,
+        parse_rate_limits_response,
     },
     resolve_command_shim, resolve_profile_dir,
 };
@@ -111,11 +117,17 @@ fn test_codex_schema_and_knobs_contract() {
     let methods = schema_val.get("methods").expect("methods in schema");
 
     assert!(methods.get("thread/start").is_some());
+    assert!(methods.get("thread/resume").is_some());
+    assert!(methods.get("turn/interrupt").is_some());
+    assert!(methods.get("model/list").is_some());
     assert!(methods.get("account/rateLimits/read").is_some());
+
+    let initialize = &methods["initialize"]["params"]["properties"];
+    assert!(initialize.get("clientInfo").is_some());
 
     let thread_start = &methods["thread/start"]["params"]["properties"];
     assert!(thread_start.get("developerInstructions").is_some());
-    assert!(thread_start.get("sandboxPolicy").is_some());
+    assert!(thread_start.get("sandbox").is_some());
     assert!(thread_start.get("approvalPolicy").is_some());
 
     let thread_req = build_thread_start_request(
@@ -124,61 +136,92 @@ fn test_codex_schema_and_knobs_contract() {
         "o3-mini",
         Some("Developer instructions for reviewer"),
         CodexSandboxPolicy::WorkspaceWrite,
-        CodexApprovalPolicy::OnWrite,
+        CodexApprovalPolicy::OnRequest,
     );
     let thread_json = serde_json::to_string(&thread_req).expect("serialize thread/start");
     assert!(thread_json.contains("developerInstructions"));
     assert!(thread_json.contains("workspace-write"));
-    assert!(thread_json.contains("on-write"));
+    assert!(thread_json.contains("on-request"));
+    assert!(thread_json.contains("\"sandbox\""));
+    assert!(!thread_json.contains("sandboxPolicy"));
+    assert!(!thread_json.contains("jsonrpc"));
 
     let turn_req = build_turn_start_request(11, "th_codex_01", "Inspect crate boundaries");
     let turn_json = serde_json::to_string(&turn_req).expect("serialize turn/start");
     assert!(turn_json.contains("th_codex_01"));
+    assert!(turn_json.contains("\"type\":\"text\""));
+    assert!(!turn_json.contains("jsonrpc"));
+
+    let image = AttachmentRecord {
+        id: "att-1".to_string(),
+        thread_id: ThreadId::from("thread-1"),
+        file_name: "diagram.png".to_string(),
+        mime_type: "image/png".to_string(),
+        size_bytes: 12,
+        file_path: "/workspace/diagram.png".to_string(),
+        created_at_ms: 1,
+    };
+    let image_req = build_turn_start_request_with_attachments(
+        12,
+        "th_codex_01",
+        "Describe the image",
+        &[image],
+    );
+    assert_eq!(
+        image_req.params["input"][1],
+        serde_json::json!({
+            "type": "localImage",
+            "path": "/workspace/diagram.png"
+        })
+    );
 }
 
 #[test]
 fn test_codex_lifecycle_and_ratelimits() {
-    let mut turn_tokens = 0;
+    let mut outcome = None;
     let mut approval_seen = false;
 
     for line in CODEX_LIFECYCLE_JSONL.lines() {
-        if line.contains("\"turn/approvalRequest\"") {
+        if line.contains("\"item/commandExecution/requestApproval\"") {
             if let Ok(CodexNotificationEvent::ApprovalRequest {
-                approval_id,
+                request_id,
                 command,
                 ..
             }) = parse_codex_notification(line)
             {
                 approval_seen = true;
-                let appr_resp = build_approval_response(20, &approval_id, true);
-                assert_eq!(appr_resp.method, "turn/approvalResponse");
+                assert_eq!(request_id, "approval-01");
+                let appr_resp = build_approval_response(true);
+                assert_eq!(appr_resp["decision"], "accept");
                 assert_eq!(command, "cargo check --workspace");
             }
         } else if line.contains("\"turn/completed\"")
-            && let Ok(CodexNotificationEvent::TurnCompleted { total_tokens }) =
-                parse_codex_notification(line)
+            && let Ok(CodexNotificationEvent::TurnCompleted {
+                outcome: turn_outcome,
+            }) = parse_codex_notification(line)
         {
-            turn_tokens = total_tokens;
+            outcome = Some(turn_outcome);
         }
     }
 
     assert!(approval_seen);
-    assert_eq!(turn_tokens, 1420);
+    assert_eq!(outcome, Some(TurnOutcome::Success));
 
     let limits_raw: serde_json::Value =
         serde_json::from_str(CODEX_RATELIMITS_JSON).expect("parse limits fixture");
     let limits_resp = JsonRpcResponse {
-        jsonrpc: "2.0".into(),
+        jsonrpc: None,
         id: 5,
         result: Some(limits_raw),
         error: None,
     };
     let parsed_limits = parse_rate_limits_response(&limits_resp).expect("parse rate limits");
     assert_eq!(parsed_limits.len(), 2);
-    assert_eq!(parsed_limits[0].limit_name, "tokens");
-    assert_eq!(parsed_limits[0].used_percent, 34.2);
-    assert_eq!(parsed_limits[1].limit_name, "requests");
-    assert_eq!(parsed_limits[1].used_percent, 18.5);
+    assert_eq!(parsed_limits[0].limit_name, "Codex primary");
+    assert_eq!(parsed_limits[0].used_percent, 34.0);
+    assert_eq!(parsed_limits[0].resets_at, "1790395200");
+    assert_eq!(parsed_limits[1].limit_name, "Codex secondary");
+    assert_eq!(parsed_limits[1].used_percent, 18.0);
 }
 
 #[test]
