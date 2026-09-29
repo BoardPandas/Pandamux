@@ -7,7 +7,7 @@ use tokio::time::timeout;
 use pandamux_core::event::ThreadEventKind;
 use pandamux_core::provider_config::{ProviderInstanceConfig, ProviderKind};
 use pandamux_core::thread::WorktreeRef;
-use pandamux_core::{ProviderInstanceId, UserSettings};
+use pandamux_core::{ProviderInstanceId, ThreadId, UserSettings};
 use pandamux_protocol::{RpcRequest, ServerRole};
 use pandamux_providers::MockProviderDriver;
 use pandamux_server::{DriverRegistry, Router, Store};
@@ -157,6 +157,25 @@ async fn test_thread_approval_flow() {
         .await
         .expect("get response");
     assert_eq!(final_get.result.unwrap()["thread"]["status"], "idle");
+
+    let persisted = store
+        .get_events(&ThreadId::from(thread_id.as_str()), None)
+        .expect("load approval lifecycle events");
+    assert!(
+        persisted
+            .windows(2)
+            .all(|events| events[1].seq == events[0].seq + 1),
+        "approval continuation must not collide with the resolved event sequence"
+    );
+    let resolved_index = persisted
+        .iter()
+        .position(|event| matches!(event.kind, ThreadEventKind::ApprovalResolved { .. }))
+        .expect("persist approval resolution");
+    let continuation_index = persisted
+        .iter()
+        .position(|event| matches!(event.kind, ThreadEventKind::AssistantText { .. }))
+        .expect("persist provider continuation after approval");
+    assert!(resolved_index < continuation_index);
 }
 
 #[tokio::test]

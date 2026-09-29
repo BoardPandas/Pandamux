@@ -36,6 +36,7 @@ fn now_ms() -> u64 {
 pub struct ActiveThreadSession {
     pub session: Arc<Mutex<Option<Box<dyn ProviderSession>>>>,
     pub events_rx: Arc<Mutex<Option<mpsc::Receiver<ProviderEvent>>>>,
+    pub event_writer: Arc<Mutex<()>>,
     pub execution: Arc<ResolvedProviderExecution>,
     pub generation: uuid::Uuid,
     pub child_capability_token: String,
@@ -208,6 +209,7 @@ impl ThreadManager {
         let candidate = ActiveThreadSession {
             session: Arc::new(Mutex::new(Some(session))),
             events_rx: Arc::new(Mutex::new(events_rx)),
+            event_writer: Arc::new(Mutex::new(())),
             execution,
             generation: uuid::Uuid::new_v4(),
             child_capability_token,
@@ -547,14 +549,22 @@ impl ThreadManager {
         let active_sessions = self.active_sessions.clone();
         let generation = active_sess.generation;
         let turn_id_for_task = turn_id.clone();
-        let mut stream_seq = started_seq;
+        let event_writer = active_sess.event_writer.clone();
 
         tokio::spawn(async move {
             let turn_id = turn_id_for_task;
             let mut rx = rx;
             let mut terminal_outcome = None;
             while let Some(prov_event) = rx.recv().await {
-                stream_seq += 1;
+                let _event_guard = event_writer.lock().await;
+                let mut stream_seq = match store
+                    .get_latest_seq(&thread_id)
+                    .ok()
+                    .and_then(|seq| seq.checked_add(1))
+                {
+                    Some(seq) => seq,
+                    None => break,
+                };
                 let at = now_ms();
 
                 match prov_event {
@@ -568,7 +578,9 @@ impl ThreadManager {
                                 text: delta,
                             },
                         };
-                        let _ = store.append_event(&ev);
+                        if store.append_event(&ev).is_err() {
+                            break;
+                        }
                         let _ = broadcaster.send(EventEnvelope {
                             subscription_id: String::new(),
                             environment_id: env_id.clone().into(),
@@ -589,7 +601,9 @@ impl ThreadManager {
                                 text: delta,
                             },
                         };
-                        let _ = store.append_event(&ev);
+                        if store.append_event(&ev).is_err() {
+                            break;
+                        }
                         let _ = broadcaster.send(EventEnvelope {
                             subscription_id: String::new(),
                             environment_id: env_id.clone().into(),
@@ -613,7 +627,9 @@ impl ThreadManager {
                                 output: None,
                             },
                         };
-                        let _ = store.append_event(&ev);
+                        if store.append_event(&ev).is_err() {
+                            break;
+                        }
                         let _ = broadcaster.send(EventEnvelope {
                             subscription_id: String::new(),
                             environment_id: env_id.clone().into(),
@@ -642,7 +658,9 @@ impl ThreadManager {
                                 output,
                             },
                         };
-                        let _ = store.append_event(&ev);
+                        if store.append_event(&ev).is_err() {
+                            break;
+                        }
                         let _ = broadcaster.send(EventEnvelope {
                             subscription_id: String::new(),
                             environment_id: env_id.clone().into(),
@@ -679,7 +697,9 @@ impl ThreadManager {
                                 detail,
                             },
                         };
-                        let _ = store.append_event(&ev);
+                        if store.append_event(&ev).is_err() {
+                            break;
+                        }
                         let _ = broadcaster.send(EventEnvelope {
                             subscription_id: String::new(),
                             environment_id: env_id.clone().into(),
@@ -711,7 +731,9 @@ impl ThreadManager {
                                 effort: None,
                             },
                         };
-                        let _ = store.append_event(&ev);
+                        if store.append_event(&ev).is_err() {
+                            break;
+                        }
                         let _ = broadcaster.send(EventEnvelope {
                             subscription_id: String::new(),
                             environment_id: env_id.clone().into(),
@@ -750,7 +772,9 @@ impl ThreadManager {
                             at_ms: at,
                             kind: ThreadEventKind::TurnCompleted { outcome },
                         };
-                        let _ = store.append_event(&ev);
+                        if store.append_event(&ev).is_err() {
+                            break;
+                        }
                         let _ = broadcaster.send(EventEnvelope {
                             subscription_id: String::new(),
                             environment_id: env_id.clone().into(),
@@ -806,14 +830,19 @@ impl ThreadManager {
                         let _ =
                             crate::checkpoint::prune_old_checkpoints(&worktree_dir, &thread_id, 50);
 
-                        stream_seq += 1;
+                        let Some(settle_seq) = stream_seq.checked_add(1) else {
+                            break;
+                        };
+                        stream_seq = settle_seq;
                         let settle = ThreadEvent {
                             thread_id: thread_id.clone(),
                             seq: stream_seq,
                             at_ms: at,
                             kind: ThreadEventKind::TurnSettled { changed_files },
                         };
-                        let _ = store.append_event(&settle);
+                        if store.append_event(&settle).is_err() {
+                            break;
+                        }
                         let _ = broadcaster.send(EventEnvelope {
                             subscription_id: String::new(),
                             environment_id: env_id.clone().into(),
@@ -841,7 +870,9 @@ impl ThreadManager {
                                 recoverable,
                             },
                         };
-                        let _ = store.append_event(&ev);
+                        if store.append_event(&ev).is_err() {
+                            break;
+                        }
                         let _ = broadcaster.send(EventEnvelope {
                             subscription_id: String::new(),
                             environment_id: env_id.clone().into(),
@@ -862,7 +893,9 @@ impl ThreadManager {
                                 details,
                             },
                         };
-                        let _ = store.append_event(&ev);
+                        if store.append_event(&ev).is_err() {
+                            break;
+                        }
                         let _ = broadcaster.send(EventEnvelope {
                             subscription_id: String::new(),
                             environment_id: env_id.clone().into(),
@@ -880,7 +913,9 @@ impl ThreadManager {
                             at_ms: at,
                             kind: ThreadEventKind::Notice { level, message },
                         };
-                        let _ = store.append_event(&ev);
+                        if store.append_event(&ev).is_err() {
+                            break;
+                        }
                         let _ = broadcaster.send(EventEnvelope {
                             subscription_id: String::new(),
                             environment_id: env_id.clone().into(),
@@ -948,28 +983,35 @@ impl ThreadManager {
                         thread.updated_at_ms = finished_at;
                         let _ = store.save_thread(&thread);
                     }
-                    stream_seq += 1;
-                    let event = ThreadEvent {
-                        thread_id: thread_id.clone(),
-                        seq: stream_seq,
-                        at_ms: finished_at,
-                        kind: ThreadEventKind::Error {
-                            class: "provider_process".to_string(),
-                            message: "Provider event stream closed before turn completion"
-                                .to_string(),
-                            recoverable: false,
-                        },
-                    };
-                    let _ = store.append_event(&event);
-                    let _ = broadcaster.send(EventEnvelope {
-                        subscription_id: String::new(),
-                        environment_id: env_id.into(),
-                        thread_id: Some(thread_id.clone()),
-                        run_id: None,
-                        seq: stream_seq,
-                        at_ms: finished_at,
-                        kind: event.kind,
-                    });
+                    let _event_guard = event_writer.lock().await;
+                    if let Some(stream_seq) = store
+                        .get_latest_seq(&thread_id)
+                        .ok()
+                        .and_then(|seq| seq.checked_add(1))
+                    {
+                        let event = ThreadEvent {
+                            thread_id: thread_id.clone(),
+                            seq: stream_seq,
+                            at_ms: finished_at,
+                            kind: ThreadEventKind::Error {
+                                class: "provider_process".to_string(),
+                                message: "Provider event stream closed before turn completion"
+                                    .to_string(),
+                                recoverable: false,
+                            },
+                        };
+                        if store.append_event(&event).is_ok() {
+                            let _ = broadcaster.send(EventEnvelope {
+                                subscription_id: String::new(),
+                                environment_id: env_id.into(),
+                                thread_id: Some(thread_id.clone()),
+                                run_id: None,
+                                seq: stream_seq,
+                                at_ms: finished_at,
+                                kind: event.kind,
+                            });
+                        }
+                    }
                     if let Some(active) =
                         remove_active_generation(&active_sessions, &thread_id, generation).await
                     {
@@ -1001,6 +1043,8 @@ impl ThreadManager {
                 params.thread_id
             ))
         })?;
+
+        let _event_guard = active_sess.event_writer.lock().await;
 
         {
             let mut sess = active_sess.session.lock().await;

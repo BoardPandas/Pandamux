@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Codex's `untrusted` approval policy instead of `on-request`, so Codex cannot classify a
   mutating command as safe and execute it without surfacing PandaMUX's approval flow. A
   contract test fixes the sandbox and approval pair for every PandaMUX access mode.
+- **Serialized approval and provider continuation events.** A thread session now has one
+  event writer that refreshes the durable sequence before every provider event. Approval
+  decisions cannot collide with an immediately resumed tool event, and an event that
+  fails SQLite persistence is no longer broadcast as though it were replayable.
 - **Recovered and hardened the Phase 3 production foundation.** The Hub now composes the
   SSH-backed node transport, the node proxy uses a versioned bounded protocol with replay
   and explicit stale state, and remote calls no longer fall back to local execution.
