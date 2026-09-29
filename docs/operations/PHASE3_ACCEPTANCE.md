@@ -28,7 +28,7 @@ This record separates source and fixture verification from production acceptance
 | Preserve unfinished Phase 4 work | Pass | Exact baseline, binary patch, untracked archive, hashes, and byte-for-byte dry restore are recorded in `tasks/plan-rewrite.md` under R0.1 |
 | Server, request-context, proxy, and provider lifecycle tests | Pass | `cargo test -p pandamux-server`: 53 library, 2 server binary, 6 proxy transport, and 7 thread lifecycle tests passed |
 | Antigravity source and fixture contract | Pass | Official Google ACP 1.1.1 pins and object-valued capabilities, streaming archive verification, hardened two-entry extraction, real ACP and OAuth ownership, workspace-confined file handlers, opaque permission IDs, bounded cancellation, environment-wide two-process enforcement, and verified Hub-to-node SFTP fallback are implemented; live rows remain open |
-| Full workspace tests | Pass | `cargo test --workspace`: 294 passed, 0 failed, and 2 real-shell terminal tests intentionally ignored for the `0.54.2` candidate; the preceding exact `e562ae4` artifact source passed 291 with the same two ignores |
+| Full workspace tests | Pass | `cargo test --workspace`: 295 passed, 0 failed, and 2 real-shell terminal tests intentionally ignored for the `0.54.3` candidate; `0.54.2` passed 294 and exact artifact source `e562ae4` passed 291 with the same two ignores |
 | Strict static analysis | Pass | `cargo clippy --workspace --all-targets -- -D warnings` |
 | Protocol, client, CLI, server, and desktop compile check | Pass | `cargo check -p pandamux-protocol -p pandamux-client -p pandamux-cli -p pandamux-server -p pandamux-desktop` |
 | Server dependency boundary | Pass | `cargo tree` showed `pandamux-remote` composed only by `pandamux-server`; the server terminal graph contains `portable-pty` and excludes `alacritty_terminal` |
@@ -40,7 +40,7 @@ This record separates source and fixture verification from production acceptance
 | Full Windows server cross-check from Linux | Blocked by verification host | Dependency build scripts stopped before PandaMUX code because MSVC `lib.exe` is absent; `ring` and bundled SQLite could not build |
 | Native Windows IPC behavior | Not run | Requires a Windows host to run SID, DACL, remote-client, PID/image, and anti-squatting tests |
 | Galahad artifact build and transfer | Pass | Both remote files match the local manifest size and SHA-256. Bootstrap first preserved a compatible discovered `0.54.0` daemon, then activated exact launcher-owned `0.54.1` only after an authorized idle graceful stop |
-| Best-effort provider disabled-state contract | Pass in source, live persistence pending `0.54.2` | Settings schema v3 persists typed disabled reasons for Cursor, Grok, and OpenCode; focused core, protocol, resolver, and health tests pass |
+| Best-effort provider disabled-state contract | Pass in source, live persistence pending next exact artifact | Settings schema v3 persists typed disabled reasons for Cursor, Grok, and OpenCode; focused core, protocol, resolver, and health tests pass |
 
 ## R0.5 live matrix
 
@@ -55,12 +55,12 @@ This record separates source and fixture verification from production acceptance
 | Thirty-minute laptop disconnect during remote turn | Not applicable | Not run | Capture pre-disconnect event cursor, node continuity, reconnect cursor, and recovered final events |
 | Thirty-minute laptop sleep during remote full-screen terminal | Not applicable | Not run | Capture byte offset before sleep, node terminal continuity, reconnect offset, replay, and final screen |
 | Idle node upgrade using R0 artifacts | Not applicable | Pass for `0.54.0` to `0.54.1` | Exact hashes, compatible-discovery behavior, idle state, graceful stop, launcher ownership, authenticated ping and identify, and served version were captured |
-| Busy node upgrade refusal or defer | Not applicable | Not run | Capture owned work, refusal or deferred state, unchanged served version, and later safe activation |
+| Busy node upgrade refusal or defer | Not applicable | Pass | With PTY `term-a02635e5` active, the exact `0.54.2` request returned `ssh_daemon_upgrade_deferred` with `retryable=true`; PID `1088271`, served `0.54.1`, and the PTY remained active while uploaded artifact hashes matched |
 | Pasted image to remote provider | Not applicable | Partial | Production Hub chunk transfer passed for a 970,142-byte PNG and the node SHA-256 matched. Provider receipt remains blocked on authenticated provider acceptance |
 | Unpushed worktree delta synchronization | Not applicable | Pass | Production Hub created and routed a 400-byte bundle for unpushed commit `25f0f6845f1524913c3b4f2bf644cb798e4399ba`; the remote branch and blob hash match without an upstream push |
-| Cursor common fixture and live smoke | Not run | Pending disabled-state deployment | Source defaults it disabled with code `live_acceptance_incomplete`, message, and remediation; exact `0.54.2` live protocol proof remains |
-| Grok common fixture and live smoke | Not run | Pending disabled-state deployment | Source defaults it disabled with code `live_acceptance_incomplete`, message, and remediation; exact `0.54.2` live protocol proof remains |
-| OpenCode common fixture and live smoke | Not run | Pending disabled-state deployment | Source defaults it disabled with code `live_acceptance_incomplete`, message, and remediation; exact `0.54.2` live protocol proof remains |
+| Cursor common fixture and live smoke | Not run | Pending disabled-state deployment | Source defaults it disabled with code `live_acceptance_incomplete`, message, and remediation; exact live protocol proof remains |
+| Grok common fixture and live smoke | Not run | Pending disabled-state deployment | Source defaults it disabled with code `live_acceptance_incomplete`, message, and remediation; exact live protocol proof remains |
+| OpenCode common fixture and live smoke | Not run | Pending disabled-state deployment | Source defaults it disabled with code `live_acceptance_incomplete`, message, and remediation; exact live protocol proof remains |
 
 ## Exact `0.54.1` artifact evidence
 

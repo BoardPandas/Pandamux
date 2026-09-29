@@ -372,14 +372,11 @@ pub async fn start_or_discover_daemon(
     ))
 }
 
-async fn stop_idle_launcher_owned_daemon(
-    pool: &SshConnectionPool,
-    config: &SshConfig,
-    runtime: &RemoteServerRuntime,
-) -> Result<(), SshFailure> {
-    let activity_command = format!(
+fn daemon_activity_command(runtime: &RemoteServerRuntime) -> String {
+    format!(
         concat!(
-            "children=$(ps -o pid= --ppid {} 2>/dev/null) || exit 2; ",
+            "children=$(cat /proc/{}/task/*/children 2>/dev/null) || exit 2; ",
+            "children=$(printf '%s' \"$children\" | tr -d '[:space:]') || exit 2; ",
             "test -z \"$children\" || exit 1; ",
             "test -r /proc/net/unix || exit 2; ",
             "awk -v p={} '$6 == \"03\" && $8 == p {{ found=1 }} END {{ exit found ? 0 : 1 }}' /proc/net/unix; ",
@@ -391,7 +388,15 @@ async fn stop_idle_launcher_owned_daemon(
         runtime.pid,
         shell_quote(&runtime.socket_path),
         shell_quote(runtime.proxy_path.as_deref().unwrap_or(""))
-    );
+    )
+}
+
+async fn stop_idle_launcher_owned_daemon(
+    pool: &SshConnectionPool,
+    config: &SshConfig,
+    runtime: &RemoteServerRuntime,
+) -> Result<(), SshFailure> {
+    let activity_command = daemon_activity_command(runtime);
     let activity = execute_bootstrap_command(pool, config, &activity_command).await?;
     match activity.exit_code {
         0 => {}
@@ -587,5 +592,26 @@ mod tests {
             source.get_binary_bytes(RemoteArch::Aarch64, RemoteBinaryKind::Server),
             None
         );
+    }
+
+    #[test]
+    fn activity_probe_checks_children_from_every_daemon_thread() {
+        let runtime = RemoteServerRuntime {
+            pid: 12345,
+            version: "0.54.2".to_string(),
+            protocol_version: 3,
+            environment_id: "env-remote".to_string(),
+            socket_path: "/run/pandamux/server.sock".to_string(),
+            proxy_path: Some("/run/pandamux/proxy.sock".to_string()),
+            token: "not-used-by-probe".to_string(),
+            launcher_owned: true,
+            started_at: 1,
+        };
+
+        let command = daemon_activity_command(&runtime);
+
+        assert!(command.contains("/proc/12345/task/*/children"));
+        assert!(command.contains("tr -d '[:space:]'"));
+        assert!(!command.contains("ps -o pid="));
     }
 }

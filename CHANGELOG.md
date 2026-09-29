@@ -189,6 +189,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Idle launcher-owned nodes can now upgrade on Linux without weakening the busy-work
+  guard.** The lifecycle probe reads child PIDs across every daemon thread through
+  `/proc` instead of treating `ps` exit code 1 for an empty selection as an indeterminate
+  failure. Active PTYs still defer replacement, while a truly idle node may stop
+  gracefully and activate the requested exact artifact.
 - **Unverified best-effort providers now fail closed with an actionable reason.** Existing
   settings migrate once to schema v3, adding Cursor, Grok, and OpenCode as disabled
   profiles until their live smoke passes. Settings, health reports, and execution errors

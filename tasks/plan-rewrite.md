@@ -1078,6 +1078,12 @@ Gate exit:
   daemon, and activated exact launcher-owned `0.54.1` only after an authenticated idle
   check and authorized graceful stop. Runtime ownership, private endpoint modes, served
   version, and executable hash were verified independently.
+- **Busy upgrade:** a live `0.54.1` PTY caused the exact `0.54.2` bootstrap to return
+  `ssh_daemon_upgrade_deferred`; the PID, served version, and terminal remained intact.
+  The subsequent idle attempt failed closed because Fedora `ps --ppid` returns status 1
+  for an empty selection. The next patch reads `/proc/<pid>/task/*/children` across every
+  daemon thread so zero children and active PTY children are both distinguished safely;
+  its `0.54.3` candidate passed 295 workspace tests and strict Clippy.
 - **Managed Antigravity install:** fresh isolated exact-commit nodes passed both the
   direct Google ACP 1.1.1 download and the blocked-node Hub-cache plus SFTP path. The
   pinned 681,969,407-byte archive hash, both extracted sizes, executable modes, private
@@ -1092,8 +1098,8 @@ Gate exit:
   health exposes that structured reason. The `0.54.2` candidate passed 294 workspace
   tests with zero failures and two intentional real-shell ignores plus strict Clippy.
   Exact deployment proof is still required.
-- **Gate remains open:** busy upgrade deferral and later activation, Antigravity OAuth
-  and provider interaction, Codex and Claude interaction, long disconnect and laptop
+- **Gate remains open:** later idle activation, Antigravity OAuth and provider
+  interaction, Codex and Claude interaction, long disconnect and laptop
   sleep recovery, image provider receipt, and native Windows behavior are not inferred
   from the passing Galahad transport evidence.
 
