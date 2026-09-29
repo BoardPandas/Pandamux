@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Changed
 
+- **Recorded the current Phase 3 recovery acceptance boundary.** The acceptance matrix
+  now identifies the exact `0.54.7` Galahad artifact and Codex live evidence, preserves
+  the managed-install and transfer proofs, and leaves Claude, Antigravity sign-in,
+  physical sleep, and native Windows checks explicitly open. No public release or
+  publication is enabled.
 - **Made Codex Ask mode fail closed at the provider boundary.** Ask sessions now use
   Codex's `untrusted` approval policy instead of `on-request`, so Codex cannot classify a
   mutating command as safe and execute it without surfacing PandaMUX's approval flow. A

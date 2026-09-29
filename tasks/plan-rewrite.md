@@ -1053,7 +1053,7 @@ Acceptance:
 
 Live results and required evidence are tracked in [`docs/operations/PHASE3_ACCEPTANCE.md`](../docs/operations/PHASE3_ACCEPTANCE.md). The record is open; no live Windows or Galahad row has been inferred from fixture coverage.
 
-R0.5 preflight found that the recovered Antigravity path used placeholder release metadata, shell-script stand-ins for the Google bundle, a fabricated OAuth flow, and success responses without a live ACP process. The recovery implementation now uses the pinned Google ACP 1.1.1 bundles, streaming size and SHA-256 verification, two-entry hardened extraction, real initialize and session traffic, strict OAuth relay validation, workspace-confined file capabilities, opaque permission option IDs, cancellation and process cleanup, node download plus verified hub-to-node SFTP fallback, and private profile and scratch directories. Exact-commit Galahad runs now prove both managed-install paths and the remote transfer layer. Provider interaction, OAuth, long reconnect, busy upgrade, and native Windows rows remain gating.
+R0.5 preflight found that the recovered Antigravity path used placeholder release metadata, shell-script stand-ins for the Google bundle, a fabricated OAuth flow, and success responses without a live ACP process. The recovery implementation now uses the pinned Google ACP 1.1.1 bundles, streaming size and SHA-256 verification, two-entry hardened extraction, real initialize and session traffic, strict OAuth relay validation, workspace-confined file capabilities, opaque permission option IDs, cancellation and process cleanup, node download plus verified hub-to-node SFTP fallback, and private profile and scratch directories. Exact-commit Galahad runs prove both managed-install paths, idle and busy lifecycle behavior, the remote transfer layer, stored best-effort-provider disabled states, and the full Codex provider row on `0.54.7`. Claude and Antigravity authentication and provider interaction, the required physical laptop disconnect and sleep checks, and native Windows rows remain gating.
 
 Run the matrix against local Windows and Galahad with exact binary SHAs and captured artifacts:
 
@@ -1072,18 +1072,22 @@ Gate exit:
 
 ##### R0.5 Galahad progress record, 2026-09-28
 
-- **Exact node lifecycle:** clean commit `e562ae4` produced publication-disabled
-  `0.54.1` musl server and CLI artifacts with a fresh size and SHA-256 manifest.
-  Production bootstrap transferred both, preserved a compatible discovered `0.54.0`
-  daemon, and activated exact launcher-owned `0.54.1` only after an authenticated idle
-  check and authorized graceful stop. Runtime ownership, private endpoint modes, served
-  version, and executable hash were verified independently.
-- **Busy upgrade:** a live `0.54.1` PTY caused the exact `0.54.2` bootstrap to return
-  `ssh_daemon_upgrade_deferred`; the PID, served version, and terminal remained intact.
-  The subsequent idle attempt failed closed because Fedora `ps --ppid` returns status 1
-  for an empty selection. The next patch reads `/proc/<pid>/task/*/children` across every
-  daemon thread so zero children and active PTY children are both distinguished safely;
-  its `0.54.3` candidate passed 295 workspace tests and strict Clippy.
+- **Exact node lifecycle:** clean commit
+  `f9aa2b20a72e008ac6a80fc7a4858f28b0635e37` produced publication-disabled `0.54.7`
+  musl server and CLI artifacts with fresh size and SHA-256 evidence. Galahad serves the
+  exact launcher-owned artifact, and authenticated ping, identity, protocol, executable
+  path, hash, and child cleanup checks pass. The earlier busy-PTY request still proves
+  `ssh_daemon_upgrade_deferred`, while later idle transitions reached `0.54.7`.
+- **Acceptance-driven provider fixes:** exact live runs found and corrected Codex Ask
+  mode using an approval policy that could execute mutations without surfacing PandaMUX,
+  duplicate durable event sequences when a provider resumed immediately after approval,
+  and explicit cancellation being overwritten by expected stream closure. The deciding
+  fixes are `495b6e6`, `10904b9`, and `f9aa2b2`.
+- **Codex provider row:** exact `0.54.7` proves configured instance and model identity,
+  basic streaming, one approval with contiguous persisted events, a read-only ceiling,
+  explicit cancellation and settlement, image receipt, and replay after a short Hub
+  disconnect. The 20-second reconnect is supporting evidence only and does not replace
+  the required 30-minute physical laptop check.
 - **Managed Antigravity install:** fresh isolated exact-commit nodes passed both the
   direct Google ACP 1.1.1 download and the blocked-node Hub-cache plus SFTP path. The
   pinned 681,969,407-byte archive hash, both extracted sizes, executable modes, private
@@ -1091,17 +1095,18 @@ Gate exit:
   node independently failed a curl through its closed proxy before fallback passed.
 - **Remote transfer:** the production SSH proxy applied one unpushed local commit to a
   named Galahad branch with matching commit and blob hashes. A 970,142-byte PNG crossed
-  the attachment chunk path with matching local and remote SHA-256. Provider receipt
-  remains part of the authenticated-provider row.
+  the attachment chunk path with matching local and remote SHA-256; Codex then described
+  the attached image correctly on exact `0.54.7`.
 - **Best-effort providers:** settings schema v3 now persists Cursor, Grok, and OpenCode
   disabled by default with typed code, message, and remediation fields, and provider
-  health exposes that structured reason. The `0.54.2` candidate passed 294 workspace
-  tests with zero failures and two intentional real-shell ignores plus strict Clippy.
-  Exact deployment proof is still required.
-- **Gate remains open:** later idle activation, Antigravity OAuth and provider
-  interaction, Codex and Claude interaction, long disconnect and laptop
-  sleep recovery, image provider receipt, and native Windows behavior are not inferred
-  from the passing Galahad transport evidence.
+  health exposes each structured reason on the exact deployed artifact.
+- **Verification:** exact `0.54.7` passed 296 workspace tests with zero failures and two
+  intentional real-shell ignores, strict Clippy, formatting, whitespace, crate-boundary,
+  and wiring guards. `cargo-deny` is unavailable on this host, so no advisory result is
+  claimed.
+- **Gate remains open:** Claude browser login, Antigravity remote OAuth and provider
+  interaction, the required 30-minute laptop disconnect and full-screen-terminal sleep,
+  and native Windows behavior still require interactive or external-host evidence.
 
 ### Phase 4: Provider observability, usage, capacity, policy, and safe failover
 
