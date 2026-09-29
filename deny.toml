@@ -9,13 +9,13 @@ targets = [
 ]
 
 [advisories]
-vulnerability = "deny"
-unmaintained = "warn"
+# Vulnerability advisories are errors under current cargo-deny defaults.
+unmaintained = "workspace"
 yanked = "warn"
 ignore = []
 
 [licenses]
-unlicensed = "deny"
+# Unlicensed and unlisted licenses are denied by default.
 allow = [
     "MIT",
     "Apache-2.0",
@@ -28,18 +28,18 @@ allow = [
     "Zlib",
     "CC0-1.0",
 ]
-deny = [
-    "GPL-1.0",
-    "GPL-2.0",
-    "GPL-3.0",
-    "AGPL-1.0",
-    "AGPL-3.0",
-    "LGPL-2.0",
-    "LGPL-2.1",
-    "LGPL-3.0",
-]
 confidence-threshold = 0.8
-exceptions = []
+# Existing transitive crates whose declared licenses are outside the global
+# allowlist. Keep these scoped so new crates with those licenses still fail.
+exceptions = [
+    { crate = "cbindgen@0.28.0", allow = ["MPL-2.0"] },
+    { crate = "dwrote@0.11.5", allow = ["MPL-2.0"] },
+    { crate = "enum-iterator@2.3.0", allow = ["0BSD"] },
+    { crate = "enum-iterator-derive@1.5.0", allow = ["0BSD"] },
+    { crate = "libbz2-rs-sys@0.2.5", allow = ["bzip2-1.0.6"] },
+    { crate = "option-ext@0.2.0", allow = ["MPL-2.0"] },
+    { crate = "webpki-roots@1.0.9", allow = ["CDLA-Permissive-2.0"] },
+]
 
 [bans]
 multiple-versions = "warn"

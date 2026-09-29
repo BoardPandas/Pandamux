@@ -27,18 +27,22 @@ R0 development gate:
 - Phase 4E adds the top-level Usage and capacity surface, pure client reducers for every
   data and failure state, named subscription and provider presentation, canonical
   organization-policy editing and enforcement, truthful health controls, and the
-  source-level accessibility gate. Native Windows keyboard, scaling, forced-colors, and
-  screen-reader acceptance remain explicitly unverified.
+  source-level accessibility gate. Native Windows UI Automation exposed named,
+  focusable Usage controls and a 20-step Tab path, but editor accessibility
+  focus, scaling, forced colors, reduced motion, and screen-reader acceptance
+  remain open.
 - Phase 4F adds explicit capability-compatible failover pools, deterministic hard-filter-
   first routing, durable per-attempt side-effect boundaries, one automatic retry only
   before output, and audited fresh-session continuation after unsafe capacity exhaustion.
   Authenticated remote turns carry a Hub-owned policy and pool snapshot that the node
   validates again before selecting a route. Independent rollback switches preserve
   observations while disabling scanning, Hub
-  synchronization, capacity-aware routing, or automatic failover. Native Windows and
-  live-provider acceptance remain explicitly unverified.
+  synchronization, capacity-aware routing, or automatic failover. Exact 0.60.0
+  artifacts passed native Windows startup and real Galahad Codex, Claude,
+  Antigravity, and Hub SSH turns; the full Phase 4 exit matrix remains open.
 
-See the completion records and acceptance criteria in [`tasks/plan-rewrite.md`](tasks/plan-rewrite.md).
+See the [Phase 4 live acceptance record](docs/operations/PHASE4_ACCEPTANCE.md)
+and the completion criteria in [`tasks/plan-rewrite.md`](tasks/plan-rewrite.md).
 
 ## Product shape
 

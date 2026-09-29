@@ -15,7 +15,7 @@ For current facts, use this order:
 
 The only version source is `[workspace.package] version` in the root [`Cargo.toml`](Cargo.toml). Crates inherit it with `version.workspace = true`.
 
-The codebase is implementing Phase 4 after the R0 development gate. R0.1 preserves the unfinished usage prototype; R0.2 completes production proxy routing; R0.3 enforces exact provider-instance execution; R0.4 secures the local control boundary. R0.5 has exact live evidence for Galahad and native Windows IPC. On 2026-09-29, the user approved deferring the required 30-minute physical laptop disconnect and sleep checks so development could continue. Those rows still block any production-accepted, released, or shipped claim until the matrix passes and its record is archived.
+Phase 4A through 4F implementation is recorded after the R0 development gate, but the Phase 4 exit matrix remains open. R0.1 preserves the unfinished usage prototype; R0.2 completes production proxy routing; R0.3 enforces exact provider-instance execution; R0.4 secures the local control boundary. R0.5 has exact live evidence for Galahad and native Windows IPC. On 2026-09-29, the user approved deferring the required 30-minute physical laptop disconnect and sleep checks so development could continue. Those rows still block any production-accepted, released, or shipped claim until the matrix passes and its record is archived. The current 0.60.0 provider, Hub SSH, Hub usage, and native Windows startup results are recorded in [`docs/operations/PHASE4_ACCEPTANCE.md`](docs/operations/PHASE4_ACCEPTANCE.md); they do not close the remaining interaction, reconciliation, and live failover rows.
 
 ## Build and development
 

@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Added
 
+- **Added exact-artifact Phase 4 acceptance evidence.** The new record separates
+  verified native Windows startup, accessible Usage controls, live Galahad
+  providers, Hub SSH routing, and usage synchronization from the remaining
+  interaction, reconciliation, failover, and production-release gates.
+
 - **Added Phase 4F explicit failover pools and side-effect-aware capacity recovery.**
   Organization settings now create and edit named pools whose provider, subscription,
   model, capability, access, and preference claims are validated against server-derived
@@ -75,6 +80,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   validation contracts without leaking transcript paths or profile data.
 
 ### Changed
+
+- **Restored the dependency policy check.** Current `cargo-deny` now validates
+  advisories, sources, bans, and a narrow license allowlist with version-scoped
+  exceptions for seven existing transitive crates; it still reports a yanked
+  transitive version as a non-failing warning.
 
 - **Made provider quota and health claims evidence-based.** Codex account rate limits
   use exact integer fractions and Reported confidence. Grok quota collection remains

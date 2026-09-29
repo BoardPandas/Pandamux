@@ -215,9 +215,15 @@ new animation, and errors remain visible until a retry or successful reload.
 
 The current GPUI primitives used here do not expose a live-region or semantic table API,
 so automated tests cannot prove error announcement or screen-reader table navigation.
-No native Windows keyboard-only, 200 percent scaling, reduced-motion, forced-colors, or
-screen-reader walkthrough was run for this checkpoint. These are acceptance gaps, not
-claims inferred from compilation.
+The later exact 0.60.0 Windows UI Automation probe opened Usage, found named,
+focusable navigation, filter, and subscription controls after AccessKit activation,
+and completed a 20-step Tab path. The subscription editor received typed input,
+and keyboard Cancel closed it and restored focus to its originating button.
+UI Automation did not report focus on the Edit control, and its Invoke action
+on Cancel only moved focus. The probe did not test
+announcement of values or tables, 200 percent scaling, reduced motion, forced
+colors, or a screen reader. These remain acceptance gaps. See
+`docs/operations/PHASE4_ACCEPTANCE.md`.
 
 ## Diagnostics and privacy
 
@@ -238,8 +244,11 @@ provider profile.
 
 ## Current boundary
 
-Checkpoint 4F has local source implementation and verification evidence only. The
-deferred physical R0.5 laptop disconnect and sleep rows, native Phase 4D provider runtime
-acceptance, native Phase 4E interaction and accessibility acceptance, the local plus
-Galahad live failover matrix, and later release gates still block production acceptance
-and release.
+Checkpoint 4F has local source verification plus exact 0.60.0 native Windows
+startup and partial UI Automation evidence, Galahad live turns for all three
+must-have providers, a Hub-to-node SSH turn, and a bounded Hub usage pull. The
+deferred physical R0.5 laptop disconnect and sleep rows, full native Phase 4E
+interaction and accessibility acceptance, weekly reconciliation, the local plus
+Galahad live failover matrix, and later release gates still block production
+acceptance and release. The exact results and limitations are recorded in
+`docs/operations/PHASE4_ACCEPTANCE.md`.

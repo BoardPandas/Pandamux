@@ -1,7 +1,7 @@
 # PandaMUX Rewrite: Chat-First Agent Client with Remote Environments, Multi-Repo Fleet Orchestration, Agents, Schedules, Full MCP Settings Control, and Broadside Sharing
 
 Date: 2026-09-25 (Approved 2026-09-26; recovery rewrite 2026-09-28)
-Status: **Phases 0 to 3 and Phase 4 Step 1 are recorded complete; Phase 3 production acceptance and Phase 4 recovery are open**
+Status: **Phases 0 to 3 and Phase 4A through 4F implementation are recorded; Phase 3 production acceptance and the Phase 4 exit gate remain open**
 Baseline: PandaMUX v0.53.44 at `9511d0e22d44`; the uncommitted Phase 4 usage prototype is preserved for selective salvage
 
 Relationship to `tasks/plan-repo.md`: that file is the **historical** record of the Electron to native Rust rewrite (Phases 1 to 7, complete). This plan supersedes its product direction (terminal multiplexer) but keeps its engineering posture: backend-owned state, single writer, intent-in/delta-out, deliberate dependency pins, crate isolation, and tag-driven signed releases. Its Section 12 design tokens carry over where they still apply (Section 8). UI history: Iced is removed. An earlier draft of this plan chose Tauri 2 + React; the user replaced that with **GPUI + gpui-kit** (all Rust) on 2026-09-25, and Tauri 2 remains only as the documented fallback if the Phase 0 GPUI spike fails. `plan-repo.md` rejected GPUI for three reasons, each now handled explicitly: GPL contamination (zed#55470, still open; tracked as a license gate in S6 and Risks), "not built for external consumption" (gpui-kit publishes exact-pinned `gpui-pre` snapshots and ships in production in Longbridge Pro on Windows, macOS, and Linux), and weak accessibility. Phase 0 treated accessibility as exploratory; the rewritten Phase 4 and Phase 7 criteria make the defined v1 accessibility matrix release-gating.
@@ -1523,11 +1523,16 @@ Checkpoint acceptance:
   authenticated `system.hello`, `system.ping`, and `system.identify` calls against an
   isolated runtime, and the desktop headless startup check passed. `cargo-deny` is not
   installed on this host, so no advisory, license, ban, or source result is claimed.
-- **Acceptance boundary:** deterministic local fixtures and injected provider failures
-  satisfy the source-level 4F acceptance rows. No current desktop executable was exercised
-  interactively on Windows, and no live local-provider or Galahad multi-node failover
-  matrix was run. The deferred R0.5 physical laptop-disconnect and sleep rows also remain
-  open. Those gaps still block Phase 4 production acceptance and release. No push,
+- **Acceptance boundary at commit `96aad1d`:** deterministic local fixtures and injected
+  provider failures satisfy the source-level 4F rows. Subsequent exact-artifact
+  acceptance on 2026-09-29 proved native Windows build and window smoke, a partial
+  Windows UI Automation Usage-control probe, real Codex, Claude, and Antigravity
+  turns on an isolated Galahad node, and a real Hub-to-node SSH turn with policy
+  denial and bounded usage sync. The full native interaction and accessibility
+  matrix, live restart and side-effect-aware failover matrix, and weekly
+  reconciliation remain open. The deferred R0.5 physical laptop-disconnect and
+  sleep rows also remain open. See `docs/operations/PHASE4_ACCEPTANCE.md` for
+  exact hashes, commands, result IDs, limitations, and cleanup. No push,
   deployment, production activation, or release is claimed.
 - **Recovery preservation:** the original dirty checkout remains at recovered base
   `9511d0e22d44`. Its 11 unfinished Phase 4 prototype source files were restored from the
@@ -1540,6 +1545,10 @@ Checkpoint acceptance:
 #### Phase 4 verification and completion record
 
 Run narrow unit and migration tests first, then crate tests, workspace fmt/clippy/tests, resolved-boundary checks, `cargo deny advisories licenses bans sources`, built-artifact smoke, and the local plus Galahad live matrix. Cargo commands remain serial in this repository.
+
+The 2026-09-29 exact-artifact live record is
+`docs/operations/PHASE4_ACCEPTANCE.md`. It advances provider, Hub transport,
+Hub usage, and native Windows startup evidence, but does not close this exit gate.
 
 Phase 4 exits only when:
 
