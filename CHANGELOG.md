@@ -6,7 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+
+- **Added the normalized Phase 4A usage and policy foundation.** PandaMUX now stores
+  retry-safe usage observations with checked integer token and cost values, durable
+  scanner cursors and hub outbox state, opaque subscription mappings, capacity facts,
+  canonical revisioned organization and failover policy, deterministic legacy
+  reconciliation, and explicit quarantine records. Authenticated usage export and ack,
+  plus bounded usage, capacity, and provider-health queries, expose stable page and
+  validation contracts without leaking transcript paths or profile data.
+
 ### Changed
+
+- **Closed R0 as a development gate through an explicit user-approved rescope.** Phase 4
+  implementation may continue while the deferred 30-minute physical laptop disconnect
+  and sleep checks remain mandatory production-acceptance and release evidence.
 
 - **Completed native Windows IPC acceptance for R0.5.** Exact `0.54.12`
   Windows server and CLI artifacts passed SID-scoped pipe naming, same-user control,

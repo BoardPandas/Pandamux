@@ -13,16 +13,17 @@ use pandamux_protocol::antigravity_rpc::{
 };
 use pandamux_protocol::{
     AttachmentGetParams, AttachmentImportPathParams, AttachmentListParams,
-    AttachmentPutChunkParams, CheckpointDiffParams, CheckpointListParams, CheckpointRollbackParams,
-    EnvironmentImportSshConfigParams, EnvironmentImportSshConfigResult, EnvironmentListResult,
-    GitCommitParams, GitCreatePrParams, GitPushParams, GitStatusParams, HarkDictatePromptParams,
-    HarkSpellbookSyncParams, HelloParams, HelloResult, IdentifyResult, McpCallToolParams,
-    PROTOCOL_VERSION, PingResult, ProviderHealthParams, ProviderHealthReport, ProviderHealthResult,
-    RpcError, RpcRequest, RpcResponse, ServerCapabilities, ServerRole, SettingsGetParams,
-    SettingsGetResult, SettingsSetParams, SubAgentTreeItem, SubAgentTreeParams, SubAgentTreeResult,
-    TerminalAttachParams, TerminalCloseParams, TerminalInputParams, TerminalOpenParams,
-    TerminalResizeParams, ThreadCancelTurnParams, ThreadCreateParams, ThreadGetParams,
-    ThreadListParams, ThreadRespondApprovalParams, ThreadResumeParams, ThreadSendTurnParams,
+    AttachmentPutChunkParams, CapacityQueryParams, CheckpointDiffParams, CheckpointListParams,
+    CheckpointRollbackParams, EnvironmentImportSshConfigParams, EnvironmentImportSshConfigResult,
+    EnvironmentListResult, GitCommitParams, GitCreatePrParams, GitPushParams, GitStatusParams,
+    HarkDictatePromptParams, HarkSpellbookSyncParams, HelloParams, HelloResult, IdentifyResult,
+    McpCallToolParams, PROTOCOL_VERSION, PingResult, ProviderHealthParams, ProviderHealthReport,
+    ProviderHealthResult, RpcError, RpcRequest, RpcResponse, ServerCapabilities, ServerRole,
+    SettingsGetParams, SettingsGetResult, SettingsSetParams, SubAgentTreeItem, SubAgentTreeParams,
+    SubAgentTreeResult, TerminalAttachParams, TerminalCloseParams, TerminalInputParams,
+    TerminalOpenParams, TerminalResizeParams, ThreadCancelTurnParams, ThreadCreateParams,
+    ThreadGetParams, ThreadListParams, ThreadRespondApprovalParams, ThreadResumeParams,
+    ThreadSendTurnParams, UsageAckParams, UsageAckResult, UsageExportParams, UsageQueryParams,
     WorktreeSyncDeltaParams, WorktreeSyncDeltaResult,
 };
 
@@ -93,6 +94,46 @@ fn account_badge_label(label: Option<&str>, sub: Option<&str>) -> Option<String>
         (Some(l), _) if !l.is_empty() => Some(l.to_string()),
         (_, Some(s)) if !s.is_empty() => Some(s.to_string()),
         _ => None,
+    }
+}
+
+fn parse_usage_params<T>(params: Value, method: &str) -> Result<T, RpcError>
+where
+    T: serde::de::DeserializeOwned + Default,
+{
+    if params.is_null() {
+        return Ok(T::default());
+    }
+    serde_json::from_value(params).map_err(|error| {
+        usage_params_error(
+            "usage_params_invalid",
+            format!("Invalid {method} params: {error}"),
+        )
+    })
+}
+
+fn usage_params_error(reason: &str, message: impl Into<String>) -> RpcError {
+    RpcError::with_data(
+        -32602,
+        message,
+        json!({
+            "reason": reason,
+        }),
+    )
+}
+
+fn require_local_query_peer(context: &RequestContext) -> Result<(), RpcError> {
+    if matches!(
+        context.peer_role,
+        PeerRole::Internal | PeerRole::LocalControl
+    ) {
+        Ok(())
+    } else {
+        Err(RpcError::with_data(
+            -32001,
+            "Usage queries require authenticated local control",
+            json!({ "reason": "usage_local_control_required" }),
+        ))
     }
 }
 
@@ -478,9 +519,16 @@ impl Router {
 
     fn resolve_target_environment(
         &self,
-        _method: &str,
+        method: &str,
         params: &Value,
     ) -> Option<pandamux_core::ids::EnvironmentId> {
+        if matches!(
+            method,
+            "usage.export" | "usage.ack" | "usage.query" | "capacity.query"
+        ) {
+            return None;
+        }
+
         // 1. Direct environmentId in params
         if let Some(env_id_val) = params
             .get("environmentId")
@@ -658,6 +706,10 @@ impl Router {
             "settings.get" | "config.get" => self.handle_settings_get(params),
             "settings.set" | "config.set" => self.handle_settings_set(params),
             "provider.health" | "provider.probe" => self.handle_provider_health(params).await,
+            "usage.export" => self.handle_usage_export(context, params),
+            "usage.ack" => self.handle_usage_ack(context, params),
+            "usage.query" => self.handle_usage_query(context, params),
+            "capacity.query" => self.handle_capacity_query(context, params),
             "mcp.list_tools" => self.handle_mcp_list_tools(),
             "mcp.call_tool" => self.handle_mcp_call_tool(params),
             "notification.post" => self.handle_notification_post(params).await,
@@ -923,9 +975,27 @@ impl Router {
     }
 
     async fn handle_provider_health(&self, params: Value) -> Result<Value, RpcError> {
-        let filter: ProviderHealthParams = serde_json::from_value(params).unwrap_or_default();
+        let filter = if params.is_null() {
+            ProviderHealthParams::default()
+        } else {
+            serde_json::from_value::<ProviderHealthParams>(params).map_err(|error| {
+                RpcError::with_data(
+                    -32602,
+                    format!("Invalid provider.health params: {error}"),
+                    json!({ "reason": "provider_health_params_invalid" }),
+                )
+            })?
+        };
+        filter.validate().map_err(|error| {
+            RpcError::with_data(
+                -32602,
+                error,
+                json!({ "reason": "provider_health_page_limit_invalid" }),
+            )
+        })?;
         let environment_id = filter
             .environment_id
+            .clone()
             .unwrap_or_else(|| EnvironmentId::new(self.environment_id.clone()));
         let settings = self
             .store
@@ -943,15 +1013,29 @@ impl Router {
                 .resolve_allow_disabled(instance_id, &environment_id)?;
         }
 
-        let mut reports = Vec::new();
+        let mut instances = settings
+            .providers
+            .iter()
+            .filter(|instance| {
+                filter
+                    .instance_id
+                    .as_ref()
+                    .is_none_or(|target_id| &instance.id == target_id)
+            })
+            .filter(|instance| {
+                filter
+                    .after_instance_id
+                    .as_ref()
+                    .is_none_or(|after| instance.id.as_str() > after.as_str())
+            })
+            .collect::<Vec<_>>();
+        instances.sort_by(|left, right| left.id.cmp(&right.id));
+        let has_more = instances.len() > filter.limit as usize;
+        instances.truncate(filter.limit as usize);
 
-        for inst in &settings.providers {
-            if let Some(ref target_id) = filter.instance_id
-                && &inst.id != target_id
-            {
-                continue;
-            }
+        let mut reports = Vec::with_capacity(instances.len());
 
+        for inst in instances {
             match self
                 .provider_resolver
                 .resolve_allow_disabled(&inst.id, &environment_id)
@@ -1055,8 +1139,102 @@ impl Router {
             }
         }
 
-        let res = ProviderHealthResult { reports };
+        let next_instance_id = reports.last().map(|report| report.instance_id.clone());
+        let res = ProviderHealthResult {
+            reports,
+            next_instance_id,
+            has_more,
+        };
         serde_json::to_value(&res).map_err(|e| RpcError::internal_error(e.to_string()))
+    }
+
+    fn handle_usage_export(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        self.require_hub_usage_peer(context)?;
+        let params: UsageExportParams = parse_usage_params(params, "usage.export")?;
+        params
+            .validate()
+            .map_err(|error| usage_params_error("usage_page_limit_invalid", error))?;
+        let result = self
+            .store
+            .export_usage(&params)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn handle_usage_ack(&self, context: &RequestContext, params: Value) -> Result<Value, RpcError> {
+        self.require_hub_usage_peer(context)?;
+        let params: UsageAckParams = serde_json::from_value(params).map_err(|error| {
+            usage_params_error(
+                "usage_ack_params_invalid",
+                format!("Invalid usage.ack params: {error}"),
+            )
+        })?;
+        params
+            .validate()
+            .map_err(|error| usage_params_error("usage_ack_invalid", error))?;
+        let acknowledged = self
+            .store
+            .acknowledge_usage(params.through_seq)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        serde_json::to_value(UsageAckResult {
+            acknowledged,
+            through_seq: params.through_seq,
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn handle_usage_query(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_local_query_peer(context)?;
+        let params: UsageQueryParams = parse_usage_params(params, "usage.query")?;
+        params
+            .validate()
+            .map_err(|error| usage_params_error("usage_query_invalid", error))?;
+        let result = self
+            .store
+            .query_usage(&params)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn handle_capacity_query(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_local_query_peer(context)?;
+        let params: CapacityQueryParams = parse_usage_params(params, "capacity.query")?;
+        params
+            .validate()
+            .map_err(|error| usage_params_error("capacity_query_invalid", error))?;
+        let result = self
+            .store
+            .query_capacity(&params)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn require_hub_usage_peer(&self, context: &RequestContext) -> Result<(), RpcError> {
+        if matches!(context.peer_role, PeerRole::Internal) {
+            return Ok(());
+        }
+        if matches!(context.peer_role, PeerRole::NodeProxy)
+            && context.authenticated_environment_id.as_str() == self.environment_id
+        {
+            return Ok(());
+        }
+        Err(RpcError::with_data(
+            -32001,
+            "Usage export is restricted to the authenticated Hub peer",
+            json!({ "reason": "usage_hub_peer_required" }),
+        ))
     }
 
     fn handle_mcp_list_tools(&self) -> Result<Value, RpcError> {
@@ -1825,6 +2003,56 @@ mod tests {
         Router::with_drivers(store, ServerRole::Hub, "env-test".to_string(), drivers)
     }
 
+    fn add_usage_fixture(store: &Store) {
+        store
+            .save_usage_subscription(
+                &pandamux_core::UsageSubscription {
+                    key: pandamux_core::SubscriptionKey::new("subkey-work"),
+                    provider: pandamux_core::UsageProvider::Codex,
+                    display_name: "Work Codex".to_string(),
+                    masked_account_label: None,
+                },
+                1000,
+            )
+            .expect("save usage subscription");
+        store
+            .map_provider_subscription(
+                &EnvironmentId::new("env-test"),
+                &pandamux_core::ProviderInstanceId::new("codex-work"),
+                &pandamux_core::SubscriptionKey::new("subkey-work"),
+                1000,
+            )
+            .expect("map usage subscription");
+        store
+            .record_usage_batch(
+                &EnvironmentId::new("env-test"),
+                &[pandamux_core::UsageObservation {
+                    id: pandamux_core::UsageObservationId::new("usage-router"),
+                    source_kind: pandamux_core::UsageSourceKind::ManagedTurn,
+                    parser_version: 1,
+                    provider_native_session_id: None,
+                    provider_native_turn_id: Some("native-turn".to_string()),
+                    occurred_at_ms: Some(1000),
+                    provider: pandamux_core::UsageProvider::Codex,
+                    provider_instance_id: pandamux_core::ProviderInstanceId::new("codex-work"),
+                    subscription_key: pandamux_core::SubscriptionKey::new("subkey-work"),
+                    model: Some("gpt-fixture".to_string()),
+                    tokens: pandamux_core::TokenCounts {
+                        input: 5,
+                        output: 2,
+                        ..pandamux_core::TokenCounts::default()
+                    },
+                    provider_reported_micro_usd: None,
+                    source_record_count: 1,
+                    thread_id: None,
+                    agent_id: None,
+                    schedule_id: None,
+                }],
+                None,
+            )
+            .expect("record usage observation");
+    }
+
     #[tokio::test]
     async fn router_handles_ping_and_capabilities() {
         let store = Store::in_memory().unwrap();
@@ -1839,6 +2067,143 @@ mod tests {
         let res = router.handle_request(caps_req).await.expect("response");
         assert!(res.is_success());
         assert_eq!(res.result.unwrap()["streaming"], true);
+    }
+
+    #[tokio::test]
+    async fn usage_export_is_hub_only_and_queries_are_local_control_only() {
+        let store = Store::in_memory().expect("open store");
+        add_usage_fixture(&store);
+        let router = mock_router(store);
+        router.capability_authority().configure_local_capabilities(
+            "endpoint".to_string(),
+            "control-token".to_string(),
+            "mcp-token".to_string(),
+        );
+        let control = router
+            .capability_authority()
+            .authenticate(
+                "control-token",
+                crate::request_context::ClientIdentity::default(),
+            )
+            .expect("control context");
+        let node = RequestContext::node_proxy(
+            EnvironmentId::new("env-test"),
+            crate::request_context::ClientIdentity::default(),
+        );
+
+        let denied_export = router
+            .handle_request_with_context(
+                &control,
+                RpcRequest::new(1, "usage.export", Some(json!({ "limit": 10 }))),
+            )
+            .await
+            .expect("export response");
+        assert_eq!(denied_export.error.expect("denied export").code, -32001);
+
+        let denied_routed_export = router
+            .handle_request_with_context(
+                &control,
+                RpcRequest::new(
+                    11,
+                    "usage.export",
+                    Some(json!({ "environmentId": "env-other", "limit": 10 })),
+                ),
+            )
+            .await
+            .expect("routed export response");
+        assert_eq!(
+            denied_routed_export
+                .error
+                .expect("routed export denied")
+                .data
+                .unwrap()["reason"],
+            "capability_scope_denied"
+        );
+
+        let export = router
+            .handle_request_with_context(
+                &node,
+                RpcRequest::new(2, "usage.export", Some(json!({ "limit": 10 }))),
+            )
+            .await
+            .expect("export response");
+        assert!(export.is_success());
+        assert_eq!(
+            export.result.as_ref().unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let forged_node = RequestContext::node_proxy(
+            EnvironmentId::new("env-other"),
+            crate::request_context::ClientIdentity::default(),
+        );
+        let forged = router
+            .handle_request_with_context(
+                &forged_node,
+                RpcRequest::new(3, "usage.export", Some(json!({ "limit": 10 }))),
+            )
+            .await
+            .expect("forged response");
+        assert_eq!(
+            forged.error.expect("forged export denied").data.unwrap()["reason"],
+            "usage_hub_peer_required"
+        );
+
+        let query = router
+            .handle_request_with_context(
+                &control,
+                RpcRequest::new(4, "usage.query", Some(json!({ "limit": 10 }))),
+            )
+            .await
+            .expect("query response");
+        assert!(query.is_success());
+        assert_eq!(
+            query.result.as_ref().unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let filtered_remote_environment = router
+            .handle_request_with_context(
+                &control,
+                RpcRequest::new(
+                    12,
+                    "usage.query",
+                    Some(json!({ "environmentId": "env-other", "limit": 10 })),
+                ),
+            )
+            .await
+            .expect("filtered query response");
+        assert!(filtered_remote_environment.is_success());
+        assert!(
+            filtered_remote_environment.result.unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+
+        let denied_query = router
+            .handle_request_with_context(
+                &node,
+                RpcRequest::new(5, "usage.query", Some(json!({ "limit": 10 }))),
+            )
+            .await
+            .expect("query response");
+        assert_eq!(denied_query.error.expect("node query denied").code, -32001);
+
+        let removed_write = router
+            .handle_request_with_context(
+                &control,
+                RpcRequest::new(6, "usage.record_buckets", Some(json!({ "buckets": [] }))),
+            )
+            .await
+            .expect("removed write response");
+        assert_eq!(removed_write.error.expect("method missing").code, -32601);
     }
 
     #[tokio::test]
@@ -2029,7 +2394,7 @@ mod tests {
         let get_res = router.handle_request(get_req).await.unwrap();
         assert!(get_res.is_success());
         let get_val = get_res.result.unwrap();
-        assert_eq!(get_val["settings"]["version"], 3);
+        assert_eq!(get_val["settings"]["version"], 4);
         assert_eq!(get_val["settings"]["terminal"]["scrollbackLines"], 10_000);
 
         // 2. Update a specific key using config.set dotted path
@@ -2062,6 +2427,8 @@ mod tests {
         let health_val = health_res.result.unwrap();
         let reports = health_val["reports"].as_array().unwrap();
         assert!(!reports.is_empty());
+        assert_eq!(health_val["hasMore"], false);
+        assert!(health_val["nextInstanceId"].is_string());
         // Verify report structure
         for report in reports {
             assert!(report.get("instanceId").is_some());
@@ -2081,6 +2448,47 @@ mod tests {
             assert!(report["disabledReason"]["message"].is_string());
             assert!(report["disabledReason"]["remediation"].is_string());
         }
+
+        let first_page = router
+            .handle_request(RpcRequest::new(
+                5,
+                "provider.health",
+                Some(json!({ "limit": 1 })),
+            ))
+            .await
+            .unwrap();
+        assert!(first_page.is_success());
+        let first_page = first_page.result.unwrap();
+        assert_eq!(first_page["reports"].as_array().unwrap().len(), 1);
+        assert_eq!(first_page["hasMore"], true);
+        let first_cursor = first_page["nextInstanceId"].as_str().unwrap();
+
+        let second_page = router
+            .handle_request(RpcRequest::new(
+                6,
+                "provider.health",
+                Some(json!({ "afterInstanceId": first_cursor, "limit": 1 })),
+            ))
+            .await
+            .unwrap();
+        assert!(second_page.is_success());
+        assert_ne!(
+            second_page.result.unwrap()["reports"][0]["instanceId"],
+            first_cursor
+        );
+
+        let invalid_page = router
+            .handle_request(RpcRequest::new(
+                7,
+                "provider.health",
+                Some(json!({ "limit": 0 })),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            invalid_page.error.unwrap().data.unwrap()["reason"],
+            "provider_health_page_limit_invalid"
+        );
     }
 
     #[tokio::test]

@@ -981,7 +981,7 @@ Exit criteria: Antigravity's managed bundle is installed on Galahad by node-side
 
 ### Recovery Gate R0: prove the Phase 3 foundation before extending it
 
-**Why this gate exists:** When R0 opened, Phase 3 had implementation commits, but the production hub did not compose a remote transport, the server did not complete the proxy command, thread execution did not resolve the selected provider instance, and the documented live matrix had not been archived. Phase 4 usage, capacity, and failover would otherwise have observed and routed a placeholder system. R0.2 through R0.4 now correct those foundations; R0.5 remains open for the physical laptop disconnect and sleep rows.
+**Why this gate exists:** When R0 opened, Phase 3 had implementation commits, but the production hub did not compose a remote transport, the server did not complete the proxy command, thread execution did not resolve the selected provider instance, and the documented live matrix had not been archived. Phase 4 usage, capacity, and failover would otherwise have observed and routed a placeholder system. R0.2 through R0.4 now correct those foundations. On 2026-09-29, the user explicitly approved moving past the two remaining physical R0.5 rows. That rescope closes R0 as a Phase 4 development gate only. The disconnect and sleep rows remain required production-acceptance and release evidence.
 
 #### R0.1 Preserve and classify the unfinished Phase 4 attempt
 
@@ -1123,9 +1123,11 @@ Gate exit:
   intentional real-shell ignores, strict Clippy, formatting, whitespace, crate-boundary,
   and wiring guards. `cargo-deny` is unavailable on this host, so no advisory result is
   claimed.
-- **Gate remains open:** the required 30-minute physical laptop disconnect and
-  full-screen-terminal sleep still require interactive evidence. Browser authentication,
-  native Windows IPC, and all three Galahad provider rows are complete.
+- **Development-gate rescope, 2026-09-29:** the user explicitly approved continuing
+  Phase 4 without waiting for the 30-minute physical laptop disconnect and
+  full-screen-terminal sleep checks. Browser authentication, native Windows IPC, and all
+  three Galahad provider rows are complete. The two deferred rows still require
+  interactive evidence before any production-accepted, released, or shipped claim.
 
 ### Phase 4: Provider observability, usage, capacity, policy, and safe failover
 
@@ -1139,7 +1141,7 @@ Gate exit:
 
 - Baseline `9511d0e22d44192f106e2f84a7c96b96d76734b6`, branch `master`, upstream `origin/master`, and workspace version `0.53.44` were recorded with the exact nine tracked and three untracked paths. Every path was owned by the user before recovery work began.
 - The named snapshot is `/home/brandon/.codex/recovery/Pandamux/2026-09-28-r0.1-phase4-prototype-9511d0e`. Its full-index binary patch has SHA-256 `96117c5a4fe97b0448036a6154f2b9c0cf70b31a9417c33aea698b7aa0f9668a`; its untracked archive has SHA-256 `27cb07ad0ef5497e6b764d562bbc0828ffeb09e1c597cc08b49f54bc2f6754bd`. A detached worktree restore at the exact baseline passed `git apply --check --binary`, applied the patch, extracted the archive, and matched all 12 paths byte for byte. Source status was identical before and after the snapshot.
-- **Keep:** `tasks/plan-rewrite.md` as the current contract; the token-category vocabulary and serialization-test intent from `crates/pandamux-core/src/usage.rs`; module seams in `crates/pandamux-core/src/lib.rs`, `crates/pandamux-protocol/src/lib.rs`, `crates/pandamux-providers/src/lib.rs`, and `crates/pandamux-server/src/lib.rs`; pure Claude and Codex parser fixtures from `crates/pandamux-providers/src/usage_scanner.rs`; query and versioned-wire fixture ideas from `crates/pandamux-protocol/src/usage_rpc.rs`; migration and store failure-test ideas from `crates/pandamux-server/src/store/migrations.rs` and `crates/pandamux-server/src/store/mod.rs`; and router fixture intent from `crates/pandamux-server/src/router.rs`. Migration 4 remains immutable as a legacy input to migration 5.
+- **Keep:** `tasks/plan-rewrite.md` as the current contract; the token-category vocabulary and serialization-test intent from `crates/pandamux-core/src/usage.rs`; module seams in `crates/pandamux-core/src/lib.rs`, `crates/pandamux-protocol/src/lib.rs`, `crates/pandamux-providers/src/lib.rs`, and `crates/pandamux-server/src/lib.rs`; pure Claude and Codex parser fixtures from `crates/pandamux-providers/src/usage_scanner.rs`; query and versioned-wire fixture ideas from `crates/pandamux-protocol/src/usage_rpc.rs`; migration and store failure-test ideas from `crates/pandamux-server/src/store/migrations.rs` and `crates/pandamux-server/src/store/mod.rs`; and router fixture intent from `crates/pandamux-server/src/router.rs`. Migration 4 remains immutable as a legacy input to normalized usage migration 6.
 - **Rewrite:** `crates/pandamux-core/src/usage.rs` around checked `UsageObservation`, `SubscriptionKey`, integer money, explicit unknowns, and projection-only buckets; `crates/pandamux-protocol/src/usage_rpc.rs` around authenticated export and bounded query contracts; `crates/pandamux-providers/src/usage_scanner.rs` as pure parsers below a server-owned scanner with durable file-identity cursors; `crates/pandamux-server/src/usage_aggregator.rs` as indexed SQL projection and effective-dated pricing; the usage portions of `crates/pandamux-server/src/store/mod.rs` as transactional observation, cursor, and outbox persistence; and the usage portions of `crates/pandamux-server/src/router.rs` behind trusted request context.
 - **Discard:** caller-submitted `UsageBucket` writes and environment identity, path-only in-memory cursors, scanner-owned filesystem traversal, append-only duplicate-prone buckets, floating-point prices and fallback prices, fabricated dates and models, silent read and parse failures, clamping corrupt database values, unknown-provider fallback to Claude, in-memory pricing mutation, and loading all rows for aggregation.
 - Pre-edit verification was intentionally recorded rather than repaired in place: `cargo fmt --all --check` failed on formatting in `usage.rs` and `router.rs`; `cargo test -p pandamux-core usage` failed to compile because the prototype used `ProviderKind` as a `BTreeMap` key without `Ord`. These failures confirm that the snapshot is salvage material, not an accepted implementation.
@@ -1156,10 +1158,10 @@ Gate exit:
 
 1. Finish or replace core token types with total checked addition, all provider variants, forward-compatible unknown handling, and stable serialization tests.
 2. Consolidate overlapping organization types into one canonical policy/domain model before schema design. Define invariants for project organization, allowed provider instances/subscriptions, failover pools, budgets, Broadside policy, and fail-closed missing or ambiguous assignment.
-3. Keep applied migration 4 immutable. Add migration 5 for normalized observations, durable scanner cursors, node outbox sequence, hub high-water marks, subscriptions, instance-to-subscription mapping, failover pools, canonical organization policy, pricing versions, capacity snapshots, and quarantine records.
+3. Keep applied migrations 4 and 5 immutable. Add migration 6 for normalized observations, durable scanner cursors, node outbox sequence, hub high-water marks, subscriptions, instance-to-subscription mapping, failover pools, canonical organization policy, pricing versions, capacity snapshots, and quarantine records. Migration 5 was added during R0.3 for provider execution audit after this checkpoint was drafted, so renumbering or rewriting it would violate the migration contract.
 4. Give observations a unique stable id and use conflict-safe inserts. Cursor advancement, observation inserts, and outbox enqueue happen in one SQLite transaction.
 5. Deterministically backfill valid migration-4 rows into observations; quarantine invalid providers, negative integers, impossible dates, and ambiguous identity. Preserve the legacy table until a verified release has completed migration and reconciliation.
-6. Test upgrades from schema versions 1, 2, 3, and 4, repeated migration, interrupted rollback, corrupt legacy rows, and database reopen. Never renumber an applied migration.
+6. Test upgrades from schema versions 1, 2, 3, 4, and 5, repeated migration, interrupted rollback, corrupt legacy rows, and database reopen. Never renumber an applied migration.
 7. Define internal `usage.export { afterSeq, limit }` and optional `usage.ack`. Require an authenticated hub peer. The response contains normalized observations and `nodeStoreId`, never transcript text, profile paths, or source filenames.
 8. Define desktop-facing `usage.query`, `capacity.query`, and `provider.health` with bounded pagination, explicit filters, stable error codes, and versioned wire fixtures.
 9. Remove or permanently internalize unrestricted `usage.record_buckets`; no client can submit environment id, subscription identity, or cost as trusted provenance.
@@ -1170,6 +1172,41 @@ Checkpoint acceptance:
 - Cursor and fact insertion either commit together or both roll back.
 - An authenticated node cannot forge another environment, and a desktop client cannot call hub-only ingestion methods.
 - Migration tests preserve all valid legacy totals and enumerate every quarantined row.
+
+##### Checkpoint 4A completion record, 2026-09-29
+
+- Core usage truth is now `UsageObservation` with opaque ids, checked token totals,
+  integer micro-USD, explicit unknown provider and source variants, stable serialization,
+  provider-instance and subscription identity, and optional managed attribution.
+- One canonical revisioned organization policy now owns project assignment, allowed
+  instances and subscriptions, failover pools, budget, concurrency, tier mapping, and
+  Broadside policy. Missing or conflicting project assignment fails closed. Failover
+  pools reject empty or duplicate candidates, and the SQLite policy store rejects stale
+  or same-revision mutations.
+- Additive migration 6 creates normalized facts, subscription mapping, transactional
+  cursors and outbox, node store identity, hub high-water state, organization and
+  failover policy, pricing, capacity, and quarantine tables. The expression-backed
+  capacity identity remains idempotent even when optional window values are unknown.
+- Migration-4 buckets are preserved, deterministically backfilled when valid, and
+  quarantined with safe hashes and bounded reasons when invalid. Upgrade tests cover
+  every earlier schema through 5, repeat application, rollback and retry, database
+  reopen, totals, and every corrupt fixture row.
+- `usage.export` and `usage.ack` require the authenticated hub peer. Local-control
+  `usage.query` and `capacity.query`, plus `provider.health`, have explicit filters,
+  bounded keyset pages, stable validation reasons, and serialization fixtures. The old
+  unrestricted `usage.record_buckets` method is absent.
+- **Deliberate deviation:** normalized usage is migration 6 rather than the originally
+  drafted migration 5 because R0.3 had already applied migration 5 for provider execution
+  audit. Preserving applied migration numbers takes precedence over the stale draft
+  number and changes no 4A domain or acceptance requirement.
+- **Local verification:** at workspace version `0.55.0`, formatting and strict workspace
+  Clippy passed, and `cargo test --workspace` passed 325 tests with zero failures and two
+  intentionally ignored real-shell terminal tests. The Rust crate-boundary and Claude
+  wiring guards passed. `cargo-deny` is unavailable on this host, so no advisory or
+  license result is claimed.
+- This completion record is source and local verification evidence only. It does not
+  satisfy the deferred physical R0.5 rows, Phase 4B scanner acceptance, production
+  acceptance, push, deployment, or release.
 
 #### Checkpoint 4B: node-owned scanners and source reconciliation
 
@@ -1261,7 +1298,8 @@ Run narrow unit and migration tests first, then crate tests, workspace fmt/clipp
 
 Phase 4 exits only when:
 
-- R0 is closed and archived.
+- R0 is closed and archived as a development gate. Any explicitly re-scoped live row
+  remains a production-acceptance and release blocker until its evidence is archived.
 - Usage restarts, rotations, retries, reconnects, and backfills are idempotent, with source coverage visible.
 - Weekly totals reconcile against each provider's defensible reporting source within 2 percent where that source exists; providers without a source show Unknown rather than failing the phase on invented precision.
 - Capacity confidence and freshness appear everywhere capacity affects a decision.

@@ -20,6 +20,7 @@ pandamux-term = { path = "../pandamux-term", default-features = false, features 
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2 = "0.10"
 tokio = { workspace = true, features = ["io-std", "process", "signal", "time"] }
 uuid.workspace = true
 

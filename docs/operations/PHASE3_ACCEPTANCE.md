@@ -4,10 +4,11 @@ Date opened: 2026-09-28
 
 Last updated: 2026-09-29
 
-Status: **Open. The exact Galahad artifact, lifecycle, managed install, transfer,
-Codex, Claude, and Antigravity provider rows, and native Windows IPC behavior have
-live evidence. The required 30-minute physical laptop disconnect and sleep checks
-remain open.**
+Status: **Open for production acceptance, closed as a Phase 4 development gate by
+explicit user-approved rescope on 2026-09-29. The exact Galahad artifact, lifecycle,
+managed install, transfer, Codex, Claude, and Antigravity provider rows, and native
+Windows IPC behavior have live evidence. The required 30-minute physical laptop
+disconnect and sleep checks remain open and still block release claims.**
 
 This record separates source and fixture verification from production acceptance.
 Passing unit, cross-compile, or proxy fixture tests does not satisfy a live Windows or
@@ -258,5 +259,8 @@ still require interactive participation when those rows are scheduled.
 
 ## Gate decision
 
-R0 remains open. Do not continue into Phase 4A as accepted implementation work until
-every required row passes or the plan records a user-approved rescope.
+The user approved the documented rescope on 2026-09-29, so R0 is closed as a Phase 4
+development gate and implementation may continue. The 30-minute physical laptop
+disconnect and full-screen-terminal sleep rows were deferred, not waived. This record
+remains open, and PandaMUX must not be described as production-accepted, released, or
+shipped until those rows pass and their evidence is archived.

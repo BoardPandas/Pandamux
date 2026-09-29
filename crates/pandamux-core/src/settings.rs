@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-pub const SETTINGS_SCHEMA_VERSION: u32 = 3;
+pub const SETTINGS_SCHEMA_VERSION: u32 = 4;
 
 /// Bounds for `terminal.scrollbackLines` (clamped on load and set).
 pub const SCROLLBACK_LINES_MIN: u32 = 1_000;
@@ -25,7 +25,7 @@ pub struct UserSettings {
     pub terminal: TerminalSettings,
     pub keyboard: KeyboardSettings,
     #[serde(default)]
-    pub organizations: Vec<crate::organization::OrganizationSubscription>,
+    pub organizations: Vec<crate::organization::OrganizationPolicy>,
     #[serde(default = "default_tier_mapping_opt")]
     pub tier_mapping: Option<crate::organization::TierMapping>,
     #[serde(default = "default_providers")]
@@ -237,6 +237,9 @@ impl UserSettings {
                 }
             }
             self.version = 3;
+        }
+        if self.version < 4 {
+            self.version = 4;
         }
         for provider in &mut self.providers {
             if provider.enabled {

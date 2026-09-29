@@ -29,9 +29,9 @@ This index routes contributors to current sources for the GPUI chat-first rewrit
 
 The server is the production owner of remote composition and durable state. The desktop is a GPUI client. Remote Linux nodes run the server daemon and are reached through the versioned SSH exec proxy; no remote TCP control port is opened.
 
-## Active recovery gate
+## Active Phase 4 status
 
-The unfinished Phase 4 prototype has been preserved under Recovery Gate R0.1. R0.2 through R0.4 establish production remote routing, exact provider-instance resolution, and authenticated local control. R0.5 has exact live evidence for Galahad and native Windows IPC; the required 30-minute physical laptop disconnect and sleep checks remain open. Checked source implementation is not a substitute for that remaining acceptance.
+The unfinished Phase 4 prototype was preserved under Recovery Gate R0.1. R0.2 through R0.4 establish production remote routing, exact provider-instance resolution, and authenticated local control. R0.5 has exact live evidence for Galahad and native Windows IPC. The user approved deferring its remaining physical laptop checks on 2026-09-29, which closes the development gate but does not satisfy production acceptance or release. Phase 4A now supplies the normalized usage, policy, migration, and authenticated bounded-protocol foundation.
 
 The authoritative completion records, unresolved rows, and exact acceptance criteria are in [`tasks/plan-rewrite.md`](../tasks/plan-rewrite.md).
 

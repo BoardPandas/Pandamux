@@ -15,7 +15,7 @@ For current facts, use this order:
 
 The only version source is `[workspace.package] version` in the root [`Cargo.toml`](Cargo.toml). Crates inherit it with `version.workspace = true`.
 
-The codebase is at the Phase 4 recovery gate. R0.1 preserves the unfinished usage prototype; R0.2 completes production proxy routing; R0.3 enforces exact provider-instance execution; R0.4 secures the local control boundary. R0.5 has exact live evidence for Galahad and native Windows IPC, while the required 30-minute physical laptop disconnect and sleep checks remain open. Do not call the rewrite production-accepted, released, or shipped before the matrix passes and its record is archived.
+The codebase is implementing Phase 4 after the R0 development gate. R0.1 preserves the unfinished usage prototype; R0.2 completes production proxy routing; R0.3 enforces exact provider-instance execution; R0.4 secures the local control boundary. R0.5 has exact live evidence for Galahad and native Windows IPC. On 2026-09-29, the user approved deferring the required 30-minute physical laptop disconnect and sleep checks so development could continue. Those rows still block any production-accepted, released, or shipped claim until the matrix passes and its record is archived.
 
 ## Build and development
 
@@ -125,7 +125,7 @@ Every executable provider path starts from a stored `ProviderInstanceConfig` res
 
 Per-instance permits are held for the complete provider-process lifetime, including approval waits, and are released on cancellation, crash, configuration replacement, or shutdown. The selected instance ID is carried through the thread, health and login paths, turn, process audit, and provider launch.
 
-Phase 4A will extend that typed identity into normalized usage observations and subscription mappings. The recovered usage prototype is evidence only; its append-only buckets, caller-supplied provenance, floating-point pricing, and in-memory path cursors are not the implementation contract.
+Phase 4A extends that typed identity into normalized usage observations and subscription mappings. It uses additive migration 6 because R0.3 already applied migration 5 for provider execution audit. The recovered usage prototype remains evidence only; its append-only buckets, caller-supplied provenance, floating-point pricing, and in-memory path cursors are not the implementation contract.
 
 ## Remote composition
 

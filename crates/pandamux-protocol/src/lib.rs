@@ -14,6 +14,7 @@ pub mod subscription;
 pub mod system;
 pub mod terminal_rpc;
 pub mod thread_rpc;
+pub mod usage_rpc;
 pub mod worktree_rpc;
 
 pub use antigravity_rpc::{
@@ -44,8 +45,9 @@ pub use jsonrpc::{JSONRPC_VERSION, RpcError, RpcId, RpcRequest, RpcResponse};
 pub use mcp::{McpCallToolParams, McpCallToolResult, McpContentItem, McpToolDefinition};
 pub use proxy::{PROXY_PROTOCOL_VERSION, ProxyMessage};
 pub use settings_rpc::{
-    ProviderHealthParams, ProviderHealthReport, ProviderHealthResult, SettingsGetParams,
-    SettingsGetResult, SettingsSetParams, SettingsSetResult,
+    DEFAULT_PROVIDER_HEALTH_PAGE_SIZE, MAX_PROVIDER_HEALTH_PAGE_SIZE, ProviderHealthParams,
+    ProviderHealthReport, ProviderHealthResult, SettingsGetParams, SettingsGetResult,
+    SettingsSetParams, SettingsSetResult,
 };
 pub use subagent_rpc::{SubAgentTreeItem, SubAgentTreeParams, SubAgentTreeResult};
 pub use subscription::{EventEnvelope, SubscribeParams, SubscribeResult, UnsubscribeParams};
@@ -62,6 +64,11 @@ pub use thread_rpc::{
     ThreadCancelTurnParams, ThreadCreateParams, ThreadGetParams, ThreadGetResult, ThreadListParams,
     ThreadRespondApprovalParams, ThreadResumeParams, ThreadResumeResult, ThreadSendTurnParams,
     ThreadSendTurnResult,
+};
+pub use usage_rpc::{
+    CapacityQueryCursor, CapacityQueryParams, CapacityQueryResult, UsageAckParams, UsageAckResult,
+    UsageCoverage, UsageExportItem, UsageExportParams, UsageExportResult, UsageQueryCursor,
+    UsageQueryItem, UsageQueryParams, UsageQueryResult,
 };
 pub use worktree_rpc::{WorktreeSyncDeltaParams, WorktreeSyncDeltaResult};
 

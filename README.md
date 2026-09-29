@@ -9,13 +9,15 @@ This repository began as an Electron prototype, then had an Iced multiplexer imp
 
 The workspace version comes only from `[workspace.package] version` in [`Cargo.toml`](Cargo.toml). Do not infer the current version from documentation prose.
 
-The codebase is in the recovery gate before continuing Phase 4 provider observability work:
+The codebase is implementing Phase 4 provider observability work after completing the
+R0 development gate:
 
 - R0.1 preserves and verifies the unfinished Phase 4 usage prototype without treating it as accepted production code.
 - R0.2 implements Hub-to-node routing through a versioned SSH exec proxy, reconnect semantics, event replay, and joined cleanup.
 - R0.3 resolves every provider turn from the exact stored provider instance and holds per-instance capacity for the provider process lifetime.
 - R0.4 secures local IPC with server-assigned request contexts, distinct capabilities, OS-user boundaries, and redacted MCP reads.
-- R0.5 has exact live evidence for Galahad and native Windows IPC. The required 30-minute physical laptop disconnect and sleep checks remain open, so the current source must not be described as production-accepted or released.
+- R0.5 has exact live evidence for Galahad and native Windows IPC. On 2026-09-29, the user approved deferring the required 30-minute physical laptop disconnect and sleep checks so Phase 4 development could continue. Those checks still block production-accepted, released, or shipped claims.
+- Phase 4A provides normalized usage observations, durable transactional cursors and outbox state, canonical organization and failover policy, migration-4 reconciliation through additive migration 6, and bounded authenticated usage, capacity, and health protocol pages.
 
 See the completion records and acceptance criteria in [`tasks/plan-rewrite.md`](tasks/plan-rewrite.md).
 

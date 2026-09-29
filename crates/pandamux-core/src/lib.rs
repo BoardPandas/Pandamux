@@ -43,11 +43,16 @@ pub use event::{
 pub use home::{HomeLayout, HomePane};
 pub use i18n::{Locale, Localizer};
 pub use ids::{
-    AgentId, EnvironmentId, PaneId, ProjectId, ProviderInstanceId, RunId, ScheduleId, SshProfileId,
-    SurfaceId, ThreadId, TurnId, WindowId, WorkspaceId,
+    AgentId, EnvironmentId, FailoverPoolId, NodeStoreId, OrganizationId, PaneId, PricingVersionId,
+    ProjectId, ProviderInstanceId, RunId, ScheduleId, SshProfileId, SubscriptionKey, SurfaceId,
+    ThreadId, TurnId, UsageObservationId, WindowId, WorkspaceId,
 };
 pub use notification::{NewNotification, NotificationInfo, NotificationSource, Notifications};
-pub use organization::{ModelTarget, OrganizationPolicy, OrganizationSubscription, TierMapping};
+pub use organization::{
+    BroadsidePolicy, FailoverPool, FailoverPoolError, FailoverPoolMember, ModelTarget,
+    OrganizationPolicy, OrganizationPolicyError, OrganizationSubscription, TierMapping,
+    resolve_project_organization,
+};
 pub use project::{
     FolderBreadcrumb, FolderEntry, FolderListing, ProjectError, ProjectErrorCategory, ProjectKey,
     ProjectLocation, ProjectSpec, local_breadcrumbs, local_parent, normalize_posix_path,
@@ -90,4 +95,8 @@ pub use thread::{
     AccessMode, AgentInstanceRef, Thread, ThreadOrigin, ThreadStatus, ThreadWorkspace, Turn,
     TurnInput, TurnStatus, TurnUsage, WorktreeRef,
 };
-pub use usage::{DailyBudgetLedger, TokenUsageSummary, UsageRecord};
+pub use usage::{
+    CapacityConfidence, CapacitySnapshot, DailyBudgetLedger, TokenCounts, TokenUsageSummary,
+    UsageArithmeticError, UsageBucket, UsageObservation, UsageObservationError, UsageProvider,
+    UsageRecord, UsageSourceKind, UsageSubscription,
+};

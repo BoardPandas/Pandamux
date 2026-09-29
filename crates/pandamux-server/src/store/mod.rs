@@ -1,12 +1,19 @@
 pub mod migrations;
 
 use pandamux_core::{
-    AttachmentRecord, EnvironmentId, ProviderCapabilities, ProviderInstanceId, ProviderKind,
-    ScheduleRecord, Thread, ThreadEvent, ThreadEventKind, ThreadId, Turn, TurnId, TurnStatus,
-    UserSettings,
+    AgentId, AttachmentRecord, CapacityConfidence, CapacitySnapshot, EnvironmentId, FailoverPool,
+    NodeStoreId, OrganizationPolicy, ProjectId, ProviderCapabilities, ProviderInstanceId,
+    ProviderKind, ScheduleId, ScheduleRecord, SubscriptionKey, Thread, ThreadEvent,
+    ThreadEventKind, ThreadId, TokenCounts, Turn, TurnId, TurnStatus, UsageObservation,
+    UsageObservationId, UsageProvider, UsageSourceKind, UsageSubscription, UserSettings,
 };
-use pandamux_protocol::EventEnvelope;
+use pandamux_protocol::{
+    CapacityQueryCursor, CapacityQueryParams, CapacityQueryResult, EventEnvelope, UsageExportItem,
+    UsageExportParams, UsageExportResult, UsageQueryCursor, UsageQueryItem, UsageQueryParams,
+    UsageQueryResult,
+};
 use rusqlite::{Connection, OptionalExtension, params};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -54,6 +61,26 @@ pub struct ProviderExecutionAudit {
     pub capabilities: ProviderCapabilities,
     pub model: String,
     pub created_at_ms: u64,
+}
+
+/// Durable scanner position committed in the same transaction as accepted facts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UsageScannerCursor {
+    pub source_kind: UsageSourceKind,
+    pub file_identity: String,
+    pub canonical_path: String,
+    pub committed_offset: u64,
+    pub parser_version: u32,
+    pub observed_size: u64,
+    pub observed_modified_at_ms: Option<u64>,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct UsageBatchResult {
+    pub inserted: u64,
+    pub duplicates: u64,
+    pub last_outbox_seq: u64,
 }
 
 /// A thread-safe, single-writer SQLite store wrapper.
@@ -559,6 +586,847 @@ impl Store {
         }))
     }
 
+    // Canonical organization and failover policy
+
+    pub fn save_failover_pool(
+        &self,
+        pool: &FailoverPool,
+        updated_at_ms: u64,
+    ) -> Result<(), StoreError> {
+        pool.validate()
+            .map_err(|error| StoreError::Data(error.to_string()))?;
+        let revision = checked_i64(pool.revision, "failover pool revision")?;
+        let updated_at_ms = checked_i64(updated_at_ms, "failover pool updated_at_ms")?;
+        let definition_json = serde_json::to_string(pool)?;
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let existing = tx
+            .query_row(
+                "SELECT revision, definition_json FROM failover_pools WHERE id = ?1",
+                [pool.id.as_str()],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+        if let Some((existing_revision, existing_json)) = existing {
+            if revision < existing_revision {
+                return Err(StoreError::Data(format!(
+                    "failover pool {} revision {} is older than stored revision {}",
+                    pool.id, pool.revision, existing_revision
+                )));
+            }
+            if revision == existing_revision && definition_json != existing_json {
+                return Err(StoreError::Data(format!(
+                    "failover pool {} changed without a revision increment",
+                    pool.id
+                )));
+            }
+        }
+        tx.execute(
+            "INSERT INTO failover_pools (
+                id, display_name, revision, definition_json, updated_at_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(id) DO UPDATE SET
+                display_name = excluded.display_name,
+                revision = excluded.revision,
+                definition_json = excluded.definition_json,
+                updated_at_ms = excluded.updated_at_ms",
+            params![
+                pool.id.as_str(),
+                pool.display_name,
+                revision,
+                definition_json,
+                updated_at_ms,
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn get_failover_pool(
+        &self,
+        id: &pandamux_core::FailoverPoolId,
+    ) -> Result<Option<FailoverPool>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let json = conn
+            .query_row(
+                "SELECT definition_json FROM failover_pools WHERE id = ?1",
+                [id.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        json.map(|json| {
+            let pool: FailoverPool = serde_json::from_str(&json)?;
+            pool.validate()
+                .map_err(|error| StoreError::Data(error.to_string()))?;
+            Ok(pool)
+        })
+        .transpose()
+    }
+
+    pub fn save_organization_policy(
+        &self,
+        policy: &OrganizationPolicy,
+        updated_at_ms: u64,
+    ) -> Result<(), StoreError> {
+        policy
+            .validate()
+            .map_err(|error| StoreError::Data(error.to_string()))?;
+        let revision = checked_i64(policy.revision, "organization policy revision")?;
+        let updated_at_ms = checked_i64(updated_at_ms, "organization policy updated_at_ms")?;
+        let policy_json = serde_json::to_string(policy)?;
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let existing = tx
+            .query_row(
+                "SELECT revision, policy_json FROM organization_policies WHERE id = ?1",
+                [policy.id.as_str()],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+        if let Some((existing_revision, existing_json)) = existing {
+            if revision < existing_revision {
+                return Err(StoreError::Data(format!(
+                    "organization {} revision {} is older than stored revision {}",
+                    policy.id, policy.revision, existing_revision
+                )));
+            }
+            if revision == existing_revision && policy_json != existing_json {
+                return Err(StoreError::Data(format!(
+                    "organization {} changed without a revision increment",
+                    policy.id
+                )));
+            }
+        }
+
+        for project_id in &policy.project_ids {
+            let assigned = tx
+                .query_row(
+                    "SELECT organization_id FROM organization_project_assignments
+                     WHERE project_id = ?1",
+                    [project_id.as_str()],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            if assigned
+                .as_deref()
+                .is_some_and(|id| id != policy.id.as_str())
+            {
+                return Err(StoreError::Data(format!(
+                    "project {project_id} is already assigned to organization {}",
+                    assigned.unwrap_or_default()
+                )));
+            }
+        }
+
+        tx.execute(
+            "INSERT INTO organization_policies (
+                id, display_name, revision, policy_json, updated_at_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(id) DO UPDATE SET
+                display_name = excluded.display_name,
+                revision = excluded.revision,
+                policy_json = excluded.policy_json,
+                updated_at_ms = excluded.updated_at_ms",
+            params![
+                policy.id.as_str(),
+                policy.display_name,
+                revision,
+                policy_json,
+                updated_at_ms,
+            ],
+        )?;
+        tx.execute(
+            "DELETE FROM organization_project_assignments WHERE organization_id = ?1",
+            [policy.id.as_str()],
+        )?;
+        for project_id in &policy.project_ids {
+            tx.execute(
+                "INSERT INTO organization_project_assignments (project_id, organization_id)
+                 VALUES (?1, ?2)",
+                params![project_id.as_str(), policy.id.as_str()],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn organization_policy_for_project(
+        &self,
+        project_id: &ProjectId,
+    ) -> Result<OrganizationPolicy, StoreError> {
+        if project_id.as_str().trim().is_empty() {
+            return Err(StoreError::Data("project id must not be empty".to_string()));
+        }
+        let conn = self.conn.lock().unwrap();
+        let json = conn
+            .query_row(
+                "SELECT p.policy_json
+                 FROM organization_project_assignments a
+                 JOIN organization_policies p ON p.id = a.organization_id
+                 WHERE a.project_id = ?1",
+                [project_id.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or_else(|| {
+                StoreError::Data(format!(
+                    "project {project_id} has no organization assignment"
+                ))
+            })?;
+        let policy: OrganizationPolicy = serde_json::from_str(&json)?;
+        policy
+            .validate()
+            .map_err(|error| StoreError::Data(error.to_string()))?;
+        if !policy.project_ids.iter().any(|id| id == project_id) {
+            return Err(StoreError::Data(format!(
+                "project {project_id} assignment disagrees with canonical policy"
+            )));
+        }
+        Ok(policy)
+    }
+
+    // Normalized usage
+
+    pub fn save_usage_subscription(
+        &self,
+        subscription: &UsageSubscription,
+        updated_at_ms: u64,
+    ) -> Result<(), StoreError> {
+        if subscription.key.as_str().trim().is_empty()
+            || subscription.display_name.trim().is_empty()
+            || subscription.provider.as_str().trim().is_empty()
+        {
+            return Err(StoreError::Data(
+                "usage subscription key, provider, and display name must not be empty".to_string(),
+            ));
+        }
+        if subscription
+            .masked_account_label
+            .as_deref()
+            .and_then(|label| label.split_once('@'))
+            .is_some_and(|(local, _)| !local.contains('*'))
+        {
+            return Err(StoreError::Data(
+                "usage subscription email labels must be masked".to_string(),
+            ));
+        }
+        let updated_at_ms = checked_i64(updated_at_ms, "usage subscription updated_at_ms")?;
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO usage_subscriptions (
+                subscription_key, provider, display_name, masked_account_label,
+                created_at_ms, updated_at_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+             ON CONFLICT(subscription_key) DO UPDATE SET
+                provider = excluded.provider,
+                display_name = excluded.display_name,
+                masked_account_label = excluded.masked_account_label,
+                updated_at_ms = excluded.updated_at_ms",
+            params![
+                subscription.key.as_str(),
+                subscription.provider.as_str(),
+                subscription.display_name,
+                subscription.masked_account_label,
+                updated_at_ms,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn map_provider_subscription(
+        &self,
+        environment_id: &EnvironmentId,
+        provider_instance_id: &ProviderInstanceId,
+        subscription_key: &SubscriptionKey,
+        updated_at_ms: u64,
+    ) -> Result<(), StoreError> {
+        for (field, value) in [
+            ("environment id", environment_id.as_str()),
+            ("provider instance id", provider_instance_id.as_str()),
+            ("subscription key", subscription_key.as_str()),
+        ] {
+            if value.trim().is_empty() {
+                return Err(StoreError::Data(format!("{field} must not be empty")));
+            }
+        }
+        let updated_at_ms = checked_i64(updated_at_ms, "provider mapping updated_at_ms")?;
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO provider_subscription_mappings (
+                environment_id, provider_instance_id, subscription_key, updated_at_ms
+             ) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(environment_id, provider_instance_id) DO UPDATE SET
+                subscription_key = excluded.subscription_key,
+                updated_at_ms = excluded.updated_at_ms",
+            params![
+                environment_id.as_str(),
+                provider_instance_id.as_str(),
+                subscription_key.as_str(),
+                updated_at_ms,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn usage_node_store_id(&self) -> Result<NodeStoreId, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let value = conn.query_row(
+            "SELECT node_store_id FROM usage_store_meta WHERE singleton = 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )?;
+        Ok(NodeStoreId::from(value))
+    }
+
+    pub fn get_usage_scanner_cursor(
+        &self,
+        source_kind: &UsageSourceKind,
+        file_identity: &str,
+    ) -> Result<Option<UsageScannerCursor>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let row = conn
+            .query_row(
+                "SELECT source_kind, file_identity, canonical_path, committed_offset,
+                        parser_version, observed_size, observed_modified_at_ms, updated_at_ms
+                 FROM usage_scanner_cursors
+                 WHERE source_kind = ?1 AND file_identity = ?2",
+                params![source_kind.as_str(), file_identity],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, Option<i64>>(6)?,
+                        row.get::<_, i64>(7)?,
+                    ))
+                },
+            )
+            .optional()?;
+        row.map(|row| {
+            Ok(UsageScannerCursor {
+                source_kind: UsageSourceKind::from(row.0),
+                file_identity: row.1,
+                canonical_path: row.2,
+                committed_offset: checked_u64(row.3, "usage_scanner_cursors.committed_offset")?,
+                parser_version: checked_u32(row.4, "usage_scanner_cursors.parser_version")?,
+                observed_size: checked_u64(row.5, "usage_scanner_cursors.observed_size")?,
+                observed_modified_at_ms: row
+                    .6
+                    .map(|value| {
+                        checked_u64(value, "usage_scanner_cursors.observed_modified_at_ms")
+                    })
+                    .transpose()?,
+                updated_at_ms: checked_u64(row.7, "usage_scanner_cursors.updated_at_ms")?,
+            })
+        })
+        .transpose()
+    }
+
+    pub fn record_usage_batch(
+        &self,
+        environment_id: &EnvironmentId,
+        observations: &[UsageObservation],
+        cursor: Option<&UsageScannerCursor>,
+    ) -> Result<UsageBatchResult, StoreError> {
+        if environment_id.as_str().trim().is_empty() {
+            return Err(StoreError::Data(
+                "authenticated environment id must not be empty".to_string(),
+            ));
+        }
+        if let Some(cursor) = cursor {
+            validate_usage_cursor(cursor)?;
+        }
+        for observation in observations {
+            observation
+                .validate()
+                .map_err(|error| StoreError::Data(error.to_string()))?;
+        }
+
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let mut result = UsageBatchResult::default();
+        let created_at_ms = checked_i64(store_now_ms(), "usage_observations.created_at_ms")?;
+
+        for observation in observations {
+            let mapped_subscription = tx
+                .query_row(
+                    "SELECT m.subscription_key, s.provider
+                     FROM provider_subscription_mappings m
+                     JOIN usage_subscriptions s
+                       ON s.subscription_key = m.subscription_key
+                     WHERE m.environment_id = ?1 AND m.provider_instance_id = ?2",
+                    params![
+                        environment_id.as_str(),
+                        observation.provider_instance_id.as_str()
+                    ],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .optional()?;
+            if mapped_subscription.as_ref().map(|value| value.0.as_str())
+                != Some(observation.subscription_key.as_str())
+                || mapped_subscription.as_ref().map(|value| value.1.as_str())
+                    != Some(observation.provider.as_str())
+            {
+                return Err(StoreError::Data(format!(
+                    "provider instance {} is not mapped to provider {} and subscription {} in environment {}",
+                    observation.provider_instance_id,
+                    observation.provider.as_str(),
+                    observation.subscription_key,
+                    environment_id
+                )));
+            }
+
+            let other_tokens_json = serde_json::to_string(&observation.tokens.other)?;
+            let inserted = tx.execute(
+                "INSERT INTO usage_observations (
+                    environment_id, observation_id, source_kind, parser_version,
+                    provider_native_session_id, provider_native_turn_id, occurred_at_ms,
+                    provider, provider_instance_id, subscription_key, model,
+                    input_tokens, cached_input_tokens, cache_write_tokens, output_tokens,
+                    reasoning_tokens, other_tokens_json, provider_reported_micro_usd,
+                    source_record_count, thread_id, agent_id, schedule_id, created_at_ms
+                 ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                    ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23
+                 ) ON CONFLICT(environment_id, observation_id) DO NOTHING",
+                params![
+                    environment_id.as_str(),
+                    observation.id.as_str(),
+                    observation.source_kind.as_str(),
+                    i64::from(observation.parser_version),
+                    observation.provider_native_session_id,
+                    observation.provider_native_turn_id,
+                    optional_checked_i64(observation.occurred_at_ms, "occurred_at_ms")?,
+                    observation.provider.as_str(),
+                    observation.provider_instance_id.as_str(),
+                    observation.subscription_key.as_str(),
+                    observation.model,
+                    checked_i64(observation.tokens.input, "input_tokens")?,
+                    checked_i64(observation.tokens.cached_input, "cached_input_tokens")?,
+                    checked_i64(observation.tokens.cache_write, "cache_write_tokens")?,
+                    checked_i64(observation.tokens.output, "output_tokens")?,
+                    checked_i64(observation.tokens.reasoning, "reasoning_tokens")?,
+                    other_tokens_json,
+                    optional_checked_i64(
+                        observation.provider_reported_micro_usd,
+                        "provider_reported_micro_usd"
+                    )?,
+                    checked_i64(observation.source_record_count, "source_record_count")?,
+                    observation.thread_id.as_ref().map(ThreadId::as_str),
+                    observation.agent_id.as_ref().map(|id| id.as_str()),
+                    observation.schedule_id.as_ref().map(ScheduleId::as_str),
+                    created_at_ms,
+                ],
+            )?;
+            if inserted == 0 {
+                let existing = load_usage_observation(&tx, environment_id, &observation.id)?
+                    .ok_or_else(|| {
+                        StoreError::Data(
+                            "usage observation conflict did not resolve to a stored fact"
+                                .to_string(),
+                        )
+                    })?;
+                if existing != *observation {
+                    return Err(StoreError::Data(format!(
+                        "usage observation id collision for {}",
+                        observation.id
+                    )));
+                }
+                result.duplicates = result.duplicates.checked_add(1).ok_or_else(|| {
+                    StoreError::Data("usage duplicate count overflow".to_string())
+                })?;
+                continue;
+            }
+
+            tx.execute(
+                "INSERT INTO usage_outbox (environment_id, observation_id, enqueued_at_ms)
+                 VALUES (?1, ?2, ?3)",
+                params![
+                    environment_id.as_str(),
+                    observation.id.as_str(),
+                    created_at_ms
+                ],
+            )?;
+            result.inserted = result
+                .inserted
+                .checked_add(1)
+                .ok_or_else(|| StoreError::Data("usage insert count overflow".to_string()))?;
+            result.last_outbox_seq = checked_u64(tx.last_insert_rowid(), "usage_outbox.seq")?;
+        }
+
+        if let Some(cursor) = cursor {
+            tx.execute(
+                "INSERT INTO usage_scanner_cursors (
+                    source_kind, file_identity, canonical_path, committed_offset,
+                    parser_version, observed_size, observed_modified_at_ms, updated_at_ms
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT(source_kind, file_identity) DO UPDATE SET
+                    canonical_path = excluded.canonical_path,
+                    committed_offset = excluded.committed_offset,
+                    parser_version = excluded.parser_version,
+                    observed_size = excluded.observed_size,
+                    observed_modified_at_ms = excluded.observed_modified_at_ms,
+                    updated_at_ms = excluded.updated_at_ms",
+                params![
+                    cursor.source_kind.as_str(),
+                    cursor.file_identity,
+                    cursor.canonical_path,
+                    checked_i64(cursor.committed_offset, "committed_offset")?,
+                    i64::from(cursor.parser_version),
+                    checked_i64(cursor.observed_size, "observed_size")?,
+                    optional_checked_i64(
+                        cursor.observed_modified_at_ms,
+                        "observed_modified_at_ms"
+                    )?,
+                    checked_i64(cursor.updated_at_ms, "cursor updated_at_ms")?,
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(result)
+    }
+
+    pub fn export_usage(
+        &self,
+        params: &UsageExportParams,
+    ) -> Result<UsageExportResult, StoreError> {
+        params.validate().map_err(StoreError::Data)?;
+        let after_seq = checked_i64(params.after_seq, "usage export after_seq")?;
+        let query_limit = i64::from(params.limit) + 1;
+        let conn = self.conn.lock().unwrap();
+        let node_store_id = conn.query_row(
+            "SELECT node_store_id FROM usage_store_meta WHERE singleton = 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )?;
+        let mut stmt = conn.prepare(
+            "SELECT x.seq,
+                    o.observation_id, o.source_kind, o.parser_version,
+                    o.provider_native_session_id, o.provider_native_turn_id,
+                    o.occurred_at_ms, o.provider, o.provider_instance_id,
+                    o.subscription_key, o.model, o.input_tokens,
+                    o.cached_input_tokens, o.cache_write_tokens, o.output_tokens,
+                    o.reasoning_tokens, o.other_tokens_json,
+                    o.provider_reported_micro_usd, o.source_record_count,
+                    o.thread_id, o.agent_id, o.schedule_id
+             FROM usage_outbox x
+             JOIN usage_observations o
+               ON o.environment_id = x.environment_id
+              AND o.observation_id = x.observation_id
+             WHERE x.seq > ?1
+             ORDER BY x.seq
+             LIMIT ?2",
+        )?;
+        let mut rows = stmt.query(params![after_seq, query_limit])?;
+        let mut items = Vec::new();
+        while let Some(row) = rows.next()? {
+            items.push(UsageExportItem {
+                seq: checked_u64(row.get(0)?, "usage_outbox.seq")?,
+                observation: decode_usage_observation(row, 1)?,
+            });
+        }
+        let has_more = items.len() > params.limit as usize;
+        if has_more {
+            items.pop();
+        }
+        let next_after_seq = items
+            .last()
+            .map(|item| item.seq)
+            .unwrap_or(params.after_seq);
+        Ok(UsageExportResult {
+            node_store_id: NodeStoreId::from(node_store_id),
+            items,
+            next_after_seq,
+            has_more,
+        })
+    }
+
+    pub fn acknowledge_usage(&self, through_seq: u64) -> Result<u64, StoreError> {
+        let through_seq = checked_i64(through_seq, "usage acknowledgement sequence")?;
+        let acknowledged_at_ms = checked_i64(store_now_ms(), "usage acknowledgement time")?;
+        let conn = self.conn.lock().unwrap();
+        let count = conn.execute(
+            "UPDATE usage_outbox
+             SET acknowledged_at_ms = ?1
+             WHERE seq <= ?2 AND acknowledged_at_ms IS NULL",
+            params![acknowledged_at_ms, through_seq],
+        )?;
+        u64::try_from(count)
+            .map_err(|_| StoreError::Data("usage acknowledgement count overflow".to_string()))
+    }
+
+    pub fn query_usage(&self, params: &UsageQueryParams) -> Result<UsageQueryResult, StoreError> {
+        params.validate().map_err(StoreError::Data)?;
+        let mut sql = String::from(
+            "SELECT environment_id,
+                    observation_id, source_kind, parser_version,
+                    provider_native_session_id, provider_native_turn_id,
+                    occurred_at_ms, provider, provider_instance_id, subscription_key,
+                    model, input_tokens, cached_input_tokens, cache_write_tokens,
+                    output_tokens, reasoning_tokens, other_tokens_json,
+                    provider_reported_micro_usd, source_record_count,
+                    thread_id, agent_id, schedule_id
+             FROM usage_observations WHERE 1 = 1",
+        );
+        let mut values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        if let Some(value) = params.from_ms {
+            sql.push_str(" AND occurred_at_ms >= ?");
+            values.push(Box::new(checked_i64(value, "usage query from_ms")?));
+        }
+        if let Some(value) = params.to_ms {
+            sql.push_str(" AND occurred_at_ms <= ?");
+            values.push(Box::new(checked_i64(value, "usage query to_ms")?));
+        }
+        push_usage_filter(
+            &mut sql,
+            &mut values,
+            "environment_id",
+            params.environment_id.as_ref().map(EnvironmentId::as_str),
+        );
+        push_usage_filter(
+            &mut sql,
+            &mut values,
+            "provider",
+            params.provider.as_ref().map(UsageProvider::as_str),
+        );
+        push_usage_filter(
+            &mut sql,
+            &mut values,
+            "provider_instance_id",
+            params
+                .provider_instance_id
+                .as_ref()
+                .map(ProviderInstanceId::as_str),
+        );
+        push_usage_filter(
+            &mut sql,
+            &mut values,
+            "subscription_key",
+            params
+                .subscription_key
+                .as_ref()
+                .map(SubscriptionKey::as_str),
+        );
+        push_usage_filter(
+            &mut sql,
+            &mut values,
+            "agent_id",
+            params.agent_id.as_ref().map(|id| id.as_str()),
+        );
+        push_usage_filter(
+            &mut sql,
+            &mut values,
+            "schedule_id",
+            params.schedule_id.as_ref().map(ScheduleId::as_str),
+        );
+        push_usage_filter(&mut sql, &mut values, "model", params.model.as_deref());
+        push_usage_filter(
+            &mut sql,
+            &mut values,
+            "source_kind",
+            params.source_kind.as_ref().map(UsageSourceKind::as_str),
+        );
+        if let Some(cursor) = &params.after {
+            let occurred_at_ms = cursor
+                .occurred_at_ms
+                .map(|value| checked_i64(value, "usage query cursor occurred_at_ms"))
+                .transpose()?
+                .unwrap_or(-1);
+            sql.push_str(
+                " AND (
+                    COALESCE(occurred_at_ms, -1) > ? OR
+                    (COALESCE(occurred_at_ms, -1) = ? AND environment_id > ?) OR
+                    (COALESCE(occurred_at_ms, -1) = ? AND environment_id = ?
+                        AND observation_id > ?)
+                  )",
+            );
+            values.push(Box::new(occurred_at_ms));
+            values.push(Box::new(occurred_at_ms));
+            values.push(Box::new(cursor.environment_id.as_str().to_string()));
+            values.push(Box::new(occurred_at_ms));
+            values.push(Box::new(cursor.environment_id.as_str().to_string()));
+            values.push(Box::new(cursor.observation_id.as_str().to_string()));
+        }
+        sql.push_str(
+            " ORDER BY COALESCE(occurred_at_ms, -1), environment_id, observation_id LIMIT ?",
+        );
+        values.push(Box::new(i64::from(params.limit) + 1));
+
+        let conn = self.conn.lock().unwrap();
+        let references: Vec<&dyn rusqlite::ToSql> =
+            values.iter().map(|value| value.as_ref()).collect();
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = stmt.query(references.as_slice())?;
+        let mut items = Vec::new();
+        while let Some(row) = rows.next()? {
+            items.push(UsageQueryItem {
+                environment_id: EnvironmentId::from(row.get::<_, String>(0)?),
+                observation: decode_usage_observation(row, 1)?,
+            });
+        }
+        let has_more = items.len() > params.limit as usize;
+        if has_more {
+            items.pop();
+        }
+        let next = items.last().map(|item| UsageQueryCursor {
+            occurred_at_ms: item.observation.occurred_at_ms,
+            environment_id: item.environment_id.clone(),
+            observation_id: item.observation.id.clone(),
+        });
+        let included_environments: BTreeSet<EnvironmentId> = items
+            .iter()
+            .map(|item| item.environment_id.clone())
+            .collect();
+        let quarantined_count = checked_u64(
+            conn.query_row("SELECT COUNT(*) FROM usage_quarantine", [], |row| {
+                row.get(0)
+            })?,
+            "usage_quarantine count",
+        )?;
+        Ok(UsageQueryResult {
+            items,
+            next,
+            has_more,
+            coverage: pandamux_protocol::UsageCoverage {
+                quarantined_count,
+                included_environments: included_environments.into_iter().collect(),
+            },
+        })
+    }
+
+    pub fn save_capacity_snapshot(&self, snapshot: &CapacitySnapshot) -> Result<(), StoreError> {
+        snapshot.validate().map_err(StoreError::Data)?;
+        let confidence = match snapshot.confidence {
+            CapacityConfidence::Reported => "reported",
+            CapacityConfidence::Estimated => "estimated",
+            CapacityConfidence::Unknown => "unknown",
+        };
+        let conn = self.conn.lock().unwrap();
+        let inserted = conn.execute(
+            "INSERT INTO capacity_snapshots (
+                subscription_key, window_start_ms, window_end_ms, used_millionths,
+                remaining_millionths, reset_at_ms, source, confidence,
+                provider_version, as_of_ms, detail_json
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, '{}')
+             ON CONFLICT DO NOTHING",
+            params![
+                snapshot.subscription_key.as_str(),
+                optional_checked_i64(snapshot.window_start_ms, "capacity window_start_ms")?,
+                optional_checked_i64(snapshot.window_end_ms, "capacity window_end_ms")?,
+                snapshot.used_millionths.map(i64::from),
+                snapshot.remaining_millionths.map(i64::from),
+                optional_checked_i64(snapshot.reset_at_ms, "capacity reset_at_ms")?,
+                snapshot.source,
+                confidence,
+                snapshot.provider_version,
+                checked_i64(snapshot.as_of_ms, "capacity as_of_ms")?,
+            ],
+        )?;
+        if inserted == 0 {
+            let mut stmt = conn.prepare(
+                "SELECT subscription_key, window_start_ms, window_end_ms,
+                        used_millionths, remaining_millionths, reset_at_ms, source,
+                        confidence, provider_version, as_of_ms
+                 FROM capacity_snapshots
+                 WHERE subscription_key = ?1
+                   AND window_start_ms IS ?2
+                   AND window_end_ms IS ?3
+                   AND source = ?4
+                   AND as_of_ms = ?5",
+            )?;
+            let mut rows = stmt.query(params![
+                snapshot.subscription_key.as_str(),
+                optional_checked_i64(snapshot.window_start_ms, "capacity window_start_ms")?,
+                optional_checked_i64(snapshot.window_end_ms, "capacity window_end_ms")?,
+                snapshot.source,
+                checked_i64(snapshot.as_of_ms, "capacity as_of_ms")?,
+            ])?;
+            let existing = rows
+                .next()?
+                .ok_or_else(|| {
+                    StoreError::Data(
+                        "capacity conflict did not resolve to a stored snapshot".to_string(),
+                    )
+                })
+                .and_then(|row| decode_capacity_snapshot(row, 0))?;
+            if existing != *snapshot {
+                return Err(StoreError::Data(format!(
+                    "capacity snapshot identity collision for subscription {} at {}",
+                    snapshot.subscription_key, snapshot.as_of_ms
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn query_capacity(
+        &self,
+        params: &CapacityQueryParams,
+    ) -> Result<CapacityQueryResult, StoreError> {
+        params.validate().map_err(StoreError::Data)?;
+        let mut sql = String::from(
+            "SELECT id, subscription_key, window_start_ms, window_end_ms,
+                    used_millionths, remaining_millionths, reset_at_ms, source,
+                    confidence, provider_version, as_of_ms
+             FROM capacity_snapshots WHERE 1 = 1",
+        );
+        let mut values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        if let Some(subscription_key) = &params.subscription_key {
+            sql.push_str(" AND subscription_key = ?");
+            values.push(Box::new(subscription_key.as_str().to_string()));
+        }
+        if let Some(cursor) = &params.after {
+            let as_of_ms = checked_i64(cursor.as_of_ms, "capacity cursor as_of_ms")?;
+            let sequence = checked_i64(cursor.sequence, "capacity cursor sequence")?;
+            sql.push_str(
+                " AND (
+                    as_of_ms > ? OR
+                    (as_of_ms = ? AND subscription_key > ?) OR
+                    (as_of_ms = ? AND subscription_key = ? AND id > ?)
+                  )",
+            );
+            values.push(Box::new(as_of_ms));
+            values.push(Box::new(as_of_ms));
+            values.push(Box::new(cursor.subscription_key.as_str().to_string()));
+            values.push(Box::new(as_of_ms));
+            values.push(Box::new(cursor.subscription_key.as_str().to_string()));
+            values.push(Box::new(sequence));
+        }
+        sql.push_str(" ORDER BY as_of_ms, subscription_key, id LIMIT ?");
+        values.push(Box::new(i64::from(params.limit) + 1));
+
+        let conn = self.conn.lock().unwrap();
+        let references: Vec<&dyn rusqlite::ToSql> =
+            values.iter().map(|value| value.as_ref()).collect();
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = stmt.query(references.as_slice())?;
+        let mut values = Vec::new();
+        while let Some(row) = rows.next()? {
+            let sequence = checked_u64(row.get(0)?, "capacity_snapshots.id")?;
+            let snapshot = decode_capacity_snapshot(row, 1)?;
+            values.push((sequence, snapshot));
+        }
+        let has_more = values.len() > params.limit as usize;
+        if has_more {
+            values.pop();
+        }
+        let next = values
+            .last()
+            .map(|(sequence, snapshot)| CapacityQueryCursor {
+                as_of_ms: snapshot.as_of_ms,
+                subscription_key: snapshot.subscription_key.clone(),
+                sequence: *sequence,
+            });
+        Ok(CapacityQueryResult {
+            snapshots: values.into_iter().map(|(_, snapshot)| snapshot).collect(),
+            next,
+            has_more,
+        })
+    }
+
     pub fn get_latest_seq(&self, thread_id: &ThreadId) -> Result<u64, StoreError> {
         let conn = self.conn.lock().unwrap();
         let seq: Option<i64> = conn
@@ -951,9 +1819,197 @@ impl Store {
     }
 }
 
+fn validate_usage_cursor(cursor: &UsageScannerCursor) -> Result<(), StoreError> {
+    if cursor.source_kind.as_str().trim().is_empty()
+        || cursor.file_identity.trim().is_empty()
+        || cursor.canonical_path.trim().is_empty()
+    {
+        return Err(StoreError::Data(
+            "usage cursor source, file identity, and diagnostic path must not be empty".to_string(),
+        ));
+    }
+    if cursor.parser_version == 0 {
+        return Err(StoreError::Data(
+            "usage cursor parser version must be greater than zero".to_string(),
+        ));
+    }
+    if cursor.committed_offset > cursor.observed_size {
+        return Err(StoreError::Data(
+            "usage cursor offset must not exceed observed file size".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn store_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn load_usage_observation(
+    conn: &Connection,
+    environment_id: &EnvironmentId,
+    observation_id: &UsageObservationId,
+) -> Result<Option<UsageObservation>, StoreError> {
+    let mut stmt = conn.prepare(
+        "SELECT observation_id, source_kind, parser_version,
+                provider_native_session_id, provider_native_turn_id,
+                occurred_at_ms, provider, provider_instance_id, subscription_key,
+                model, input_tokens, cached_input_tokens, cache_write_tokens,
+                output_tokens, reasoning_tokens, other_tokens_json,
+                provider_reported_micro_usd, source_record_count,
+                thread_id, agent_id, schedule_id
+         FROM usage_observations
+         WHERE environment_id = ?1 AND observation_id = ?2",
+    )?;
+    let mut rows = stmt.query(params![environment_id.as_str(), observation_id.as_str()])?;
+    rows.next()?
+        .map(|row| decode_usage_observation(row, 0))
+        .transpose()
+}
+
+fn decode_usage_observation(
+    row: &rusqlite::Row<'_>,
+    offset: usize,
+) -> Result<UsageObservation, StoreError> {
+    let parser_version = checked_u32(row.get(offset + 2)?, "usage_observations.parser_version")?;
+    let other_tokens_json: String = row.get(offset + 15)?;
+    let observation = UsageObservation {
+        id: UsageObservationId::from(row.get::<_, String>(offset)?),
+        source_kind: UsageSourceKind::from(row.get::<_, String>(offset + 1)?),
+        parser_version,
+        provider_native_session_id: row.get(offset + 3)?,
+        provider_native_turn_id: row.get(offset + 4)?,
+        occurred_at_ms: row
+            .get::<_, Option<i64>>(offset + 5)?
+            .map(|value| checked_u64(value, "usage_observations.occurred_at_ms"))
+            .transpose()?,
+        provider: UsageProvider::from(row.get::<_, String>(offset + 6)?),
+        provider_instance_id: ProviderInstanceId::from(row.get::<_, String>(offset + 7)?),
+        subscription_key: SubscriptionKey::from(row.get::<_, String>(offset + 8)?),
+        model: row.get(offset + 9)?,
+        tokens: TokenCounts {
+            input: checked_u64(row.get(offset + 10)?, "usage_observations.input_tokens")?,
+            cached_input: checked_u64(
+                row.get(offset + 11)?,
+                "usage_observations.cached_input_tokens",
+            )?,
+            cache_write: checked_u64(
+                row.get(offset + 12)?,
+                "usage_observations.cache_write_tokens",
+            )?,
+            output: checked_u64(row.get(offset + 13)?, "usage_observations.output_tokens")?,
+            reasoning: checked_u64(row.get(offset + 14)?, "usage_observations.reasoning_tokens")?,
+            other: serde_json::from_str::<BTreeMap<String, u64>>(&other_tokens_json)?,
+        },
+        provider_reported_micro_usd: row
+            .get::<_, Option<i64>>(offset + 16)?
+            .map(|value| checked_u64(value, "usage_observations.provider_reported_micro_usd"))
+            .transpose()?,
+        source_record_count: checked_u64(
+            row.get(offset + 17)?,
+            "usage_observations.source_record_count",
+        )?,
+        thread_id: row
+            .get::<_, Option<String>>(offset + 18)?
+            .map(ThreadId::from),
+        agent_id: row
+            .get::<_, Option<String>>(offset + 19)?
+            .map(AgentId::from),
+        schedule_id: row
+            .get::<_, Option<String>>(offset + 20)?
+            .map(ScheduleId::from),
+    };
+    observation
+        .validate()
+        .map_err(|error| StoreError::Data(error.to_string()))?;
+    Ok(observation)
+}
+
+fn decode_capacity_snapshot(
+    row: &rusqlite::Row<'_>,
+    offset: usize,
+) -> Result<CapacitySnapshot, StoreError> {
+    let confidence_value: String = row.get(offset + 7)?;
+    let confidence = match confidence_value.as_str() {
+        "reported" => CapacityConfidence::Reported,
+        "estimated" => CapacityConfidence::Estimated,
+        "unknown" => CapacityConfidence::Unknown,
+        _ => {
+            return Err(StoreError::Data(format!(
+                "capacity snapshot contains unknown confidence: {confidence_value}"
+            )));
+        }
+    };
+    let snapshot = CapacitySnapshot {
+        subscription_key: SubscriptionKey::from(row.get::<_, String>(offset)?),
+        window_start_ms: optional_checked_u64(
+            row.get(offset + 1)?,
+            "capacity_snapshots.window_start_ms",
+        )?,
+        window_end_ms: optional_checked_u64(
+            row.get(offset + 2)?,
+            "capacity_snapshots.window_end_ms",
+        )?,
+        used_millionths: optional_checked_u32(
+            row.get(offset + 3)?,
+            "capacity_snapshots.used_millionths",
+        )?,
+        remaining_millionths: optional_checked_u32(
+            row.get(offset + 4)?,
+            "capacity_snapshots.remaining_millionths",
+        )?,
+        reset_at_ms: optional_checked_u64(row.get(offset + 5)?, "capacity_snapshots.reset_at_ms")?,
+        source: row.get(offset + 6)?,
+        confidence,
+        provider_version: row.get(offset + 8)?,
+        as_of_ms: checked_u64(row.get(offset + 9)?, "capacity_snapshots.as_of_ms")?,
+    };
+    snapshot.validate().map_err(StoreError::Data)?;
+    Ok(snapshot)
+}
+
+fn push_usage_filter(
+    sql: &mut String,
+    values: &mut Vec<Box<dyn rusqlite::ToSql>>,
+    column: &str,
+    value: Option<&str>,
+) {
+    if let Some(value) = value {
+        sql.push_str(" AND ");
+        sql.push_str(column);
+        sql.push_str(" = ?");
+        values.push(Box::new(value.to_string()));
+    }
+}
+
+fn checked_i64(value: u64, field: &str) -> Result<i64, StoreError> {
+    i64::try_from(value)
+        .map_err(|_| StoreError::Data(format!("{field} exceeds SQLite integer range: {value}")))
+}
+
+fn optional_checked_i64(value: Option<u64>, field: &str) -> Result<Option<i64>, StoreError> {
+    value.map(|value| checked_i64(value, field)).transpose()
+}
+
 fn checked_u64(value: i64, field: &str) -> Result<u64, StoreError> {
     u64::try_from(value)
         .map_err(|_| StoreError::Data(format!("{field} contains a negative value: {value}")))
+}
+
+fn checked_u32(value: i64, field: &str) -> Result<u32, StoreError> {
+    u32::try_from(value)
+        .map_err(|_| StoreError::Data(format!("{field} is outside the u32 range: {value}")))
+}
+
+fn optional_checked_u64(value: Option<i64>, field: &str) -> Result<Option<u64>, StoreError> {
+    value.map(|value| checked_u64(value, field)).transpose()
+}
+
+fn optional_checked_u32(value: Option<i64>, field: &str) -> Result<Option<u32>, StoreError> {
+    value.map(|value| checked_u32(value, field)).transpose()
 }
 
 #[cfg(test)]
@@ -1237,5 +2293,397 @@ mod tests {
             .expect("get by ids");
         assert_eq!(by_ids.len(), 1);
         assert_eq!(by_ids[0].id, "att-2");
+    }
+
+    fn failover_pool(id: &str) -> FailoverPool {
+        FailoverPool {
+            id: pandamux_core::FailoverPoolId::new(id),
+            display_name: "Primary pool".to_string(),
+            members: vec![pandamux_core::FailoverPoolMember {
+                provider_instance_id: ProviderInstanceId::new("claude-work"),
+                subscription_key: SubscriptionKey::new("subkey-work"),
+            }],
+            revision: 1,
+        }
+    }
+
+    fn organization_policy(id: &str, project_id: &str) -> OrganizationPolicy {
+        OrganizationPolicy {
+            id: pandamux_core::OrganizationId::new(id),
+            display_name: "Work organization".to_string(),
+            project_ids: vec![ProjectId::new(project_id)],
+            allowed_provider_instances: vec![ProviderInstanceId::new("claude-work")],
+            allowed_subscriptions: vec![SubscriptionKey::new("subkey-work")],
+            failover_pool_ids: vec![pandamux_core::FailoverPoolId::new("pool-work")],
+            default_tier_mapping: None,
+            max_concurrency: Some(2),
+            daily_budget_micro_usd: Some(10_000_000),
+            broadside: pandamux_core::BroadsidePolicy::default(),
+            revision: 1,
+        }
+    }
+
+    #[test]
+    fn canonical_policy_persistence_is_revisioned_and_fail_closed() {
+        let store = Store::in_memory().expect("open store");
+        let pool = failover_pool("pool-work");
+        store
+            .save_failover_pool(&pool, 1000)
+            .expect("save failover pool");
+        assert_eq!(
+            store
+                .get_failover_pool(&pool.id)
+                .expect("load failover pool"),
+            Some(pool.clone())
+        );
+
+        let policy = organization_policy("org-work", "proj-one");
+        store
+            .save_organization_policy(&policy, 1000)
+            .expect("save organization");
+        assert_eq!(
+            store
+                .organization_policy_for_project(&ProjectId::new("proj-one"))
+                .expect("resolve organization"),
+            policy
+        );
+        assert!(
+            store
+                .organization_policy_for_project(&ProjectId::new("proj-missing"))
+                .is_err()
+        );
+
+        let conflicting = organization_policy("org-other", "proj-one");
+        assert!(store.save_organization_policy(&conflicting, 1001).is_err());
+        assert_eq!(
+            store
+                .organization_policy_for_project(&ProjectId::new("proj-one"))
+                .expect("original assignment remains")
+                .id
+                .as_str(),
+            "org-work"
+        );
+    }
+
+    #[test]
+    fn canonical_policy_updates_require_revision_increments() {
+        let store = Store::in_memory().expect("open store");
+        let mut pool = failover_pool("pool-work");
+        store
+            .save_failover_pool(&pool, 1000)
+            .expect("save failover pool");
+        pool.display_name = "Changed without revision".to_string();
+        assert!(store.save_failover_pool(&pool, 1001).is_err());
+        pool.revision = 2;
+        store
+            .save_failover_pool(&pool, 1002)
+            .expect("save revised failover pool");
+
+        let mut policy = organization_policy("org-work", "proj-one");
+        store
+            .save_organization_policy(&policy, 1000)
+            .expect("save organization");
+        policy.display_name = "Changed without revision".to_string();
+        assert!(store.save_organization_policy(&policy, 1001).is_err());
+        policy.revision = 2;
+        policy.project_ids = vec![ProjectId::new("proj-two")];
+        store
+            .save_organization_policy(&policy, 1002)
+            .expect("save revised organization");
+        assert!(
+            store
+                .organization_policy_for_project(&ProjectId::new("proj-one"))
+                .is_err()
+        );
+        assert_eq!(
+            store
+                .organization_policy_for_project(&ProjectId::new("proj-two"))
+                .expect("new assignment")
+                .revision,
+            2
+        );
+    }
+
+    fn usage_observation(id: &str, input: u64) -> UsageObservation {
+        UsageObservation {
+            id: UsageObservationId::new(id),
+            source_kind: UsageSourceKind::ClaudeTranscript,
+            parser_version: 2,
+            provider_native_session_id: Some("session-fixture".to_string()),
+            provider_native_turn_id: Some(format!("native-{id}")),
+            occurred_at_ms: Some(1_700_000_000_000 + input),
+            provider: UsageProvider::Claude,
+            provider_instance_id: ProviderInstanceId::new("claude-work"),
+            subscription_key: SubscriptionKey::new("subkey-work"),
+            model: Some("claude-model".to_string()),
+            tokens: TokenCounts {
+                input,
+                output: 5,
+                ..TokenCounts::default()
+            },
+            provider_reported_micro_usd: None,
+            source_record_count: 1,
+            thread_id: None,
+            agent_id: None,
+            schedule_id: None,
+        }
+    }
+
+    fn configure_usage_mapping(store: &Store) {
+        store
+            .save_usage_subscription(
+                &UsageSubscription {
+                    key: SubscriptionKey::new("subkey-work"),
+                    provider: UsageProvider::Claude,
+                    display_name: "Work Claude".to_string(),
+                    masked_account_label: Some("p***@example.com".to_string()),
+                },
+                1000,
+            )
+            .expect("save subscription");
+        store
+            .map_provider_subscription(
+                &EnvironmentId::new("env-local"),
+                &ProviderInstanceId::new("claude-work"),
+                &SubscriptionKey::new("subkey-work"),
+                1000,
+            )
+            .expect("map subscription");
+        assert!(
+            store
+                .save_usage_subscription(
+                    &UsageSubscription {
+                        key: SubscriptionKey::new("subkey-unmasked"),
+                        provider: UsageProvider::Claude,
+                        display_name: "Unsafe label".to_string(),
+                        masked_account_label: Some("person@example.com".to_string()),
+                    },
+                    1000,
+                )
+                .is_err()
+        );
+    }
+
+    fn usage_cursor(offset: u64) -> UsageScannerCursor {
+        UsageScannerCursor {
+            source_kind: UsageSourceKind::ClaudeTranscript,
+            file_identity: "unix:42:99".to_string(),
+            canonical_path: "/private/transcript.jsonl".to_string(),
+            committed_offset: offset,
+            parser_version: 2,
+            observed_size: offset,
+            observed_modified_at_ms: Some(2000),
+            updated_at_ms: 3000,
+        }
+    }
+
+    #[test]
+    fn usage_batch_is_atomic_idempotent_and_collision_safe() {
+        let store = Store::in_memory().expect("open store");
+        configure_usage_mapping(&store);
+        let environment_id = EnvironmentId::new("env-local");
+        let observation = usage_observation("usage-one", 10);
+
+        let inserted = store
+            .record_usage_batch(
+                &environment_id,
+                std::slice::from_ref(&observation),
+                Some(&usage_cursor(100)),
+            )
+            .expect("record usage");
+        assert_eq!(inserted.inserted, 1);
+        assert_eq!(inserted.duplicates, 0);
+        assert_eq!(inserted.last_outbox_seq, 1);
+        assert_eq!(
+            store
+                .get_usage_scanner_cursor(&UsageSourceKind::ClaudeTranscript, "unix:42:99")
+                .expect("load cursor")
+                .expect("cursor")
+                .committed_offset,
+            100
+        );
+
+        let duplicate = store
+            .record_usage_batch(
+                &environment_id,
+                std::slice::from_ref(&observation),
+                Some(&usage_cursor(120)),
+            )
+            .expect("replay usage");
+        assert_eq!(duplicate.inserted, 0);
+        assert_eq!(duplicate.duplicates, 1);
+        assert_eq!(
+            store
+                .export_usage(&UsageExportParams::default())
+                .expect("export usage")
+                .items
+                .len(),
+            1
+        );
+
+        let mut collision = observation;
+        collision.tokens.input = 999;
+        assert!(
+            store
+                .record_usage_batch(&environment_id, &[collision], Some(&usage_cursor(140)))
+                .is_err()
+        );
+        assert_eq!(
+            store
+                .get_usage_scanner_cursor(&UsageSourceKind::ClaudeTranscript, "unix:42:99")
+                .expect("load cursor")
+                .expect("cursor")
+                .committed_offset,
+            120
+        );
+
+        let mut wrong_provider = usage_observation("usage-wrong-provider", 10);
+        wrong_provider.provider = UsageProvider::Codex;
+        assert!(
+            store
+                .record_usage_batch(&environment_id, &[wrong_provider], None)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn failed_usage_insert_does_not_advance_cursor() {
+        let store = Store::in_memory().expect("open store");
+        let environment_id = EnvironmentId::new("env-local");
+        let observation = usage_observation("usage-unmapped", 10);
+        assert!(
+            store
+                .record_usage_batch(&environment_id, &[observation], Some(&usage_cursor(100)))
+                .is_err()
+        );
+        assert!(
+            store
+                .get_usage_scanner_cursor(&UsageSourceKind::ClaudeTranscript, "unix:42:99")
+                .expect("load cursor")
+                .is_none()
+        );
+        assert!(
+            store
+                .export_usage(&UsageExportParams::default())
+                .expect("export usage")
+                .items
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn usage_export_ack_and_filtered_query_are_bounded() {
+        let store = Store::in_memory().expect("open store");
+        configure_usage_mapping(&store);
+        let environment_id = EnvironmentId::new("env-local");
+        store
+            .record_usage_batch(
+                &environment_id,
+                &[
+                    usage_observation("usage-one", 10),
+                    usage_observation("usage-two", 20),
+                ],
+                None,
+            )
+            .expect("record usage");
+
+        let first = store
+            .export_usage(&UsageExportParams {
+                after_seq: 0,
+                limit: 1,
+            })
+            .expect("first page");
+        assert_eq!(first.items.len(), 1);
+        assert!(first.has_more);
+        assert_eq!(first.next_after_seq, 1);
+        assert!(first.node_store_id.as_str().starts_with("store-"));
+
+        let second = store
+            .export_usage(&UsageExportParams {
+                after_seq: first.next_after_seq,
+                limit: 1,
+            })
+            .expect("second page");
+        assert_eq!(second.items.len(), 1);
+        assert!(!second.has_more);
+        assert_eq!(store.acknowledge_usage(1).expect("ack usage"), 1);
+        assert_eq!(store.acknowledge_usage(1).expect("repeat ack"), 0);
+
+        let query = store
+            .query_usage(&UsageQueryParams {
+                environment_id: Some(environment_id),
+                subscription_key: Some(SubscriptionKey::new("subkey-work")),
+                limit: 1,
+                ..UsageQueryParams::default()
+            })
+            .expect("query usage");
+        assert_eq!(query.items.len(), 1);
+        assert!(query.has_more);
+        assert!(query.next.is_some());
+        assert_eq!(query.coverage.included_environments.len(), 1);
+    }
+
+    #[test]
+    fn capacity_query_uses_stable_bounded_cursor() {
+        let store = Store::in_memory().expect("open store");
+        configure_usage_mapping(&store);
+        for (as_of_ms, remaining) in [(1000, 750_000), (2000, 500_000)] {
+            let snapshot = CapacitySnapshot {
+                subscription_key: SubscriptionKey::new("subkey-work"),
+                window_start_ms: None,
+                window_end_ms: None,
+                used_millionths: Some(1_000_000 - remaining),
+                remaining_millionths: Some(remaining),
+                reset_at_ms: None,
+                source: "provider_report".to_string(),
+                confidence: CapacityConfidence::Reported,
+                provider_version: Some("fixture-1".to_string()),
+                as_of_ms,
+            };
+            store
+                .save_capacity_snapshot(&snapshot)
+                .expect("save capacity snapshot");
+            store
+                .save_capacity_snapshot(&snapshot)
+                .expect("replay capacity snapshot");
+        }
+
+        assert!(
+            store
+                .save_capacity_snapshot(&CapacitySnapshot {
+                    subscription_key: SubscriptionKey::new("subkey-work"),
+                    window_start_ms: None,
+                    window_end_ms: None,
+                    used_millionths: Some(900_000),
+                    remaining_millionths: Some(100_000),
+                    reset_at_ms: None,
+                    source: "provider_report".to_string(),
+                    confidence: CapacityConfidence::Reported,
+                    provider_version: Some("fixture-1".to_string()),
+                    as_of_ms: 1000,
+                })
+                .is_err()
+        );
+
+        let first = store
+            .query_capacity(&CapacityQueryParams {
+                subscription_key: Some(SubscriptionKey::new("subkey-work")),
+                after: None,
+                limit: 1,
+            })
+            .expect("first capacity page");
+        assert_eq!(first.snapshots.len(), 1);
+        assert!(first.has_more);
+
+        let second = store
+            .query_capacity(&CapacityQueryParams {
+                subscription_key: Some(SubscriptionKey::new("subkey-work")),
+                after: first.next,
+                limit: 1,
+            })
+            .expect("second capacity page");
+        assert_eq!(second.snapshots.len(), 1);
+        assert!(!second.has_more);
+        assert_eq!(second.snapshots[0].as_of_ms, 2000);
     }
 }

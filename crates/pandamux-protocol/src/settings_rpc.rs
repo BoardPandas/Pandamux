@@ -3,6 +3,13 @@ use pandamux_core::ids::{EnvironmentId, ProviderInstanceId};
 use pandamux_core::provider_config::{ProviderDisabledReason, ProviderKind};
 use serde::{Deserialize, Serialize};
 
+pub const DEFAULT_PROVIDER_HEALTH_PAGE_SIZE: u32 = 100;
+pub const MAX_PROVIDER_HEALTH_PAGE_SIZE: u32 = 500;
+
+fn default_provider_health_page_size() -> u32 {
+    DEFAULT_PROVIDER_HEALTH_PAGE_SIZE
+}
+
 /// Parameters for retrieving application user settings.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,7 +51,7 @@ pub struct SettingsSetResult {
 }
 
 /// Parameters for checking provider health.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderHealthParams {
     /// Optional specific provider instance to check.
@@ -53,6 +60,54 @@ pub struct ProviderHealthParams {
     /// Environment whose instance overrides must be applied.
     #[serde(default)]
     pub environment_id: Option<EnvironmentId>,
+    /// Stable keyset cursor. Only instance ids after this value are returned.
+    #[serde(default)]
+    pub after_instance_id: Option<ProviderInstanceId>,
+    /// Maximum number of instances to probe and return.
+    #[serde(default = "default_provider_health_page_size")]
+    pub limit: u32,
+}
+
+impl Default for ProviderHealthParams {
+    fn default() -> Self {
+        Self {
+            instance_id: None,
+            environment_id: None,
+            after_instance_id: None,
+            limit: DEFAULT_PROVIDER_HEALTH_PAGE_SIZE,
+        }
+    }
+}
+
+impl ProviderHealthParams {
+    pub fn validate(&self) -> Result<(), String> {
+        if !(1..=MAX_PROVIDER_HEALTH_PAGE_SIZE).contains(&self.limit) {
+            return Err(format!(
+                "limit must be between 1 and {MAX_PROVIDER_HEALTH_PAGE_SIZE}"
+            ));
+        }
+        for (field, value) in [
+            (
+                "instanceId",
+                self.instance_id.as_ref().map(ProviderInstanceId::as_str),
+            ),
+            (
+                "environmentId",
+                self.environment_id.as_ref().map(EnvironmentId::as_str),
+            ),
+            (
+                "afterInstanceId",
+                self.after_instance_id
+                    .as_ref()
+                    .map(ProviderInstanceId::as_str),
+            ),
+        ] {
+            if value.is_some_and(|value| value.trim().is_empty()) {
+                return Err(format!("{field} must be absent or non-empty"));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Health report for an individual provider instance.
@@ -83,6 +138,10 @@ pub struct ProviderHealthReport {
 #[serde(rename_all = "camelCase")]
 pub struct ProviderHealthResult {
     pub reports: Vec<ProviderHealthReport>,
+    #[serde(default)]
+    pub next_instance_id: Option<ProviderInstanceId>,
+    #[serde(default)]
+    pub has_more: bool,
 }
 
 #[cfg(test)]
@@ -122,5 +181,34 @@ mod tests {
         let parsed: ProviderHealthReport = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.status, "healthy");
         assert_eq!(parsed.account_badge.as_deref(), Some("Claude Max"));
+    }
+
+    #[test]
+    fn provider_health_page_contract_is_stable_and_bounded() {
+        let params: ProviderHealthParams = serde_json::from_str("{}").unwrap();
+        assert_eq!(params.limit, DEFAULT_PROVIDER_HEALTH_PAGE_SIZE);
+        assert!(params.validate().is_ok());
+
+        let fixture = ProviderHealthParams {
+            instance_id: None,
+            environment_id: Some(EnvironmentId::new("env-local")),
+            after_instance_id: Some(ProviderInstanceId::new("claude-default")),
+            limit: 25,
+        };
+        assert_eq!(
+            serde_json::to_value(fixture).unwrap(),
+            serde_json::json!({
+                "instanceId": null,
+                "environmentId": "env-local",
+                "afterInstanceId": "claude-default",
+                "limit": 25
+            })
+        );
+
+        let invalid = ProviderHealthParams {
+            limit: MAX_PROVIDER_HEALTH_PAGE_SIZE + 1,
+            ..ProviderHealthParams::default()
+        };
+        assert!(invalid.validate().is_err());
     }
 }
