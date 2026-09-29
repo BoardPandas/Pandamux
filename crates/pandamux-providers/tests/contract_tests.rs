@@ -9,7 +9,7 @@ use pandamux_providers::{
     ENV_CLAUDE_CONFIG_DIR, ENV_CODEX_HOME, ENV_GEMINI_HOME, apply_profile_environment,
     build_claude_interrupt_request, build_claude_launch_args, build_claude_user_message,
     claude::{ClaudeAuthStatus, ControlResponse, parse_stream_json_lines},
-    claude_permission_mode,
+    claude_disallowed_tools, claude_permission_mode,
     codex::{
         CodexApprovalPolicy, CodexNotificationEvent, CodexSandboxPolicy, JsonRpcResponse,
         build_approval_response, build_thread_start_request, build_turn_start_request,
@@ -128,6 +128,23 @@ fn test_claude_access_modes_map_to_supported_permission_modes() {
     assert_eq!(
         claude_permission_mode(AccessMode::FullAccess),
         "bypassPermissions"
+    );
+}
+
+#[test]
+fn test_claude_read_only_disallows_exiting_plan_mode() {
+    let configured = vec!["WebFetch".to_string()];
+    assert_eq!(
+        claude_disallowed_tools(AccessMode::ReadOnly, &configured),
+        vec!["WebFetch".to_string(), "ExitPlanMode".to_string()]
+    );
+    assert_eq!(
+        claude_disallowed_tools(AccessMode::Ask, &configured),
+        configured
+    );
+    assert_eq!(
+        claude_disallowed_tools(AccessMode::ReadOnly, &["ExitPlanMode".to_string()]),
+        vec!["ExitPlanMode".to_string()]
     );
 }
 

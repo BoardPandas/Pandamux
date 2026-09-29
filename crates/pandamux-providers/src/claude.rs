@@ -206,6 +206,15 @@ pub fn claude_permission_mode(access: AccessMode) -> &'static str {
     }
 }
 
+/// Merges PandaMUX access policy with configured Claude tool restrictions.
+pub fn claude_disallowed_tools(access: AccessMode, configured: &[String]) -> Vec<String> {
+    let mut disallowed = configured.to_vec();
+    if access == AccessMode::ReadOnly && !disallowed.iter().any(|tool| tool == "ExitPlanMode") {
+        disallowed.push("ExitPlanMode".to_string());
+    }
+    disallowed
+}
+
 /// Builds one Claude Code SDK streaming user message.
 pub fn build_claude_user_message(input: &TurnInput) -> serde_json::Value {
     let mut prompt_text = input.text.clone();
@@ -717,11 +726,13 @@ impl ProviderDriver for ClaudeDriver {
             let perm_mode = claude_permission_mode(spec.access);
 
             let preamble = spec.instructions.as_ref().map(|i| i.format_preamble());
-            let (allowed_tools, disallowed_tools) = if let Some(tp) = &spec.tool_policy {
+            let (allowed_tools, configured_disallowed_tools) = if let Some(tp) = &spec.tool_policy {
                 (tp.allowed.clone(), tp.disallowed.clone())
             } else {
                 (Vec::new(), Vec::new())
             };
+            let disallowed_tools =
+                claude_disallowed_tools(spec.access, &configured_disallowed_tools);
 
             let args = build_claude_launch_args(
                 preamble.as_deref(),

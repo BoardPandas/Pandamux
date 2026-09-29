@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Changed
 
+- **Closed Claude's ReadOnly plan-mode approval escape.** ReadOnly sessions now add
+  `ExitPlanMode` to Claude's disallowed tools without replacing configured tool
+  restrictions, preventing a plan-only turn from asking to leave the enforced
+  read-only ceiling.
 - **Updated the Claude provider to the current SDK streaming contract.** Claude turns
   now send structured user messages, parse nested assistant tool and result content,
   preserve the exact pending tool input across approval, serialize current control

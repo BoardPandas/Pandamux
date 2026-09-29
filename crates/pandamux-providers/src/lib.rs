@@ -28,7 +28,7 @@ pub use antigravity::{
 };
 pub use claude::{
     ClaudeDriver, ClaudeSession, build_claude_interrupt_request, build_claude_launch_args,
-    build_claude_user_message, claude_permission_mode,
+    build_claude_user_message, claude_disallowed_tools, claude_permission_mode,
 };
 pub use codex::{CodexDriver, CodexSession};
 pub use cursor::{
