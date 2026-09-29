@@ -274,12 +274,25 @@ impl ProviderResolver {
             .and_then(|environment| environment.provider_overrides.get(config.id.as_str()));
         let mut resolved = config.resolve_for_environment(environment_id, environment_override);
         if require_enabled && !resolved.enabled {
-            return Err(provider_error(
+            let mut error = provider_error(
                 Some(&config.id),
                 environment_id,
                 "provider_instance_disabled",
                 format!("provider instance '{}' is disabled", config.id),
-            ));
+            );
+            if let Some(disabled_reason) = resolved.disabled_reason.as_ref()
+                && let Some(data) = error
+                    .data
+                    .as_mut()
+                    .and_then(serde_json::Value::as_object_mut)
+            {
+                data.insert(
+                    "disabledReason".to_string(),
+                    serde_json::to_value(disabled_reason)
+                        .expect("provider disabled reason serializes"),
+                );
+            }
+            return Err(error);
         }
         if resolved.concurrency_limit == 0 {
             return Err(provider_error(
@@ -425,6 +438,7 @@ mod tests {
             env_overrides: BTreeMap::new(),
             settings: serde_json::json!({ "instance": id }),
             enabled: true,
+            disabled_reason: None,
         }
     }
 
@@ -486,6 +500,48 @@ mod tests {
         assert_eq!(
             resolved.config.profile_dir,
             "/data/pandamux/profiles/claude/claude-work"
+        );
+    }
+
+    #[test]
+    fn disabled_instance_error_preserves_the_structured_reason() {
+        let mut disabled = config("cursor-default", 1);
+        disabled.provider = ProviderKind::Cursor;
+        disabled.enabled = false;
+        disabled.disabled_reason = Some(pandamux_core::ProviderDisabledReason {
+            code: "live_acceptance_incomplete".to_string(),
+            message: "Cursor live acceptance has not passed".to_string(),
+            remediation: Some("Run the common provider smoke".to_string()),
+        });
+        let settings = UserSettings {
+            providers: vec![disabled],
+            ..UserSettings::default()
+        };
+        let store = Store::in_memory().expect("store");
+        store.save_settings(&settings).expect("save settings");
+        let drivers = Arc::new(DriverRegistry::default_local());
+        let resolver = ProviderResolver::new(
+            store,
+            drivers,
+            EnvironmentId::from("env-local"),
+            PathBuf::from("/data/pandamux"),
+        );
+
+        let error = match resolver.resolve(
+            &ProviderInstanceId::from("cursor-default"),
+            &EnvironmentId::from("env-local"),
+        ) {
+            Ok(_) => panic!("disabled provider must not resolve for execution"),
+            Err(error) => error,
+        };
+
+        assert_eq!(
+            error
+                .data
+                .as_ref()
+                .and_then(|data| data.pointer("/disabledReason/code"))
+                .and_then(serde_json::Value::as_str),
+            Some("live_acceptance_incomplete")
         );
     }
 

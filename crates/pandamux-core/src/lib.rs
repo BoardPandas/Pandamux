@@ -60,7 +60,8 @@ pub use project_registry::{
     resolve_project_id,
 };
 pub use provider_config::{
-    ProviderCapabilities, ProviderEnvironmentOverride, ProviderInstanceConfig, ProviderKind,
+    ProviderCapabilities, ProviderDisabledReason, ProviderEnvironmentOverride,
+    ProviderInstanceConfig, ProviderKind,
 };
 pub use remote_manifest::{
     RemoteArch, RemoteBinaryKind, RemoteBinaryManifest, RemoteBinaryMeta, RemotePlatform,

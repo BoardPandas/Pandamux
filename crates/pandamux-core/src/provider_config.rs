@@ -15,6 +15,16 @@ pub enum ProviderKind {
     Custom,
 }
 
+/// Persisted explanation for why a provider instance is intentionally disabled.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderDisabledReason {
+    pub code: String,
+    pub message: String,
+    #[serde(default)]
+    pub remediation: Option<String>,
+}
+
 impl ProviderKind {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -65,6 +75,8 @@ pub struct ProviderInstanceConfig {
     pub settings: serde_json::Value,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disabled_reason: Option<ProviderDisabledReason>,
 }
 
 impl ProviderInstanceConfig {
@@ -78,6 +90,9 @@ impl ProviderInstanceConfig {
         if let Some(ovr) = overrides {
             if let Some(en) = ovr.enabled {
                 resolved.enabled = en;
+                if en {
+                    resolved.disabled_reason = None;
+                }
             }
             if let Some(bp) = &ovr.binary_path {
                 resolved.binary_path = Some(bp.clone());

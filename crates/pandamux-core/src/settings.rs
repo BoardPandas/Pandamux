@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-pub const SETTINGS_SCHEMA_VERSION: u32 = 2;
+pub const SETTINGS_SCHEMA_VERSION: u32 = 3;
 
 /// Bounds for `terminal.scrollbackLines` (clamped on load and set).
 pub const SCROLLBACK_LINES_MIN: u32 = 1_000;
@@ -86,7 +86,7 @@ pub fn default_tier_mapping() -> crate::organization::TierMapping {
 
 pub fn default_providers() -> Vec<crate::provider_config::ProviderInstanceConfig> {
     use crate::ids::ProviderInstanceId;
-    use crate::provider_config::{ProviderInstanceConfig, ProviderKind};
+    use crate::provider_config::{ProviderDisabledReason, ProviderInstanceConfig, ProviderKind};
 
     vec![
         ProviderInstanceConfig {
@@ -102,6 +102,7 @@ pub fn default_providers() -> Vec<crate::provider_config::ProviderInstanceConfig
                 "defaultModel": "claude-3-7-sonnet-latest"
             }),
             enabled: true,
+            disabled_reason: None,
         },
         ProviderInstanceConfig {
             id: ProviderInstanceId::new("codex-default"),
@@ -116,6 +117,7 @@ pub fn default_providers() -> Vec<crate::provider_config::ProviderInstanceConfig
                 "defaultModel": "o3-mini"
             }),
             enabled: true,
+            disabled_reason: None,
         },
         ProviderInstanceConfig {
             id: ProviderInstanceId::new("antigravity-default"),
@@ -130,6 +132,70 @@ pub fn default_providers() -> Vec<crate::provider_config::ProviderInstanceConfig
                 "defaultModel": "gemini-2.0-flash"
             }),
             enabled: true,
+            disabled_reason: None,
+        },
+        ProviderInstanceConfig {
+            id: ProviderInstanceId::new("cursor-default"),
+            provider: ProviderKind::Cursor,
+            display_name: "Cursor Agent".to_string(),
+            profile_dir: "profiles/cursor/default".to_string(),
+            environment_id: None,
+            binary_path: None,
+            concurrency_limit: 2,
+            env_overrides: BTreeMap::new(),
+            settings: serde_json::json!({ "defaultModel": "cursor-fast" }),
+            enabled: false,
+            disabled_reason: Some(ProviderDisabledReason {
+                code: "live_acceptance_incomplete".to_string(),
+                message: "Cursor is disabled until its ACP fixture and live smoke pass"
+                    .to_string(),
+                remediation: Some(
+                    "Install and authenticate cursor-agent, then run the common provider acceptance smoke"
+                        .to_string(),
+                ),
+            }),
+        },
+        ProviderInstanceConfig {
+            id: ProviderInstanceId::new("grok-default"),
+            provider: ProviderKind::Grok,
+            display_name: "xAI Grok".to_string(),
+            profile_dir: "profiles/grok/default".to_string(),
+            environment_id: None,
+            binary_path: None,
+            concurrency_limit: 2,
+            env_overrides: BTreeMap::new(),
+            settings: serde_json::json!({ "defaultModel": "grok-3" }),
+            enabled: false,
+            disabled_reason: Some(ProviderDisabledReason {
+                code: "live_acceptance_incomplete".to_string(),
+                message: "Grok is disabled until its ACP entry point and live smoke are verified"
+                    .to_string(),
+                remediation: Some(
+                    "Configure a verified Grok ACP binary, authenticate it, and run the common provider acceptance smoke"
+                        .to_string(),
+                ),
+            }),
+        },
+        ProviderInstanceConfig {
+            id: ProviderInstanceId::new("opencode-default"),
+            provider: ProviderKind::OpenCode,
+            display_name: "OpenCode".to_string(),
+            profile_dir: "profiles/opencode/default".to_string(),
+            environment_id: None,
+            binary_path: None,
+            concurrency_limit: 2,
+            env_overrides: BTreeMap::new(),
+            settings: serde_json::json!({ "defaultModel": "opencode-coder" }),
+            enabled: false,
+            disabled_reason: Some(ProviderDisabledReason {
+                code: "live_acceptance_incomplete".to_string(),
+                message: "OpenCode is disabled until its ACP or serve-mode live smoke passes"
+                    .to_string(),
+                remediation: Some(
+                    "Install and authenticate OpenCode, select its verified transport, and run the common provider acceptance smoke"
+                        .to_string(),
+                ),
+            }),
         },
     ]
 }
@@ -153,6 +219,30 @@ impl Default for UserSettings {
 impl UserSettings {
     /// Clamp values into their valid ranges (applied after load and set).
     pub fn normalize(&mut self) {
+        if self.version < 3 {
+            for provider in default_providers().into_iter().filter(|provider| {
+                matches!(
+                    provider.provider,
+                    crate::provider_config::ProviderKind::Cursor
+                        | crate::provider_config::ProviderKind::Grok
+                        | crate::provider_config::ProviderKind::OpenCode
+                )
+            }) {
+                if !self
+                    .providers
+                    .iter()
+                    .any(|existing| existing.id == provider.id)
+                {
+                    self.providers.push(provider);
+                }
+            }
+            self.version = 3;
+        }
+        for provider in &mut self.providers {
+            if provider.enabled {
+                provider.disabled_reason = None;
+            }
+        }
         self.terminal.scrollback_lines = self
             .terminal
             .scrollback_lines
@@ -309,6 +399,7 @@ pub fn settings_set(settings: &mut UserSettings, key: &str, value: Value) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provider_config::ProviderKind;
     use serde_json::json;
 
     #[test]
@@ -321,12 +412,81 @@ mod tests {
         assert_eq!(settings.ui.theme, "dark");
         assert!(settings.ui.show_status_bar);
         assert!(settings.keyboard.pass_through.is_empty());
+        let disabled_best_effort = settings
+            .providers
+            .iter()
+            .filter(|provider| {
+                matches!(
+                    provider.provider,
+                    ProviderKind::Cursor | ProviderKind::Grok | ProviderKind::OpenCode
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(disabled_best_effort.len(), 3);
+        for provider in disabled_best_effort {
+            assert!(!provider.enabled);
+            assert_eq!(
+                provider
+                    .disabled_reason
+                    .as_ref()
+                    .map(|reason| reason.code.as_str()),
+                Some("live_acceptance_incomplete")
+            );
+        }
     }
 
     #[test]
     fn legacy_empty_json_loads_with_defaults() {
         let settings: UserSettings = serde_json::from_str("{}").expect("defaults");
         assert_eq!(settings.terminal.scrollback_lines, 10_000);
+    }
+
+    #[test]
+    fn version_two_settings_gain_disabled_best_effort_providers() {
+        let mut settings = UserSettings {
+            version: 2,
+            ..UserSettings::default()
+        };
+        settings.providers.retain(|provider| {
+            !matches!(
+                provider.provider,
+                ProviderKind::Cursor | ProviderKind::Grok | ProviderKind::OpenCode
+            )
+        });
+
+        settings.normalize();
+
+        assert_eq!(settings.version, SETTINGS_SCHEMA_VERSION);
+        for kind in [
+            ProviderKind::Cursor,
+            ProviderKind::Grok,
+            ProviderKind::OpenCode,
+        ] {
+            let provider = settings
+                .providers
+                .iter()
+                .find(|provider| provider.provider == kind)
+                .expect("migrated best-effort provider");
+            assert!(!provider.enabled);
+            assert!(provider.disabled_reason.is_some());
+        }
+
+        let cursor = settings
+            .providers
+            .iter_mut()
+            .find(|provider| provider.provider == ProviderKind::Cursor)
+            .expect("migrated Cursor provider");
+        cursor.enabled = true;
+        settings.normalize();
+        assert!(
+            settings
+                .providers
+                .iter()
+                .find(|provider| provider.provider == ProviderKind::Cursor)
+                .expect("enabled Cursor provider")
+                .disabled_reason
+                .is_none()
+        );
     }
 
     #[test]

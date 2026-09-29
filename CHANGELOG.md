@@ -189,6 +189,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Unverified best-effort providers now fail closed with an actionable reason.** Existing
+  settings migrate once to schema v3, adding Cursor, Grok, and OpenCode as disabled
+  profiles until their live smoke passes. Settings, health reports, and execution errors
+  preserve a typed reason code, message, and remediation instead of presenting an
+  unverified provider as ready.
 - **Remote bootstrap now works with standard OpenSSH user certificates and private SFTP
   uploads.** Key-file authentication retries with the matching sibling `-cert.pub` file,
   and streamed fallback uploads no longer include accidental root ownership metadata.

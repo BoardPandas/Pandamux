@@ -957,6 +957,11 @@ impl Router {
                 .resolve_allow_disabled(&inst.id, &environment_id)
             {
                 Ok(resolved) if !resolved.config.enabled => {
+                    let disabled_reason = resolved.config.disabled_reason.clone();
+                    let reason = disabled_reason
+                        .as_ref()
+                        .map(|reason| reason.message.clone())
+                        .unwrap_or_else(|| "Provider instance is disabled".to_string());
                     reports.push(ProviderHealthReport {
                         instance_id: resolved.config.id,
                         provider: resolved.config.provider,
@@ -967,7 +972,8 @@ impl Router {
                         status: "disabled".to_string(),
                         account_badge: None,
                         subscription: None,
-                        reason: Some("Provider instance is disabled".to_string()),
+                        reason: Some(reason),
+                        disabled_reason,
                         checked_at_ms: Self::now_ms(),
                     });
                 }
@@ -1019,6 +1025,7 @@ impl Router {
                         account_badge,
                         subscription,
                         reason,
+                        disabled_reason: None,
                         checked_at_ms: snapshot.checked_at_ms,
                     });
                 }
@@ -1041,6 +1048,7 @@ impl Router {
                         account_badge: None,
                         subscription: None,
                         reason: Some(reason),
+                        disabled_reason: None,
                         checked_at_ms: Self::now_ms(),
                     });
                 }
@@ -1801,6 +1809,7 @@ mod tests {
                 env_overrides: Default::default(),
                 settings: json!({ "fixture": true }),
                 enabled: true,
+                disabled_reason: None,
             }],
             ..UserSettings::default()
         };
@@ -2020,7 +2029,7 @@ mod tests {
         let get_res = router.handle_request(get_req).await.unwrap();
         assert!(get_res.is_success());
         let get_val = get_res.result.unwrap();
-        assert_eq!(get_val["settings"]["version"], 2);
+        assert_eq!(get_val["settings"]["version"], 3);
         assert_eq!(get_val["settings"]["terminal"]["scrollbackLines"], 10_000);
 
         // 2. Update a specific key using config.set dotted path
@@ -2058,6 +2067,19 @@ mod tests {
             assert!(report.get("instanceId").is_some());
             assert!(report.get("provider").is_some());
             assert!(report.get("status").is_some());
+        }
+        let disabled = reports
+            .iter()
+            .filter(|report| report["status"] == "disabled")
+            .collect::<Vec<_>>();
+        assert_eq!(disabled.len(), 3);
+        for report in disabled {
+            assert_eq!(
+                report["disabledReason"]["code"],
+                "live_acceptance_incomplete"
+            );
+            assert!(report["disabledReason"]["message"].is_string());
+            assert!(report["disabledReason"]["remediation"].is_string());
         }
     }
 

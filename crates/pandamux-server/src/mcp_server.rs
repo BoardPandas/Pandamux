@@ -166,6 +166,7 @@ mod tests {
             )]),
             settings: json!({ "apiToken": "arbitrary-json-sentinel" }),
             enabled: true,
+            disabled_reason: None,
         }];
         settings.environments = vec![Environment {
             id: EnvironmentId::new("env-local"),

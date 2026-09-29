@@ -130,6 +130,7 @@ mod tests {
             env_overrides: BTreeMap::new(),
             settings: serde_json::Value::Null,
             enabled: true,
+            disabled_reason: None,
         };
         assert_eq!(
             resolve_instance_profile_dir(base, &config),

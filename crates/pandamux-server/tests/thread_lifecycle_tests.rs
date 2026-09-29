@@ -25,6 +25,7 @@ fn configure_mock_instance(store: &Store, instance_id: &str, limit: u32) {
             env_overrides: BTreeMap::new(),
             settings: json!({ "instance": instance_id }),
             enabled: true,
+            disabled_reason: None,
         }],
         ..UserSettings::default()
     };
@@ -373,6 +374,7 @@ async fn exact_provider_instance_flows_through_health_login_process_turn_and_aud
         env_overrides: BTreeMap::from([("ACCOUNT".to_string(), account.to_string())]),
         settings: json!({ "account": account }),
         enabled: true,
+        disabled_reason: None,
     };
     store
         .save_settings(&UserSettings {

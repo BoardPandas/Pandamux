@@ -801,13 +801,23 @@ impl Store {
     // ── Settings ──────────────────────────────────────────────────────────
 
     pub fn get_settings(&self) -> Result<Option<UserSettings>, StoreError> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt =
-            conn.prepare("SELECT value_json FROM settings WHERE key = 'user_settings'")?;
-        let json: Option<String> = stmt.query_row([], |row| row.get(0)).optional()?;
+        let json: Option<String> = {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt =
+                conn.prepare("SELECT value_json FROM settings WHERE key = 'user_settings'")?;
+            stmt.query_row([], |row| row.get(0)).optional()?
+        };
 
         match json {
-            Some(j) => Ok(Some(serde_json::from_str(&j)?)),
+            Some(j) => {
+                let mut settings: UserSettings = serde_json::from_str(&j)?;
+                let original = settings.clone();
+                settings.normalize();
+                if settings != original {
+                    self.save_settings(&settings)?;
+                }
+                Ok(Some(settings))
+            }
             None => Ok(None),
         }
     }
@@ -1039,6 +1049,54 @@ mod tests {
 
         let loaded_settings = store.get_settings().expect("load settings").unwrap();
         assert_eq!(loaded_settings.ui.theme, "light");
+    }
+
+    #[test]
+    fn loading_version_two_settings_persists_disabled_best_effort_profiles() {
+        let store = Store::in_memory().expect("open in-memory store");
+        let mut settings = UserSettings {
+            version: 2,
+            ..UserSettings::default()
+        };
+        settings.providers.retain(|provider| {
+            !matches!(
+                provider.provider,
+                pandamux_core::ProviderKind::Cursor
+                    | pandamux_core::ProviderKind::Grok
+                    | pandamux_core::ProviderKind::OpenCode
+            )
+        });
+        store
+            .save_settings(&settings)
+            .expect("save version two settings");
+
+        let migrated = store
+            .get_settings()
+            .expect("migrate settings")
+            .expect("stored settings");
+        assert_eq!(migrated.version, pandamux_core::SETTINGS_SCHEMA_VERSION);
+
+        let stored_json: String = store
+            .conn
+            .lock()
+            .expect("store lock")
+            .query_row(
+                "SELECT value_json FROM settings WHERE key = 'user_settings'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read persisted settings");
+        let persisted: UserSettings =
+            serde_json::from_str(&stored_json).expect("parse persisted settings");
+        assert_eq!(persisted, migrated);
+        assert_eq!(
+            persisted
+                .providers
+                .iter()
+                .filter(|provider| !provider.enabled && provider.disabled_reason.is_some())
+                .count(),
+            3
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use pandamux_core::UserSettings;
 use pandamux_core::ids::{EnvironmentId, ProviderInstanceId};
-use pandamux_core::provider_config::ProviderKind;
+use pandamux_core::provider_config::{ProviderDisabledReason, ProviderKind};
 use serde::{Deserialize, Serialize};
 
 /// Parameters for retrieving application user settings.
@@ -73,6 +73,8 @@ pub struct ProviderHealthReport {
     pub subscription: Option<String>,
     #[serde(default)]
     pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disabled_reason: Option<ProviderDisabledReason>,
     pub checked_at_ms: u64,
 }
 
@@ -112,6 +114,7 @@ mod tests {
             account_badge: Some("Claude Max".to_string()),
             subscription: Some("Max".to_string()),
             reason: None,
+            disabled_reason: None,
             checked_at_ms: 12345678,
         };
 
