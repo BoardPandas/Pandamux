@@ -3,11 +3,11 @@ use pandamux_core::{
     event::TurnOutcome,
     ids::{ProviderInstanceId, ThreadId},
     provider_config::ProviderKind,
-    thread::AccessMode,
+    thread::{AccessMode, TurnInput},
 };
 use pandamux_providers::{
     ENV_CLAUDE_CONFIG_DIR, ENV_CODEX_HOME, ENV_GEMINI_HOME, apply_profile_environment,
-    build_claude_launch_args,
+    build_claude_interrupt_request, build_claude_launch_args, build_claude_user_message,
     claude::{ClaudeAuthStatus, ControlResponse, parse_stream_json_lines},
     claude_permission_mode,
     codex::{
@@ -67,9 +67,10 @@ fn test_claude_stream_json_and_subagents() {
     );
 
     // Allow response
-    let allow = ControlResponse::allow(&perm.request_id);
+    let allow = ControlResponse::allow(&perm.request_id, perm.input.clone());
     let allow_json = serde_json::to_string(&allow).expect("serialize allow");
-    assert!(allow_json.contains("\"decision\":\"allow\""));
+    assert!(allow_json.contains("\"behavior\":\"allow\""));
+    assert!(allow_json.contains("\"updatedInput\""));
 
     // Subagent extraction
     assert_eq!(parsed.subagents.len(), 1);
@@ -95,7 +96,7 @@ fn test_claude_control_denial_and_launch_args() {
         "Outbound POST blocked",
     );
     let deny_json = serde_json::to_string(&deny).expect("serialize deny");
-    assert!(deny_json.contains("\"decision\":\"deny\""));
+    assert!(deny_json.contains("\"behavior\":\"deny\""));
     assert!(deny_json.contains("Outbound POST blocked"));
 
     let args = build_claude_launch_args(
@@ -110,6 +111,12 @@ fn test_claude_control_denial_and_launch_args() {
     assert!(args.contains(&"--disallowedTools".into()));
     assert!(args.contains(&"--permission-mode".into()));
     assert!(args.contains(&"--session-id".into()));
+
+    let bypass_args = build_claude_launch_args(None, &[], &[], Some("bypassPermissions"), None);
+    assert!(
+        bypass_args.contains(&"--allow-dangerously-skip-permissions".to_string()),
+        "full access must explicitly enable Claude's bypass mode"
+    );
 }
 
 #[test]
@@ -121,6 +128,163 @@ fn test_claude_access_modes_map_to_supported_permission_modes() {
     assert_eq!(
         claude_permission_mode(AccessMode::FullAccess),
         "bypassPermissions"
+    );
+}
+
+#[test]
+fn test_claude_stream_input_uses_the_sdk_user_message_schema() {
+    let input = TurnInput {
+        text: "Describe the attachment".to_string(),
+        attachments: vec![AttachmentRecord {
+            id: "att-claude-1".to_string(),
+            thread_id: ThreadId::from("thread-claude-1"),
+            file_name: "diagram.png".to_string(),
+            mime_type: "image/png".to_string(),
+            size_bytes: 12,
+            file_path: "/workspace/diagram.png".to_string(),
+            created_at_ms: 1,
+        }],
+        ..TurnInput::default()
+    };
+
+    let message = build_claude_user_message(&input);
+    assert_eq!(message["type"], "user");
+    assert_eq!(message["message"]["role"], "user");
+    assert_eq!(message["message"]["content"][0]["type"], "text");
+    let text = message["message"]["content"][0]["text"]
+        .as_str()
+        .expect("text content");
+    assert!(text.starts_with("Describe the attachment"));
+    assert!(text.contains("diagram.png (image/png, 12 B): /workspace/diagram.png"));
+    assert!(message.get("text").is_none());
+    assert!(message.get("attachments").is_none());
+}
+
+#[test]
+fn test_claude_current_stream_output_schema() {
+    let assistant = serde_json::json!({
+        "type": "assistant",
+        "message": {
+            "content": [{"type": "text", "text": "R0_CLAUDE_PROTOCOL_OK"}]
+        },
+        "session_id": "session-current"
+    });
+    assert_eq!(
+        pandamux_providers::claude::parse_stream_json_line(&assistant.to_string()),
+        Some(pandamux_providers::ProviderEvent::TextDelta {
+            delta: "R0_CLAUDE_PROTOCOL_OK".to_string()
+        })
+    );
+
+    let failed = serde_json::json!({
+        "type": "result",
+        "subtype": "error_during_execution",
+        "is_error": true,
+        "usage": {"input_tokens": 3, "output_tokens": 1}
+    });
+    assert!(matches!(
+        pandamux_providers::claude::parse_stream_json_line(&failed.to_string()),
+        Some(pandamux_providers::ProviderEvent::TurnCompleted {
+            outcome: TurnOutcome::Failed,
+            ..
+        })
+    ));
+
+    let tool_use = serde_json::json!({
+        "type": "assistant",
+        "message": {
+            "content": [{
+                "type": "tool_use",
+                "id": "tool-current",
+                "name": "Bash",
+                "input": {"command": "pwd"}
+            }]
+        }
+    });
+    assert!(matches!(
+        pandamux_providers::claude::parse_stream_json_line(&tool_use.to_string()),
+        Some(pandamux_providers::ProviderEvent::ToolCallStarted { id, name, .. })
+            if id == "tool-current" && name == "Bash"
+    ));
+
+    let tool_result = serde_json::json!({
+        "type": "user",
+        "message": {
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": "tool-current",
+                "content": "workspace path",
+                "is_error": false
+            }]
+        }
+    });
+    assert!(matches!(
+        pandamux_providers::claude::parse_stream_json_line(&tool_result.to_string()),
+        Some(pandamux_providers::ProviderEvent::ToolCallFinished { id, error: None, .. })
+            if id == "tool-current"
+    ));
+}
+
+#[test]
+fn test_claude_current_control_request_and_response_schema() {
+    let request = serde_json::json!({
+        "type": "control_request",
+        "request_id": "request-current",
+        "request": {
+            "subtype": "can_use_tool",
+            "tool_name": "Bash",
+            "input": {
+                "command": "printf ready > /tmp/marker",
+                "description": "Write marker"
+            },
+            "description": "Write marker"
+        }
+    });
+    let parsed = parse_stream_json_lines(&request.to_string()).expect("parse current request");
+    let permission = parsed.control_requests.first().expect("control request");
+    assert_eq!(permission.request_id, "request-current");
+    assert_eq!(permission.tool_name, "Bash");
+    assert_eq!(
+        permission.command.as_deref(),
+        Some("printf ready > /tmp/marker")
+    );
+    assert_eq!(permission.input["description"], "Write marker");
+
+    assert!(matches!(
+        pandamux_providers::claude::parse_stream_json_line(&request.to_string()),
+        Some(pandamux_providers::ProviderEvent::ApprovalRequested {
+            request_id,
+            command: Some(command),
+            ..
+        }) if request_id == "request-current" && command == "printf ready > /tmp/marker"
+    ));
+
+    let response = ControlResponse::allow(&permission.request_id, permission.input.clone());
+    assert_eq!(
+        serde_json::to_value(response).expect("serialize current allow"),
+        serde_json::json!({
+            "type": "control_response",
+            "response": {
+                "subtype": "success",
+                "request_id": "request-current",
+                "response": {
+                    "behavior": "allow",
+                    "updatedInput": {
+                        "command": "printf ready > /tmp/marker",
+                        "description": "Write marker"
+                    }
+                }
+            }
+        })
+    );
+
+    assert_eq!(
+        build_claude_interrupt_request("interrupt-current"),
+        serde_json::json!({
+            "type": "control_request",
+            "request_id": "interrupt-current",
+            "request": {"subtype": "interrupt"}
+        })
     );
 }
 

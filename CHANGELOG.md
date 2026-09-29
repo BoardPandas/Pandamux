@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Changed
 
+- **Updated the Claude provider to the current SDK streaming contract.** Claude turns
+  now send structured user messages, parse nested assistant tool and result content,
+  preserve the exact pending tool input across approval, serialize current control
+  responses and interrupts, classify error results as failed, and explicitly enable
+  the CLI safety gate only for full-access bypass mode. Legacy fixture envelopes remain
+  readable.
 - **Updated Claude access policy mapping for the current CLI contract.** Read-only
   sessions now use `plan`, approval-required sessions use `manual`, automatic edit
   sessions use `acceptEdits`, and full-access sessions explicitly use

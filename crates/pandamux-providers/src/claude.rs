@@ -4,7 +4,9 @@ use pandamux_core::{
     thread::{AccessMode, TurnInput, TurnUsage},
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
@@ -39,6 +41,8 @@ pub struct ControlRequest {
     pub tool_name: String,
     pub command: Option<String>,
     pub reason: Option<String>,
+    #[serde(default)]
+    pub input: serde_json::Value,
 }
 
 /// Outbound control response answering a `control_request`.
@@ -46,28 +50,35 @@ pub struct ControlRequest {
 pub struct ControlResponse {
     #[serde(rename = "type")]
     pub msg_type: String,
-    pub request_id: String,
-    pub decision: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
+    pub response: serde_json::Value,
 }
 
 impl ControlResponse {
-    pub fn allow(request_id: &str) -> Self {
+    pub fn allow(request_id: &str, updated_input: serde_json::Value) -> Self {
         Self {
             msg_type: "control_response".into(),
-            request_id: request_id.into(),
-            decision: "allow".into(),
-            message: None,
+            response: serde_json::json!({
+                "subtype": "success",
+                "request_id": request_id,
+                "response": {
+                    "behavior": "allow",
+                    "updatedInput": updated_input
+                }
+            }),
         }
     }
 
     pub fn deny(request_id: &str, reason: &str) -> Self {
         Self {
             msg_type: "control_response".into(),
-            request_id: request_id.into(),
-            decision: "deny".into(),
-            message: Some(reason.into()),
+            response: serde_json::json!({
+                "subtype": "success",
+                "request_id": request_id,
+                "response": {
+                    "behavior": "deny",
+                    "message": reason
+                }
+            }),
         }
     }
 }
@@ -162,6 +173,9 @@ pub fn build_claude_launch_args(
     if let Some(mode) = permission_mode {
         args.push("--permission-mode".to_string());
         args.push(mode.to_string());
+        if mode == "bypassPermissions" {
+            args.push("--allow-dangerously-skip-permissions".to_string());
+        }
     }
 
     if let Some(sid) = session_id {
@@ -192,6 +206,77 @@ pub fn claude_permission_mode(access: AccessMode) -> &'static str {
     }
 }
 
+/// Builds one Claude Code SDK streaming user message.
+pub fn build_claude_user_message(input: &TurnInput) -> serde_json::Value {
+    let mut prompt_text = input.text.clone();
+    if !input.attachments.is_empty() {
+        prompt_text.push_str(&pandamux_core::format_attachments_summary(
+            &input.attachments,
+        ));
+    }
+
+    serde_json::json!({
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": [{
+                "type": "text",
+                "text": prompt_text
+            }]
+        }
+    })
+}
+
+/// Builds one Claude Code SDK interrupt control request.
+pub fn build_claude_interrupt_request(request_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "control_request",
+        "request_id": request_id,
+        "request": {"subtype": "interrupt"}
+    })
+}
+
+fn parse_control_request_value(val: &serde_json::Value) -> Option<ControlRequest> {
+    if val.get("type").and_then(|value| value.as_str()) != Some("control_request") {
+        return None;
+    }
+
+    let request_id = val.get("request_id")?.as_str()?.to_string();
+    let request = val.get("request");
+    let tool_name = request
+        .and_then(|value| value.get("tool_name"))
+        .or_else(|| val.get("tool_name"))?
+        .as_str()?
+        .to_string();
+    let command = request
+        .and_then(|value| value.pointer("/input/command"))
+        .or_else(|| val.get("command"))
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
+    let reason = request
+        .and_then(|value| value.get("description"))
+        .or_else(|| val.get("reason"))
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
+    let input = request
+        .and_then(|value| value.get("input"))
+        .cloned()
+        .unwrap_or_else(|| {
+            command
+                .as_ref()
+                .map(|command| serde_json::json!({ "command": command }))
+                .unwrap_or_else(|| serde_json::json!({}))
+        });
+
+    Some(ControlRequest {
+        request_id,
+        tool_name,
+        command,
+        reason,
+        input,
+    })
+}
+
 /// Parses NDJSON events from Claude Code stream-json output.
 pub fn parse_stream_json_lines(ndjson: &str) -> Result<ParsedClaudeStream, ProviderError> {
     let mut parsed = ParsedClaudeStream::default();
@@ -217,7 +302,12 @@ pub fn parse_stream_json_lines(ndjson: &str) -> Result<ParsedClaudeStream, Provi
                 }
             }
             "control_request" => {
-                let req: ControlRequest = serde_json::from_value(val.clone())?;
+                let req = parse_control_request_value(&val).ok_or_else(|| {
+                    ProviderError::ProtocolError {
+                        provider: "claude".to_string(),
+                        message: "Malformed Claude control request".to_string(),
+                    }
+                })?;
                 parsed.control_requests.push(req);
             }
             "tool_use" => {
@@ -294,6 +384,74 @@ pub fn parse_stream_json_lines(ndjson: &str) -> Result<ParsedClaudeStream, Provi
     Ok(parsed)
 }
 
+fn parse_tool_use_value(
+    value: &serde_json::Value,
+    parent_tool_use_id: Option<String>,
+) -> Option<ProviderEvent> {
+    let name = value.get("name")?.as_str()?;
+    let id = value.get("id")?.as_str()?.to_string();
+    let input = value.get("input").cloned().unwrap_or_default();
+
+    if name == "Task" {
+        let parent_tool_use_id = value
+            .get("parent_tool_use_id")
+            .and_then(|item| item.as_str())
+            .map(str::to_string)
+            .or(parent_tool_use_id);
+        let agent_type = input
+            .get("subagent_type")
+            .and_then(|item| item.as_str())
+            .unwrap_or("agent")
+            .to_string();
+        let description = input
+            .get("description")
+            .and_then(|item| item.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let model = input
+            .get("model")
+            .and_then(|item| item.as_str())
+            .map(str::to_string);
+        Some(ProviderEvent::SubAgentSpawned {
+            tool_use_id: id,
+            parent_tool_use_id,
+            agent_type,
+            description,
+            model,
+        })
+    } else {
+        Some(ProviderEvent::ToolCallStarted {
+            id,
+            name: name.to_string(),
+            input,
+        })
+    }
+}
+
+fn parse_tool_result_value(value: &serde_json::Value) -> Option<ProviderEvent> {
+    let id = value
+        .get("tool_use_id")
+        .or_else(|| value.get("id"))?
+        .as_str()?
+        .to_string();
+    let output = value.get("content").map(|content| {
+        content
+            .as_str()
+            .map(str::to_string)
+            .unwrap_or_else(|| content.to_string())
+    });
+    let is_error = value
+        .get("is_error")
+        .and_then(|item| item.as_bool())
+        .unwrap_or(false);
+    let error = is_error.then(|| {
+        output
+            .clone()
+            .unwrap_or_else(|| "Claude tool execution failed".to_string())
+    });
+    Some(ProviderEvent::ToolCallFinished { id, output, error })
+}
+
 /// Converts a single line of Claude NDJSON output into a ProviderEvent.
 pub fn parse_stream_json_line(line: &str) -> Option<ProviderEvent> {
     let line = line.trim();
@@ -306,71 +464,37 @@ pub fn parse_stream_json_line(line: &str) -> Option<ProviderEvent> {
 
     match event_type {
         "control_request" => {
-            let req_id = val.get("request_id")?.as_str()?.to_string();
-            let tool_name = val
-                .get("tool_name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown");
-            let command = val
-                .get("command")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+            let request = parse_control_request_value(&val)?;
 
-            let kind = match tool_name {
+            let kind = match request.tool_name.as_str() {
                 "Bash" => ApprovalKind::CommandExecution,
                 "Edit" | "Write" => ApprovalKind::FileEdit,
                 _ => ApprovalKind::ToolCall,
             };
 
             Some(ProviderEvent::ApprovalRequested {
-                request_id: req_id,
+                request_id: request.request_id,
                 kind,
                 detail: val.clone(),
-                command,
+                command: request.command,
             })
         }
-        "tool_use" => {
-            let name = val.get("name")?.as_str()?;
-            let id = val.get("id")?.as_str()?.to_string();
-            let input = val.get("input").cloned().unwrap_or_default();
-
-            if name == "Task" {
+        "tool_use" => parse_tool_use_value(&val, None),
+        "tool_result" => parse_tool_result_value(&val),
+        "assistant" => {
+            let content = val
+                .pointer("/message/content")
+                .or_else(|| val.get("content"));
+            if let Some(content_arr) = content.and_then(|v| v.as_array()) {
                 let parent_tool_use_id = val
                     .get("parent_tool_use_id")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                let subagent_type = input
-                    .get("subagent_type")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("agent")
-                    .to_string();
-                let description = input
-                    .get("description")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string();
-                let model = input
-                    .get("model")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-
-                Some(ProviderEvent::SubAgentSpawned {
-                    tool_use_id: id,
-                    parent_tool_use_id,
-                    agent_type: subagent_type,
-                    description,
-                    model,
-                })
-            } else {
-                Some(ProviderEvent::ToolCallStarted {
-                    id,
-                    name: name.to_string(),
-                    input,
-                })
-            }
-        }
-        "assistant" => {
-            if let Some(content_arr) = val.get("content").and_then(|v| v.as_array()) {
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string);
+                if let Some(tool_use) = content_arr.iter().find(|item| {
+                    item.get("type").and_then(|value| value.as_str()) == Some("tool_use")
+                }) {
+                    return parse_tool_use_value(tool_use, parent_tool_use_id);
+                }
                 let mut text = String::new();
                 for item in content_arr {
                     if item.get("type").and_then(|v| v.as_str()) == Some("text")
@@ -385,6 +509,15 @@ pub fn parse_stream_json_line(line: &str) -> Option<ProviderEvent> {
             }
             None
         }
+        "user" => val
+            .pointer("/message/content")
+            .and_then(|value| value.as_array())
+            .and_then(|items| {
+                items.iter().find(|item| {
+                    item.get("type").and_then(|value| value.as_str()) == Some("tool_result")
+                })
+            })
+            .and_then(parse_tool_result_value),
         "content_block_delta" => {
             if let Some(delta) = val.get("delta")
                 && delta.get("type").and_then(|v| v.as_str()) == Some("text_delta")
@@ -406,12 +539,24 @@ pub fn parse_stream_json_line(line: &str) -> Option<ProviderEvent> {
                     .get("output_tokens")
                     .and_then(|v| v.as_u64())
                     .unwrap_or_default(),
-                cost_usd: u.get("cost_usd").and_then(|v| v.as_f64()),
+                cost_usd: u
+                    .get("cost_usd")
+                    .and_then(|v| v.as_f64())
+                    .or_else(|| val.get("total_cost_usd").and_then(|v| v.as_f64())),
                 ..Default::default()
             });
+            let is_error = val.get("is_error").and_then(|v| v.as_bool()) == Some(true)
+                || val
+                    .get("subtype")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|subtype| subtype.starts_with("error_"));
 
             Some(ProviderEvent::TurnCompleted {
-                outcome: TurnOutcome::Success,
+                outcome: if is_error {
+                    TurnOutcome::Failed
+                } else {
+                    TurnOutcome::Success
+                },
                 usage,
             })
         }
@@ -609,11 +754,19 @@ impl ProviderDriver for ClaudeDriver {
                 })?;
 
             let (tx, rx) = mpsc::channel(128);
+            let pending_control_inputs = Arc::new(Mutex::new(HashMap::new()));
+            let parser_pending_inputs = pending_control_inputs.clone();
 
             // Spawn background stdout parser
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stdout).lines();
                 while let Ok(Some(line)) = reader.next_line().await {
+                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line)
+                        && let Some(request) = parse_control_request_value(&value)
+                        && let Ok(mut pending) = parser_pending_inputs.lock()
+                    {
+                        pending.insert(request.request_id, request.input);
+                    }
                     if let Some(event) = parse_stream_json_line(&line)
                         && tx.send(event).await.is_err()
                     {
@@ -627,6 +780,7 @@ impl ProviderDriver for ClaudeDriver {
                 stdin,
                 events_rx: Some(rx),
                 session_token: spec.resume,
+                pending_control_inputs,
             }) as Box<dyn ProviderSession>)
         })
     }
@@ -638,43 +792,13 @@ pub struct ClaudeSession {
     stdin: tokio::process::ChildStdin,
     events_rx: Option<mpsc::Receiver<ProviderEvent>>,
     session_token: Option<String>,
+    pending_control_inputs: Arc<Mutex<HashMap<String, serde_json::Value>>>,
 }
 
 impl ProviderSession for ClaudeSession {
     fn send_turn<'a>(&'a mut self, input: TurnInput) -> BoxFuture<'a, Result<(), ProviderError>> {
         Box::pin(async move {
-            let mut prompt_text = input.text.clone();
-            if !input.attachments.is_empty() {
-                prompt_text.push_str(&pandamux_core::format_attachments_summary(
-                    &input.attachments,
-                ));
-            }
-
-            let mut msg_map = serde_json::Map::new();
-            msg_map.insert(
-                "type".into(),
-                serde_json::Value::String("user_input".into()),
-            );
-            msg_map.insert("text".into(), serde_json::Value::String(prompt_text));
-
-            if !input.attachments.is_empty() {
-                let att_list: Vec<serde_json::Value> = input
-                    .attachments
-                    .iter()
-                    .map(|att| {
-                        serde_json::json!({
-                            "id": att.id,
-                            "fileName": att.file_name,
-                            "mimeType": att.mime_type,
-                            "size": att.size_bytes,
-                            "path": att.file_path,
-                        })
-                    })
-                    .collect();
-                msg_map.insert("attachments".into(), serde_json::Value::Array(att_list));
-            }
-
-            let mut line = serde_json::to_string(&serde_json::Value::Object(msg_map))?;
+            let mut line = serde_json::to_string(&build_claude_user_message(&input))?;
             line.push('\n');
             self.stdin.write_all(line.as_bytes()).await?;
             self.stdin.flush().await?;
@@ -698,8 +822,24 @@ impl ProviderSession for ClaudeSession {
         decision: ApprovalDecision,
     ) -> BoxFuture<'a, Result<(), ProviderError>> {
         Box::pin(async move {
+            let pending_input = self
+                .pending_control_inputs
+                .lock()
+                .map_err(|_| ProviderError::ProtocolError {
+                    provider: "claude".to_string(),
+                    message: "Claude permission state lock is poisoned".to_string(),
+                })?
+                .remove(&request_id);
             let resp = match decision {
-                ApprovalDecision::Approved => ControlResponse::allow(&request_id),
+                ApprovalDecision::Approved => {
+                    let input = pending_input.ok_or_else(|| ProviderError::ProtocolError {
+                        provider: "claude".to_string(),
+                        message: format!(
+                            "Claude approval {request_id} has no matching pending tool input"
+                        ),
+                    })?;
+                    ControlResponse::allow(&request_id, input)
+                }
                 ApprovalDecision::Denied | ApprovalDecision::TimedOut => {
                     ControlResponse::deny(&request_id, "User declined permission request")
                 }
@@ -714,7 +854,8 @@ impl ProviderSession for ClaudeSession {
 
     fn interrupt<'a>(&'a mut self) -> BoxFuture<'a, Result<(), ProviderError>> {
         Box::pin(async move {
-            let resp = serde_json::json!({ "type": "interrupt" });
+            let request_id = uuid::Uuid::new_v4().to_string();
+            let resp = build_claude_interrupt_request(&request_id);
             let mut line = serde_json::to_string(&resp)?;
             line.push('\n');
             let _ = self.stdin.write_all(line.as_bytes()).await;
