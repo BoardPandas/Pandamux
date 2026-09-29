@@ -96,8 +96,10 @@ pub use thread::{
     TurnInput, TurnStatus, TurnUsage, TurnUsageProvenance, WorktreeRef,
 };
 pub use usage::{
-    CapacityConfidence, CapacitySnapshot, DailyBudgetLedger, TokenCounts, TokenUsageSummary,
-    UsageArithmeticError, UsageBucket, UsageObservation, UsageObservationError, UsagePricingRates,
-    UsagePricingRule, UsagePricingVersion, UsageProvider, UsageRecord, UsageSourceKind,
-    UsageSubscription, UsageUnknownField, estimate_usage_micro_usd,
+    CAPACITY_SNAPSHOT_SCHEMA_VERSION, CapacityConfidence, CapacityEvidenceScope, CapacityFreshness,
+    CapacityProjection, CapacitySnapshot, DEFAULT_CAPACITY_MAX_AGE_MS, DailyBudgetLedger,
+    TokenCounts, TokenUsageSummary, UsageArithmeticError, UsageBucket, UsageObservation,
+    UsageObservationError, UsagePricingRates, UsagePricingRule, UsagePricingVersion, UsageProvider,
+    UsageRecord, UsageSourceKind, UsageSubscription, UsageUnknownField, estimate_usage_micro_usd,
+    project_capacity_revisions,
 };

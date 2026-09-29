@@ -19,8 +19,9 @@ use crate::acp::{
 };
 use crate::error::ProviderError;
 use crate::models::{
-    InjectedInstructions, ModelInfo, ProviderAuthStatus, ProviderEvent, ProviderHealth,
-    ProviderMetadata, ProviderSnapshot, SessionSpec, ToolPolicy, UsageLimits,
+    InjectedInstructions, ModelInfo, ProviderAuthConfidence, ProviderAuthStatus, ProviderEvent,
+    ProviderHealth, ProviderMetadata, ProviderSnapshot, SessionSpec, ToolPolicy, UsageLimits,
+    provider_snapshot_expiry, provider_snapshot_now_ms,
 };
 use crate::profiles::{
     apply_profile_environment, ensure_profile_dir, resolve_instance_profile_dir,
@@ -262,20 +263,18 @@ impl ProviderDriver for OpenCodeDriver {
     fn probe<'a>(&'a self, cfg: &'a ProviderInstanceConfig) -> BoxFuture<'a, ProviderSnapshot> {
         Box::pin(async move {
             let binary = self.resolve_binary(cfg);
-            if let Some(_bin) = binary {
+            let checked_at_ms = provider_snapshot_now_ms();
+            let expires_at_ms = provider_snapshot_expiry(checked_at_ms);
+            if let Some(bin) = binary {
                 let profile_dir = resolve_instance_profile_dir(&self.base_data_dir, cfg);
                 let has_auth = profile_dir.join("config.json").exists()
                     || cfg.settings.get("serverPassword").is_some()
                     || std::env::var("OPENCODE_SERVER_PASSWORD").is_ok();
 
                 let auth = if has_auth {
-                    ProviderAuthStatus::Authenticated {
-                        account_label: Some("OpenCode Local".to_string()),
-                        email: None,
-                        subscription: Some("Self-Hosted".to_string()),
-                    }
+                    ProviderAuthStatus::Configured
                 } else {
-                    ProviderAuthStatus::Unauthenticated
+                    ProviderAuthStatus::Unknown
                 };
 
                 let health = if has_auth {
@@ -289,20 +288,32 @@ impl ProviderDriver for OpenCodeDriver {
 
                 ProviderSnapshot {
                     installed: true,
-                    version: Some("0.18.2".to_string()),
+                    resolved_executable: Some(bin.to_string_lossy().to_string()),
+                    version: None,
                     auth,
+                    auth_confidence: if has_auth {
+                        ProviderAuthConfidence::Detected
+                    } else {
+                        ProviderAuthConfidence::Unknown
+                    },
                     health,
-                    checked_at_ms: 1000,
+                    runtime_code: Some("offline_profile_probe".to_string()),
+                    checked_at_ms,
+                    expires_at_ms,
                 }
             } else {
                 ProviderSnapshot {
                     installed: false,
+                    resolved_executable: None,
                     version: None,
                     auth: ProviderAuthStatus::Unknown,
+                    auth_confidence: ProviderAuthConfidence::Unknown,
                     health: ProviderHealth::Unavailable {
                         reason: "OpenCode binary not found in PATH or settings".to_string(),
                     },
-                    checked_at_ms: 1000,
+                    runtime_code: Some("binary_missing".to_string()),
+                    checked_at_ms,
+                    expires_at_ms,
                 }
             }
         })

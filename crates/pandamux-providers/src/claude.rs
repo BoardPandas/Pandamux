@@ -13,8 +13,9 @@ use tokio::sync::mpsc;
 
 use crate::error::ProviderError;
 use crate::models::{
-    ModelInfo, ProviderAuthStatus, ProviderEvent, ProviderHealth, ProviderMetadata,
-    ProviderSnapshot, SessionSpec, UsageLimits,
+    ModelInfo, ProviderAuthConfidence, ProviderAuthStatus, ProviderEvent, ProviderHealth,
+    ProviderMetadata, ProviderSnapshot, SessionSpec, UsageLimits, provider_snapshot_expiry,
+    provider_snapshot_now_ms,
 };
 use crate::profiles::{
     apply_profile_environment, ensure_profile_dir, resolve_instance_profile_dir,
@@ -120,6 +121,7 @@ pub async fn probe_claude_auth(
 ) -> Result<ClaudeAuthStatus, ProviderError> {
     let mut cmd = tokio::process::Command::new(claude_bin);
     cmd.arg("auth").arg("status").arg("--json");
+    cmd.kill_on_drop(true);
 
     if let Some(dir) = config_dir {
         cmd.env("CLAUDE_CONFIG_DIR", dir);
@@ -672,6 +674,8 @@ impl ProviderDriver for ClaudeDriver {
         Box::pin(async move {
             let profile_dir = resolve_instance_profile_dir(&self.base_data_dir, cfg);
             let binary = self.resolve_claude_binary(cfg);
+            let checked_at_ms = provider_snapshot_now_ms();
+            let expires_at_ms = provider_snapshot_expiry(checked_at_ms);
 
             if let Some(bin) = binary {
                 match probe_claude_auth(&bin, Some(&profile_dir)).await {
@@ -688,31 +692,43 @@ impl ProviderDriver for ClaudeDriver {
 
                         ProviderSnapshot {
                             installed: true,
+                            resolved_executable: Some(bin.to_string_lossy().to_string()),
                             version: None,
                             auth,
+                            auth_confidence: ProviderAuthConfidence::Reported,
                             health: ProviderHealth::Healthy,
-                            checked_at_ms: 1000,
+                            runtime_code: Some("runtime_ready".to_string()),
+                            checked_at_ms,
+                            expires_at_ms,
                         }
                     }
                     Err(e) => ProviderSnapshot {
                         installed: true,
+                        resolved_executable: Some(bin.to_string_lossy().to_string()),
                         version: None,
                         auth: ProviderAuthStatus::Unknown,
+                        auth_confidence: ProviderAuthConfidence::Unknown,
                         health: ProviderHealth::Degraded {
                             reason: e.to_string(),
                         },
-                        checked_at_ms: 1000,
+                        runtime_code: Some("auth_probe_failed".to_string()),
+                        checked_at_ms,
+                        expires_at_ms,
                     },
                 }
             } else {
                 ProviderSnapshot {
                     installed: false,
+                    resolved_executable: None,
                     version: None,
                     auth: ProviderAuthStatus::Unknown,
+                    auth_confidence: ProviderAuthConfidence::Unknown,
                     health: ProviderHealth::Unavailable {
                         reason: "Claude binary not found on PATH".to_string(),
                     },
-                    checked_at_ms: 1000,
+                    runtime_code: Some("binary_missing".to_string()),
+                    checked_at_ms,
+                    expires_at_ms,
                 }
             }
         })

@@ -90,6 +90,51 @@ rate, including an unknown provider-specific category, makes the overall API-equ
 estimate absent. Provider-reported spend remains a separate value. Coverage reports the
 unknown-price token count and its millionths share.
 
+## Capacity evidence and synchronization
+
+Migration 9 stores immutable capacity revisions by subscription, environment, provider
+instance, window, evidence scope, source, and observation time. A revision carries exact
+integer used and remaining fractions, reset time, provider version, confidence, schema
+version, and maximum age. Used and remaining values must total one million when both are
+reported. Unsupported, unavailable, or semantically unverified provider data remains
+Unknown rather than receiving a plausible default.
+
+Codex account rate-limit fixtures justify Reported evidence and use exact decimal-to-
+integer conversion. Grok's parser fixture remains test coverage only, so live Grok quota
+collection is disabled. Claude and Antigravity report Unknown capacity until a defensible
+provider source exists.
+
+After a successful usage synchronization pass, the Hub requests one bounded capacity
+refresh. The node returns only the subscription metadata referenced by that snapshot
+set, allowing a fresh Hub database to satisfy referential integrity before storing the
+revisions. Authenticated transport context replaces any claimed environment identity.
+The Hub then pushes its newest bounded view back to the same node with the schema version
+and age policy; the node stamps it as Hub evidence.
+
+Projection keeps only the newest revision for each evidence identity. Fresh Reported
+evidence ages to Estimated and then Unknown. Reset, stale, clock-skewed, conflicting, and
+offline evidence remains explicit. Conflicts choose the lowest known remaining fraction.
+An active local hard limit forces zero until its verified reset even if its ordinary age
+expires, and stale Hub evidence cannot raise it.
+
+## Provider health and login
+
+`provider.health` probes configured instances concurrently with a bounded semaphore and
+per-probe deadline. Probe child processes are killed if their future is cancelled. The
+result persists and reports environment, exact instance, provider, enabled state,
+installation, resolved executable, version, authentication state and confidence, masked
+account and subscription label, runtime state and reason code, check time, expiry, last
+successful check, retryability, and structured login guidance. Unknown authentication
+is never classified Healthy. Health tests assert that no provider session is started.
+
+Login is a separate explicit action. Claude and Codex first return a short-lived one-time
+preview containing the exact environment, instance, isolated profile, flow, and safely
+quoted command. A matching launch opens the Terminal surface with private profile and
+environment values, then consumes the preview only after successful input. Launch and
+remote reachability failures stay structured, visible, and retryable; a failed input
+closes the newly opened terminal. Antigravity continues to use its dedicated browser
+OAuth flow, and unverified generic provider login launchers remain unavailable.
+
 ## Diagnostics and privacy
 
 Usage queries expose source coverage, parser version, last scan and success times,
@@ -109,7 +154,7 @@ provider profile.
 
 ## Current boundary
 
-Checkpoint 4C is local implementation and verification evidence. Capacity semantics,
-provider health confidence, and actionable login are Checkpoint 4D. The deferred
-physical R0.5 laptop disconnect and sleep rows still block production acceptance and
-release.
+Checkpoint 4D is local implementation and verification evidence. The Phase 4E Usage and
+provider-identity UI is not implemented by this checkpoint. The deferred physical R0.5
+laptop disconnect and sleep rows, native Phase 4D runtime acceptance, and later release
+gates still block production acceptance and release.

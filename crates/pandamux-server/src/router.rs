@@ -1,10 +1,14 @@
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use pandamux_core::{EnvironmentId, ProviderKind, ThreadEventKind, UserSettings};
+use pandamux_core::{
+    CAPACITY_SNAPSHOT_SCHEMA_VERSION, CapacityConfidence, CapacityEvidenceScope, CapacitySnapshot,
+    DEFAULT_CAPACITY_MAX_AGE_MS, EnvironmentId, ProviderKind, ThreadEventKind, UsageSubscription,
+    UserSettings,
+};
 use pandamux_protocol::antigravity_rpc::{
     AntigravityDiscardUploadParams, AntigravityInstallParams, AntigravityOAuthRelayParams,
     AntigravityOAuthRelayResult, AntigravityOAuthStartParams, AntigravityOAuthStartResult,
@@ -13,18 +17,21 @@ use pandamux_protocol::antigravity_rpc::{
 };
 use pandamux_protocol::{
     AttachmentGetParams, AttachmentImportPathParams, AttachmentListParams,
-    AttachmentPutChunkParams, CapacityQueryParams, CheckpointDiffParams, CheckpointListParams,
+    AttachmentPutChunkParams, CapacityPushParams, CapacityPushResult, CapacityQueryParams,
+    CapacityRefreshParams, CapacityRefreshResult, CheckpointDiffParams, CheckpointListParams,
     CheckpointRollbackParams, EnvironmentImportSshConfigParams, EnvironmentImportSshConfigResult,
     EnvironmentListResult, GitCommitParams, GitCreatePrParams, GitPushParams, GitStatusParams,
     HarkDictatePromptParams, HarkSpellbookSyncParams, HelloParams, HelloResult, IdentifyResult,
     McpCallToolParams, PROTOCOL_VERSION, PingResult, ProviderHealthParams, ProviderHealthReport,
-    ProviderHealthResult, RpcError, RpcRequest, RpcResponse, ServerCapabilities, ServerRole,
-    SettingsGetParams, SettingsGetResult, SettingsSetParams, SubAgentTreeItem, SubAgentTreeParams,
-    SubAgentTreeResult, TerminalAttachParams, TerminalCloseParams, TerminalInputParams,
-    TerminalOpenParams, TerminalResizeParams, ThreadCancelTurnParams, ThreadCreateParams,
-    ThreadGetParams, ThreadListParams, ThreadRespondApprovalParams, ThreadResumeParams,
-    ThreadSendTurnParams, UsageAckParams, UsageAckResult, UsageBackfillParams, UsageExportParams,
-    UsageQueryParams, WorktreeSyncDeltaParams, WorktreeSyncDeltaResult,
+    ProviderHealthResult, ProviderLoginFlow, ProviderLoginGuidance, ProviderLoginLaunchParams,
+    ProviderLoginLaunchResult, ProviderLoginPreview, ProviderLoginPreviewParams, RpcError,
+    RpcRequest, RpcResponse, ServerCapabilities, ServerRole, SettingsGetParams, SettingsGetResult,
+    SettingsSetParams, SubAgentTreeItem, SubAgentTreeParams, SubAgentTreeResult,
+    TerminalAttachParams, TerminalCloseParams, TerminalInputParams, TerminalOpenParams,
+    TerminalResizeParams, ThreadCancelTurnParams, ThreadCreateParams, ThreadGetParams,
+    ThreadListParams, ThreadRespondApprovalParams, ThreadResumeParams, ThreadSendTurnParams,
+    UsageAckParams, UsageAckResult, UsageBackfillParams, UsageExportParams, UsageQueryParams,
+    WorktreeSyncDeltaParams, WorktreeSyncDeltaResult,
 };
 
 use crate::attachment::AttachmentManager;
@@ -35,6 +42,8 @@ use crate::request_context::{CapabilityAuthority, PeerRole, RequestContext};
 use crate::store::Store;
 use crate::terminal::TerminalServerManager;
 use crate::thread_manager::ThreadManager;
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 
 pub struct Router {
     store: Store,
@@ -49,12 +58,20 @@ pub struct Router {
     terminal: TerminalServerManager,
     environment_router: Arc<crate::environment_router::EnvironmentRouter>,
     remote_terminals: Arc<std::sync::Mutex<HashMap<String, pandamux_core::ids::EnvironmentId>>>,
+    login_previews: Arc<std::sync::Mutex<HashMap<String, LoginPreviewRecord>>>,
     hark: Arc<crate::hark::HarkBridge>,
     data_dir: PathBuf,
     role: ServerRole,
     environment_id: String,
     server_version: String,
     default_drivers: bool,
+}
+
+#[derive(Clone)]
+struct LoginPreviewRecord {
+    preview: pandamux_protocol::ProviderLoginPreview,
+    environment: HashMap<String, String>,
+    shell: Option<String>,
 }
 
 fn default_data_dir() -> PathBuf {
@@ -87,14 +104,270 @@ fn default_attachments_dir() -> PathBuf {
 }
 
 fn account_badge_label(label: Option<&str>, sub: Option<&str>) -> Option<String> {
+    let label = label.and_then(mask_account_label);
+    let sub = sub.and_then(mask_account_label);
     match (label, sub) {
         (Some(l), Some(s)) if !l.is_empty() && !s.is_empty() && l != s => {
             Some(format!("{l} ({s})"))
         }
-        (Some(l), _) if !l.is_empty() => Some(l.to_string()),
-        (_, Some(s)) if !s.is_empty() => Some(s.to_string()),
+        (Some(l), _) if !l.is_empty() => Some(l),
+        (_, Some(s)) if !s.is_empty() => Some(s),
         _ => None,
     }
+}
+
+fn mask_account_label(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if let Some((local, domain)) = value.split_once('@') {
+        let prefix = local
+            .chars()
+            .next()
+            .map_or("*".to_string(), |first| format!("{first}***"));
+        return Some(format!("{prefix}@{domain}"));
+    }
+    let prefix = value.chars().take(2).collect::<String>();
+    Some(format!("{prefix}***"))
+}
+
+fn provider_login_guidance(provider: ProviderKind) -> ProviderLoginGuidance {
+    match provider {
+        ProviderKind::Claude | ProviderKind::Codex => ProviderLoginGuidance {
+            flow: ProviderLoginFlow::Terminal,
+            available: true,
+            summary: "Preview the isolated profile and exact CLI login command before launch"
+                .to_string(),
+            unavailable_reason: None,
+        },
+        ProviderKind::Antigravity => ProviderLoginGuidance {
+            flow: ProviderLoginFlow::Browser,
+            available: true,
+            summary: "Use the explicit Antigravity OAuth action for this isolated profile"
+                .to_string(),
+            unavailable_reason: None,
+        },
+        _ => ProviderLoginGuidance {
+            flow: ProviderLoginFlow::Manual,
+            available: false,
+            summary: "No verified non-destructive login launcher is available".to_string(),
+            unavailable_reason: Some("provider_login_flow_unverified".to_string()),
+        },
+    }
+}
+
+#[cfg(windows)]
+fn render_login_command(program: &str, args: &[String]) -> String {
+    let quote = |value: &str| format!("'{}'", value.replace('\'', "''"));
+    std::iter::once("&".to_string())
+        .chain(std::iter::once(quote(program)))
+        .chain(args.iter().map(|arg| quote(arg)))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(not(windows))]
+fn render_login_command(program: &str, args: &[String]) -> String {
+    let quote = |value: &str| format!("'{}'", value.replace('\'', "'\"'\"'"));
+    std::iter::once(quote(program))
+        .chain(args.iter().map(|arg| quote(arg)))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn login_shell() -> Result<Option<String>, RpcError> {
+    #[cfg(windows)]
+    {
+        return pandamux_term::shell::resolve_powershell()
+            .map(Some)
+            .ok_or_else(|| {
+                RpcError::with_data(
+                    -32020,
+                    "PowerShell is required for a safe provider login terminal",
+                    json!({
+                        "reason": "provider_login_shell_missing",
+                        "retryable": true,
+                    }),
+                )
+            });
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(None)
+    }
+}
+
+fn provider_health_report_from_snapshot(
+    environment_id: &EnvironmentId,
+    config: pandamux_core::provider_config::ProviderInstanceConfig,
+    snapshot: pandamux_providers::ProviderSnapshot,
+) -> ProviderHealthReport {
+    use pandamux_providers::{ProviderAuthConfidence, ProviderAuthStatus, ProviderHealth};
+
+    let (authentication_state, account_badge, subscription) = match &snapshot.auth {
+        ProviderAuthStatus::Authenticated {
+            account_label,
+            email,
+            subscription,
+        } => (
+            "authenticated",
+            account_badge_label(
+                account_label.as_deref().or(email.as_deref()),
+                subscription.as_deref(),
+            ),
+            subscription.as_deref().and_then(mask_account_label),
+        ),
+        ProviderAuthStatus::Configured => ("configured", None, None),
+        ProviderAuthStatus::Unauthenticated => ("unauthenticated", None, None),
+        ProviderAuthStatus::Unknown => ("unknown", None, None),
+    };
+    let authentication_confidence = match snapshot.auth_confidence {
+        ProviderAuthConfidence::Reported => "reported",
+        ProviderAuthConfidence::Detected => "detected",
+        ProviderAuthConfidence::Unknown => "unknown",
+    };
+    let (runtime_status, runtime_reason) = match &snapshot.health {
+        ProviderHealth::Healthy => ("healthy", None),
+        ProviderHealth::Degraded { reason } => ("degraded", Some(reason.clone())),
+        ProviderHealth::Unavailable { reason } => ("unavailable", Some(reason.clone())),
+    };
+    let (status, reason) = match &snapshot.health {
+        ProviderHealth::Unavailable { .. } => ("unavailable", runtime_reason),
+        ProviderHealth::Degraded { .. } => ("degraded", runtime_reason),
+        ProviderHealth::Healthy => match &snapshot.auth {
+            ProviderAuthStatus::Authenticated { .. } => ("healthy", None),
+            ProviderAuthStatus::Configured => (
+                "configured",
+                Some("Credentials were detected but authentication was not verified".to_string()),
+            ),
+            ProviderAuthStatus::Unauthenticated => {
+                ("unauthenticated", Some("Not logged in".to_string()))
+            }
+            ProviderAuthStatus::Unknown => (
+                "unknown",
+                Some("Authentication state is unknown".to_string()),
+            ),
+        },
+    };
+
+    ProviderHealthReport {
+        environment_id: environment_id.clone(),
+        instance_id: config.id,
+        provider: config.provider,
+        display_name: config.display_name,
+        enabled: config.enabled,
+        installed: snapshot.installed,
+        resolved_executable: snapshot.resolved_executable,
+        version: snapshot.version,
+        status: status.to_string(),
+        authentication_state: authentication_state.to_string(),
+        authentication_confidence: authentication_confidence.to_string(),
+        runtime_status: runtime_status.to_string(),
+        runtime_code: snapshot.runtime_code,
+        account_badge,
+        subscription,
+        reason,
+        disabled_reason: None,
+        checked_at_ms: snapshot.checked_at_ms,
+        expires_at_ms: snapshot.expires_at_ms,
+        last_success_at_ms: None,
+        login_guidance: Some(provider_login_guidance(config.provider)),
+        retryable: true,
+    }
+}
+
+fn capacity_snapshots_from_provider_report(
+    environment_id: &EnvironmentId,
+    config: &pandamux_core::provider_config::ProviderInstanceConfig,
+    subscription_key: pandamux_core::SubscriptionKey,
+    report: Option<pandamux_providers::UsageLimits>,
+    observed_at_ms: u64,
+) -> Vec<CapacitySnapshot> {
+    let Some(report) = report else {
+        return vec![CapacitySnapshot {
+            schema_version: CAPACITY_SNAPSHOT_SCHEMA_VERSION,
+            subscription_key,
+            environment_id: Some(environment_id.clone()),
+            provider_instance_id: Some(config.id.clone()),
+            window_name: None,
+            window_start_ms: None,
+            window_end_ms: None,
+            used_millionths: None,
+            remaining_millionths: None,
+            reset_at_ms: None,
+            source: if config.enabled {
+                format!("{}_capacity_unreported", config.provider.as_str())
+            } else {
+                "provider_disabled".to_string()
+            },
+            confidence: CapacityConfidence::Unknown,
+            evidence_scope: CapacityEvidenceScope::Local,
+            hard_limit: false,
+            provider_version: None,
+            as_of_ms: observed_at_ms,
+            max_age_ms: DEFAULT_CAPACITY_MAX_AGE_MS,
+        }];
+    };
+
+    let as_of_ms = if report.as_of_ms == 0 {
+        observed_at_ms
+    } else {
+        report.as_of_ms
+    };
+    if report.limits.is_empty() {
+        return vec![CapacitySnapshot {
+            schema_version: CAPACITY_SNAPSHOT_SCHEMA_VERSION,
+            subscription_key,
+            environment_id: Some(environment_id.clone()),
+            provider_instance_id: Some(config.id.clone()),
+            window_name: None,
+            window_start_ms: None,
+            window_end_ms: None,
+            used_millionths: None,
+            remaining_millionths: None,
+            reset_at_ms: None,
+            source: report.source,
+            confidence: CapacityConfidence::Unknown,
+            evidence_scope: CapacityEvidenceScope::Local,
+            hard_limit: false,
+            provider_version: report.provider_version,
+            as_of_ms,
+            max_age_ms: DEFAULT_CAPACITY_MAX_AGE_MS,
+        }];
+    }
+
+    report
+        .limits
+        .into_iter()
+        .map(|limit| {
+            let duration_ms = u64::from(limit.window_duration_mins).saturating_mul(60 * 1000);
+            let window_start_ms = limit
+                .resets_at_ms
+                .map(|reset| reset.saturating_sub(duration_ms));
+            CapacitySnapshot {
+                schema_version: CAPACITY_SNAPSHOT_SCHEMA_VERSION,
+                subscription_key: subscription_key.clone(),
+                environment_id: Some(environment_id.clone()),
+                provider_instance_id: Some(config.id.clone()),
+                window_name: Some(limit.limit_name),
+                window_start_ms,
+                window_end_ms: limit.resets_at_ms,
+                used_millionths: limit.used_millionths,
+                remaining_millionths: limit.remaining_millionths,
+                reset_at_ms: limit.resets_at_ms,
+                source: report.source.clone(),
+                confidence: report.confidence,
+                evidence_scope: CapacityEvidenceScope::Local,
+                hard_limit: limit.hard_limit
+                    && limit.remaining_millionths == Some(0)
+                    && limit.resets_at_ms.is_some(),
+                provider_version: report.provider_version.clone(),
+                as_of_ms,
+                max_age_ms: DEFAULT_CAPACITY_MAX_AGE_MS,
+            }
+        })
+        .collect()
 }
 
 fn parse_usage_params<T>(params: Value, method: &str) -> Result<T, RpcError>
@@ -238,6 +511,7 @@ impl Router {
             terminal,
             environment_router,
             remote_terminals: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            login_previews: Arc::new(std::sync::Mutex::new(HashMap::new())),
             hark: Arc::new(crate::hark::HarkBridge::default()),
             data_dir,
             role,
@@ -710,11 +984,15 @@ impl Router {
             "settings.get" | "config.get" => self.handle_settings_get(params),
             "settings.set" | "config.set" => self.handle_settings_set(params),
             "provider.health" | "provider.probe" => self.handle_provider_health(params).await,
+            "provider.login.preview" => self.handle_provider_login_preview(params).await,
+            "provider.login.launch" => self.handle_provider_login_launch(params),
             "usage.export" => self.handle_usage_export(context, params),
             "usage.backfill" => self.handle_usage_backfill(context, params),
             "usage.ack" => self.handle_usage_ack(context, params),
             "usage.query" => self.handle_usage_query(context, params),
             "capacity.query" => self.handle_capacity_query(context, params),
+            "capacity.refresh" => self.handle_capacity_refresh(context, params).await,
+            "capacity.push" => self.handle_capacity_push(context, params),
             "mcp.list_tools" => self.handle_mcp_list_tools(),
             "mcp.call_tool" => self.handle_mcp_call_tool(params),
             "notification.post" => self.handle_notification_post(params).await,
@@ -1038,9 +1316,21 @@ impl Router {
         let has_more = instances.len() > filter.limit as usize;
         instances.truncate(filter.limit as usize);
 
+        enum ProbeOutcome {
+            Snapshot(pandamux_providers::ProviderSnapshot),
+            TimedOut,
+        }
+
+        let semaphore = Arc::new(Semaphore::new(filter.max_concurrency as usize));
+        let mut tasks = JoinSet::new();
         let mut reports = Vec::with_capacity(instances.len());
+        let mut expected = HashMap::new();
 
         for inst in instances {
+            expected.insert(
+                inst.id.clone(),
+                (inst.provider, inst.display_name.clone(), inst.enabled),
+            );
             match self
                 .provider_resolver
                 .resolve_allow_disabled(&inst.id, &environment_id)
@@ -1052,70 +1342,51 @@ impl Router {
                         .map(|reason| reason.message.clone())
                         .unwrap_or_else(|| "Provider instance is disabled".to_string());
                     reports.push(ProviderHealthReport {
+                        environment_id: environment_id.clone(),
                         instance_id: resolved.config.id,
                         provider: resolved.config.provider,
                         display_name: resolved.config.display_name,
                         enabled: false,
                         installed: false,
+                        resolved_executable: None,
                         version: None,
                         status: "disabled".to_string(),
+                        authentication_state: "unknown".to_string(),
+                        authentication_confidence: "unknown".to_string(),
+                        runtime_status: "disabled".to_string(),
+                        runtime_code: Some("provider_disabled".to_string()),
                         account_badge: None,
                         subscription: None,
                         reason: Some(reason),
                         disabled_reason,
                         checked_at_ms: Self::now_ms(),
+                        expires_at_ms: Self::now_ms()
+                            .saturating_add(pandamux_providers::PROVIDER_SNAPSHOT_TTL_MS),
+                        last_success_at_ms: None,
+                        login_guidance: Some(provider_login_guidance(resolved.config.provider)),
+                        retryable: false,
                     });
                 }
                 Ok(resolved) => {
-                    let snapshot = resolved.driver.probe(&resolved.config).await;
-                    let (status, reason) = match &snapshot.health {
-                        pandamux_providers::models::ProviderHealth::Healthy => match &snapshot.auth
-                        {
-                            pandamux_providers::models::ProviderAuthStatus::Authenticated {
-                                ..
-                            } => ("healthy".to_string(), None),
-                            pandamux_providers::models::ProviderAuthStatus::Unauthenticated => (
-                                "unauthenticated".to_string(),
-                                Some("Not logged in".to_string()),
-                            ),
-                            pandamux_providers::models::ProviderAuthStatus::Unknown => (
-                                "unknown".to_string(),
-                                Some("Authentication state is unknown".to_string()),
-                            ),
-                        },
-                        pandamux_providers::models::ProviderHealth::Degraded { reason } => {
-                            ("degraded".to_string(), Some(reason.clone()))
-                        }
-                        pandamux_providers::models::ProviderHealth::Unavailable { reason } => {
-                            ("unavailable".to_string(), Some(reason.clone()))
-                        }
-                    };
-
-                    let (account_badge, subscription) = match &snapshot.auth {
-                        pandamux_providers::models::ProviderAuthStatus::Authenticated {
-                            account_label,
-                            email: _,
-                            subscription,
-                        } => (
-                            account_badge_label(account_label.as_deref(), subscription.as_deref()),
-                            subscription.clone(),
-                        ),
-                        _ => (None, None),
-                    };
-
-                    reports.push(ProviderHealthReport {
-                        instance_id: resolved.config.id,
-                        provider: resolved.config.provider,
-                        display_name: resolved.config.display_name,
-                        enabled: resolved.config.enabled,
-                        installed: snapshot.installed,
-                        version: snapshot.version,
-                        status,
-                        account_badge,
-                        subscription,
-                        reason,
-                        disabled_reason: None,
-                        checked_at_ms: snapshot.checked_at_ms,
+                    let semaphore = semaphore.clone();
+                    let timeout = Duration::from_millis(filter.timeout_ms);
+                    tasks.spawn(async move {
+                        let permit = semaphore.acquire_owned().await;
+                        let outcome = match permit {
+                            Ok(_permit) => {
+                                match tokio::time::timeout(
+                                    timeout,
+                                    resolved.driver.probe(&resolved.config),
+                                )
+                                .await
+                                {
+                                    Ok(snapshot) => ProbeOutcome::Snapshot(snapshot),
+                                    Err(_) => ProbeOutcome::TimedOut,
+                                }
+                            }
+                            Err(_) => ProbeOutcome::TimedOut,
+                        };
+                        (resolved.config, outcome)
                     });
                 }
                 Err(error) => {
@@ -1127,21 +1398,126 @@ impl Router {
                         .map(str::to_string)
                         .unwrap_or_else(|| error.message.clone());
                     reports.push(ProviderHealthReport {
+                        environment_id: environment_id.clone(),
                         instance_id: inst.id.clone(),
                         provider: inst.provider,
                         display_name: inst.display_name.clone(),
                         enabled: inst.enabled,
                         installed: false,
+                        resolved_executable: None,
                         version: None,
                         status: "unavailable".to_string(),
+                        authentication_state: "unknown".to_string(),
+                        authentication_confidence: "unknown".to_string(),
+                        runtime_status: "unavailable".to_string(),
+                        runtime_code: Some("provider_resolution_failed".to_string()),
                         account_badge: None,
                         subscription: None,
                         reason: Some(reason),
                         disabled_reason: None,
                         checked_at_ms: Self::now_ms(),
+                        expires_at_ms: Self::now_ms()
+                            .saturating_add(pandamux_providers::PROVIDER_SNAPSHOT_TTL_MS),
+                        last_success_at_ms: None,
+                        login_guidance: Some(provider_login_guidance(inst.provider)),
+                        retryable: true,
                     });
                 }
             }
+        }
+
+        while let Some(result) = tasks.join_next().await {
+            let Ok((config, outcome)) = result else {
+                continue;
+            };
+            let report = match outcome {
+                ProbeOutcome::Snapshot(snapshot) => {
+                    provider_health_report_from_snapshot(&environment_id, config, snapshot)
+                }
+                ProbeOutcome::TimedOut => {
+                    let checked_at_ms = Self::now_ms();
+                    ProviderHealthReport {
+                        environment_id: environment_id.clone(),
+                        instance_id: config.id,
+                        provider: config.provider,
+                        display_name: config.display_name,
+                        enabled: config.enabled,
+                        installed: config.binary_path.is_some(),
+                        resolved_executable: config.binary_path,
+                        version: None,
+                        status: "unavailable".to_string(),
+                        authentication_state: "unknown".to_string(),
+                        authentication_confidence: "unknown".to_string(),
+                        runtime_status: "timeout".to_string(),
+                        runtime_code: Some("probe_timeout".to_string()),
+                        account_badge: None,
+                        subscription: None,
+                        reason: Some(format!(
+                            "Provider health probe exceeded {} ms",
+                            filter.timeout_ms
+                        )),
+                        disabled_reason: None,
+                        checked_at_ms,
+                        expires_at_ms: checked_at_ms
+                            .saturating_add(pandamux_providers::PROVIDER_SNAPSHOT_TTL_MS),
+                        last_success_at_ms: None,
+                        login_guidance: Some(provider_login_guidance(config.provider)),
+                        retryable: true,
+                    }
+                }
+            };
+            reports.push(report);
+        }
+
+        for (instance_id, (provider, display_name, enabled)) in expected {
+            if reports
+                .iter()
+                .any(|report| report.instance_id == instance_id)
+            {
+                continue;
+            }
+            let checked_at_ms = Self::now_ms();
+            reports.push(ProviderHealthReport {
+                environment_id: environment_id.clone(),
+                instance_id,
+                provider,
+                display_name,
+                enabled,
+                installed: false,
+                resolved_executable: None,
+                version: None,
+                status: "unavailable".to_string(),
+                authentication_state: "unknown".to_string(),
+                authentication_confidence: "unknown".to_string(),
+                runtime_status: "unavailable".to_string(),
+                runtime_code: Some("probe_task_failed".to_string()),
+                account_badge: None,
+                subscription: None,
+                reason: Some("Provider health probe task failed".to_string()),
+                disabled_reason: None,
+                checked_at_ms,
+                expires_at_ms: checked_at_ms
+                    .saturating_add(pandamux_providers::PROVIDER_SNAPSHOT_TTL_MS),
+                last_success_at_ms: None,
+                login_guidance: Some(provider_login_guidance(provider)),
+                retryable: true,
+            });
+        }
+
+        reports.sort_by(|left, right| left.instance_id.cmp(&right.instance_id));
+        for report in &mut reports {
+            let previous = self
+                .store
+                .latest_provider_health_report(&report.environment_id, &report.instance_id)
+                .map_err(|error| RpcError::internal_error(error.to_string()))?;
+            report.last_success_at_ms = if report.status == "healthy" {
+                Some(report.checked_at_ms)
+            } else {
+                previous.and_then(|previous| previous.last_success_at_ms)
+            };
+            self.store
+                .save_provider_health_report(report)
+                .map_err(|error| RpcError::internal_error(error.to_string()))?;
         }
 
         let next_instance_id = reports.last().map(|report| report.instance_id.clone());
@@ -1151,6 +1527,205 @@ impl Router {
             has_more,
         };
         serde_json::to_value(&res).map_err(|e| RpcError::internal_error(e.to_string()))
+    }
+
+    async fn handle_provider_login_preview(&self, params: Value) -> Result<Value, RpcError> {
+        let params: ProviderLoginPreviewParams =
+            serde_json::from_value(params).map_err(|error| {
+                RpcError::invalid_params(format!("Invalid provider.login.preview params: {error}"))
+            })?;
+        let environment_id = params
+            .environment_id
+            .unwrap_or_else(|| EnvironmentId::new(self.environment_id.clone()));
+        let resolved = self
+            .provider_resolver
+            .resolve_allow_disabled(&params.provider_instance_id, &environment_id)?;
+        let args = match resolved.config.provider {
+            ProviderKind::Claude => vec!["auth".to_string(), "login".to_string()],
+            ProviderKind::Codex => vec!["login".to_string()],
+            provider => {
+                let guidance = provider_login_guidance(provider);
+                return Err(RpcError::with_data(
+                    -32020,
+                    guidance.summary,
+                    json!({
+                        "reason": guidance.unavailable_reason
+                            .unwrap_or_else(|| "provider_login_requires_dedicated_flow".to_string()),
+                        "providerInstanceId": params.provider_instance_id,
+                        "environmentId": environment_id,
+                        "flow": guidance.flow,
+                        "retryable": true,
+                    }),
+                ));
+            }
+        };
+        let snapshot = tokio::time::timeout(
+            Duration::from_millis(pandamux_protocol::DEFAULT_PROVIDER_PROBE_TIMEOUT_MS),
+            resolved.driver.probe(&resolved.config),
+        )
+        .await
+        .map_err(|_| {
+            RpcError::with_data(
+                -32020,
+                "Provider login preview could not resolve the executable before its deadline",
+                json!({
+                    "reason": "provider_login_preview_timeout",
+                    "providerInstanceId": params.provider_instance_id,
+                    "environmentId": environment_id,
+                    "retryable": true,
+                }),
+            )
+        })?;
+        let program = snapshot.resolved_executable.ok_or_else(|| {
+            RpcError::with_data(
+                -32020,
+                "Provider executable is not installed or could not be resolved",
+                json!({
+                    "reason": "provider_login_executable_missing",
+                    "providerInstanceId": params.provider_instance_id,
+                    "environmentId": environment_id,
+                    "retryable": true,
+                }),
+            )
+        })?;
+        if program.chars().any(char::is_control) {
+            return Err(RpcError::with_data(
+                -32020,
+                "Resolved provider executable contains unsafe control characters",
+                json!({
+                    "reason": "provider_login_executable_invalid",
+                    "retryable": false,
+                }),
+            ));
+        }
+        let display_command = render_login_command(&program, &args);
+        let mut environment = resolved
+            .config
+            .env_overrides
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<HashMap<_, _>>();
+        let profile = resolved.config.profile_dir.clone();
+        let profile_key = match resolved.config.provider {
+            ProviderKind::Claude => pandamux_providers::ENV_CLAUDE_CONFIG_DIR,
+            ProviderKind::Codex => pandamux_providers::ENV_CODEX_HOME,
+            _ => unreachable!("unsupported login provider was rejected"),
+        };
+        environment.insert(profile_key.to_string(), profile.clone());
+        let now_ms = Self::now_ms();
+        let preview = ProviderLoginPreview {
+            preview_id: format!("login-preview-{}", uuid::Uuid::new_v4()),
+            environment_id,
+            provider_instance_id: resolved.config.id,
+            provider: resolved.config.provider,
+            profile,
+            flow: ProviderLoginFlow::Terminal,
+            display_command,
+            expires_at_ms: now_ms.saturating_add(5 * 60 * 1000),
+        };
+        let record = LoginPreviewRecord {
+            preview: preview.clone(),
+            environment,
+            shell: login_shell()?,
+        };
+        let mut previews = self
+            .login_previews
+            .lock()
+            .map_err(|_| RpcError::internal_error("Provider login preview registry lock failed"))?;
+        previews.retain(|_, candidate| candidate.preview.expires_at_ms > now_ms);
+        previews.insert(preview.preview_id.clone(), record);
+        serde_json::to_value(preview).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn handle_provider_login_launch(&self, params: Value) -> Result<Value, RpcError> {
+        let params: ProviderLoginLaunchParams =
+            serde_json::from_value(params).map_err(|error| {
+                RpcError::invalid_params(format!("Invalid provider.login.launch params: {error}"))
+            })?;
+        let environment_id = params
+            .environment_id
+            .unwrap_or_else(|| EnvironmentId::new(self.environment_id.clone()));
+        let now_ms = Self::now_ms();
+        let record = {
+            let mut previews = self.login_previews.lock().map_err(|_| {
+                RpcError::internal_error("Provider login preview registry lock failed")
+            })?;
+            previews.retain(|_, candidate| candidate.preview.expires_at_ms > now_ms);
+            previews.get(&params.preview_id).cloned()
+        }
+        .ok_or_else(|| {
+            RpcError::with_data(
+                -32020,
+                "Provider login preview is missing or expired",
+                json!({
+                    "reason": "provider_login_preview_expired",
+                    "retryable": true,
+                }),
+            )
+        })?;
+        if record.preview.environment_id != environment_id
+            || record.preview.provider_instance_id != params.provider_instance_id
+        {
+            return Err(RpcError::with_data(
+                -32020,
+                "Provider login launch does not match its preview",
+                json!({
+                    "reason": "provider_login_preview_mismatch",
+                    "retryable": true,
+                }),
+            ));
+        }
+        let opened = self
+            .terminal
+            .open(TerminalOpenParams {
+                terminal_id: None,
+                environment_id: Some(environment_id.clone()),
+                cwd: std::env::current_dir()
+                    .ok()
+                    .map(|path| path.to_string_lossy().to_string()),
+                shell: record.shell,
+                rows: Some(30),
+                cols: Some(120),
+                env: Some(record.environment),
+            })
+            .map_err(|error| {
+                RpcError::with_data(
+                    -32020,
+                    format!("Failed to open provider login terminal: {error}"),
+                    json!({
+                        "reason": "provider_login_terminal_open_failed",
+                        "retryable": true,
+                    }),
+                )
+            })?;
+        if let Err(error) = self.terminal.input(TerminalInputParams {
+            terminal_id: opened.terminal_id.clone(),
+            data: format!("{}\n", record.preview.display_command),
+        }) {
+            let _ = self.terminal.close(TerminalCloseParams {
+                terminal_id: opened.terminal_id.clone(),
+            });
+            return Err(RpcError::with_data(
+                -32020,
+                format!("Failed to launch provider login command: {error}"),
+                json!({
+                    "reason": "provider_login_terminal_input_failed",
+                    "terminalId": opened.terminal_id,
+                    "retryable": true,
+                }),
+            ));
+        }
+        if let Ok(mut previews) = self.login_previews.lock() {
+            previews.remove(&params.preview_id);
+        }
+        serde_json::to_value(ProviderLoginLaunchResult {
+            environment_id,
+            provider_instance_id: params.provider_instance_id,
+            terminal_id: opened.terminal_id,
+            display_command: record.preview.display_command,
+            retryable: true,
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
     }
 
     fn handle_usage_export(
@@ -1246,6 +1821,189 @@ impl Router {
             .query_capacity(&params)
             .map_err(|error| RpcError::internal_error(error.to_string()))?;
         serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_capacity_refresh(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        self.require_capacity_refresh_peer(context)?;
+        let params: CapacityRefreshParams = parse_usage_params(params, "capacity.refresh")?;
+        params
+            .validate()
+            .map_err(|error| usage_params_error("capacity_refresh_invalid", error))?;
+        let environment_id = params
+            .environment_id
+            .clone()
+            .unwrap_or_else(|| EnvironmentId::new(self.environment_id.clone()));
+        if environment_id != context.authenticated_environment_id
+            && !matches!(
+                context.peer_role,
+                PeerRole::Internal | PeerRole::LocalControl
+            )
+        {
+            return Err(RpcError::with_data(
+                -32001,
+                "Capacity refresh environment does not match the authenticated peer",
+                json!({ "reason": "capacity_environment_mismatch" }),
+            ));
+        }
+
+        let settings = self
+            .store
+            .get_settings()
+            .map_err(|error| RpcError::internal_error(error.to_string()))?
+            .unwrap_or_default();
+        let mut snapshots = Vec::new();
+        let mut subscriptions = BTreeMap::new();
+        let mut matched = false;
+        for config in settings.providers.iter().filter(|config| {
+            params
+                .provider_instance_id
+                .as_ref()
+                .is_none_or(|requested| requested == &config.id)
+        }) {
+            matched = true;
+            let Some((subscription_key, _)) = self
+                .store
+                .usage_subscription_for_provider(&environment_id, &config.id)
+                .map_err(|error| RpcError::internal_error(error.to_string()))?
+            else {
+                if params.provider_instance_id.is_some() {
+                    return Err(RpcError::with_data(
+                        -32020,
+                        "Provider instance has no explicit subscription mapping",
+                        json!({
+                            "reason": "capacity_subscription_mapping_missing",
+                            "providerInstanceId": config.id,
+                            "environmentId": environment_id,
+                        }),
+                    ));
+                }
+                continue;
+            };
+            let subscription = self
+                .store
+                .usage_subscription_by_key(&subscription_key)
+                .map_err(|error| RpcError::internal_error(error.to_string()))?
+                .ok_or_else(|| {
+                    RpcError::internal_error(
+                        "Provider subscription mapping references missing metadata",
+                    )
+                })?;
+            subscriptions.insert(subscription_key.clone(), subscription);
+            let resolved = self
+                .provider_resolver
+                .resolve_allow_disabled(&config.id, &environment_id)?;
+            let report = if resolved.config.enabled {
+                tokio::time::timeout(
+                    Duration::from_millis(params.timeout_ms),
+                    resolved.driver.usage_limits(&resolved.config),
+                )
+                .await
+                .ok()
+                .flatten()
+            } else {
+                None
+            };
+            let mut instance_snapshots = capacity_snapshots_from_provider_report(
+                &environment_id,
+                &resolved.config,
+                subscription_key,
+                report,
+                Self::now_ms(),
+            );
+            self.store
+                .save_capacity_snapshots(&instance_snapshots)
+                .map_err(|error| RpcError::internal_error(error.to_string()))?;
+            snapshots.append(&mut instance_snapshots);
+        }
+        if params.provider_instance_id.is_some() && !matched {
+            return Err(RpcError::with_data(
+                -32020,
+                "Provider instance does not exist",
+                json!({ "reason": "provider_instance_missing" }),
+            ));
+        }
+        let subscriptions: Vec<UsageSubscription> = subscriptions.into_values().collect();
+        serde_json::to_value(CapacityRefreshResult {
+            subscriptions,
+            snapshots,
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn handle_capacity_push(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        self.require_capacity_push_peer(context)?;
+        let params: CapacityPushParams = serde_json::from_value(params).map_err(|error| {
+            usage_params_error(
+                "capacity_push_params_invalid",
+                format!("Invalid capacity.push params: {error}"),
+            )
+        })?;
+        params
+            .validate()
+            .map_err(|error| usage_params_error("capacity_push_invalid", error))?;
+        let authenticated_environment_id = if matches!(context.peer_role, PeerRole::Internal) {
+            EnvironmentId::new(self.environment_id.clone())
+        } else {
+            context.authenticated_environment_id.clone()
+        };
+        if params.environment_id != authenticated_environment_id {
+            return Err(RpcError::with_data(
+                -32001,
+                "Capacity push environment does not match the authenticated context",
+                json!({ "reason": "capacity_environment_mismatch" }),
+            ));
+        }
+        let snapshots = params
+            .snapshots
+            .into_iter()
+            .map(|mut snapshot| {
+                snapshot.schema_version = params.schema_version;
+                snapshot.environment_id = Some(authenticated_environment_id.clone());
+                snapshot.evidence_scope = CapacityEvidenceScope::Hub;
+                snapshot.max_age_ms = params.max_age_ms;
+                snapshot
+            })
+            .collect::<Vec<_>>();
+        self.store
+            .save_capacity_snapshots(&snapshots)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        serde_json::to_value(CapacityPushResult {
+            accepted: u32::try_from(snapshots.len()).unwrap_or(u32::MAX),
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn require_capacity_refresh_peer(&self, context: &RequestContext) -> Result<(), RpcError> {
+        if matches!(
+            context.peer_role,
+            PeerRole::Internal | PeerRole::LocalControl | PeerRole::NodeProxy
+        ) {
+            return Ok(());
+        }
+        Err(RpcError::with_data(
+            -32001,
+            "Capacity refresh requires authenticated control or Hub context",
+            json!({ "reason": "capacity_refresh_peer_required" }),
+        ))
+    }
+
+    fn require_capacity_push_peer(&self, context: &RequestContext) -> Result<(), RpcError> {
+        if matches!(context.peer_role, PeerRole::Internal | PeerRole::NodeProxy) {
+            return Ok(());
+        }
+        Err(RpcError::with_data(
+            -32001,
+            "Capacity push is restricted to the authenticated Hub context",
+            json!({ "reason": "capacity_hub_peer_required" }),
+        ))
     }
 
     fn require_hub_usage_peer(&self, context: &RequestContext) -> Result<(), RpcError> {
@@ -3834,5 +4592,514 @@ Host worker-node
             .unwrap();
         assert!(response.is_success());
         assert!(received_bundle.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn health_fixtures_are_bounded_persisted_and_never_start_sessions() {
+        let store = Store::in_memory().expect("open health store");
+        let scenarios = [
+            (
+                "missing",
+                json!({
+                    "installed": false,
+                    "authState": "unknown",
+                    "authConfidence": "unknown",
+                    "runtimeHealth": "unavailable",
+                    "runtimeCode": "binary_missing",
+                    "probeDelayMs": 30
+                }),
+            ),
+            (
+                "unsupported",
+                json!({
+                    "version": "0.0.1",
+                    "authState": "authenticated",
+                    "runtimeHealth": "unavailable",
+                    "runtimeCode": "unsupported_version",
+                    "probeDelayMs": 30
+                }),
+            ),
+            (
+                "unknown-auth",
+                json!({
+                    "authState": "unknown",
+                    "authConfidence": "unknown",
+                    "runtimeHealth": "healthy",
+                    "probeDelayMs": 30
+                }),
+            ),
+            (
+                "logged-out",
+                json!({
+                    "authState": "unauthenticated",
+                    "authConfidence": "reported",
+                    "runtimeHealth": "healthy",
+                    "probeDelayMs": 30
+                }),
+            ),
+            (
+                "logged-in",
+                json!({
+                    "authState": "authenticated",
+                    "authConfidence": "reported",
+                    "runtimeHealth": "healthy",
+                    "accountLabel": "person@example.com",
+                    "subscription": "Team",
+                    "probeDelayMs": 30
+                }),
+            ),
+            (
+                "malformed",
+                json!({
+                    "authState": "unknown",
+                    "authConfidence": "unknown",
+                    "runtimeHealth": "degraded",
+                    "runtimeCode": "malformed_output",
+                    "healthReason": "Provider returned malformed probe output",
+                    "probeDelayMs": 30
+                }),
+            ),
+            (
+                "timeout",
+                json!({
+                    "authState": "authenticated",
+                    "runtimeHealth": "healthy",
+                    "probeDelayMs": 150
+                }),
+            ),
+        ];
+        let providers = scenarios
+            .into_iter()
+            .map(|(id, settings)| pandamux_core::ProviderInstanceConfig {
+                id: pandamux_core::ProviderInstanceId::new(id),
+                provider: ProviderKind::Custom,
+                display_name: id.to_string(),
+                profile_dir: format!("profiles/custom/{id}"),
+                environment_id: None,
+                binary_path: Some(format!("/mock/bin/{id}")),
+                concurrency_limit: 1,
+                env_overrides: Default::default(),
+                settings,
+                enabled: true,
+                disabled_reason: None,
+            })
+            .collect::<Vec<_>>();
+        store
+            .save_settings(&UserSettings {
+                providers,
+                ..UserSettings::default()
+            })
+            .expect("save health fixtures");
+        let driver = Arc::new(pandamux_providers::MockProviderDriver::new(
+            ProviderKind::Custom,
+            "Health fixture",
+        ));
+        let drivers = Arc::new(DriverRegistry::new());
+        drivers.register(ProviderKind::Custom, driver.clone());
+        let router = Router::with_drivers(
+            store.clone(),
+            ServerRole::Hub,
+            "env-health".to_string(),
+            drivers,
+        );
+
+        let response = router
+            .handle_request(RpcRequest::new(
+                1,
+                "provider.health",
+                Some(json!({
+                    "timeoutMs": 80,
+                    "maxConcurrency": 2
+                })),
+            ))
+            .await
+            .expect("health response");
+        let result: ProviderHealthResult =
+            serde_json::from_value(response.result.expect("health result"))
+                .expect("typed health result");
+        assert_eq!(result.reports.len(), 7);
+        let report = |id: &str| {
+            result
+                .reports
+                .iter()
+                .find(|report| report.instance_id.as_str() == id)
+                .expect("health fixture report")
+        };
+        assert_eq!(
+            report("missing").runtime_code.as_deref(),
+            Some("binary_missing")
+        );
+        assert_eq!(
+            report("unsupported").runtime_code.as_deref(),
+            Some("unsupported_version")
+        );
+        assert_eq!(report("unknown-auth").status, "unknown");
+        assert_eq!(report("logged-out").status, "unauthenticated");
+        assert_eq!(report("logged-in").status, "healthy");
+        assert_eq!(
+            report("logged-in").account_badge.as_deref(),
+            Some("p***@example.com (Te***)")
+        );
+        assert_eq!(report("logged-in").subscription.as_deref(), Some("Te***"));
+        assert!(
+            !serde_json::to_string(report("logged-in"))
+                .expect("serialize masked health report")
+                .contains("Team")
+        );
+        assert_eq!(report("malformed").status, "degraded");
+        assert_eq!(report("timeout").runtime_status, "timeout");
+        assert!(report("timeout").retryable);
+        assert!(driver.max_concurrent_probes() >= 2);
+        assert!(driver.max_concurrent_probes() <= 2);
+        assert_eq!(driver.session_start_count(), 0);
+        assert_eq!(
+            store
+                .provider_health_snapshot_count()
+                .expect("health snapshot count"),
+            7
+        );
+
+        let first_success = report("logged-in")
+            .last_success_at_ms
+            .expect("healthy last success");
+        let mut settings = store
+            .get_settings()
+            .expect("load health settings")
+            .expect("health settings");
+        settings
+            .providers
+            .iter_mut()
+            .find(|config| config.id.as_str() == "logged-in")
+            .expect("logged-in config")
+            .settings = json!({
+            "authState": "unknown",
+            "authConfidence": "unknown",
+            "runtimeHealth": "unavailable",
+            "runtimeCode": "remote_probe_failed"
+        });
+        store
+            .save_settings(&settings)
+            .expect("save failed health state");
+        let failed = router
+            .handle_request(RpcRequest::new(
+                2,
+                "provider.health",
+                Some(json!({
+                    "instanceId": "logged-in",
+                    "timeoutMs": 80,
+                    "maxConcurrency": 1
+                })),
+            ))
+            .await
+            .expect("failed health response");
+        let failed: ProviderHealthResult =
+            serde_json::from_value(failed.result.expect("failed health result"))
+                .expect("typed failed health result");
+        assert_eq!(failed.reports[0].status, "unavailable");
+        assert_eq!(failed.reports[0].last_success_at_ms, Some(first_success));
+        assert_eq!(driver.session_start_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn remote_health_and_login_launch_failures_remain_visible_and_retryable() {
+        let store = Store::in_memory().expect("open provider action store");
+        let provider = pandamux_core::ProviderInstanceConfig {
+            id: pandamux_core::ProviderInstanceId::new("claude-login"),
+            provider: ProviderKind::Claude,
+            display_name: "Claude Login".to_string(),
+            profile_dir: "profiles/claude/login".to_string(),
+            environment_id: None,
+            binary_path: Some("/mock/bin/claude".to_string()),
+            concurrency_limit: 1,
+            env_overrides: Default::default(),
+            settings: json!({ "authState": "unauthenticated" }),
+            enabled: true,
+            disabled_reason: None,
+        };
+        store
+            .save_settings(&UserSettings {
+                providers: vec![provider],
+                ..UserSettings::default()
+            })
+            .expect("save login provider");
+        let driver = Arc::new(pandamux_providers::MockProviderDriver::new(
+            ProviderKind::Claude,
+            "Login fixture",
+        ));
+        let drivers = Arc::new(DriverRegistry::new());
+        drivers.register(ProviderKind::Claude, driver.clone());
+        let router = Router::with_drivers(store, ServerRole::Hub, "env-login".to_string(), drivers);
+
+        let unreachable = router
+            .handle_request(RpcRequest::new(
+                1,
+                "provider.health",
+                Some(json!({ "environmentId": "env-offline" })),
+            ))
+            .await
+            .expect("unreachable response");
+        let unreachable = unreachable.error.expect("unreachable error");
+        let unreachable_data = unreachable.data.expect("unreachable data");
+        assert_eq!(unreachable_data["state"], "unreachable");
+        assert_eq!(unreachable_data["retryable"], true);
+
+        let preview = router
+            .handle_request(RpcRequest::new(
+                2,
+                "provider.login.preview",
+                Some(json!({
+                    "providerInstanceId": "claude-login",
+                    "environmentId": "env-login"
+                })),
+            ))
+            .await
+            .expect("preview response");
+        let preview: ProviderLoginPreview =
+            serde_json::from_value(preview.result.expect("preview result")).expect("typed preview");
+        assert_eq!(preview.flow, ProviderLoginFlow::Terminal);
+        assert!(preview.display_command.contains("auth"));
+        assert!(preview.display_command.contains("login"));
+        assert!(router.terminal.list().terminals.is_empty());
+
+        let failed_launch = router
+            .handle_request(RpcRequest::new(
+                3,
+                "provider.login.launch",
+                Some(json!({
+                    "previewId": preview.preview_id.clone(),
+                    "providerInstanceId": "different-instance",
+                    "environmentId": "env-login"
+                })),
+            ))
+            .await
+            .expect("failed launch response");
+        let failed_launch = failed_launch.error.expect("failed launch error");
+        let data = failed_launch.data.expect("failed launch data");
+        assert_eq!(data["reason"], "provider_login_preview_mismatch");
+        assert_eq!(data["retryable"], true);
+        assert!(router.terminal.list().terminals.is_empty());
+
+        let invalid_shell = tempfile::tempdir().expect("invalid shell directory");
+        router
+            .login_previews
+            .lock()
+            .expect("login preview registry")
+            .get_mut(&preview.preview_id)
+            .expect("retained login preview")
+            .shell = Some(invalid_shell.path().to_string_lossy().to_string());
+        let terminal_failure = router
+            .handle_request(RpcRequest::new(
+                4,
+                "provider.login.launch",
+                Some(json!({
+                    "previewId": preview.preview_id.clone(),
+                    "providerInstanceId": "claude-login",
+                    "environmentId": "env-login"
+                })),
+            ))
+            .await
+            .expect("terminal failure response")
+            .error
+            .expect("terminal failure error");
+        let terminal_failure = terminal_failure.data.expect("terminal failure data");
+        assert_eq!(
+            terminal_failure["reason"],
+            "provider_login_terminal_open_failed"
+        );
+        assert_eq!(terminal_failure["retryable"], true);
+        assert!(router.terminal.list().terminals.is_empty());
+        assert_eq!(driver.session_start_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn capacity_refresh_and_context_bound_push_preserve_safer_local_evidence() {
+        let store = Store::in_memory().expect("open capacity store");
+        let environment_id = EnvironmentId::new("env-capacity");
+        let instance_id = pandamux_core::ProviderInstanceId::new("custom-capacity");
+        let subscription_key = pandamux_core::SubscriptionKey::new("subkey-capacity");
+        store
+            .save_settings(&UserSettings {
+                providers: vec![pandamux_core::ProviderInstanceConfig {
+                    id: instance_id.clone(),
+                    provider: ProviderKind::Custom,
+                    display_name: "Capacity fixture".to_string(),
+                    profile_dir: "profiles/custom/capacity".to_string(),
+                    environment_id: None,
+                    binary_path: Some("/mock/bin/capacity".to_string()),
+                    concurrency_limit: 1,
+                    env_overrides: Default::default(),
+                    settings: json!({
+                        "capacityReport": {
+                            "source": "fixture_report",
+                            "confidence": "reported",
+                            "providerVersion": "fixture-2",
+                            "asOfMs": 1_000_000,
+                            "limits": [{
+                                "limitName": "primary",
+                                "usedMillionths": 400_000,
+                                "remainingMillionths": 600_000,
+                                "windowDurationMins": 60,
+                                "resetsAtMs": 2_000_000,
+                                "hardLimit": false
+                            }]
+                        }
+                    }),
+                    enabled: true,
+                    disabled_reason: None,
+                }],
+                ..UserSettings::default()
+            })
+            .expect("save capacity settings");
+        store
+            .save_usage_subscription(
+                &pandamux_core::UsageSubscription {
+                    key: subscription_key.clone(),
+                    provider: pandamux_core::UsageProvider::Custom,
+                    display_name: "Capacity subscription".to_string(),
+                    masked_account_label: None,
+                },
+                1,
+            )
+            .expect("save capacity subscription");
+        store
+            .map_provider_subscription(&environment_id, &instance_id, &subscription_key, 1)
+            .expect("map capacity subscription");
+        let drivers = Arc::new(DriverRegistry::new());
+        drivers.register(
+            ProviderKind::Custom,
+            Arc::new(pandamux_providers::MockProviderDriver::new(
+                ProviderKind::Custom,
+                "Capacity fixture",
+            )),
+        );
+        let router = Router::with_drivers(
+            store.clone(),
+            ServerRole::Hub,
+            environment_id.as_str().to_string(),
+            drivers,
+        );
+
+        let refreshed = router
+            .handle_request(RpcRequest::new(
+                1,
+                "capacity.refresh",
+                Some(json!({
+                    "environmentId": environment_id,
+                    "providerInstanceId": instance_id,
+                    "timeoutMs": 1000
+                })),
+            ))
+            .await
+            .expect("capacity refresh response");
+        let refreshed: CapacityRefreshResult =
+            serde_json::from_value(refreshed.result.expect("capacity refresh result"))
+                .expect("typed capacity refresh");
+        assert_eq!(refreshed.snapshots.len(), 1);
+        assert_eq!(refreshed.snapshots[0].remaining_millionths, Some(600_000));
+        assert_eq!(
+            refreshed.snapshots[0].confidence,
+            CapacityConfidence::Reported
+        );
+
+        let local_hard_limit = CapacitySnapshot {
+            schema_version: CAPACITY_SNAPSHOT_SCHEMA_VERSION,
+            subscription_key: subscription_key.clone(),
+            environment_id: Some(environment_id.clone()),
+            provider_instance_id: Some(instance_id.clone()),
+            window_name: Some("primary".to_string()),
+            window_start_ms: Some(900_000),
+            window_end_ms: Some(2_000_000),
+            used_millionths: Some(1_000_000),
+            remaining_millionths: Some(0),
+            reset_at_ms: Some(2_000_000),
+            source: "local_rate_limit".to_string(),
+            confidence: CapacityConfidence::Reported,
+            evidence_scope: CapacityEvidenceScope::Local,
+            hard_limit: true,
+            provider_version: Some("fixture-2".to_string()),
+            as_of_ms: 900_000,
+            max_age_ms: 1,
+        };
+        store
+            .save_capacity_snapshot(&local_hard_limit)
+            .expect("save local hard limit");
+        let hub_snapshot = CapacitySnapshot {
+            schema_version: CAPACITY_SNAPSHOT_SCHEMA_VERSION,
+            subscription_key: subscription_key.clone(),
+            environment_id: Some(EnvironmentId::new("spoofed-environment")),
+            provider_instance_id: Some(instance_id.clone()),
+            window_name: Some("primary".to_string()),
+            window_start_ms: Some(900_000),
+            window_end_ms: Some(2_000_000),
+            used_millionths: Some(100_000),
+            remaining_millionths: Some(900_000),
+            reset_at_ms: Some(2_000_000),
+            source: "hub_projection".to_string(),
+            confidence: CapacityConfidence::Reported,
+            evidence_scope: CapacityEvidenceScope::Local,
+            hard_limit: false,
+            provider_version: Some("fixture-2".to_string()),
+            as_of_ms: 1_010_000,
+            max_age_ms: DEFAULT_CAPACITY_MAX_AGE_MS,
+        };
+        let node_context = RequestContext::node_proxy(
+            environment_id.clone(),
+            crate::request_context::ClientIdentity::default(),
+        );
+        let pushed = router
+            .handle_request_with_context(
+                &node_context,
+                RpcRequest::new(
+                    2,
+                    "capacity.push",
+                    Some(
+                        serde_json::to_value(CapacityPushParams {
+                            environment_id: environment_id.clone(),
+                            schema_version: CAPACITY_SNAPSHOT_SCHEMA_VERSION,
+                            issued_at_ms: 1_010_000,
+                            max_age_ms: DEFAULT_CAPACITY_MAX_AGE_MS,
+                            snapshots: vec![hub_snapshot],
+                        })
+                        .expect("serialize capacity push"),
+                    ),
+                ),
+            )
+            .await
+            .expect("capacity push response");
+        assert!(pushed.is_success());
+
+        let queried = store
+            .query_capacity(&CapacityQueryParams {
+                subscription_key: Some(subscription_key),
+                environment_id: Some(environment_id.clone()),
+                at_ms: Some(1_010_000),
+                after: None,
+                limit: 100,
+            })
+            .expect("query effective capacity");
+        let effective = queried
+            .effective
+            .iter()
+            .find(|projection| projection.window_name.as_deref() == Some("primary"))
+            .expect("primary capacity projection");
+        assert_eq!(effective.remaining_millionths, Some(0));
+        assert!(effective.hard_limited);
+        assert!(effective.conflicting_evidence);
+        assert!(queried.snapshots.iter().any(|snapshot| {
+            snapshot.evidence_scope == CapacityEvidenceScope::Hub
+                && snapshot.environment_id.as_ref() == Some(&environment_id)
+        }));
+
+        store
+            .record_usage_sync_failure(&environment_id, true, "capacity_fixture_offline")
+            .expect("record offline environment");
+        let offline = store
+            .query_capacity(&CapacityQueryParams {
+                environment_id: Some(environment_id.clone()),
+                at_ms: Some(1_010_000),
+                ..CapacityQueryParams::default()
+            })
+            .expect("query offline coverage");
+        assert_eq!(offline.offline_environments, vec![environment_id]);
     }
 }

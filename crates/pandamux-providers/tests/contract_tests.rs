@@ -14,7 +14,7 @@ use pandamux_providers::{
         CodexApprovalPolicy, CodexNotificationEvent, CodexSandboxPolicy, JsonRpcResponse,
         build_approval_response, build_thread_start_request, build_turn_start_request,
         build_turn_start_request_with_attachments, codex_session_policies,
-        parse_codex_notification, parse_rate_limits_response,
+        parse_codex_notification, parse_rate_limits_response, parse_rate_limits_value,
     },
     resolve_command_shim, resolve_profile_dir,
 };
@@ -451,10 +451,35 @@ fn test_codex_lifecycle_and_ratelimits() {
     let parsed_limits = parse_rate_limits_response(&limits_resp).expect("parse rate limits");
     assert_eq!(parsed_limits.len(), 2);
     assert_eq!(parsed_limits[0].limit_name, "Codex primary");
-    assert_eq!(parsed_limits[0].used_percent, 34.0);
-    assert_eq!(parsed_limits[0].resets_at, "1790395200");
+    assert_eq!(parsed_limits[0].used_millionths, Some(340_000));
+    assert_eq!(parsed_limits[0].remaining_millionths, Some(660_000));
+    assert_eq!(parsed_limits[0].resets_at_ms, Some(1_790_395_200_000));
     assert_eq!(parsed_limits[1].limit_name, "Codex secondary");
-    assert_eq!(parsed_limits[1].used_percent, 18.0);
+    assert_eq!(parsed_limits[1].used_millionths, Some(180_000));
+    assert_eq!(parsed_limits[1].remaining_millionths, Some(820_000));
+}
+
+#[test]
+fn test_codex_rate_limit_fraction_conversion_is_exact_and_bounded() {
+    let limits = parse_rate_limits_value(&serde_json::json!({
+        "limitName": "Codex",
+        "primary": {
+            "usedPercent": "14.825",
+            "windowDurationMins": 300,
+            "resetsAt": "1790395200"
+        }
+    }))
+    .expect("parse exact decimal percentage");
+    assert_eq!(limits[0].used_millionths, Some(148_250));
+    assert_eq!(limits[0].remaining_millionths, Some(851_750));
+    assert_eq!(limits[0].resets_at_ms, Some(1_790_395_200_000));
+
+    assert!(
+        parse_rate_limits_value(&serde_json::json!({
+            "primary": { "usedPercent": 100.0001 }
+        }))
+        .is_err()
+    );
 }
 
 #[test]

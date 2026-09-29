@@ -3,7 +3,7 @@ use rusqlite::{Connection, Result, Transaction, params};
 use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const SCHEMA_VERSION: i64 = 8;
+pub const SCHEMA_VERSION: i64 = 9;
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -1165,6 +1165,76 @@ fn apply_migrations_to(conn: &mut Connection, target_version: i64) -> Result<()>
         tx.commit()?;
     }
 
+    if current < 9 && target_version >= 9 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(
+            "ALTER TABLE capacity_snapshots ADD COLUMN schema_version INTEGER NOT NULL
+                DEFAULT 1 CHECK(schema_version = 1);
+            ALTER TABLE capacity_snapshots ADD COLUMN environment_id TEXT NOT NULL
+                DEFAULT 'env-legacy' CHECK(environment_id <> '');
+            ALTER TABLE capacity_snapshots ADD COLUMN provider_instance_id TEXT;
+            ALTER TABLE capacity_snapshots ADD COLUMN window_name TEXT;
+            ALTER TABLE capacity_snapshots ADD COLUMN evidence_scope TEXT NOT NULL
+                DEFAULT 'local' CHECK(evidence_scope IN ('local', 'hub'));
+            ALTER TABLE capacity_snapshots ADD COLUMN hard_limit INTEGER NOT NULL
+                DEFAULT 0 CHECK(hard_limit IN (0, 1));
+            ALTER TABLE capacity_snapshots ADD COLUMN max_age_ms INTEGER NOT NULL
+                DEFAULT 900000 CHECK(max_age_ms > 0);
+            ALTER TABLE capacity_snapshots ADD COLUMN received_at_ms INTEGER NOT NULL
+                DEFAULT 0 CHECK(received_at_ms >= 0);
+
+            UPDATE capacity_snapshots
+            SET environment_id = COALESCE((
+                    SELECT MIN(m.environment_id)
+                    FROM provider_subscription_mappings m
+                    WHERE m.subscription_key = capacity_snapshots.subscription_key
+                ), 'env-legacy'),
+                received_at_ms = as_of_ms;
+
+            DROP INDEX idx_capacity_snapshot_identity;
+            CREATE UNIQUE INDEX idx_capacity_snapshot_revision
+                ON capacity_snapshots(
+                    subscription_key,
+                    environment_id,
+                    COALESCE(provider_instance_id, ''),
+                    COALESCE(window_name, ''),
+                    CASE WHEN window_name IS NULL
+                        THEN COALESCE(window_start_ms, -1) ELSE -1 END,
+                    CASE WHEN window_name IS NULL
+                        THEN COALESCE(window_end_ms, -1) ELSE -1 END,
+                    evidence_scope,
+                    source,
+                    as_of_ms
+                );
+            CREATE INDEX idx_capacity_environment_as_of
+                ON capacity_snapshots(environment_id, as_of_ms DESC, id);
+            CREATE INDEX idx_capacity_effective_window
+                ON capacity_snapshots(
+                    subscription_key,
+                    COALESCE(window_name, ''),
+                    as_of_ms DESC,
+                    id
+                );
+
+            CREATE TABLE provider_health_snapshots (
+                environment_id TEXT NOT NULL CHECK(environment_id <> ''),
+                provider_instance_id TEXT NOT NULL CHECK(provider_instance_id <> ''),
+                report_json TEXT NOT NULL,
+                last_success_at_ms INTEGER CHECK(last_success_at_ms >= 0),
+                checked_at_ms INTEGER NOT NULL CHECK(checked_at_ms >= 0),
+                expires_at_ms INTEGER NOT NULL CHECK(expires_at_ms >= checked_at_ms),
+                PRIMARY KEY(environment_id, provider_instance_id)
+            );
+            CREATE INDEX idx_provider_health_expiry
+                ON provider_health_snapshots(expires_at_ms, environment_id);",
+        )?;
+        tx.execute(
+            "INSERT INTO _migrations (version, applied_at_ms) VALUES (9, ?1)",
+            [now_ms() as i64],
+        )?;
+        tx.commit()?;
+    }
+
     Ok(())
 }
 
@@ -1234,6 +1304,93 @@ mod tests {
                 1
             );
         }
+    }
+
+    #[test]
+    fn migration_nine_preserves_capacity_revisions_and_adds_health_storage() {
+        let mut conn = Connection::open_in_memory().expect("open database");
+        apply_migrations_to(&mut conn, 8).expect("apply schema eight");
+        conn.execute(
+            "INSERT INTO usage_subscriptions (
+                subscription_key, provider, display_name, created_at_ms, updated_at_ms
+             ) VALUES ('subkey-capacity', 'codex', 'Capacity fixture', 1000, 1000)",
+            [],
+        )
+        .expect("insert subscription");
+        conn.execute(
+            "INSERT INTO provider_subscription_mappings (
+                environment_id, provider_instance_id, subscription_key, updated_at_ms
+             ) VALUES ('env-capacity', 'codex-capacity', 'subkey-capacity', 1000)",
+            [],
+        )
+        .expect("insert provider mapping");
+        conn.execute(
+            "INSERT INTO capacity_snapshots (
+                subscription_key, window_start_ms, window_end_ms,
+                used_millionths, remaining_millionths, reset_at_ms,
+                source, confidence, provider_version, as_of_ms
+             ) VALUES (
+                'subkey-capacity', 1000, 2000, 250000, 750000, 2000,
+                'legacy_fixture', 'reported', 'fixture', 1500
+             )",
+            [],
+        )
+        .expect("insert legacy capacity revision");
+        conn.execute(
+            "INSERT INTO capacity_snapshots (
+                subscription_key, window_start_ms, window_end_ms,
+                used_millionths, remaining_millionths, reset_at_ms,
+                source, confidence, provider_version, as_of_ms
+             ) VALUES (
+                'subkey-capacity', 3000, 4000, 500000, 500000, 4000,
+                'legacy_fixture', 'reported', 'fixture', 1500
+             )",
+            [],
+        )
+        .expect("insert second legacy capacity window");
+
+        apply_migrations(&mut conn).expect("apply migration nine");
+
+        let migrated = conn
+            .query_row(
+                "SELECT schema_version, environment_id, evidence_scope,
+                        hard_limit, max_age_ms, received_at_ms
+                 FROM capacity_snapshots",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                    ))
+                },
+            )
+            .expect("query migrated capacity revision");
+        assert_eq!(
+            migrated,
+            (
+                1,
+                "env-capacity".to_string(),
+                "local".to_string(),
+                0,
+                900_000,
+                1_500
+            )
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM capacity_snapshots", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .expect("migrated capacity revision count"),
+            2
+        );
+        assert!(table_exists(&conn, "provider_health_snapshots"));
+
+        apply_migrations(&mut conn).expect("repeat migration nine");
+        assert_eq!(migration_version(&conn), SCHEMA_VERSION);
     }
 
     #[test]

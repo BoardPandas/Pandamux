@@ -288,6 +288,7 @@ fn transport_error(env_id: &EnvironmentId, state: EnvironmentTransportState) -> 
         serde_json::json!({
             "environmentId": env_id,
             "state": state_name,
+            "retryable": true,
         }),
     )
 }

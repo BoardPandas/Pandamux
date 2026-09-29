@@ -3,7 +3,10 @@
 //! Portions of this driver are derived from T3 Code (Layers/GrokAdapter.ts, Layers/grokUsageLimits.ts).
 //! See THIRD_PARTY_NOTICES.md for license details.
 
-use pandamux_core::provider_config::{ProviderCapabilities, ProviderInstanceConfig, ProviderKind};
+use pandamux_core::{
+    CapacityConfidence,
+    provider_config::{ProviderCapabilities, ProviderInstanceConfig, ProviderKind},
+};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -15,8 +18,9 @@ use crate::acp::{
 };
 use crate::error::ProviderError;
 use crate::models::{
-    InjectedInstructions, ModelInfo, ProviderAuthStatus, ProviderHealth, ProviderMetadata,
-    ProviderSnapshot, RateLimitEntry, SessionSpec, UsageLimits,
+    InjectedInstructions, ModelInfo, ProviderAuthConfidence, ProviderAuthStatus, ProviderHealth,
+    ProviderMetadata, ProviderSnapshot, RateLimitEntry, SessionSpec, UsageLimits,
+    provider_snapshot_expiry, provider_snapshot_now_ms,
 };
 use crate::profiles::{
     apply_profile_environment, ensure_profile_dir, resolve_instance_profile_dir,
@@ -69,23 +73,48 @@ impl From<GrokUsageLimits> for UsageLimits {
         let req_used = g
             .rate_limits
             .requests_per_minute_limit
-            .saturating_sub(g.rate_limits.requests_remaining) as f64;
-        let req_limit = g.rate_limits.requests_per_minute_limit.max(1) as f64;
-        let req_percent = (req_used / req_limit) * 100.0;
+            .saturating_sub(g.rate_limits.requests_remaining);
+        let req_limit = g.rate_limits.requests_per_minute_limit.max(1);
+        let request_used_millionths = u32::try_from(
+            u64::from(req_used)
+                .saturating_mul(1_000_000)
+                .checked_div(u64::from(req_limit))
+                .unwrap_or(0),
+        )
+        .unwrap_or(1_000_000)
+        .min(1_000_000);
+        let token_limit = g.token_budget.limit_tokens.max(1);
+        let token_used_millionths = u32::try_from(
+            g.token_budget
+                .used_tokens
+                .saturating_mul(1_000_000)
+                .checked_div(token_limit)
+                .unwrap_or(0),
+        )
+        .unwrap_or(1_000_000)
+        .min(1_000_000);
 
         Self {
+            source: "grok_unverified_fixture".to_string(),
+            confidence: CapacityConfidence::Unknown,
+            provider_version: None,
+            as_of_ms: 0,
             limits: vec![
                 RateLimitEntry {
                     limit_name: "requests_per_minute".to_string(),
-                    used_percent: req_percent,
+                    used_millionths: Some(request_used_millionths),
+                    remaining_millionths: Some(1_000_000 - request_used_millionths),
                     window_duration_mins: (g.rate_limits.window_duration_seconds / 60).max(1),
-                    resets_at: g.rate_limits.resets_at,
+                    resets_at_ms: None,
+                    hard_limit: request_used_millionths == 1_000_000,
                 },
                 RateLimitEntry {
                     limit_name: "token_budget".to_string(),
-                    used_percent: g.token_budget.used_percent,
+                    used_millionths: Some(token_used_millionths),
+                    remaining_millionths: Some(1_000_000 - token_used_millionths),
                     window_duration_mins: 1440,
-                    resets_at: "".to_string(),
+                    resets_at_ms: None,
+                    hard_limit: token_used_millionths == 1_000_000,
                 },
             ],
         }
@@ -209,7 +238,7 @@ impl ProviderDriver for GrokDriver {
                 supports_system_prompt: false,
                 supports_reasoning: true,
                 supports_approvals: true,
-                supports_rate_limits: true,
+                supports_rate_limits: false,
                 supports_resume: true,
                 supports_images: true,
             },
@@ -242,7 +271,9 @@ impl ProviderDriver for GrokDriver {
     fn probe<'a>(&'a self, cfg: &'a ProviderInstanceConfig) -> BoxFuture<'a, ProviderSnapshot> {
         Box::pin(async move {
             let binary = self.resolve_binary(cfg);
-            if let Some(_bin) = binary {
+            let checked_at_ms = provider_snapshot_now_ms();
+            let expires_at_ms = provider_snapshot_expiry(checked_at_ms);
+            if let Some(bin) = binary {
                 let profile_dir = resolve_instance_profile_dir(&self.base_data_dir, cfg);
                 let has_api_key = profile_dir.join("api_key.txt").exists()
                     || cfg.settings.get("apiKey").is_some()
@@ -250,11 +281,7 @@ impl ProviderDriver for GrokDriver {
                     || std::env::var("XAI_API_KEY").is_ok();
 
                 let auth = if has_api_key {
-                    ProviderAuthStatus::Authenticated {
-                        account_label: Some("xAI API Key".to_string()),
-                        email: None,
-                        subscription: Some("Grok Developer Tier".to_string()),
-                    }
+                    ProviderAuthStatus::Configured
                 } else {
                     ProviderAuthStatus::Unauthenticated
                 };
@@ -269,20 +296,28 @@ impl ProviderDriver for GrokDriver {
 
                 ProviderSnapshot {
                     installed: true,
-                    version: Some("1.0.4".to_string()),
+                    resolved_executable: Some(bin.to_string_lossy().to_string()),
+                    version: None,
                     auth,
+                    auth_confidence: ProviderAuthConfidence::Detected,
                     health,
-                    checked_at_ms: 1000,
+                    runtime_code: Some("offline_profile_probe".to_string()),
+                    checked_at_ms,
+                    expires_at_ms,
                 }
             } else {
                 ProviderSnapshot {
                     installed: false,
+                    resolved_executable: None,
                     version: None,
                     auth: ProviderAuthStatus::Unknown,
+                    auth_confidence: ProviderAuthConfidence::Unknown,
                     health: ProviderHealth::Unavailable {
                         reason: "Grok CLI binary not found in PATH or settings".to_string(),
                     },
-                    checked_at_ms: 1000,
+                    runtime_code: Some("binary_missing".to_string()),
+                    checked_at_ms,
+                    expires_at_ms,
                 }
             }
         })
@@ -297,19 +332,11 @@ impl ProviderDriver for GrokDriver {
 
     fn usage_limits<'a>(
         &'a self,
-        cfg: &'a ProviderInstanceConfig,
+        _cfg: &'a ProviderInstanceConfig,
     ) -> BoxFuture<'a, Option<UsageLimits>> {
-        Box::pin(async move {
-            let profile_dir = resolve_instance_profile_dir(&self.base_data_dir, cfg);
-            let limits_file = profile_dir.join("usage_limits.json");
-            if let Ok(content) = std::fs::read_to_string(&limits_file)
-                && let Ok(limits) = parse_grok_usage_limits(&content)
-            {
-                return Some(limits.into());
-            }
-
-            None
-        })
+        // The local file shape has parser coverage but no live semantic proof. Do not
+        // elevate it to capacity evidence until a versioned live smoke is archived.
+        Box::pin(async move { None })
     }
 
     fn start_session<'a>(

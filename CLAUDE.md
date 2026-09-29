@@ -148,6 +148,26 @@ facts but computes complete filtered totals in SQLite. Provider-reported spend a
 API-equivalent estimates remain separate, and any nonzero token category without an
 exact effective rule keeps the estimate unknown.
 
+Phase 4D keeps quota evidence separate from provider availability. Additive migration 9
+persists immutable capacity revisions and provider health snapshots without rewriting
+earlier migrations. Capacity snapshots carry a schema version, authenticated
+environment and provider identity, quota window, exact integer fractions, reset,
+source, confidence, provider version, evidence scope, and age policy. Hub
+synchronization sends only bounded referenced subscription metadata before its
+revisions. Projection selects the safer conflicting value, decays old evidence, marks
+offline and clock-skewed sources, and never lets stale Hub evidence raise an active
+local hard limit before its verified reset.
+
+Only Codex rate-limit fixtures currently justify Reported quota evidence. Grok live
+collection remains disabled, and Claude and Antigravity capacity remains Unknown unless
+a defensible provider source is added. Provider health probes are side-effect-free,
+deadline-bounded, concurrency-capped, and persist last success separately from current
+installation, executable, version, authentication confidence, runtime, check time, and
+expiry. Unknown authentication is never Healthy. Claude and Codex login requires a
+short-lived preview of the exact environment, instance, profile, and safely quoted
+command before the server opens a Terminal session. Antigravity retains its dedicated
+OAuth flow.
+
 ## Remote composition
 
 `pandamux-remote` owns SSH mechanics, but `pandamux-server` owns their production composition.

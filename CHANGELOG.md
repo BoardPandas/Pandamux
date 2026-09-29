@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Added
 
+- **Added Phase 4D capacity, provider-health, and explicit login controls.** Nodes
+  now persist schema-versioned quota revisions with source, confidence, freshness,
+  reset, and hard-limit evidence, while authenticated Hub synchronization carries the
+  bounded subscription metadata needed to bootstrap a fresh replica. Capacity
+  projections age evidence conservatively, preserve local hard limits until verified
+  reset, expose conflicting and offline evidence, and choose the safer remaining value.
+  Concurrent provider health checks now have bounded deadlines and concurrency, durable
+  last-success state, separate installation, authentication, and runtime fields, masked
+  account labels, and structured guidance. Claude and Codex login actions require a
+  one-time preview of the exact isolated profile and safely quoted command before a
+  retryable Terminal launch.
+
 - **Added the Phase 4C Hub usage synchronization, aggregation, and pricing layer.**
   The Hub now pulls bounded pages from every registered node, assigns authenticated
   environment identity, commits facts with each durable high-water mark, resumes after
@@ -36,6 +48,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   validation contracts without leaking transcript paths or profile data.
 
 ### Changed
+
+- **Made provider quota and health claims evidence-based.** Codex account rate limits
+  use exact integer fractions and Reported confidence. Grok quota collection remains
+  disabled until a live semantic smoke test exists, while Claude and Antigravity report
+  Unknown capacity. Best-effort providers no longer fabricate versions, account tiers,
+  or authenticated state from the presence of local configuration files.
 
 - **Closed R0 as a development gate through an explicit user-approved rescope.** Phase 4
   implementation may continue while the deferred 30-minute physical laptop disconnect

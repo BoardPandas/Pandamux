@@ -1,5 +1,5 @@
 use pandamux_core::{
-    UsageUnknownField,
+    CapacityConfidence, UsageUnknownField,
     event::{ApprovalDecision, ApprovalKind, TurnOutcome},
     provider_config::{ProviderCapabilities, ProviderInstanceConfig, ProviderKind},
     thread::{AccessMode, TurnInput, TurnUsage, TurnUsageProvenance},
@@ -17,8 +17,9 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 
 use crate::error::ProviderError;
 use crate::models::{
-    ModelInfo, ProviderAuthStatus, ProviderEvent, ProviderHealth, ProviderMetadata,
-    ProviderSnapshot, RateLimitEntry, SessionSpec, UsageLimits,
+    ModelInfo, ProviderAuthConfidence, ProviderAuthStatus, ProviderEvent, ProviderHealth,
+    ProviderMetadata, ProviderSnapshot, RateLimitEntry, SessionSpec, UsageLimits,
+    provider_snapshot_expiry,
 };
 use crate::profiles::{
     apply_profile_environment, ensure_profile_dir, resolve_instance_profile_dir,
@@ -308,6 +309,11 @@ pub fn parse_rate_limits_response(
             message: "Missing 'rateLimits' in result".into(),
         })?;
 
+    parse_rate_limits_value(limits)
+}
+
+/// Parses a Codex rate-limit snapshot with exact integer fraction conversion.
+pub fn parse_rate_limits_value(limits: &Value) -> Result<Vec<RateLimitEntry>, ProviderError> {
     let mut entries = Vec::new();
     if let Some(legacy_limits) = limits.as_array() {
         for item in legacy_limits {
@@ -316,7 +322,7 @@ pub fn parse_rate_limits_response(
                     .and_then(Value::as_str)
                     .unwrap_or("unknown"),
                 item,
-            ));
+            )?);
         }
     } else if limits.is_object() {
         let name = limits
@@ -328,7 +334,7 @@ pub fn parse_rate_limits_response(
                 entries.push(parse_rate_limit_window(
                     &format!("{name} {window_name}"),
                     window,
-                ));
+                )?);
             }
         }
     } else {
@@ -340,30 +346,91 @@ pub fn parse_rate_limits_response(
     Ok(entries)
 }
 
-fn parse_rate_limit_window(limit_name: &str, window: &Value) -> RateLimitEntry {
-    let resets_at = window
-        .get("resetsAt")
-        .and_then(|value| {
-            value
-                .as_str()
-                .map(str::to_string)
-                .or_else(|| value.as_i64().map(|value| value.to_string()))
-        })
-        .unwrap_or_default();
-
-    RateLimitEntry {
+fn parse_rate_limit_window(
+    limit_name: &str,
+    window: &Value,
+) -> Result<RateLimitEntry, ProviderError> {
+    let used_millionths = window
+        .get("usedPercent")
+        .map(parse_percent_millionths)
+        .transpose()?;
+    let remaining_millionths = used_millionths.map(|used| 1_000_000_u32.saturating_sub(used));
+    Ok(RateLimitEntry {
         limit_name: limit_name.to_string(),
-        used_percent: window
-            .get("usedPercent")
-            .and_then(Value::as_f64)
-            .unwrap_or(0.0),
+        used_millionths,
+        remaining_millionths,
         window_duration_mins: window
             .get("windowDurationMins")
             .and_then(Value::as_u64)
             .unwrap_or(0)
             .try_into()
             .unwrap_or(u32::MAX),
-        resets_at,
+        resets_at_ms: window.get("resetsAt").and_then(parse_epoch_ms),
+        hard_limit: remaining_millionths == Some(0),
+    })
+}
+
+fn parse_percent_millionths(value: &Value) -> Result<u32, ProviderError> {
+    let raw = match value {
+        Value::Number(number) => number.to_string(),
+        Value::String(value) => value.trim().to_string(),
+        _ => return Err(codex_protocol_error("Codex usedPercent was not numeric")),
+    };
+    if raw.starts_with('-') || raw.starts_with('+') || raw.is_empty() {
+        return Err(codex_protocol_error(
+            "Codex usedPercent was outside 0 through 100",
+        ));
+    }
+    let (whole, fraction) = raw.split_once('.').unwrap_or((&raw, ""));
+    if !whole.bytes().all(|byte| byte.is_ascii_digit())
+        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+        || fraction.len() > 9
+    {
+        return Err(codex_protocol_error(
+            "Codex usedPercent had invalid precision",
+        ));
+    }
+    let whole = whole
+        .parse::<u128>()
+        .map_err(|_| codex_protocol_error("Codex usedPercent overflowed"))?;
+    let scale = 10_u128
+        .checked_pow(u32::try_from(fraction.len()).unwrap_or(u32::MAX))
+        .ok_or_else(|| codex_protocol_error("Codex usedPercent precision overflowed"))?;
+    let fraction = if fraction.is_empty() {
+        0
+    } else {
+        fraction
+            .parse::<u128>()
+            .map_err(|_| codex_protocol_error("Codex usedPercent overflowed"))?
+    };
+    let numerator = whole
+        .checked_mul(scale)
+        .and_then(|value| value.checked_add(fraction))
+        .and_then(|value| value.checked_mul(1_000_000))
+        .ok_or_else(|| codex_protocol_error("Codex usedPercent overflowed"))?;
+    let denominator = scale
+        .checked_mul(100)
+        .ok_or_else(|| codex_protocol_error("Codex usedPercent overflowed"))?;
+    let rounded = numerator
+        .checked_add(denominator / 2)
+        .ok_or_else(|| codex_protocol_error("Codex usedPercent overflowed"))?
+        / denominator;
+    if rounded > 1_000_000 {
+        return Err(codex_protocol_error(
+            "Codex usedPercent was outside 0 through 100",
+        ));
+    }
+    u32::try_from(rounded).map_err(|_| codex_protocol_error("Codex usedPercent overflowed"))
+}
+
+fn parse_epoch_ms(value: &Value) -> Option<u64> {
+    let raw = value
+        .as_u64()
+        .or_else(|| value.as_str().and_then(|value| value.parse().ok()))?;
+    if raw >= 1_000_000_000_000 {
+        Some(raw)
+    } else {
+        raw.checked_mul(1000)
     }
 }
 
@@ -555,6 +622,7 @@ async fn probe_codex_auth(
 ) -> Result<(bool, Option<String>, Option<String>), ProviderError> {
     let mut auth = tokio::process::Command::new(binary);
     auth.arg("login").arg("status");
+    auth.kill_on_drop(true);
     apply_profile_environment(&mut auth, ProviderKind::Codex, profile_dir, env_overrides);
     #[cfg(windows)]
     auth.creation_flags(crate::supervision::CREATE_NO_WINDOW);
@@ -587,8 +655,19 @@ async fn probe_codex_auth(
         }
     });
 
+    let version = probe_codex_version(binary, profile_dir, env_overrides).await;
+
+    Ok((logged_in, method, version))
+}
+
+async fn probe_codex_version(
+    binary: &std::path::Path,
+    profile_dir: &std::path::Path,
+    env_overrides: &std::collections::BTreeMap<String, String>,
+) -> Option<String> {
     let mut version = tokio::process::Command::new(binary);
     version.arg("--version");
+    version.kill_on_drop(true);
     apply_profile_environment(
         &mut version,
         ProviderKind::Codex,
@@ -597,17 +676,14 @@ async fn probe_codex_auth(
     );
     #[cfg(windows)]
     version.creation_flags(crate::supervision::CREATE_NO_WINDOW);
-    let version_output = version.output().await.ok();
-    let version = version_output.and_then(|output| {
+    version.output().await.ok().and_then(|output| {
         output.status.success().then(|| {
             String::from_utf8_lossy(&output.stdout)
                 .trim()
                 .trim_start_matches("codex-cli ")
                 .to_string()
         })
-    });
-
-    Ok((logged_in, method, version))
+    })
 }
 
 async fn list_codex_models(
@@ -677,7 +753,7 @@ async fn read_codex_usage_limits(
     let cwd = std::env::current_dir().map_err(ProviderError::Io)?;
     let (mut child, mut stdin, mut lines, stderr_task) =
         spawn_codex_app_server(binary, profile_dir, &cwd, env_overrides).await?;
-    let result: Result<UsageLimits, ProviderError> = async {
+    let result: Result<Vec<RateLimitEntry>, ProviderError> = async {
         initialize_codex_app_server(&mut stdin, &mut lines).await?;
         let request = JsonRpcRequest {
             id: 2,
@@ -691,14 +767,19 @@ async fn read_codex_usage_limits(
             result: Some(read_codex_response(&mut lines, 2).await?),
             error: None,
         };
-        Ok(UsageLimits {
-            limits: parse_rate_limits_response(&response)?,
-        })
+        parse_rate_limits_response(&response)
     }
     .await;
     let _ = child.kill().await;
     let _ = tokio::time::timeout(Duration::from_secs(5), stderr_task).await;
-    result
+    let limits = result?;
+    Ok(UsageLimits {
+        source: "codex_account_rate_limits".to_string(),
+        confidence: CapacityConfidence::Reported,
+        provider_version: probe_codex_version(binary, profile_dir, env_overrides).await,
+        as_of_ms: now_ms(),
+        limits,
+    })
 }
 
 type PendingResponse = oneshot::Sender<Result<Value, String>>;
@@ -1009,42 +1090,61 @@ impl ProviderDriver for CodexDriver {
     fn probe<'a>(&'a self, cfg: &'a ProviderInstanceConfig) -> BoxFuture<'a, ProviderSnapshot> {
         Box::pin(async move {
             let Some(binary) = self.resolve_codex_binary(cfg) else {
+                let checked_at_ms = now_ms();
                 return ProviderSnapshot {
                     installed: false,
+                    resolved_executable: None,
                     version: None,
                     auth: ProviderAuthStatus::Unknown,
+                    auth_confidence: ProviderAuthConfidence::Unknown,
                     health: ProviderHealth::Unavailable {
                         reason: "Codex binary not found on PATH".to_string(),
                     },
-                    checked_at_ms: now_ms(),
+                    runtime_code: Some("binary_missing".to_string()),
+                    checked_at_ms,
+                    expires_at_ms: provider_snapshot_expiry(checked_at_ms),
                 };
             };
             let profile_dir = resolve_instance_profile_dir(&self.base_data_dir, cfg);
             match probe_codex_auth(&binary, &profile_dir, &cfg.env_overrides).await {
-                Ok((logged_in, method, version)) => ProviderSnapshot {
-                    installed: true,
-                    version,
-                    auth: if logged_in {
-                        ProviderAuthStatus::Authenticated {
-                            account_label: method,
-                            email: None,
-                            subscription: None,
-                        }
-                    } else {
-                        ProviderAuthStatus::Unauthenticated
-                    },
-                    health: ProviderHealth::Healthy,
-                    checked_at_ms: now_ms(),
-                },
-                Err(error) => ProviderSnapshot {
-                    installed: true,
-                    version: None,
-                    auth: ProviderAuthStatus::Unknown,
-                    health: ProviderHealth::Degraded {
-                        reason: error.to_string(),
-                    },
-                    checked_at_ms: now_ms(),
-                },
+                Ok((logged_in, method, version)) => {
+                    let checked_at_ms = now_ms();
+                    ProviderSnapshot {
+                        installed: true,
+                        resolved_executable: Some(binary.to_string_lossy().to_string()),
+                        version,
+                        auth: if logged_in {
+                            ProviderAuthStatus::Authenticated {
+                                account_label: method,
+                                email: None,
+                                subscription: None,
+                            }
+                        } else {
+                            ProviderAuthStatus::Unauthenticated
+                        },
+                        auth_confidence: ProviderAuthConfidence::Reported,
+                        health: ProviderHealth::Healthy,
+                        runtime_code: Some("runtime_ready".to_string()),
+                        checked_at_ms,
+                        expires_at_ms: provider_snapshot_expiry(checked_at_ms),
+                    }
+                }
+                Err(error) => {
+                    let checked_at_ms = now_ms();
+                    ProviderSnapshot {
+                        installed: true,
+                        resolved_executable: Some(binary.to_string_lossy().to_string()),
+                        version: None,
+                        auth: ProviderAuthStatus::Unknown,
+                        auth_confidence: ProviderAuthConfidence::Unknown,
+                        health: ProviderHealth::Degraded {
+                            reason: error.to_string(),
+                        },
+                        runtime_code: Some("auth_probe_failed".to_string()),
+                        checked_at_ms,
+                        expires_at_ms: provider_snapshot_expiry(checked_at_ms),
+                    }
+                }
             }
         })
     }

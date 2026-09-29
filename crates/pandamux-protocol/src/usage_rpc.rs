@@ -1,12 +1,15 @@
 use pandamux_core::{
-    AgentId, CapacitySnapshot, EnvironmentId, NodeStoreId, PricingVersionId, ProviderInstanceId,
-    ScheduleId, SubscriptionKey, TokenCounts, UsageObservation, UsageObservationId, UsageProvider,
-    UsageSourceKind,
+    AgentId, CAPACITY_SNAPSHOT_SCHEMA_VERSION, CapacityProjection, CapacitySnapshot, EnvironmentId,
+    NodeStoreId, PricingVersionId, ProviderInstanceId, ScheduleId, SubscriptionKey, TokenCounts,
+    UsageObservation, UsageObservationId, UsageProvider, UsageSourceKind, UsageSubscription,
 };
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_USAGE_PAGE_SIZE: u32 = 100;
 pub const MAX_USAGE_PAGE_SIZE: u32 = 500;
+pub const MAX_CAPACITY_SNAPSHOTS_PER_PUSH: usize = 128;
+pub const DEFAULT_CAPACITY_REFRESH_TIMEOUT_MS: u64 = 10_000;
+pub const MAX_CAPACITY_REFRESH_TIMEOUT_MS: u64 = 30_000;
 
 fn default_page_size() -> u32 {
     DEFAULT_USAGE_PAGE_SIZE
@@ -432,6 +435,11 @@ pub struct CapacityQueryParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subscription_key: Option<SubscriptionKey>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment_id: Option<EnvironmentId>,
+    /// Stable evaluation instant for replay and tests. Current server time is used when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after: Option<CapacityQueryCursor>,
     #[serde(default = "default_page_size")]
     pub limit: u32,
@@ -441,6 +449,8 @@ impl Default for CapacityQueryParams {
     fn default() -> Self {
         Self {
             subscription_key: None,
+            environment_id: None,
+            at_ms: None,
             after: None,
             limit: DEFAULT_USAGE_PAGE_SIZE,
         }
@@ -462,6 +472,13 @@ impl CapacityQueryParams {
             "subscriptionKey",
             self.subscription_key.as_ref().map(SubscriptionKey::as_str),
         )?;
+        validate_optional_id(
+            "environmentId",
+            self.environment_id.as_ref().map(EnvironmentId::as_str),
+        )?;
+        if let Some(at_ms) = self.at_ms {
+            validate_persisted_u64("atMs", at_ms)?;
+        }
         if let Some(cursor) = &self.after {
             validate_persisted_u64("after.asOfMs", cursor.as_of_ms)?;
             validate_persisted_u64("after.sequence", cursor.sequence)?;
@@ -481,6 +498,106 @@ pub struct CapacityQueryResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next: Option<CapacityQueryCursor>,
     pub has_more: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effective: Vec<CapacityProjection>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub offline_environments: Vec<EnvironmentId>,
+}
+
+fn default_capacity_refresh_timeout_ms() -> u64 {
+    DEFAULT_CAPACITY_REFRESH_TIMEOUT_MS
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapacityRefreshParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment_id: Option<EnvironmentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_instance_id: Option<ProviderInstanceId>,
+    #[serde(default = "default_capacity_refresh_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+impl Default for CapacityRefreshParams {
+    fn default() -> Self {
+        Self {
+            environment_id: None,
+            provider_instance_id: None,
+            timeout_ms: DEFAULT_CAPACITY_REFRESH_TIMEOUT_MS,
+        }
+    }
+}
+
+impl CapacityRefreshParams {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_optional_id(
+            "environmentId",
+            self.environment_id.as_ref().map(EnvironmentId::as_str),
+        )?;
+        validate_optional_id(
+            "providerInstanceId",
+            self.provider_instance_id
+                .as_ref()
+                .map(ProviderInstanceId::as_str),
+        )?;
+        if !(25..=MAX_CAPACITY_REFRESH_TIMEOUT_MS).contains(&self.timeout_ms) {
+            return Err(format!(
+                "timeoutMs must be between 25 and {MAX_CAPACITY_REFRESH_TIMEOUT_MS}"
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapacityRefreshResult {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subscriptions: Vec<UsageSubscription>,
+    pub snapshots: Vec<CapacitySnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapacityPushParams {
+    pub environment_id: EnvironmentId,
+    pub schema_version: u32,
+    pub issued_at_ms: u64,
+    pub max_age_ms: u64,
+    pub snapshots: Vec<CapacitySnapshot>,
+}
+
+impl CapacityPushParams {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_optional_id("environmentId", Some(self.environment_id.as_str()))?;
+        if self.schema_version != CAPACITY_SNAPSHOT_SCHEMA_VERSION {
+            return Err(format!(
+                "unsupported capacity schema version {}",
+                self.schema_version
+            ));
+        }
+        validate_persisted_u64("issuedAtMs", self.issued_at_ms)?;
+        validate_persisted_u64("maxAgeMs", self.max_age_ms)?;
+        if self.max_age_ms == 0 {
+            return Err("maxAgeMs must be greater than zero".to_string());
+        }
+        if self.snapshots.len() > MAX_CAPACITY_SNAPSHOTS_PER_PUSH {
+            return Err(format!(
+                "capacity push exceeds {MAX_CAPACITY_SNAPSHOTS_PER_PUSH} snapshots"
+            ));
+        }
+        for snapshot in &self.snapshots {
+            snapshot.validate()?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapacityPushResult {
+    pub accepted: u32,
 }
 
 #[cfg(test)]

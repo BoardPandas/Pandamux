@@ -34,8 +34,8 @@ pub use pandamux_protocol::antigravity_rpc::{
 use crate::antigravity_auth::start_antigravity_session;
 use crate::error::ProviderError;
 use crate::models::{
-    ModelInfo, ProviderAuthStatus, ProviderHealth, ProviderMetadata, ProviderSnapshot, SessionSpec,
-    UsageLimits,
+    ModelInfo, ProviderAuthConfidence, ProviderAuthStatus, ProviderHealth, ProviderMetadata,
+    ProviderSnapshot, SessionSpec, UsageLimits, provider_snapshot_expiry, provider_snapshot_now_ms,
 };
 use crate::profiles::resolve_instance_profile_dir;
 use crate::traits::{BoxFuture, ProviderDriver, ProviderSession};
@@ -227,6 +227,8 @@ impl ProviderDriver for AntigravityDriver {
         Box::pin(async move {
             let resolved = self.resolve_executable(config);
             let gemini_home = resolve_instance_profile_dir(&self.base_data_dir, config);
+            let checked_at_ms = provider_snapshot_now_ms();
+            let expires_at_ms = provider_snapshot_expiry(checked_at_ms);
             match resolved {
                 Some(executable) => {
                     let health = probe_antigravity_health_offline(
@@ -235,31 +237,37 @@ impl ProviderDriver for AntigravityDriver {
                         executable.version.as_deref(),
                     );
                     let auth = if matches!(health, ProviderHealth::Healthy) {
-                        ProviderAuthStatus::Authenticated {
-                            account_label: Some("Google account".to_string()),
-                            email: None,
-                            subscription: None,
-                        }
+                        ProviderAuthStatus::Configured
                     } else {
                         ProviderAuthStatus::Unauthenticated
                     };
                     ProviderSnapshot {
                         installed: true,
+                        resolved_executable: Some(
+                            executable.executable_path.to_string_lossy().to_string(),
+                        ),
                         version: executable.version,
                         auth,
+                        auth_confidence: ProviderAuthConfidence::Detected,
                         health,
-                        checked_at_ms: 0,
+                        runtime_code: Some("offline_manifest_probe".to_string()),
+                        checked_at_ms,
+                        expires_at_ms,
                     }
                 }
                 None => ProviderSnapshot {
                     installed: false,
+                    resolved_executable: None,
                     version: None,
                     auth: ProviderAuthStatus::Unknown,
+                    auth_confidence: ProviderAuthConfidence::Unknown,
                     health: ProviderHealth::Unavailable {
                         reason: "Antigravity ACP executable and sibling harness were not found"
                             .to_string(),
                     },
-                    checked_at_ms: 0,
+                    runtime_code: Some("binary_missing".to_string()),
+                    checked_at_ms,
+                    expires_at_ms,
                 },
             }
         })

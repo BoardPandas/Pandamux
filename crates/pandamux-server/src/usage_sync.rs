@@ -1,8 +1,12 @@
 use crate::environment_router::{EnvironmentRouter, EnvironmentTransportState};
 use crate::store::{Store, StoreError};
-use pandamux_core::EnvironmentId;
+use pandamux_core::{
+    CAPACITY_SNAPSHOT_SCHEMA_VERSION, CapacityEvidenceScope, DEFAULT_CAPACITY_MAX_AGE_MS,
+    EnvironmentId,
+};
 use pandamux_protocol::{
-    RpcError, RpcRequest, RpcResponse, UsageAckParams, UsageBackfillCursor, UsageBackfillParams,
+    CapacityPushParams, CapacityPushResult, CapacityRefreshParams, CapacityRefreshResult, RpcError,
+    RpcRequest, RpcResponse, UsageAckParams, UsageBackfillCursor, UsageBackfillParams,
     UsageBackfillResult, UsageExportParams, UsageExportResult,
 };
 use serde::Serialize;
@@ -167,6 +171,9 @@ pub struct UsageSyncReport {
     pub observations_duplicated: u64,
     pub acknowledged_through_seq: u64,
     pub needs_follow_up: bool,
+    pub capacity_snapshots_received: u64,
+    pub capacity_snapshots_pushed: u64,
+    pub capacity_safe_error_code: Option<String>,
 }
 
 #[derive(Debug)]
@@ -220,7 +227,18 @@ impl UsageHubSynchronizer {
         environment_id: &EnvironmentId,
         config: &UsageSyncRuntimeConfig,
     ) -> Result<UsageSyncReport, UsageSyncError> {
-        let result = self.sync_environment_inner(environment_id, config).await;
+        let mut result = self.sync_environment_inner(environment_id, config).await;
+        if let Ok(report) = &mut result {
+            match self.sync_capacity_environment(environment_id).await {
+                Ok((received, pushed)) => {
+                    report.capacity_snapshots_received = received;
+                    report.capacity_snapshots_pushed = pushed;
+                }
+                Err(error) => {
+                    report.capacity_safe_error_code = Some(error.safe_code.to_string());
+                }
+            }
+        }
         if let Err(error) = &result {
             let _ = self.store.record_usage_sync_failure(
                 environment_id,
@@ -229,6 +247,102 @@ impl UsageHubSynchronizer {
             );
         }
         result
+    }
+
+    async fn sync_capacity_environment(
+        &self,
+        environment_id: &EnvironmentId,
+    ) -> Result<(u64, u64), UsageSyncError> {
+        let refreshed: CapacityRefreshResult = self
+            .call_remote(
+                environment_id,
+                "capacity.refresh",
+                &CapacityRefreshParams {
+                    environment_id: Some(environment_id.clone()),
+                    ..CapacityRefreshParams::default()
+                },
+            )
+            .await?;
+        if refreshed.snapshots.len() > pandamux_protocol::MAX_CAPACITY_SNAPSHOTS_PER_PUSH
+            || refreshed.subscriptions.len() > pandamux_protocol::MAX_CAPACITY_SNAPSHOTS_PER_PUSH
+        {
+            return Err(UsageSyncError::new(
+                "capacity_sync_response_too_large",
+                false,
+                "capacity refresh exceeded the bounded response limit",
+            ));
+        }
+        let referenced_keys = refreshed
+            .snapshots
+            .iter()
+            .map(|snapshot| snapshot.subscription_key.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let received_at_ms = sync_now_ms();
+        for subscription in &refreshed.subscriptions {
+            if !referenced_keys.contains(&subscription.key) {
+                return Err(UsageSyncError::new(
+                    "capacity_sync_unreferenced_subscription",
+                    false,
+                    "capacity refresh included unreferenced subscription metadata",
+                ));
+            }
+            if let Some(existing) = self.store.usage_subscription_by_key(&subscription.key)?
+                && existing.provider != subscription.provider
+            {
+                return Err(UsageSyncError::new(
+                    "capacity_sync_subscription_conflict",
+                    false,
+                    "capacity subscription provider conflicts with durable metadata",
+                ));
+            }
+            self.store
+                .save_usage_subscription(subscription, received_at_ms)?;
+        }
+        let mut snapshots = refreshed.snapshots;
+        for snapshot in &mut snapshots {
+            snapshot.schema_version = CAPACITY_SNAPSHOT_SCHEMA_VERSION;
+            snapshot.environment_id = Some(environment_id.clone());
+            snapshot.evidence_scope = CapacityEvidenceScope::Local;
+            if self
+                .store
+                .usage_subscription_by_key(&snapshot.subscription_key)?
+                .is_none()
+            {
+                return Err(UsageSyncError::new(
+                    "capacity_sync_subscription_missing",
+                    false,
+                    "capacity snapshot references unknown subscription metadata",
+                ));
+            }
+            if let Some(provider_instance_id) = &snapshot.provider_instance_id {
+                self.store.map_provider_subscription(
+                    environment_id,
+                    provider_instance_id,
+                    &snapshot.subscription_key,
+                    received_at_ms,
+                )?;
+            }
+        }
+        self.store.save_capacity_snapshots(&snapshots)?;
+        let received = u64::try_from(snapshots.len()).unwrap_or(u64::MAX);
+        let latest = self.store.latest_capacity_snapshots_for_environment(
+            environment_id,
+            pandamux_protocol::MAX_CAPACITY_SNAPSHOTS_PER_PUSH,
+        )?;
+        let pushed: CapacityPushResult = self
+            .call_remote(
+                environment_id,
+                "capacity.push",
+                &CapacityPushParams {
+                    environment_id: environment_id.clone(),
+                    schema_version: CAPACITY_SNAPSHOT_SCHEMA_VERSION,
+                    issued_at_ms: sync_now_ms(),
+                    max_age_ms: DEFAULT_CAPACITY_MAX_AGE_MS,
+                    snapshots: latest,
+                },
+            )
+            .await?;
+        Ok((received, u64::from(pushed.accepted)))
     }
 
     async fn sync_environment_inner(
@@ -513,16 +627,28 @@ fn checked_report_add(left: u64, right: u64, field: &str) -> Result<u64, UsageSy
         .ok_or_else(|| UsageSyncError::new("usage_sync_overflow", false, field))
 }
 
+fn sync_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::environment_router::MockEnvironmentTransport;
     use crate::store::UsageOutboxRetention;
     use pandamux_core::{
-        ProviderInstanceId, SubscriptionKey, TokenCounts, UsageObservation, UsageObservationId,
-        UsageProvider, UsageSourceKind, UsageSubscription,
+        CAPACITY_SNAPSHOT_SCHEMA_VERSION, CapacityConfidence, CapacityEvidenceScope,
+        CapacitySnapshot, DEFAULT_CAPACITY_MAX_AGE_MS, ProviderInstanceId, SubscriptionKey,
+        TokenCounts, UsageObservation, UsageObservationId, UsageProvider, UsageSourceKind,
+        UsageSubscription,
     };
-    use pandamux_protocol::{UsageAckResult, UsageQueryParams};
+    use pandamux_protocol::{
+        CapacityPushParams, CapacityPushResult, CapacityRefreshParams, CapacityRefreshResult,
+        UsageAckResult, UsageQueryParams,
+    };
     use serde_json::Value;
     use std::collections::BTreeSet;
     use std::sync::Mutex;
@@ -619,6 +745,60 @@ mod tests {
                         retained_from_seq: outcome.retained_from_seq,
                     })
                 }
+                "capacity.refresh" => {
+                    let params: CapacityRefreshParams = parse_params(request)?;
+                    let environment_id = params.environment_id.ok_or_else(|| {
+                        RpcError::invalid_params(
+                            "capacity.refresh requires an authenticated environment",
+                        )
+                    })?;
+                    let snapshots = store
+                        .latest_capacity_snapshots_for_environment(
+                            &environment_id,
+                            pandamux_protocol::MAX_CAPACITY_SNAPSHOTS_PER_PUSH,
+                        )
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?;
+                    let mut subscriptions = Vec::new();
+                    for key in snapshots
+                        .iter()
+                        .map(|snapshot| &snapshot.subscription_key)
+                        .collect::<BTreeSet<_>>()
+                    {
+                        let subscription = store
+                            .usage_subscription_by_key(key)
+                            .map_err(|error| RpcError::internal_error(error.to_string()))?
+                            .ok_or_else(|| {
+                                RpcError::internal_error(
+                                    "capacity fixture subscription metadata is missing",
+                                )
+                            })?;
+                        subscriptions.push(subscription);
+                    }
+                    serde_json::to_value(CapacityRefreshResult {
+                        subscriptions,
+                        snapshots,
+                    })
+                }
+                "capacity.push" => {
+                    let params: CapacityPushParams = parse_params(request)?;
+                    let accepted = params.snapshots.len();
+                    let snapshots = params
+                        .snapshots
+                        .into_iter()
+                        .map(|mut snapshot| {
+                            snapshot.environment_id = Some(params.environment_id.clone());
+                            snapshot.evidence_scope = CapacityEvidenceScope::Hub;
+                            snapshot.max_age_ms = params.max_age_ms;
+                            snapshot
+                        })
+                        .collect::<Vec<_>>();
+                    store
+                        .save_capacity_snapshots(&snapshots)
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?;
+                    serde_json::to_value(CapacityPushResult {
+                        accepted: u32::try_from(accepted).unwrap_or(u32::MAX),
+                    })
+                }
                 other => return Err(RpcError::method_not_found(other)),
             }
             .map_err(|error| RpcError::internal_error(error.to_string()))?;
@@ -679,6 +859,87 @@ mod tests {
             .expect("query synchronized totals");
         assert_eq!(query.aggregate.observation_count, 3);
         assert_eq!(query.aggregate.tokens.input, 6);
+        router.unregister_transport(&environment_id).await;
+    }
+
+    #[tokio::test]
+    async fn successful_usage_sync_context_stamps_and_pushes_capacity_revisions() {
+        let environment_id = EnvironmentId::new("env-node");
+        let node_store = node_store(&environment_id, &[]);
+        node_store
+            .save_capacity_snapshot(&CapacitySnapshot {
+                schema_version: CAPACITY_SNAPSHOT_SCHEMA_VERSION,
+                subscription_key: SubscriptionKey::new("subkey-sync"),
+                environment_id: Some(environment_id.clone()),
+                provider_instance_id: Some(ProviderInstanceId::new("codex-sync")),
+                window_name: Some("primary".to_string()),
+                window_start_ms: Some(1_000),
+                window_end_ms: Some(10_000),
+                used_millionths: Some(250_000),
+                remaining_millionths: Some(750_000),
+                reset_at_ms: Some(10_000),
+                source: "codex_account_rate_limits".to_string(),
+                confidence: CapacityConfidence::Reported,
+                evidence_scope: CapacityEvidenceScope::Local,
+                hard_limit: false,
+                provider_version: Some("fixture".to_string()),
+                as_of_ms: 2_000,
+                max_age_ms: DEFAULT_CAPACITY_MAX_AGE_MS,
+            })
+            .expect("save node capacity");
+        assert_eq!(
+            node_store
+                .latest_capacity_snapshots_for_environment(
+                    &environment_id,
+                    pandamux_protocol::MAX_CAPACITY_SNAPSHOTS_PER_PUSH,
+                )
+                .expect("load node capacity before synchronization")
+                .len(),
+            1
+        );
+        let node = Arc::new(Mutex::new(node_store));
+        let hub = Store::in_memory().expect("open capacity hub");
+        let router = Arc::new(EnvironmentRouter::new(EnvironmentId::new("env-hub")));
+        router
+            .register_transport(
+                environment_id.clone(),
+                mock_node_transport(node.clone()),
+                None,
+            )
+            .await;
+        let synchronizer = UsageHubSynchronizer::new(hub.clone(), router.clone());
+        let report = synchronizer
+            .sync_environment(&environment_id, &config())
+            .await
+            .expect("synchronize capacity");
+        assert_eq!(report.capacity_snapshots_received, 1);
+        assert_eq!(report.capacity_snapshots_pushed, 1);
+        assert_eq!(report.capacity_safe_error_code, None);
+
+        let hub_capacity = hub
+            .query_capacity(&pandamux_protocol::CapacityQueryParams {
+                environment_id: Some(environment_id.clone()),
+                at_ms: Some(2_000),
+                ..pandamux_protocol::CapacityQueryParams::default()
+            })
+            .expect("query hub capacity");
+        assert!(hub_capacity.snapshots.iter().any(|snapshot| {
+            snapshot.evidence_scope == CapacityEvidenceScope::Local
+                && snapshot.environment_id.as_ref() == Some(&environment_id)
+        }));
+        let node_capacity = node
+            .lock()
+            .expect("node capacity lock")
+            .query_capacity(&pandamux_protocol::CapacityQueryParams {
+                environment_id: Some(environment_id.clone()),
+                at_ms: Some(2_000),
+                ..pandamux_protocol::CapacityQueryParams::default()
+            })
+            .expect("query node capacity");
+        assert!(node_capacity.snapshots.iter().any(|snapshot| {
+            snapshot.evidence_scope == CapacityEvidenceScope::Hub
+                && snapshot.environment_id.as_ref() == Some(&environment_id)
+        }));
         router.unregister_transport(&environment_id).await;
     }
 

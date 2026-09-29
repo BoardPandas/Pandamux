@@ -1,10 +1,25 @@
 use pandamux_core::{
+    CapacityConfidence,
     event::{ApprovalKind, TurnOutcome},
     provider_config::{ProviderCapabilities, ProviderKind},
     thread::{AccessMode, TurnUsage},
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+pub const PROVIDER_SNAPSHOT_TTL_MS: u64 = 5 * 60 * 1000;
+
+pub fn provider_snapshot_expiry(checked_at_ms: u64) -> u64 {
+    checked_at_ms.saturating_add(PROVIDER_SNAPSHOT_TTL_MS)
+}
+
+pub fn provider_snapshot_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
 
 /// Metadata identifying a provider driver.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,10 +50,27 @@ pub struct ModelInfo {
 #[serde(rename_all = "camelCase")]
 pub struct ProviderSnapshot {
     pub installed: bool,
+    #[serde(default)]
+    pub resolved_executable: Option<String>,
     pub version: Option<String>,
     pub auth: ProviderAuthStatus,
+    #[serde(default)]
+    pub auth_confidence: ProviderAuthConfidence,
     pub health: ProviderHealth,
+    #[serde(default)]
+    pub runtime_code: Option<String>,
     pub checked_at_ms: u64,
+    pub expires_at_ms: u64,
+}
+
+/// Strength of the evidence behind an authentication state.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderAuthConfidence {
+    Reported,
+    Detected,
+    #[default]
+    Unknown,
 }
 
 /// Authentication state detected for a provider.
@@ -50,6 +82,7 @@ pub enum ProviderAuthStatus {
         email: Option<String>,
         subscription: Option<String>,
     },
+    Configured,
     Unauthenticated,
     Unknown,
 }
@@ -124,15 +157,26 @@ pub struct ToolPolicy {
 #[serde(rename_all = "camelCase")]
 pub struct RateLimitEntry {
     pub limit_name: String,
-    pub used_percent: f64,
+    #[serde(default)]
+    pub used_millionths: Option<u32>,
+    #[serde(default)]
+    pub remaining_millionths: Option<u32>,
     pub window_duration_mins: u32,
-    pub resets_at: String,
+    #[serde(default)]
+    pub resets_at_ms: Option<u64>,
+    #[serde(default)]
+    pub hard_limit: bool,
 }
 
 /// Quota and usage limits.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageLimits {
+    pub source: String,
+    pub confidence: CapacityConfidence,
+    #[serde(default)]
+    pub provider_version: Option<String>,
+    pub as_of_ms: u64,
     pub limits: Vec<RateLimitEntry>,
 }
 

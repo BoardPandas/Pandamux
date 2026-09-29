@@ -1341,6 +1341,59 @@ Checkpoint acceptance:
 - Health fixtures cover missing binary, unsupported version, unknown auth, logged out, logged in, timeout, malformed output, remote unreachable, and login launch failure.
 - No health test starts a provider session or modifies provider state.
 
+##### Checkpoint 4D completion record, 2026-09-29
+
+- Additive migration 9 preserves migrations 4 through 8 and stores immutable capacity
+  revisions by subscription, environment, provider instance, evidence window, scope,
+  source, and observation time. Legacy unnamed windows remain distinct by start and end
+  time during migration and projection. Durable provider-health rows retain current and
+  last-success evidence without storing raw account labels.
+- Capacity revisions use exact millionths, schema and age-policy versions, verified
+  reset times, provider versions, and explicit Reported, Estimated, or Unknown
+  confidence. Projection decays stale evidence, exposes clock skew, reset, offline, and
+  conflict state, chooses the safer conflicting value, and keeps an active local hard
+  limit at zero until its verified reset.
+- Codex account rate-limit events have fixture-backed Reported semantics and can persist
+  verified hard-limit evidence. Grok live quota collection remains disabled because its
+  semantics lack a live smoke result. Claude and Antigravity remain Unknown rather than
+  receiving inferred capacity.
+- Authenticated Hub synchronization now exchanges bounded capacity snapshots after usage
+  synchronization. A node supplies only the subscription metadata referenced by the
+  snapshot so a fresh Hub can commit parent records before child revisions. Transport
+  context replaces claimed environment identity, and node-bound Hub evidence is stamped
+  with the supported schema and age policy.
+- Provider health runs concurrently under a global cap and per-instance deadline.
+  Results separate installation, executable and version, authentication and confidence,
+  masked labels, runtime state, check and expiry times, last success, retryability, and
+  structured guidance. Unknown authentication never becomes Healthy, cancelled probes
+  terminate their child process, and acceptance fixtures prove that health starts no
+  provider session.
+- Claude and Codex login actions require a one-time preview of the exact environment,
+  provider instance, isolated profile, flow, and safely quoted command. Launch opens the
+  Terminal surface with private environment values. Mismatch, remote reachability,
+  terminal-open, and input failures remain visible and retryable, and failed input closes
+  the newly opened terminal. Antigravity retains its dedicated browser OAuth flow;
+  unverified generic launchers remain unavailable.
+- Acceptance fixtures cover fresh, stale, estimated, unknown, reset, hard-limit,
+  conflicting, offline, and clock-skewed capacity; missing binary, unsupported version,
+  unknown auth, logged out, logged in, timeout, malformed output, remote unreachable,
+  and real terminal-launch failure health and login states; health concurrency and
+  expiry; login preview consumption; bootstrap synchronization; and legacy unnamed
+  capacity-window preservation.
+- **Local verification:** at workspace version `0.58.0`, formatting and strict workspace
+  Clippy passed, and `cargo test --workspace` passed 369 tests with zero failures and two
+  intentionally ignored real-shell terminal tests. The Rust crate-boundary and Claude
+  wiring guards passed. The full `pandamux-server` target set type-checks for the Windows
+  GNU ABI. `cargo-deny` is unavailable on this host, so no advisory or license result is
+  claimed.
+- **Acceptance boundary:** no current Phase 4D executable was run natively on Windows,
+  against live provider quota sources, or against a live multi-node production topology.
+  All 11 prototype source files in the original checkout remain byte-identical to the
+  archived R0.1 snapshot; its plan also retains the later R0.1 recovery record. This
+  completion record is source and local verification evidence only; it does not satisfy
+  the deferred physical R0.5 rows, native Phase 4D runtime acceptance, Phase 4E,
+  production acceptance, push, deployment, or release.
+
 #### Checkpoint 4E: Usage, provider identity, policy, and accessibility UI
 
 1. Add Usage as a top-level rail destination, following the existing projection-plus-intents architecture. Put pure reducers and formatting in `pandamux-client`; GPUI owns presentation only.

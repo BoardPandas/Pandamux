@@ -20,6 +20,10 @@ R0 development gate:
 - Phase 4A provides normalized usage observations, durable transactional cursors and outbox state, canonical organization and failover policy, migration-4 reconciliation through additive migration 6, and bounded authenticated usage, capacity, and health protocol pages.
 - Phase 4B adds node-owned Claude and Codex transcript scanners with durable platform file identity, bounded lifecycle and retention, explicit coverage diagnostics, transactional cursor advancement, and managed-turn reconciliation. Raw transcript text and paths remain node-local.
 - Phase 4C adds bounded Hub pulls, transactional per-node high-water marks, acknowledged outbox compaction, explicit retention-gap backfill, indexed SQL aggregates, effective-dated integer pricing, and cross-node coverage metadata. Provider-reported spend remains separate from API-equivalent estimates.
+- Phase 4D adds schema-versioned capacity revisions and conservative projections,
+  authenticated Hub-to-node capacity exchange, bounded concurrent provider health with
+  durable freshness, and explicit preview-before-launch login actions. Codex quota
+  evidence can be Reported; unverified provider capacity remains Unknown.
 
 See the completion records and acceptance criteria in [`tasks/plan-rewrite.md`](tasks/plan-rewrite.md).
 

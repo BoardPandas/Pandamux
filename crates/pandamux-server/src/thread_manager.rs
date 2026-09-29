@@ -5,7 +5,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, broadcast, mpsc};
 
 use pandamux_core::{
-    EnvironmentId,
+    CAPACITY_SNAPSHOT_SCHEMA_VERSION, CapacityConfidence, CapacityEvidenceScope, CapacitySnapshot,
+    DEFAULT_CAPACITY_MAX_AGE_MS, EnvironmentId, ProviderKind,
     event::{ThreadEvent, ThreadEventKind, ToolCallStatus, TurnOutcome},
     ids::{ThreadId, TurnId},
     thread::{Thread, ThreadStatus, ThreadWorkspace, Turn, TurnInput, TurnStatus},
@@ -30,6 +31,54 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+fn record_local_codex_capacity(
+    store: &Store,
+    environment_id: &EnvironmentId,
+    provider_instance_id: &pandamux_core::ProviderInstanceId,
+    provider_version: Option<&str>,
+    details: &serde_json::Value,
+    observed_at_ms: u64,
+) -> Result<(), crate::store::StoreError> {
+    let Some((subscription_key, _)) =
+        store.usage_subscription_for_provider(environment_id, provider_instance_id)?
+    else {
+        return Ok(());
+    };
+    let limits = pandamux_providers::parse_rate_limits_value(details).map_err(|error| {
+        crate::store::StoreError::Data(format!("invalid Codex rate-limit event: {error}"))
+    })?;
+    let snapshots = limits
+        .into_iter()
+        .map(|limit| {
+            let duration_ms = u64::from(limit.window_duration_mins).saturating_mul(60 * 1000);
+            CapacitySnapshot {
+                schema_version: CAPACITY_SNAPSHOT_SCHEMA_VERSION,
+                subscription_key: subscription_key.clone(),
+                environment_id: Some(environment_id.clone()),
+                provider_instance_id: Some(provider_instance_id.clone()),
+                window_name: Some(limit.limit_name),
+                window_start_ms: limit
+                    .resets_at_ms
+                    .map(|reset| reset.saturating_sub(duration_ms)),
+                window_end_ms: limit.resets_at_ms,
+                used_millionths: limit.used_millionths,
+                remaining_millionths: limit.remaining_millionths,
+                reset_at_ms: limit.resets_at_ms,
+                source: "codex_rate_limit_event".to_string(),
+                confidence: CapacityConfidence::Reported,
+                evidence_scope: CapacityEvidenceScope::Local,
+                hard_limit: limit.hard_limit
+                    && limit.remaining_millionths == Some(0)
+                    && limit.resets_at_ms.is_some(),
+                provider_version: provider_version.map(str::to_string),
+                as_of_ms: observed_at_ms,
+                max_age_ms: DEFAULT_CAPACITY_MAX_AGE_MS,
+            }
+        })
+        .collect::<Vec<_>>();
+    store.save_capacity_snapshots(&snapshots)
 }
 
 /// An active supervised session paired with its event channel receiver.
@@ -561,6 +610,9 @@ impl ThreadManager {
         let turn_id_for_task = turn_id.clone();
         let event_writer = active_sess.event_writer.clone();
         let usage_scanner = self.usage_scanner.clone();
+        let provider_kind = active_sess.execution.instance.config.provider;
+        let provider_instance_id = active_sess.execution.instance.config.id.clone();
+        let provider_version = active_sess.execution.snapshot.version.clone();
 
         tokio::spawn(async move {
             let turn_id = turn_id_for_task;
@@ -911,6 +963,17 @@ impl ThreadManager {
                         });
                     }
                     ProviderEvent::RateLimitObserved { details } => {
+                        if provider_kind == ProviderKind::Codex {
+                            let environment_id = EnvironmentId::new(env_id.clone());
+                            let _ = record_local_codex_capacity(
+                                &store,
+                                &environment_id,
+                                &provider_instance_id,
+                                provider_version.as_deref(),
+                                &details,
+                                at,
+                            );
+                        }
                         let ev = ThreadEvent {
                             thread_id: thread_id.clone(),
                             seq: stream_seq,

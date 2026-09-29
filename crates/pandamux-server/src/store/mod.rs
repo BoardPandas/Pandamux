@@ -1,3 +1,4 @@
+mod capacity_phase4d;
 pub mod migrations;
 mod usage_phase4c;
 mod usage_query_phase4c;
@@ -8,12 +9,12 @@ pub use usage_phase4c::{
 };
 
 use pandamux_core::{
-    AgentId, AttachmentRecord, CapacityConfidence, CapacitySnapshot, EnvironmentId, FailoverPool,
-    NodeStoreId, OrganizationPolicy, ProjectId, ProviderCapabilities, ProviderInstanceId,
-    ProviderKind, ScheduleId, ScheduleRecord, SubscriptionKey, Thread, ThreadEvent,
-    ThreadEventKind, ThreadId, ThreadOrigin, TokenCounts, Turn, TurnId, TurnStatus, TurnUsage,
-    UsageObservation, UsageObservationId, UsageProvider, UsageSourceKind, UsageSubscription,
-    UsageUnknownField, UserSettings,
+    AgentId, AttachmentRecord, CapacityConfidence, CapacityEvidenceScope, CapacitySnapshot,
+    EnvironmentId, FailoverPool, NodeStoreId, OrganizationPolicy, ProjectId, ProviderCapabilities,
+    ProviderInstanceId, ProviderKind, ScheduleId, ScheduleRecord, SubscriptionKey, Thread,
+    ThreadEvent, ThreadEventKind, ThreadId, ThreadOrigin, TokenCounts, Turn, TurnId, TurnStatus,
+    TurnUsage, UsageObservation, UsageObservationId, UsageProvider, UsageSourceKind,
+    UsageSubscription, UsageUnknownField, UserSettings, project_capacity_revisions,
 };
 use pandamux_protocol::{
     CapacityQueryCursor, CapacityQueryParams, CapacityQueryResult, EventEnvelope, UsageExportItem,
@@ -955,6 +956,29 @@ impl Store {
         .map_err(StoreError::from)
     }
 
+    pub fn usage_subscription_by_key(
+        &self,
+        subscription_key: &SubscriptionKey,
+    ) -> Result<Option<UsageSubscription>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT provider, display_name, masked_account_label
+             FROM usage_subscriptions
+             WHERE subscription_key = ?1",
+            [subscription_key.as_str()],
+            |row| {
+                Ok(UsageSubscription {
+                    key: subscription_key.clone(),
+                    provider: UsageProvider::from(row.get::<_, String>(0)?),
+                    display_name: row.get(1)?,
+                    masked_account_label: row.get(2)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(StoreError::from)
+    }
+
     pub fn get_usage_scanner_cursor(
         &self,
         environment_id: &EnvironmentId,
@@ -1869,51 +1893,94 @@ impl Store {
     }
 
     pub fn save_capacity_snapshot(&self, snapshot: &CapacitySnapshot) -> Result<(), StoreError> {
-        snapshot.validate().map_err(StoreError::Data)?;
-        let confidence = match snapshot.confidence {
+        let mut stored = snapshot.clone();
+        if stored.environment_id.is_none() {
+            stored.environment_id = Some(EnvironmentId::new("env-legacy"));
+        }
+        stored.validate().map_err(StoreError::Data)?;
+        let confidence = match stored.confidence {
             CapacityConfidence::Reported => "reported",
             CapacityConfidence::Estimated => "estimated",
             CapacityConfidence::Unknown => "unknown",
         };
+        let evidence_scope = match stored.evidence_scope {
+            CapacityEvidenceScope::Local => "local",
+            CapacityEvidenceScope::Hub => "hub",
+        };
+        let environment_id = stored
+            .environment_id
+            .as_ref()
+            .expect("capacity environment was normalized");
         let conn = self.conn.lock().unwrap();
         let inserted = conn.execute(
             "INSERT INTO capacity_snapshots (
                 subscription_key, window_start_ms, window_end_ms, used_millionths,
                 remaining_millionths, reset_at_ms, source, confidence,
-                provider_version, as_of_ms, detail_json
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, '{}')
+                provider_version, as_of_ms, detail_json, schema_version,
+                environment_id, provider_instance_id, window_name, evidence_scope,
+                hard_limit, max_age_ms, received_at_ms
+             ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, '{}', ?11,
+                ?12, ?13, ?14, ?15, ?16, ?17, ?18
+             )
              ON CONFLICT DO NOTHING",
             params![
-                snapshot.subscription_key.as_str(),
-                optional_checked_i64(snapshot.window_start_ms, "capacity window_start_ms")?,
-                optional_checked_i64(snapshot.window_end_ms, "capacity window_end_ms")?,
-                snapshot.used_millionths.map(i64::from),
-                snapshot.remaining_millionths.map(i64::from),
-                optional_checked_i64(snapshot.reset_at_ms, "capacity reset_at_ms")?,
-                snapshot.source,
+                stored.subscription_key.as_str(),
+                optional_checked_i64(stored.window_start_ms, "capacity window_start_ms")?,
+                optional_checked_i64(stored.window_end_ms, "capacity window_end_ms")?,
+                stored.used_millionths.map(i64::from),
+                stored.remaining_millionths.map(i64::from),
+                optional_checked_i64(stored.reset_at_ms, "capacity reset_at_ms")?,
+                stored.source,
                 confidence,
-                snapshot.provider_version,
-                checked_i64(snapshot.as_of_ms, "capacity as_of_ms")?,
+                stored.provider_version,
+                checked_i64(stored.as_of_ms, "capacity as_of_ms")?,
+                i64::from(stored.schema_version),
+                environment_id.as_str(),
+                stored
+                    .provider_instance_id
+                    .as_ref()
+                    .map(ProviderInstanceId::as_str),
+                stored.window_name,
+                evidence_scope,
+                stored.hard_limit,
+                checked_i64(stored.max_age_ms, "capacity max_age_ms")?,
+                checked_i64(stored.as_of_ms, "capacity received_at_ms")?,
             ],
         )?;
         if inserted == 0 {
             let mut stmt = conn.prepare(
                 "SELECT subscription_key, window_start_ms, window_end_ms,
                         used_millionths, remaining_millionths, reset_at_ms, source,
-                        confidence, provider_version, as_of_ms
+                        confidence, provider_version, as_of_ms, schema_version,
+                        environment_id, provider_instance_id, window_name, evidence_scope,
+                        hard_limit, max_age_ms
                  FROM capacity_snapshots
                  WHERE subscription_key = ?1
-                   AND window_start_ms IS ?2
-                   AND window_end_ms IS ?3
-                   AND source = ?4
-                   AND as_of_ms = ?5",
+                   AND environment_id = ?2
+                   AND COALESCE(provider_instance_id, '') = COALESCE(?3, '')
+                   AND COALESCE(window_name, '') = COALESCE(?4, '')
+                   AND (window_name IS NOT NULL OR
+                        COALESCE(window_start_ms, -1) = COALESCE(?5, -1))
+                   AND (window_name IS NOT NULL OR
+                        COALESCE(window_end_ms, -1) = COALESCE(?6, -1))
+                   AND evidence_scope = ?7
+                   AND source = ?8
+                   AND as_of_ms = ?9",
             )?;
             let mut rows = stmt.query(params![
-                snapshot.subscription_key.as_str(),
-                optional_checked_i64(snapshot.window_start_ms, "capacity window_start_ms")?,
-                optional_checked_i64(snapshot.window_end_ms, "capacity window_end_ms")?,
-                snapshot.source,
-                checked_i64(snapshot.as_of_ms, "capacity as_of_ms")?,
+                stored.subscription_key.as_str(),
+                environment_id.as_str(),
+                stored
+                    .provider_instance_id
+                    .as_ref()
+                    .map(ProviderInstanceId::as_str),
+                stored.window_name,
+                optional_checked_i64(stored.window_start_ms, "capacity window_start_ms")?,
+                optional_checked_i64(stored.window_end_ms, "capacity window_end_ms")?,
+                evidence_scope,
+                stored.source,
+                checked_i64(stored.as_of_ms, "capacity as_of_ms")?,
             ])?;
             let existing = rows
                 .next()?
@@ -1923,10 +1990,10 @@ impl Store {
                     )
                 })
                 .and_then(|row| decode_capacity_snapshot(row, 0))?;
-            if existing != *snapshot {
+            if existing != stored {
                 return Err(StoreError::Data(format!(
                     "capacity snapshot identity collision for subscription {} at {}",
-                    snapshot.subscription_key, snapshot.as_of_ms
+                    stored.subscription_key, stored.as_of_ms
                 )));
             }
         }
@@ -1941,13 +2008,19 @@ impl Store {
         let mut sql = String::from(
             "SELECT id, subscription_key, window_start_ms, window_end_ms,
                     used_millionths, remaining_millionths, reset_at_ms, source,
-                    confidence, provider_version, as_of_ms
+                    confidence, provider_version, as_of_ms, schema_version,
+                    environment_id, provider_instance_id, window_name, evidence_scope,
+                    hard_limit, max_age_ms
              FROM capacity_snapshots WHERE 1 = 1",
         );
         let mut values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
         if let Some(subscription_key) = &params.subscription_key {
             sql.push_str(" AND subscription_key = ?");
             values.push(Box::new(subscription_key.as_str().to_string()));
+        }
+        if let Some(environment_id) = &params.environment_id {
+            sql.push_str(" AND environment_id = ?");
+            values.push(Box::new(environment_id.as_str().to_string()));
         }
         if let Some(cursor) = &params.after {
             let as_of_ms = checked_i64(cursor.as_of_ms, "capacity cursor as_of_ms")?;
@@ -1991,10 +2064,51 @@ impl Store {
                 subscription_key: snapshot.subscription_key.clone(),
                 sequence: *sequence,
             });
+        let snapshots = values
+            .into_iter()
+            .map(|(_, snapshot)| snapshot)
+            .collect::<Vec<_>>();
+        drop(rows);
+        drop(stmt);
+
+        let mut projection_sql = String::from(
+            "SELECT subscription_key, window_start_ms, window_end_ms,
+                    used_millionths, remaining_millionths, reset_at_ms, source,
+                    confidence, provider_version, as_of_ms, schema_version,
+                    environment_id, provider_instance_id, window_name, evidence_scope,
+                    hard_limit, max_age_ms
+             FROM capacity_snapshots WHERE 1 = 1",
+        );
+        let mut projection_values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        if let Some(subscription_key) = &params.subscription_key {
+            projection_sql.push_str(" AND subscription_key = ?");
+            projection_values.push(Box::new(subscription_key.as_str().to_string()));
+        }
+        if let Some(environment_id) = &params.environment_id {
+            projection_sql.push_str(" AND environment_id = ?");
+            projection_values.push(Box::new(environment_id.as_str().to_string()));
+        }
+        projection_sql.push_str(" ORDER BY as_of_ms, subscription_key, id");
+        let projection_references = projection_values
+            .iter()
+            .map(|value| value.as_ref())
+            .collect::<Vec<&dyn rusqlite::ToSql>>();
+        let mut projection_stmt = conn.prepare(&projection_sql)?;
+        let mut projection_rows = projection_stmt.query(projection_references.as_slice())?;
+        let mut projection_snapshots = Vec::new();
+        while let Some(row) = projection_rows.next()? {
+            projection_snapshots.push(decode_capacity_snapshot(row, 0)?);
+        }
+        let at_ms = params.at_ms.unwrap_or_else(current_time_ms);
+        let effective = project_capacity_revisions(&projection_snapshots, at_ms, 5 * 60 * 1000);
+        let offline_environments = load_offline_capacity_environments(&conn, params)?;
+
         Ok(CapacityQueryResult {
-            snapshots: values.into_iter().map(|(_, snapshot)| snapshot).collect(),
+            snapshots,
             next,
             has_more,
+            effective,
+            offline_environments,
         })
     }
 
@@ -3009,8 +3123,24 @@ fn decode_capacity_snapshot(
             )));
         }
     };
+    let evidence_scope_value: String = row.get(offset + 14)?;
+    let evidence_scope = match evidence_scope_value.as_str() {
+        "local" => CapacityEvidenceScope::Local,
+        "hub" => CapacityEvidenceScope::Hub,
+        _ => {
+            return Err(StoreError::Data(format!(
+                "capacity snapshot contains unknown evidence scope: {evidence_scope_value}"
+            )));
+        }
+    };
     let snapshot = CapacitySnapshot {
+        schema_version: checked_u32(row.get(offset + 10)?, "capacity_snapshots.schema_version")?,
         subscription_key: SubscriptionKey::from(row.get::<_, String>(offset)?),
+        environment_id: Some(EnvironmentId::from(row.get::<_, String>(offset + 11)?)),
+        provider_instance_id: row
+            .get::<_, Option<String>>(offset + 12)?
+            .map(ProviderInstanceId::from),
+        window_name: row.get(offset + 13)?,
         window_start_ms: optional_checked_u64(
             row.get(offset + 1)?,
             "capacity_snapshots.window_start_ms",
@@ -3030,11 +3160,49 @@ fn decode_capacity_snapshot(
         reset_at_ms: optional_checked_u64(row.get(offset + 5)?, "capacity_snapshots.reset_at_ms")?,
         source: row.get(offset + 6)?,
         confidence,
+        evidence_scope,
+        hard_limit: row.get(offset + 15)?,
         provider_version: row.get(offset + 8)?,
         as_of_ms: checked_u64(row.get(offset + 9)?, "capacity_snapshots.as_of_ms")?,
+        max_age_ms: checked_u64(row.get(offset + 16)?, "capacity_snapshots.max_age_ms")?,
     };
     snapshot.validate().map_err(StoreError::Data)?;
     Ok(snapshot)
+}
+
+fn current_time_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn load_offline_capacity_environments(
+    conn: &Connection,
+    params: &CapacityQueryParams,
+) -> Result<Vec<EnvironmentId>, StoreError> {
+    let mut sql = String::from(
+        "SELECT environment_id
+         FROM usage_hub_environment_status
+         WHERE sync_state IN ('stale', 'unreachable')",
+    );
+    let mut values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    if let Some(environment_id) = &params.environment_id {
+        sql.push_str(" AND environment_id = ?");
+        values.push(Box::new(environment_id.as_str().to_string()));
+    }
+    sql.push_str(" ORDER BY environment_id");
+    let references = values
+        .iter()
+        .map(|value| value.as_ref())
+        .collect::<Vec<&dyn rusqlite::ToSql>>();
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = stmt.query(references.as_slice())?;
+    let mut environments = Vec::new();
+    while let Some(row) = rows.next()? {
+        environments.push(EnvironmentId::from(row.get::<_, String>(0)?));
+    }
+    Ok(environments)
 }
 
 fn push_usage_filter(
@@ -3997,7 +4165,11 @@ mod tests {
         configure_usage_mapping(&store);
         for (as_of_ms, remaining) in [(1000, 750_000), (2000, 500_000)] {
             let snapshot = CapacitySnapshot {
+                schema_version: pandamux_core::CAPACITY_SNAPSHOT_SCHEMA_VERSION,
                 subscription_key: SubscriptionKey::new("subkey-work"),
+                environment_id: Some(EnvironmentId::new("env-local")),
+                provider_instance_id: Some(ProviderInstanceId::new("claude-default")),
+                window_name: Some("primary".to_string()),
                 window_start_ms: None,
                 window_end_ms: None,
                 used_millionths: Some(1_000_000 - remaining),
@@ -4005,8 +4177,11 @@ mod tests {
                 reset_at_ms: None,
                 source: "provider_report".to_string(),
                 confidence: CapacityConfidence::Reported,
+                evidence_scope: CapacityEvidenceScope::Local,
+                hard_limit: false,
                 provider_version: Some("fixture-1".to_string()),
                 as_of_ms,
+                max_age_ms: pandamux_core::DEFAULT_CAPACITY_MAX_AGE_MS,
             };
             store
                 .save_capacity_snapshot(&snapshot)
@@ -4019,16 +4194,23 @@ mod tests {
         assert!(
             store
                 .save_capacity_snapshot(&CapacitySnapshot {
+                    schema_version: pandamux_core::CAPACITY_SNAPSHOT_SCHEMA_VERSION,
                     subscription_key: SubscriptionKey::new("subkey-work"),
-                    window_start_ms: None,
-                    window_end_ms: None,
+                    environment_id: Some(EnvironmentId::new("env-local")),
+                    provider_instance_id: Some(ProviderInstanceId::new("claude-default")),
+                    window_name: Some("primary".to_string()),
+                    window_start_ms: Some(900),
+                    window_end_ms: Some(1_100),
                     used_millionths: Some(900_000),
                     remaining_millionths: Some(100_000),
                     reset_at_ms: None,
                     source: "provider_report".to_string(),
                     confidence: CapacityConfidence::Reported,
+                    evidence_scope: CapacityEvidenceScope::Local,
+                    hard_limit: false,
                     provider_version: Some("fixture-1".to_string()),
                     as_of_ms: 1000,
+                    max_age_ms: pandamux_core::DEFAULT_CAPACITY_MAX_AGE_MS,
                 })
                 .is_err()
         );
@@ -4036,6 +4218,8 @@ mod tests {
         let first = store
             .query_capacity(&CapacityQueryParams {
                 subscription_key: Some(SubscriptionKey::new("subkey-work")),
+                environment_id: None,
+                at_ms: Some(2_000),
                 after: None,
                 limit: 1,
             })
@@ -4046,6 +4230,8 @@ mod tests {
         let second = store
             .query_capacity(&CapacityQueryParams {
                 subscription_key: Some(SubscriptionKey::new("subkey-work")),
+                environment_id: None,
+                at_ms: Some(2_000),
                 after: first.next,
                 limit: 1,
             })

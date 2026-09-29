@@ -7,6 +7,7 @@ pub mod git_rpc;
 pub mod hark_rpc;
 pub mod jsonrpc;
 pub mod mcp;
+pub mod provider_rpc;
 pub mod proxy;
 pub mod settings_rpc;
 pub mod subagent_rpc;
@@ -43,11 +44,17 @@ pub use hark_rpc::{
 };
 pub use jsonrpc::{JSONRPC_VERSION, RpcError, RpcId, RpcRequest, RpcResponse};
 pub use mcp::{McpCallToolParams, McpCallToolResult, McpContentItem, McpToolDefinition};
+pub use provider_rpc::{
+    ProviderLoginFlow, ProviderLoginGuidance, ProviderLoginLaunchParams, ProviderLoginLaunchResult,
+    ProviderLoginPreview, ProviderLoginPreviewParams,
+};
 pub use proxy::{PROXY_PROTOCOL_VERSION, ProxyMessage};
 pub use settings_rpc::{
-    DEFAULT_PROVIDER_HEALTH_PAGE_SIZE, MAX_PROVIDER_HEALTH_PAGE_SIZE, ProviderHealthParams,
-    ProviderHealthReport, ProviderHealthResult, SettingsGetParams, SettingsGetResult,
-    SettingsSetParams, SettingsSetResult,
+    DEFAULT_PROVIDER_HEALTH_PAGE_SIZE, DEFAULT_PROVIDER_PROBE_CONCURRENCY,
+    DEFAULT_PROVIDER_PROBE_TIMEOUT_MS, MAX_PROVIDER_HEALTH_PAGE_SIZE,
+    MAX_PROVIDER_PROBE_CONCURRENCY, MAX_PROVIDER_PROBE_TIMEOUT_MS, MIN_PROVIDER_PROBE_TIMEOUT_MS,
+    ProviderHealthParams, ProviderHealthReport, ProviderHealthResult, SettingsGetParams,
+    SettingsGetResult, SettingsSetParams, SettingsSetResult,
 };
 pub use subagent_rpc::{SubAgentTreeItem, SubAgentTreeParams, SubAgentTreeResult};
 pub use subscription::{EventEnvelope, SubscribeParams, SubscribeResult, UnsubscribeParams};
@@ -66,12 +73,15 @@ pub use thread_rpc::{
     ThreadSendTurnResult,
 };
 pub use usage_rpc::{
-    CapacityQueryCursor, CapacityQueryParams, CapacityQueryResult, DEFAULT_USAGE_PAGE_SIZE,
-    MAX_USAGE_PAGE_SIZE, UsageAckParams, UsageAckResult, UsageAggregate, UsageBackfillCursor,
-    UsageBackfillItem, UsageBackfillParams, UsageBackfillResult, UsageCoverage, UsageCoverageGap,
-    UsageEnvironmentSyncCoverage, UsageEnvironmentSyncState, UsageExportItem, UsageExportParams,
-    UsageExportResult, UsageNodeCoverageSnapshot, UsageQueryCursor, UsageQueryItem,
-    UsageQueryParams, UsageQueryResult, UsageScannerDiagnostic, UsageSourceCoverageState,
+    CapacityPushParams, CapacityPushResult, CapacityQueryCursor, CapacityQueryParams,
+    CapacityQueryResult, CapacityRefreshParams, CapacityRefreshResult,
+    DEFAULT_CAPACITY_REFRESH_TIMEOUT_MS, DEFAULT_USAGE_PAGE_SIZE, MAX_CAPACITY_REFRESH_TIMEOUT_MS,
+    MAX_CAPACITY_SNAPSHOTS_PER_PUSH, MAX_USAGE_PAGE_SIZE, UsageAckParams, UsageAckResult,
+    UsageAggregate, UsageBackfillCursor, UsageBackfillItem, UsageBackfillParams,
+    UsageBackfillResult, UsageCoverage, UsageCoverageGap, UsageEnvironmentSyncCoverage,
+    UsageEnvironmentSyncState, UsageExportItem, UsageExportParams, UsageExportResult,
+    UsageNodeCoverageSnapshot, UsageQueryCursor, UsageQueryItem, UsageQueryParams,
+    UsageQueryResult, UsageScannerDiagnostic, UsageSourceCoverageState,
 };
 pub use worktree_rpc::{WorktreeSyncDeltaParams, WorktreeSyncDeltaResult};
 

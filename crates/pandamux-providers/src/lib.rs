@@ -31,7 +31,7 @@ pub use claude::{
     ClaudeDriver, ClaudeSession, build_claude_interrupt_request, build_claude_launch_args,
     build_claude_user_message, claude_disallowed_tools, claude_permission_mode,
 };
-pub use codex::{CodexDriver, CodexSession};
+pub use codex::{CodexDriver, CodexSession, parse_rate_limits_value};
 pub use cursor::{
     CursorDriver, build_cursor_preamble, evaluate_cursor_permission, resolve_cursor_binary,
     validate_cursor_initialize,
@@ -43,8 +43,10 @@ pub use grok::{
 };
 pub use mock::{MockProviderDriver, MockProviderSession};
 pub use models::{
-    InjectedInstructions, ModelInfo, ProviderAuthStatus, ProviderEvent, ProviderHealth,
-    ProviderMetadata, ProviderSnapshot, RateLimitEntry, SessionSpec, ToolPolicy, UsageLimits,
+    InjectedInstructions, ModelInfo, PROVIDER_SNAPSHOT_TTL_MS, ProviderAuthConfidence,
+    ProviderAuthStatus, ProviderEvent, ProviderHealth, ProviderMetadata, ProviderSnapshot,
+    RateLimitEntry, SessionSpec, ToolPolicy, UsageLimits, provider_snapshot_expiry,
+    provider_snapshot_now_ms,
 };
 pub use opencode::{
     OpenCodeDriver, OpenCodeServeCreateRequest, OpenCodeServeCreateResponse, OpenCodeServeSession,

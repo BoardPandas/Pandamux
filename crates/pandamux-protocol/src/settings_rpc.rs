@@ -3,11 +3,26 @@ use pandamux_core::ids::{EnvironmentId, ProviderInstanceId};
 use pandamux_core::provider_config::{ProviderDisabledReason, ProviderKind};
 use serde::{Deserialize, Serialize};
 
+use crate::provider_rpc::ProviderLoginGuidance;
+
 pub const DEFAULT_PROVIDER_HEALTH_PAGE_SIZE: u32 = 100;
 pub const MAX_PROVIDER_HEALTH_PAGE_SIZE: u32 = 500;
+pub const DEFAULT_PROVIDER_PROBE_TIMEOUT_MS: u64 = 5_000;
+pub const MIN_PROVIDER_PROBE_TIMEOUT_MS: u64 = 25;
+pub const MAX_PROVIDER_PROBE_TIMEOUT_MS: u64 = 30_000;
+pub const DEFAULT_PROVIDER_PROBE_CONCURRENCY: u32 = 8;
+pub const MAX_PROVIDER_PROBE_CONCURRENCY: u32 = 32;
 
 fn default_provider_health_page_size() -> u32 {
     DEFAULT_PROVIDER_HEALTH_PAGE_SIZE
+}
+
+fn default_provider_probe_timeout_ms() -> u64 {
+    DEFAULT_PROVIDER_PROBE_TIMEOUT_MS
+}
+
+fn default_provider_probe_concurrency() -> u32 {
+    DEFAULT_PROVIDER_PROBE_CONCURRENCY
 }
 
 /// Parameters for retrieving application user settings.
@@ -66,6 +81,12 @@ pub struct ProviderHealthParams {
     /// Maximum number of instances to probe and return.
     #[serde(default = "default_provider_health_page_size")]
     pub limit: u32,
+    /// Deadline applied after a probe acquires a global concurrency permit.
+    #[serde(default = "default_provider_probe_timeout_ms")]
+    pub timeout_ms: u64,
+    /// Maximum number of provider probes executing concurrently.
+    #[serde(default = "default_provider_probe_concurrency")]
+    pub max_concurrency: u32,
 }
 
 impl Default for ProviderHealthParams {
@@ -75,6 +96,8 @@ impl Default for ProviderHealthParams {
             environment_id: None,
             after_instance_id: None,
             limit: DEFAULT_PROVIDER_HEALTH_PAGE_SIZE,
+            timeout_ms: DEFAULT_PROVIDER_PROBE_TIMEOUT_MS,
+            max_concurrency: DEFAULT_PROVIDER_PROBE_CONCURRENCY,
         }
     }
 }
@@ -84,6 +107,18 @@ impl ProviderHealthParams {
         if !(1..=MAX_PROVIDER_HEALTH_PAGE_SIZE).contains(&self.limit) {
             return Err(format!(
                 "limit must be between 1 and {MAX_PROVIDER_HEALTH_PAGE_SIZE}"
+            ));
+        }
+        if !(MIN_PROVIDER_PROBE_TIMEOUT_MS..=MAX_PROVIDER_PROBE_TIMEOUT_MS)
+            .contains(&self.timeout_ms)
+        {
+            return Err(format!(
+                "timeoutMs must be between {MIN_PROVIDER_PROBE_TIMEOUT_MS} and {MAX_PROVIDER_PROBE_TIMEOUT_MS}"
+            ));
+        }
+        if !(1..=MAX_PROVIDER_PROBE_CONCURRENCY).contains(&self.max_concurrency) {
+            return Err(format!(
+                "maxConcurrency must be between 1 and {MAX_PROVIDER_PROBE_CONCURRENCY}"
             ));
         }
         for (field, value) in [
@@ -114,14 +149,22 @@ impl ProviderHealthParams {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderHealthReport {
+    pub environment_id: EnvironmentId,
     pub instance_id: ProviderInstanceId,
     pub provider: ProviderKind,
     pub display_name: String,
     pub enabled: bool,
     pub installed: bool,
     #[serde(default)]
+    pub resolved_executable: Option<String>,
+    #[serde(default)]
     pub version: Option<String>,
     pub status: String,
+    pub authentication_state: String,
+    pub authentication_confidence: String,
+    pub runtime_status: String,
+    #[serde(default)]
+    pub runtime_code: Option<String>,
     #[serde(default)]
     pub account_badge: Option<String>,
     #[serde(default)]
@@ -131,6 +174,13 @@ pub struct ProviderHealthReport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disabled_reason: Option<ProviderDisabledReason>,
     pub checked_at_ms: u64,
+    pub expires_at_ms: u64,
+    #[serde(default)]
+    pub last_success_at_ms: Option<u64>,
+    #[serde(default)]
+    pub login_guidance: Option<ProviderLoginGuidance>,
+    #[serde(default)]
+    pub retryable: bool,
 }
 
 /// Result of provider health checks.
@@ -163,18 +213,28 @@ mod tests {
     #[test]
     fn test_provider_health_report_serialization() {
         let report = ProviderHealthReport {
+            environment_id: EnvironmentId::new("env-local"),
             instance_id: ProviderInstanceId::new("claude-default"),
             provider: ProviderKind::Claude,
             display_name: "Claude Code".to_string(),
             enabled: true,
             installed: true,
+            resolved_executable: Some("C:\\Tools\\claude.exe".to_string()),
             version: Some("0.2.29".to_string()),
             status: "healthy".to_string(),
+            authentication_state: "authenticated".to_string(),
+            authentication_confidence: "reported".to_string(),
+            runtime_status: "healthy".to_string(),
+            runtime_code: Some("runtime_ready".to_string()),
             account_badge: Some("Claude Max".to_string()),
             subscription: Some("Max".to_string()),
             reason: None,
             disabled_reason: None,
             checked_at_ms: 12345678,
+            expires_at_ms: 12645678,
+            last_success_at_ms: Some(12345678),
+            login_guidance: None,
+            retryable: true,
         };
 
         let json = serde_json::to_string(&report).unwrap();
@@ -194,6 +254,8 @@ mod tests {
             environment_id: Some(EnvironmentId::new("env-local")),
             after_instance_id: Some(ProviderInstanceId::new("claude-default")),
             limit: 25,
+            timeout_ms: 2_000,
+            max_concurrency: 4,
         };
         assert_eq!(
             serde_json::to_value(fixture).unwrap(),
@@ -201,7 +263,9 @@ mod tests {
                 "instanceId": null,
                 "environmentId": "env-local",
                 "afterInstanceId": "claude-default",
-                "limit": 25
+                "limit": 25,
+                "timeoutMs": 2000,
+                "maxConcurrency": 4
             })
         );
 

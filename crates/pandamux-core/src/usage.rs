@@ -546,19 +546,62 @@ pub struct UsageSubscription {
     pub masked_account_label: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CapacityConfidence {
     Reported,
     Estimated,
+    #[default]
     Unknown,
+}
+
+pub const CAPACITY_SNAPSHOT_SCHEMA_VERSION: u32 = 1;
+pub const DEFAULT_CAPACITY_MAX_AGE_MS: u64 = 15 * 60 * 1000;
+
+fn capacity_snapshot_schema_version() -> u32 {
+    CAPACITY_SNAPSHOT_SCHEMA_VERSION
+}
+
+fn default_capacity_max_age_ms() -> u64 {
+    DEFAULT_CAPACITY_MAX_AGE_MS
+}
+
+/// Whether evidence was observed on this node or received from the Hub.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum CapacityEvidenceScope {
+    #[default]
+    Local,
+    Hub,
+}
+
+/// Freshness classification used wherever capacity affects a decision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CapacityFreshness {
+    Fresh,
+    Aging,
+    Stale,
+    Reset,
+    ClockSkew,
+    HardLimited,
 }
 
 /// Subscription quota window represented without floating-point fractions.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CapacitySnapshot {
+    #[serde(default = "capacity_snapshot_schema_version")]
+    pub schema_version: u32,
     pub subscription_key: SubscriptionKey,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment_id: Option<EnvironmentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_instance_id: Option<ProviderInstanceId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_start_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -571,9 +614,15 @@ pub struct CapacitySnapshot {
     pub reset_at_ms: Option<u64>,
     pub source: String,
     pub confidence: CapacityConfidence,
+    #[serde(default)]
+    pub evidence_scope: CapacityEvidenceScope,
+    #[serde(default)]
+    pub hard_limit: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_version: Option<String>,
     pub as_of_ms: u64,
+    #[serde(default = "default_capacity_max_age_ms")]
+    pub max_age_ms: u64,
 }
 
 impl CapacitySnapshot {
@@ -584,6 +633,32 @@ impl CapacitySnapshot {
         if self.source.trim().is_empty() {
             return Err("capacity source must not be empty".to_string());
         }
+        if self.schema_version != CAPACITY_SNAPSHOT_SCHEMA_VERSION {
+            return Err(format!(
+                "unsupported capacity schema version {}",
+                self.schema_version
+            ));
+        }
+        if self.max_age_ms == 0 {
+            return Err("capacity max age must be greater than zero".to_string());
+        }
+        for (field, value) in [
+            (
+                "environmentId",
+                self.environment_id.as_ref().map(EnvironmentId::as_str),
+            ),
+            (
+                "providerInstanceId",
+                self.provider_instance_id
+                    .as_ref()
+                    .map(ProviderInstanceId::as_str),
+            ),
+            ("windowName", self.window_name.as_deref()),
+        ] {
+            if value.is_some_and(|value| value.trim().is_empty()) {
+                return Err(format!("{field} must be absent or non-empty"));
+            }
+        }
         for (field, value) in [
             ("usedMillionths", self.used_millionths),
             ("remainingMillionths", self.remaining_millionths),
@@ -592,13 +667,252 @@ impl CapacitySnapshot {
                 return Err(format!("{field} must be between 0 and 1000000"));
             }
         }
+        if let (Some(used), Some(remaining)) = (self.used_millionths, self.remaining_millionths)
+            && used + remaining != 1_000_000
+        {
+            return Err("usedMillionths and remainingMillionths must total 1000000".to_string());
+        }
         if matches!(
             (self.window_start_ms, self.window_end_ms),
             (Some(start), Some(end)) if end < start
         ) {
             return Err("capacity window end must not precede its start".to_string());
         }
+        if self.hard_limit {
+            if self.remaining_millionths != Some(0) {
+                return Err("hard-limit evidence must report zero remaining capacity".to_string());
+            }
+            if self.reset_at_ms.is_none() {
+                return Err("hard-limit evidence must include its verified reset".to_string());
+            }
+        }
         Ok(())
+    }
+}
+
+/// Safe projection of the latest revisions for one subscription quota window.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapacityProjection {
+    pub subscription_key: SubscriptionKey,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub used_millionths: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remaining_millionths: Option<u32>,
+    pub confidence: CapacityConfidence,
+    pub freshness: CapacityFreshness,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub as_of_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset_at_ms: Option<u64>,
+    pub hard_limited: bool,
+    pub conflicting_evidence: bool,
+    pub evidence_count: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reasons: Vec<String>,
+}
+
+/// Projects immutable capacity revisions conservatively at one wall-clock instant.
+///
+/// The latest revision from each evidence identity participates. A local hard limit
+/// remains authoritative until its verified reset, even after its ordinary freshness
+/// budget expires. Other conflicts choose the lowest known remaining fraction.
+pub fn project_capacity_revisions(
+    snapshots: &[CapacitySnapshot],
+    now_ms: u64,
+    allowed_future_skew_ms: u64,
+) -> Vec<CapacityProjection> {
+    type WindowKey = (SubscriptionKey, Option<String>, Option<u64>, Option<u64>);
+    type EvidenceKey = (
+        Option<EnvironmentId>,
+        Option<ProviderInstanceId>,
+        CapacityEvidenceScope,
+        String,
+    );
+
+    let mut latest: BTreeMap<(WindowKey, EvidenceKey), &CapacitySnapshot> = BTreeMap::new();
+    for snapshot in snapshots {
+        if snapshot.validate().is_err() {
+            continue;
+        }
+        let unnamed_window = snapshot.window_name.is_none();
+        let window = (
+            snapshot.subscription_key.clone(),
+            snapshot.window_name.clone(),
+            unnamed_window.then_some(snapshot.window_start_ms).flatten(),
+            unnamed_window.then_some(snapshot.window_end_ms).flatten(),
+        );
+        let evidence = (
+            snapshot.environment_id.clone(),
+            snapshot.provider_instance_id.clone(),
+            snapshot.evidence_scope,
+            snapshot.source.clone(),
+        );
+        let key = (window, evidence);
+        if latest
+            .get(&key)
+            .is_none_or(|existing| existing.as_of_ms <= snapshot.as_of_ms)
+        {
+            latest.insert(key, snapshot);
+        }
+    }
+
+    let mut grouped: BTreeMap<WindowKey, Vec<&CapacitySnapshot>> = BTreeMap::new();
+    for ((window, _), snapshot) in latest {
+        grouped.entry(window).or_default().push(snapshot);
+    }
+
+    grouped
+        .into_iter()
+        .map(|((subscription_key, window_name, _, _), evidence)| {
+            project_capacity_window(
+                subscription_key,
+                window_name,
+                &evidence,
+                now_ms,
+                allowed_future_skew_ms,
+            )
+        })
+        .collect()
+}
+
+fn project_capacity_window(
+    subscription_key: SubscriptionKey,
+    window_name: Option<String>,
+    evidence: &[&CapacitySnapshot],
+    now_ms: u64,
+    allowed_future_skew_ms: u64,
+) -> CapacityProjection {
+    let mut reasons = BTreeSet::new();
+    let mut eligible = Vec::new();
+    let mut saw_reset = false;
+    let mut saw_clock_skew = false;
+    let mut saw_stale = false;
+
+    for snapshot in evidence {
+        if snapshot.reset_at_ms.is_some_and(|reset| reset <= now_ms) {
+            saw_reset = true;
+            reasons.insert("capacity_window_reset".to_string());
+            continue;
+        }
+
+        let local_hard_limit =
+            snapshot.hard_limit && snapshot.evidence_scope == CapacityEvidenceScope::Local;
+        if snapshot.as_of_ms > now_ms.saturating_add(allowed_future_skew_ms) {
+            saw_clock_skew = true;
+            reasons.insert("capacity_clock_skew".to_string());
+            if !local_hard_limit {
+                continue;
+            }
+        }
+
+        let age_ms = now_ms.saturating_sub(snapshot.as_of_ms);
+        let stale = age_ms > snapshot.max_age_ms;
+        if stale {
+            saw_stale = true;
+            reasons.insert("capacity_snapshot_stale".to_string());
+            if !local_hard_limit {
+                continue;
+            }
+        }
+        eligible.push((*snapshot, age_ms, local_hard_limit));
+    }
+
+    let active_local_hard_limit = eligible
+        .iter()
+        .filter(|(_, _, hard_limit)| *hard_limit)
+        .max_by_key(|(snapshot, _, _)| snapshot.as_of_ms)
+        .map(|(snapshot, _, _)| *snapshot);
+    let selected = active_local_hard_limit.or_else(|| {
+        eligible
+            .iter()
+            .filter(|(snapshot, _, _)| snapshot.remaining_millionths.is_some())
+            .min_by_key(|(snapshot, _, _)| {
+                (
+                    snapshot.remaining_millionths.unwrap_or(u32::MAX),
+                    std::cmp::Reverse(snapshot.as_of_ms),
+                )
+            })
+            .map(|(snapshot, _, _)| *snapshot)
+    });
+    let known_remaining = eligible
+        .iter()
+        .filter_map(|(snapshot, _, _)| snapshot.remaining_millionths)
+        .collect::<BTreeSet<_>>();
+    let conflicting_evidence = known_remaining.len() > 1;
+    if conflicting_evidence {
+        reasons.insert("capacity_evidence_conflict".to_string());
+    }
+    if active_local_hard_limit.is_some() {
+        reasons.insert("local_hard_limit_active".to_string());
+    }
+
+    let (used_millionths, remaining_millionths, confidence, freshness, as_of_ms, reset_at_ms) =
+        selected.map_or_else(
+            || {
+                let freshness = if saw_clock_skew {
+                    CapacityFreshness::ClockSkew
+                } else if saw_stale {
+                    CapacityFreshness::Stale
+                } else if saw_reset {
+                    CapacityFreshness::Reset
+                } else {
+                    CapacityFreshness::Stale
+                };
+                (
+                    None,
+                    None,
+                    CapacityConfidence::Unknown,
+                    freshness,
+                    None,
+                    None,
+                )
+            },
+            |snapshot| {
+                let age_ms = now_ms.saturating_sub(snapshot.as_of_ms);
+                let hard_limited = active_local_hard_limit.is_some();
+                let aging = age_ms > snapshot.max_age_ms / 2;
+                let confidence = if hard_limited {
+                    CapacityConfidence::Reported
+                } else if aging && snapshot.confidence == CapacityConfidence::Reported {
+                    reasons.insert("capacity_confidence_age_decayed".to_string());
+                    CapacityConfidence::Estimated
+                } else {
+                    snapshot.confidence
+                };
+                let freshness = if hard_limited {
+                    CapacityFreshness::HardLimited
+                } else if aging {
+                    CapacityFreshness::Aging
+                } else {
+                    CapacityFreshness::Fresh
+                };
+                (
+                    snapshot.used_millionths,
+                    snapshot.remaining_millionths,
+                    confidence,
+                    freshness,
+                    Some(snapshot.as_of_ms),
+                    snapshot.reset_at_ms,
+                )
+            },
+        );
+
+    CapacityProjection {
+        subscription_key,
+        window_name,
+        used_millionths,
+        remaining_millionths,
+        confidence,
+        freshness,
+        as_of_ms,
+        reset_at_ms,
+        hard_limited: active_local_hard_limit.is_some(),
+        conflicting_evidence,
+        evidence_count: u32::try_from(evidence.len()).unwrap_or(u32::MAX),
+        reasons: reasons.into_iter().collect(),
     }
 }
 
@@ -699,6 +1013,32 @@ mod tests {
             turn_id: None,
             agent_id: None,
             schedule_id: None,
+        }
+    }
+
+    fn capacity_snapshot(
+        source: &str,
+        as_of_ms: u64,
+        remaining_millionths: Option<u32>,
+    ) -> CapacitySnapshot {
+        CapacitySnapshot {
+            schema_version: CAPACITY_SNAPSHOT_SCHEMA_VERSION,
+            subscription_key: SubscriptionKey::new("subkey-capacity"),
+            environment_id: Some(EnvironmentId::new("env-capacity")),
+            provider_instance_id: Some(ProviderInstanceId::new("codex-capacity")),
+            window_name: Some("primary".to_string()),
+            window_start_ms: None,
+            window_end_ms: None,
+            used_millionths: remaining_millionths.map(|value| 1_000_000 - value),
+            remaining_millionths,
+            reset_at_ms: None,
+            source: source.to_string(),
+            confidence: CapacityConfidence::Reported,
+            evidence_scope: CapacityEvidenceScope::Local,
+            hard_limit: false,
+            provider_version: Some("fixture".to_string()),
+            as_of_ms,
+            max_age_ms: 100_000,
         }
     }
 
@@ -852,5 +1192,99 @@ mod tests {
         )
         .expect_err("price numerator overflow must fail");
         assert_eq!(overflow.category, "outputPrice");
+    }
+
+    #[test]
+    fn capacity_confidence_decays_and_reset_stale_unknown_and_clock_skew_stay_visible() {
+        let now = 1_000_000;
+        let fresh = project_capacity_revisions(
+            &[capacity_snapshot("fresh", now - 10_000, Some(800_000))],
+            now,
+            5_000,
+        );
+        assert_eq!(fresh[0].confidence, CapacityConfidence::Reported);
+        assert_eq!(fresh[0].freshness, CapacityFreshness::Fresh);
+
+        let aging = project_capacity_revisions(
+            &[capacity_snapshot("aging", now - 60_000, Some(700_000))],
+            now,
+            5_000,
+        );
+        assert_eq!(aging[0].confidence, CapacityConfidence::Estimated);
+        assert_eq!(aging[0].freshness, CapacityFreshness::Aging);
+
+        let mut estimated = capacity_snapshot("estimated", now - 10_000, Some(650_000));
+        estimated.confidence = CapacityConfidence::Estimated;
+        let estimated = project_capacity_revisions(&[estimated], now, 5_000);
+        assert_eq!(estimated[0].confidence, CapacityConfidence::Estimated);
+        assert_eq!(estimated[0].freshness, CapacityFreshness::Fresh);
+        assert_eq!(estimated[0].remaining_millionths, Some(650_000));
+
+        let stale = project_capacity_revisions(
+            &[capacity_snapshot("stale", now - 100_001, Some(600_000))],
+            now,
+            5_000,
+        );
+        assert_eq!(stale[0].confidence, CapacityConfidence::Unknown);
+        assert_eq!(stale[0].freshness, CapacityFreshness::Stale);
+        assert_eq!(stale[0].remaining_millionths, None);
+
+        let mut unknown = capacity_snapshot("unknown", now, None);
+        unknown.confidence = CapacityConfidence::Unknown;
+        let unknown = project_capacity_revisions(&[unknown], now, 5_000);
+        assert_eq!(unknown[0].confidence, CapacityConfidence::Unknown);
+        assert_eq!(unknown[0].remaining_millionths, None);
+
+        let mut reset = capacity_snapshot("reset", now - 10_000, Some(0));
+        reset.reset_at_ms = Some(now);
+        let reset = project_capacity_revisions(&[reset], now, 5_000);
+        assert_eq!(reset[0].freshness, CapacityFreshness::Reset);
+        assert_eq!(reset[0].remaining_millionths, None);
+
+        let future = project_capacity_revisions(
+            &[capacity_snapshot("future", now + 5_001, Some(900_000))],
+            now,
+            5_000,
+        );
+        assert_eq!(future[0].freshness, CapacityFreshness::ClockSkew);
+        assert_eq!(future[0].remaining_millionths, None);
+
+        let mut inconsistent = capacity_snapshot("inconsistent", now, Some(800_000));
+        inconsistent.used_millionths = Some(300_000);
+        assert!(inconsistent.validate().is_err());
+
+        let mut unnamed_first = capacity_snapshot("unnamed", now, Some(800_000));
+        unnamed_first.window_name = None;
+        unnamed_first.window_start_ms = Some(100);
+        unnamed_first.window_end_ms = Some(200);
+        let mut unnamed_second = unnamed_first.clone();
+        unnamed_second.window_start_ms = Some(300);
+        unnamed_second.window_end_ms = Some(400);
+        assert_eq!(
+            project_capacity_revisions(&[unnamed_first, unnamed_second], now, 5_000).len(),
+            2
+        );
+    }
+
+    #[test]
+    fn local_hard_limit_beats_fresh_hub_evidence_until_verified_reset() {
+        let now = 2_000_000;
+        let mut local = capacity_snapshot("local_rate_limit", now - 500_000, Some(0));
+        local.hard_limit = true;
+        local.reset_at_ms = Some(now + 60_000);
+        local.max_age_ms = 1;
+        let mut hub = capacity_snapshot("hub_snapshot", now, Some(900_000));
+        hub.evidence_scope = CapacityEvidenceScope::Hub;
+
+        let projected = project_capacity_revisions(&[local.clone(), hub.clone()], now, 5_000);
+        assert_eq!(projected[0].remaining_millionths, Some(0));
+        assert_eq!(projected[0].freshness, CapacityFreshness::HardLimited);
+        assert!(projected[0].hard_limited);
+        assert!(projected[0].conflicting_evidence);
+
+        local.reset_at_ms = Some(now);
+        let after_reset = project_capacity_revisions(&[local, hub], now, 5_000);
+        assert_eq!(after_reset[0].remaining_millionths, Some(900_000));
+        assert!(!after_reset[0].hard_limited);
     }
 }

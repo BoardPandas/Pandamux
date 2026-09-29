@@ -385,13 +385,24 @@ fn validate_snapshot(
             reason,
         ));
     }
-    if snapshot.auth == ProviderAuthStatus::Unauthenticated {
-        return Err(provider_error(
-            Some(instance_id),
-            environment_id,
-            "provider_unauthenticated",
-            format!("provider instance '{instance_id}' is not authenticated"),
-        ));
+    match snapshot.auth {
+        ProviderAuthStatus::Authenticated { .. } | ProviderAuthStatus::Configured => {}
+        ProviderAuthStatus::Unauthenticated => {
+            return Err(provider_error(
+                Some(instance_id),
+                environment_id,
+                "provider_unauthenticated",
+                format!("provider instance '{instance_id}' is not authenticated"),
+            ));
+        }
+        ProviderAuthStatus::Unknown => {
+            return Err(provider_error(
+                Some(instance_id),
+                environment_id,
+                "provider_authentication_unverified",
+                format!("provider instance '{instance_id}' does not have verified authentication"),
+            ));
+        }
     }
     Ok(())
 }
