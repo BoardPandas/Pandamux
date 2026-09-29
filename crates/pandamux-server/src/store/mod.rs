@@ -1,4 +1,5 @@
 mod capacity_phase4d;
+mod failover_phase4f;
 pub mod migrations;
 mod usage_phase4c;
 mod usage_query_phase4c;
@@ -9,10 +10,11 @@ pub use usage_phase4c::{
 };
 
 use pandamux_core::{
-    AgentId, AttachmentRecord, CapacityConfidence, CapacityEvidenceScope, CapacitySnapshot,
-    EnvironmentId, FailoverPool, NodeStoreId, OrganizationPolicy, ProjectId, ProviderCapabilities,
-    ProviderInstanceId, ProviderKind, ScheduleId, ScheduleRecord, ScheduleTarget, SubscriptionKey,
-    Thread, ThreadEvent, ThreadEventKind, ThreadId, ThreadOrigin, TokenCounts, Turn, TurnId,
+    AgentId, AttachmentRecord, AttemptExecutionEvidence, CapacityConfidence, CapacityEvidenceScope,
+    CapacitySnapshot, ContinuationState, EnvironmentId, FailoverPool, NodeStoreId,
+    OrganizationPolicy, ProjectId, ProviderCapabilities, ProviderInstanceId, ProviderKind,
+    ScheduleId, ScheduleRecord, ScheduleTarget, SubscriptionKey, Thread, ThreadEvent,
+    ThreadEventKind, ThreadId, ThreadOrigin, TokenCounts, Turn, TurnAttemptStatus, TurnId,
     TurnStatus, TurnUsage, UsageObservation, UsageObservationId, UsageProvider, UsageSourceKind,
     UsageSubscription, UsageUnknownField, UserSettings, project_capacity_revisions,
 };
@@ -718,6 +720,22 @@ impl Store {
         .transpose()
     }
 
+    pub fn list_failover_pools(&self) -> Result<Vec<FailoverPool>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT definition_json FROM failover_pools ORDER BY display_name ASC, id ASC",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut pools = Vec::new();
+        for row in rows {
+            let pool: FailoverPool = serde_json::from_str(&row?)?;
+            pool.validate()
+                .map_err(|error| StoreError::Data(error.to_string()))?;
+            pools.push(pool);
+        }
+        Ok(pools)
+    }
+
     pub fn save_organization_policy(
         &self,
         policy: &OrganizationPolicy,
@@ -873,6 +891,17 @@ impl Store {
         let settings_json = serde_json::to_string(settings)?;
         let mut organization_ids = BTreeSet::new();
         let mut assigned_projects = BTreeMap::<String, String>::new();
+        let mut failover_pool_ids = BTreeSet::new();
+        for pool in &settings.failover_pools {
+            pool.validate()
+                .map_err(|error| StoreError::Data(error.to_string()))?;
+            if !failover_pool_ids.insert(pool.id.as_str().to_string()) {
+                return Err(StoreError::Data(format!(
+                    "duplicate failover pool id: {}",
+                    pool.id
+                )));
+            }
+        }
         for policy in &settings.organizations {
             policy
                 .validate()
@@ -890,6 +919,14 @@ impl Store {
                 ) {
                     return Err(StoreError::Data(format!(
                         "project {project_id} is assigned to both {existing} and {}",
+                        policy.id
+                    )));
+                }
+            }
+            for pool_id in &policy.failover_pool_ids {
+                if !failover_pool_ids.contains(pool_id.as_str()) {
+                    return Err(StoreError::Data(format!(
+                        "organization {} references missing failover pool {pool_id}",
                         policy.id
                     )));
                 }
@@ -914,6 +951,25 @@ impl Store {
             .filter(|provider| provider.enabled)
             .map(|provider| provider.id.as_str())
             .collect::<BTreeSet<_>>();
+        for pool in &settings.failover_pools {
+            for member in &pool.members {
+                if !enabled_provider_ids.contains(member.provider_instance_id.as_str()) {
+                    return Err(StoreError::Data(format!(
+                        "failover pool '{}' references a disabled or missing provider instance",
+                        pool.display_name
+                    )));
+                }
+                if !provider_subscription_mappings.contains(&(
+                    member.provider_instance_id.as_str().to_string(),
+                    member.subscription_key.as_str().to_string(),
+                )) {
+                    return Err(StoreError::Data(format!(
+                        "failover pool '{}' member has no exact named subscription mapping",
+                        pool.display_name
+                    )));
+                }
+            }
+        }
         for policy in &settings.organizations {
             let has_valid_provider = policy.allowed_provider_instances.iter().any(|provider| {
                 enabled_provider_ids.contains(provider.as_str())
@@ -933,10 +989,36 @@ impl Store {
                     policy.display_name
                 )));
             }
+            for pool_id in &policy.failover_pool_ids {
+                let pool = settings
+                    .failover_pools
+                    .iter()
+                    .find(|pool| &pool.id == pool_id)
+                    .expect("referenced failover pool was validated");
+                for member in &pool.members {
+                    policy
+                        .authorize_route(&member.provider_instance_id, &member.subscription_key)
+                        .map_err(|error| StoreError::Data(error.to_string()))?;
+                }
+            }
         }
         let existing = {
             let mut stmt = tx.prepare(
                 "SELECT id, revision, policy_json FROM organization_policies ORDER BY id ASC",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?;
+            rows.map(|row| row.map(|(id, revision, json)| (id, (revision, json))))
+                .collect::<Result<BTreeMap<_, _>, _>>()?
+        };
+        let existing_pools = {
+            let mut stmt = tx.prepare(
+                "SELECT id, revision, definition_json FROM failover_pools ORDER BY id ASC",
             )?;
             let rows = stmt.query_map([], |row| {
                 Ok((
@@ -1016,6 +1098,25 @@ impl Store {
             }
         }
 
+        for pool in &settings.failover_pools {
+            let pool_json = serde_json::to_string(pool)?;
+            if let Some((existing_revision, existing_json)) = existing_pools.get(pool.id.as_str()) {
+                let revision = checked_i64(pool.revision, "failover pool revision")?;
+                if revision < *existing_revision {
+                    return Err(StoreError::Data(format!(
+                        "failover pool {} revision {} is older than stored revision {}",
+                        pool.id, pool.revision, existing_revision
+                    )));
+                }
+                if revision == *existing_revision && pool_json != *existing_json {
+                    return Err(StoreError::Data(format!(
+                        "failover pool {} changed without a revision increment",
+                        pool.id
+                    )));
+                }
+            }
+        }
+
         for (id, (_, existing_json)) in &existing {
             if !organization_ids.contains(id) {
                 let previous: OrganizationPolicy = serde_json::from_str(existing_json)?;
@@ -1048,6 +1149,32 @@ impl Store {
              ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json",
             [settings_json],
         )?;
+        for pool in &settings.failover_pools {
+            let revision = checked_i64(pool.revision, "failover pool revision")?;
+            let pool_json = serde_json::to_string(pool)?;
+            tx.execute(
+                "INSERT INTO failover_pools (
+                    id, display_name, revision, definition_json, updated_at_ms
+                 ) VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(id) DO UPDATE SET
+                    display_name = excluded.display_name,
+                    revision = excluded.revision,
+                    definition_json = excluded.definition_json,
+                    updated_at_ms = excluded.updated_at_ms",
+                params![
+                    pool.id.as_str(),
+                    pool.display_name,
+                    revision,
+                    pool_json,
+                    updated_at_ms,
+                ],
+            )?;
+        }
+        for id in existing_pools.keys() {
+            if !failover_pool_ids.contains(id) {
+                tx.execute("DELETE FROM failover_pools WHERE id = ?1", [id])?;
+            }
+        }
         tx.execute("DELETE FROM organization_project_assignments", [])?;
         for policy in &settings.organizations {
             let revision = checked_i64(policy.revision, "organization policy revision")?;
@@ -1888,13 +2015,21 @@ impl Store {
         }
         let candidates = {
             let conn = self.conn.lock().unwrap();
+            let completed_attempt = serde_json::to_string(&TurnAttemptStatus::Completed)?;
             let mut stmt = conn.prepare(
-                "SELECT t.id, t.thread_id, t.environment_id, t.provider_instance_id,
-                        t.ended_at_ms, t.usage_json, a.provider_kind, a.model,
+                "SELECT t.id, t.thread_id, t.environment_id,
+                        COALESCE(completed.provider_instance_id, t.provider_instance_id),
+                        t.ended_at_ms, t.usage_json, completed.execution_json,
+                        a.provider_kind, COALESCE(completed.model, a.model),
                         th.agent_json, th.origin_json
                  FROM turns t
                  JOIN provider_execution_audit a ON a.turn_id = t.id
                  JOIN threads th ON th.id = t.thread_id
+                 LEFT JOIN turn_attempts completed ON completed.id = (
+                    SELECT candidate.id FROM turn_attempts candidate
+                    WHERE candidate.turn_id = t.id AND candidate.status = ?2
+                    ORDER BY candidate.ordinal DESC LIMIT 1
+                 )
                  LEFT JOIN usage_observations o
                    ON o.environment_id = t.environment_id
                   AND o.turn_id = t.id
@@ -1902,10 +2037,11 @@ impl Store {
                  WHERE t.environment_id = ?1
                    AND t.usage_json IS NOT NULL AND o.observation_id IS NULL
                  ORDER BY t.started_at_ms, t.id
-                 LIMIT ?2",
+                 LIMIT ?3",
             )?;
-            let rows =
-                stmt.query_map(params![environment_id.as_str(), i64::from(limit)], |row| {
+            let rows = stmt.query_map(
+                params![environment_id.as_str(), completed_attempt, i64::from(limit)],
+                |row| {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
@@ -1913,22 +2049,32 @@ impl Store {
                         row.get::<_, String>(3)?,
                         row.get::<_, Option<i64>>(4)?,
                         row.get::<_, String>(5)?,
-                        row.get::<_, String>(6)?,
+                        row.get::<_, Option<String>>(6)?,
                         row.get::<_, String>(7)?,
-                        row.get::<_, Option<String>>(8)?,
-                        row.get::<_, String>(9)?,
+                        row.get::<_, String>(8)?,
+                        row.get::<_, Option<String>>(9)?,
+                        row.get::<_, String>(10)?,
                     ))
-                })?;
+                },
+            )?;
             let mut candidates = Vec::new();
             for row in rows {
                 let row = row?;
+                let attempt_execution = row
+                    .6
+                    .as_deref()
+                    .map(serde_json::from_str::<AttemptExecutionEvidence>)
+                    .transpose()?;
+                let provider_kind = attempt_execution
+                    .map(|execution| execution.provider_kind)
+                    .unwrap_or(serde_json::from_str(&row.7)?);
                 let agent_id = row
-                    .8
+                    .9
                     .as_deref()
                     .map(serde_json::from_str::<pandamux_core::AgentInstanceRef>)
                     .transpose()?
                     .map(|agent| agent.agent_id);
-                let origin: ThreadOrigin = serde_json::from_str(&row.9)?;
+                let origin: ThreadOrigin = serde_json::from_str(&row.10)?;
                 let schedule_id = match origin {
                     ThreadOrigin::Schedule { schedule_id, .. } => Some(schedule_id),
                     _ => None,
@@ -1943,8 +2089,8 @@ impl Store {
                         .map(|value| checked_u64(value, "managed usage ended_at_ms"))
                         .transpose()?,
                     usage: serde_json::from_str(&row.5)?,
-                    provider_kind: serde_json::from_str(&row.6)?,
-                    model: row.7,
+                    provider_kind,
+                    model: row.8,
                     agent_id,
                     schedule_id,
                 });
@@ -2548,20 +2694,60 @@ impl Store {
         Ok(token)
     }
 
-    pub fn reconcile_active_turns(&self) -> Result<usize, StoreError> {
+    pub fn delete_resume_token(&self, thread_id: &ThreadId) -> Result<(), StoreError> {
         let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM thread_resumes WHERE thread_id = ?1",
+            params![thread_id.as_str()],
+        )?;
+        Ok(())
+    }
+
+    pub fn reconcile_active_turns(&self) -> Result<usize, StoreError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
         let interrupted_status = serde_json::to_string(&TurnStatus::Interrupted)?;
         let idle_status = serde_json::to_string(&pandamux_core::ThreadStatus::Idle)?;
+        let failed_attempt = serde_json::to_string(&TurnAttemptStatus::Failed)?;
+        let running_attempt = serde_json::to_string(&TurnAttemptStatus::Running)?;
+        let retrying_attempt = serde_json::to_string(&TurnAttemptStatus::Retrying)?;
+        let failed_continuation = serde_json::to_string(&ContinuationState::Failed)?;
+        let running_continuation = serde_json::to_string(&ContinuationState::Running)?;
 
-        let count = conn.execute(
+        let count = tx.execute(
             "UPDATE turns SET status = ?1 WHERE status IN ('\"running\"', '\"awaiting_approval\"', '\"requested\"')",
             params![interrupted_status],
         )?;
 
-        conn.execute(
+        tx.execute(
+            "UPDATE turn_attempts
+             SET status = ?1,
+                 ended_at_ms = CASE WHEN started_at_ms > ?4 THEN started_at_ms ELSE ?4 END
+             WHERE status IN (?2, ?3)",
+            params![failed_attempt, running_attempt, retrying_attempt, now],
+        )?;
+        tx.execute(
+            "UPDATE continuations
+             SET state = ?1,
+                 updated_at_ms = CASE WHEN updated_at_ms > ?3 THEN updated_at_ms ELSE ?3 END
+             WHERE state = ?2
+               AND target_turn_id IN (SELECT id FROM turns WHERE status = ?4)",
+            params![
+                failed_continuation,
+                running_continuation,
+                now,
+                interrupted_status,
+            ],
+        )?;
+        tx.execute(
             "UPDATE threads SET status = ?1 WHERE status IN ('\"working\"', '\"awaiting_approval\"')",
             params![idle_status],
         )?;
+        tx.commit()?;
 
         Ok(count)
     }
@@ -3654,8 +3840,9 @@ fn optional_checked_u32(value: Option<i64>, field: &str) -> Result<Option<u32>, 
 mod tests {
     use super::*;
     use pandamux_core::{
-        EnvironmentId, ProviderInstanceId, ThreadStatus, ThreadWorkspace, TurnId, TurnInput,
-        TurnUsage, TurnUsageProvenance,
+        AttemptBoundary, EnvironmentId, ProviderInstanceId, RoutingDecision, ThreadStatus,
+        ThreadWorkspace, TurnAttempt, TurnAttemptId, TurnId, TurnInput, TurnUsage,
+        TurnUsageProvenance,
     };
 
     fn dummy_thread(id: &str) -> Thread {
@@ -3868,6 +4055,15 @@ mod tests {
             .get_resume_token(&thread_id)
             .expect("get resume token");
         assert_eq!(token.as_deref(), Some("token-xyz-123"));
+        store
+            .delete_resume_token(&thread_id)
+            .expect("delete resume token");
+        assert_eq!(
+            store
+                .get_resume_token(&thread_id)
+                .expect("get deleted resume token"),
+            None
+        );
 
         // Reconcile on simulated restart
         let reconciled_count = store.reconcile_active_turns().expect("reconcile turns");
@@ -3941,7 +4137,11 @@ mod tests {
             members: vec![pandamux_core::FailoverPoolMember {
                 provider_instance_id: ProviderInstanceId::new("claude-default"),
                 subscription_key: SubscriptionKey::new("subkey-work"),
+                model: "claude-model".to_string(),
+                declared_capabilities: ProviderCapabilities::default(),
+                user_preference: 0,
             }],
+            requirements: pandamux_core::RoutingCapabilityRequirements::default(),
             revision: 1,
         }
     }
@@ -4094,6 +4294,7 @@ mod tests {
 
         let settings = UserSettings {
             organizations: vec![organization_policy("org-work", "proj-one")],
+            failover_pools: vec![failover_pool("pool-work")],
             ..UserSettings::default()
         };
         store
@@ -4148,6 +4349,7 @@ mod tests {
         let store = Store::in_memory().expect("open store");
         configure_policy_mappings(&store);
         let mut policy = organization_policy("org-work", "proj-one");
+        policy.failover_pool_ids.clear();
         policy
             .allowed_provider_instances
             .push(ProviderInstanceId::new("codex-default"));
@@ -4211,11 +4413,13 @@ mod tests {
         let store = Store::in_memory().expect("open store");
         configure_policy_mappings(&store);
         let mut work = organization_policy("org-work", "proj-one");
+        work.failover_pool_ids.clear();
         work.allowed_provider_instances
             .push(ProviderInstanceId::new("codex-default"));
         work.allowed_subscriptions
             .push(SubscriptionKey::new("subkey-codex"));
         let mut personal = organization_policy("org-personal", "proj-two");
+        personal.failover_pool_ids.clear();
         personal
             .allowed_provider_instances
             .push(ProviderInstanceId::new("codex-default"));
@@ -4694,6 +4898,73 @@ mod tests {
                 .inserted,
             0
         );
+    }
+
+    #[test]
+    fn managed_usage_uses_the_completed_retry_attempt_identity() {
+        let store = Store::in_memory().expect("open store");
+        configure_usage_mapping(&store);
+        store
+            .save_usage_subscription_mapping(
+                &UsageSubscription {
+                    key: SubscriptionKey::new("subkey-fallback"),
+                    provider: UsageProvider::Codex,
+                    display_name: "Fallback Codex".to_string(),
+                    masked_account_label: None,
+                },
+                &EnvironmentId::new("env-local"),
+                &ProviderInstanceId::new("codex-fallback"),
+                1_000,
+            )
+            .expect("save fallback mapping");
+        let mut turn = save_managed_usage_fixture(&store);
+        turn.usage
+            .as_mut()
+            .and_then(|usage| usage.provenance.as_mut())
+            .expect("managed provenance")
+            .model = None;
+        store.save_turn(&turn).expect("clear reported model");
+        store
+            .save_turn_attempt(&TurnAttempt {
+                id: TurnAttemptId::new("attempt-managed-retry"),
+                turn_id: turn.id.clone(),
+                thread_id: turn.thread_id.clone(),
+                ordinal: 2,
+                environment_id: turn.environment_id.clone(),
+                provider_instance_id: ProviderInstanceId::new("codex-fallback"),
+                subscription_key: Some(SubscriptionKey::new("subkey-fallback")),
+                model: "codex-retry-model".to_string(),
+                boundary: AttemptBoundary::VisibleOutputBegun,
+                status: TurnAttemptStatus::Completed,
+                routing: RoutingDecision::default(),
+                execution: Some(AttemptExecutionEvidence {
+                    provider_kind: ProviderKind::Codex,
+                    profile_dir: "/profiles/codex/fallback".to_string(),
+                    binary_path: Some("/bin/codex".to_string()),
+                    capabilities: ProviderCapabilities::default(),
+                    provider_version: Some("fixture-2".to_string()),
+                }),
+                checkpoint: None,
+                partial_output: String::new(),
+                capacity_evidence: None,
+                started_at_ms: 950,
+                ended_at_ms: Some(1_000),
+            })
+            .expect("save completed retry attempt");
+
+        let result = store
+            .backfill_managed_turn_usage(&EnvironmentId::new("env-local"), 100)
+            .expect("backfill retried managed usage");
+        assert_eq!(result.batch.inserted, 1);
+        let observation = &store
+            .query_usage(&UsageQueryParams::default())
+            .expect("query managed usage")
+            .items[0]
+            .observation;
+        assert_eq!(observation.provider, UsageProvider::Codex);
+        assert_eq!(observation.provider_instance_id.as_str(), "codex-fallback");
+        assert_eq!(observation.subscription_key.as_str(), "subkey-fallback");
+        assert_eq!(observation.model.as_deref(), Some("codex-retry-model"));
     }
 
     #[test]

@@ -44,9 +44,9 @@ pub use grok::{
 pub use mock::{MockProviderDriver, MockProviderSession};
 pub use models::{
     InjectedInstructions, ModelInfo, PROVIDER_SNAPSHOT_TTL_MS, ProviderAuthConfidence,
-    ProviderAuthStatus, ProviderEvent, ProviderHealth, ProviderMetadata, ProviderSnapshot,
-    RateLimitEntry, SessionSpec, ToolPolicy, UsageLimits, provider_snapshot_expiry,
-    provider_snapshot_now_ms,
+    ProviderAuthStatus, ProviderEvent, ProviderEventForwardError, ProviderHealth, ProviderMetadata,
+    ProviderSnapshot, RateLimitEntry, SessionSpec, ToolPolicy, UsageLimits, forward_provider_event,
+    provider_snapshot_expiry, provider_snapshot_now_ms,
 };
 pub use opencode::{
     OpenCodeDriver, OpenCodeServeCreateRequest, OpenCodeServeCreateResponse, OpenCodeServeSession,

@@ -3,8 +3,13 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::gpui::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use pandamux_client::{format_age, format_micro_usd};
-use pandamux_core::{EnvironmentId, ProviderInstanceId, UserSettings};
-use pandamux_protocol::{ProviderHealthReport, ProviderLoginPreview, UsageCatalogResult};
+use pandamux_core::{
+    AccessMode, EnvironmentId, FailoverPool, FailoverPoolId, FailoverPoolMember,
+    ProviderInstanceId, RoutingCapabilityRequirements, SubscriptionKey, UserSettings,
+};
+use pandamux_protocol::{
+    ProviderHealthReport, ProviderLoginPreview, RoutingProviderCatalogEntry, UsageCatalogResult,
+};
 
 use crate::theme::{AccentColor, Radii, Theme, Typography};
 
@@ -178,6 +183,183 @@ fn increase_organization_concurrency(current: Option<u32>) -> Option<u32> {
 
 fn decrease_organization_concurrency(current: Option<u32>) -> Option<u32> {
     current.and_then(|value| value.checked_sub(1).filter(|remaining| *remaining > 0))
+}
+
+fn eligible_routing_choices(
+    settings: &UserSettings,
+    organization_index: usize,
+    catalog: &UsageCatalogResult,
+) -> Vec<(RoutingProviderCatalogEntry, SubscriptionKey)> {
+    let Some(organization) = settings.organizations.get(organization_index) else {
+        return Vec::new();
+    };
+    let mut choices = catalog
+        .routing_providers
+        .iter()
+        .filter(|provider| {
+            organization
+                .allowed_provider_instances
+                .contains(&provider.provider_instance_id)
+                && !provider.models.is_empty()
+        })
+        .filter_map(|provider| {
+            let mapping = catalog.mappings.iter().find(|mapping| {
+                mapping.environment_id == provider.environment_id
+                    && mapping.provider_instance_id == provider.provider_instance_id
+                    && organization
+                        .allowed_subscriptions
+                        .contains(&mapping.subscription_key)
+            })?;
+            Some((provider.clone(), mapping.subscription_key.clone()))
+        })
+        .collect::<Vec<_>>();
+    choices.sort_by(|left, right| {
+        left.0
+            .display_name
+            .cmp(&right.0.display_name)
+            .then_with(|| {
+                left.0
+                    .provider_instance_id
+                    .cmp(&right.0.provider_instance_id)
+            })
+    });
+    choices
+}
+
+fn create_organization_failover_pool(
+    settings: &mut UserSettings,
+    organization_index: usize,
+    catalog: &UsageCatalogResult,
+) -> bool {
+    let choices = eligible_routing_choices(settings, organization_index, catalog);
+    let Some((provider, subscription_key)) = choices.into_iter().find(|(provider, _)| {
+        provider
+            .capabilities
+            .supports_access_mode(AccessMode::WorkspaceOnly)
+    }) else {
+        return false;
+    };
+    let Some(organization) = settings.organizations.get(organization_index) else {
+        return false;
+    };
+    let display_name = format!(
+        "{} failover {}",
+        organization.display_name,
+        organization.failover_pool_ids.len().saturating_add(1)
+    );
+    let pool = FailoverPool {
+        id: FailoverPoolId::generate(),
+        display_name,
+        members: vec![FailoverPoolMember {
+            provider_instance_id: provider.provider_instance_id,
+            subscription_key,
+            model: provider.models[0].clone(),
+            declared_capabilities: provider.capabilities,
+            user_preference: 0,
+        }],
+        requirements: RoutingCapabilityRequirements::default(),
+        revision: 1,
+    };
+    let pool_id = pool.id.clone();
+    settings.failover_pools.push(pool);
+    if let Some(organization) = settings.organizations.get_mut(organization_index) {
+        organization.failover_pool_ids.push(pool_id);
+        organization.revision = organization.revision.saturating_add(1);
+    }
+    true
+}
+
+fn detach_organization_failover_pool(
+    settings: &mut UserSettings,
+    organization_index: usize,
+    pool_id: &FailoverPoolId,
+) {
+    if let Some(organization) = settings.organizations.get_mut(organization_index) {
+        organization
+            .failover_pool_ids
+            .retain(|candidate| candidate != pool_id);
+        organization.revision = organization.revision.saturating_add(1);
+    }
+    let still_referenced = settings
+        .organizations
+        .iter()
+        .any(|organization| organization.failover_pool_ids.contains(pool_id));
+    if !still_referenced {
+        settings.failover_pools.retain(|pool| &pool.id != pool_id);
+    }
+}
+
+fn add_failover_pool_member(
+    settings: &mut UserSettings,
+    organization_index: usize,
+    pool_id: &FailoverPoolId,
+    provider_instance_id: &ProviderInstanceId,
+    catalog: &UsageCatalogResult,
+) -> bool {
+    let Some(pool) = settings
+        .failover_pools
+        .iter()
+        .find(|pool| &pool.id == pool_id)
+    else {
+        return false;
+    };
+    if pool
+        .members
+        .iter()
+        .any(|member| &member.provider_instance_id == provider_instance_id)
+    {
+        return false;
+    }
+    let requirements = pool.requirements;
+    let Some((provider, subscription_key)) =
+        eligible_routing_choices(settings, organization_index, catalog)
+            .into_iter()
+            .find(|(provider, _)| {
+                &provider.provider_instance_id == provider_instance_id
+                    && requirements
+                        .validate_capabilities(provider.capabilities)
+                        .is_ok()
+            })
+    else {
+        return false;
+    };
+    let Some(pool) = settings
+        .failover_pools
+        .iter_mut()
+        .find(|pool| &pool.id == pool_id)
+    else {
+        return false;
+    };
+    pool.members.push(FailoverPoolMember {
+        provider_instance_id: provider.provider_instance_id,
+        subscription_key,
+        model: provider.models[0].clone(),
+        declared_capabilities: provider.capabilities,
+        user_preference: 0,
+    });
+    pool.revision = pool.revision.saturating_add(1);
+    true
+}
+
+fn next_compatible_access_mode(current: AccessMode, members: &[FailoverPoolMember]) -> AccessMode {
+    let modes = [
+        AccessMode::ReadOnly,
+        AccessMode::WorkspaceOnly,
+        AccessMode::Ask,
+        AccessMode::AutoEdit,
+        AccessMode::FullAccess,
+    ];
+    let current_index = modes.iter().position(|mode| *mode == current).unwrap_or(0);
+    for offset in 1..=modes.len() {
+        let candidate = modes[(current_index + offset) % modes.len()];
+        if members
+            .iter()
+            .all(|member| member.declared_capabilities.supports_access_mode(candidate))
+        {
+            return candidate;
+        }
+    }
+    current
 }
 
 /// Renders the complete Settings view based on active category.
@@ -1547,21 +1729,17 @@ fn render_organizations_tab<V: 'static>(
                                             ))
                                             .disabled(true)
                                             .tooltip("Unavailable: the current project catalog does not expose a safe assignment editor"),
-                                        )
-                                        .child(
-                                            Button::new(format!(
-                                                "edit-org-failover-{organization_index}"
-                                            ))
-                                            .ghost()
-                                            .label(format!(
-                                                "Failover pools: {}",
-                                                organization.failover_pool_ids.len()
-                                            ))
-                                            .disabled(true)
-                                            .tooltip("Unavailable until the capability-aware Phase 4F pool editor is implemented"),
                                         ),
                                 ),
                         )
+                        .child(render_failover_pools_editor(
+                            state,
+                            catalog,
+                            organization_index,
+                            theme,
+                            on_modify,
+                            cx,
+                        ))
                         .child(
                             div()
                                 .v_flex()
@@ -1653,6 +1831,511 @@ fn render_organizations_tab<V: 'static>(
                         )
                 }),
         )
+        .into_any_element()
+}
+
+fn render_failover_pools_editor<V: 'static>(
+    state: &SettingsViewState,
+    catalog: &UsageCatalogResult,
+    organization_index: usize,
+    theme: &Theme,
+    on_modify: impl Fn(
+        &mut V,
+        Box<dyn FnOnce(&mut UserSettings) + Send + 'static>,
+        &mut Window,
+        &mut Context<V>,
+    )
+    + 'static
+    + Copy,
+    cx: &mut Context<V>,
+) -> AnyElement {
+    let Some(organization) = state.settings.organizations.get(organization_index) else {
+        return div().into_any_element();
+    };
+    let can_create = eligible_routing_choices(&state.settings, organization_index, catalog)
+        .into_iter()
+        .any(|(provider, _)| {
+            provider
+                .capabilities
+                .supports_access_mode(AccessMode::WorkspaceOnly)
+        });
+    let catalog_for_create = catalog.clone();
+
+    div()
+        .v_flex()
+        .gap_2()
+        .child(
+            div()
+                .h_flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .v_flex()
+                        .child(
+                            div()
+                                .text_size(Typography::GROUP_HEADER_SIZE)
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(theme.chrome.text_t2)
+                                .child("FAILOVER POOLS"),
+                        )
+                        .child(
+                            div()
+                                .text_size(Typography::META_SIZE)
+                                .text_color(theme.chrome.text_t3)
+                                .child("Hard-filtered routes with explicit capabilities, models, and account boundaries."),
+                        ),
+                )
+                .child(
+                    Button::new(format!("create-org-failover-{organization_index}"))
+                        .ghost()
+                        .label("Create pool")
+                        .disabled(!can_create)
+                        .tooltip(if can_create {
+                            "Create a pool from the first eligible named route"
+                        } else {
+                            "Add an enabled named route with a declared model first"
+                        })
+                        .on_click(cx.listener(move |this, _event, window, cx| {
+                            let catalog = catalog_for_create.clone();
+                            on_modify(
+                                this,
+                                Box::new(move |settings| {
+                                    create_organization_failover_pool(
+                                        settings,
+                                        organization_index,
+                                        &catalog,
+                                    );
+                                }),
+                                window,
+                                cx,
+                            );
+                        })),
+                ),
+        )
+        .when(organization.failover_pool_ids.is_empty(), |this| {
+            this.child(
+                div()
+                    .p_2()
+                    .rounded(Radii::CHIP)
+                    .bg(theme.chrome.panel2)
+                    .text_size(Typography::SECONDARY_SIZE)
+                    .text_color(theme.chrome.text_t3)
+                    .child("No failover pool is assigned. New turns keep their selected provider."),
+            )
+        })
+        .children(organization.failover_pool_ids.iter().map(|pool_id| {
+            let Some(pool) = state
+                .settings
+                .failover_pools
+                .iter()
+                .find(|pool| &pool.id == pool_id)
+            else {
+                return div()
+                    .p_2()
+                    .rounded(Radii::CHIP)
+                    .bg(rgba(0xef444415))
+                    .text_color(rgb(0xef4444))
+                    .child("Missing failover pool definition")
+                    .into_any_element();
+            };
+            let pool_id_for_detach = pool.id.clone();
+            let pool_id_for_access = pool.id.clone();
+            let next_access =
+                next_compatible_access_mode(pool.requirements.access_mode, &pool.members);
+            let access_changes = next_access != pool.requirements.access_mode;
+
+            div()
+                .v_flex()
+                .gap_2()
+                .p_2()
+                .rounded(Radii::ROW)
+                .bg(theme.chrome.panel2)
+                .border_1()
+                .border_color(rgba(0xffffff0d))
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .v_flex()
+                                .child(
+                                    div()
+                                        .font_weight(FontWeight::BOLD)
+                                        .child(pool.display_name.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(Typography::META_SIZE)
+                                        .text_color(theme.chrome.text_t3)
+                                        .child(format!(
+                                            "{} member{} · revision {}",
+                                            pool.members.len(),
+                                            if pool.members.len() == 1 { "" } else { "s" },
+                                            pool.revision
+                                        )),
+                                ),
+                        )
+                        .child(
+                            Button::new(format!("detach-failover-{}", pool.id.as_str()))
+                                .ghost()
+                                .label("Remove pool")
+                                .tooltip("Detach this pool. Unshared definitions are deleted on save.")
+                                .on_click(cx.listener(move |this, _event, window, cx| {
+                                    let pool_id = pool_id_for_detach.clone();
+                                    on_modify(
+                                        this,
+                                        Box::new(move |settings| {
+                                            detach_organization_failover_pool(
+                                                settings,
+                                                organization_index,
+                                                &pool_id,
+                                            );
+                                        }),
+                                        window,
+                                        cx,
+                                    );
+                                })),
+                        ),
+                )
+                .child(
+                    div()
+                        .h_flex()
+                        .flex_wrap()
+                        .gap_2()
+                        .children([
+                            (
+                                "Instructions",
+                                pool.requirements.requires_instructions,
+                                pool.members.iter().all(|member| {
+                                    member.declared_capabilities.supports_system_prompt
+                                }),
+                                0_u8,
+                            ),
+                            (
+                                "Tools",
+                                pool.requirements.requires_tool_calls,
+                                pool.members.iter().all(|member| {
+                                    member.declared_capabilities.supports_tool_calls
+                                }),
+                                1_u8,
+                            ),
+                            (
+                                "Approvals",
+                                pool.requirements.requires_approvals,
+                                pool.members.iter().all(|member| {
+                                    member.declared_capabilities.supports_approvals
+                                }),
+                                2_u8,
+                            ),
+                            (
+                                "Reasoning",
+                                pool.requirements.requires_reasoning,
+                                pool.members.iter().all(|member| {
+                                    member.declared_capabilities.supports_reasoning
+                                }),
+                                3_u8,
+                            ),
+                        ].into_iter().map(|(label, enabled, supported, field)| {
+                            let pool_id = pool.id.clone();
+                            Button::new(format!(
+                                "failover-requirement-{}-{field}",
+                                pool.id.as_str()
+                            ))
+                            .ghost()
+                            .label(format!(
+                                "{label}: {}",
+                                if enabled { "Required" } else { "Optional" }
+                            ))
+                            .disabled(!enabled && !supported)
+                            .tooltip(if !enabled && !supported {
+                                "At least one member does not declare this capability"
+                            } else {
+                                "Toggle this hard capability requirement"
+                            })
+                            .on_click(cx.listener(move |this, _event, window, cx| {
+                                let pool_id = pool_id.clone();
+                                on_modify(
+                                    this,
+                                    Box::new(move |settings| {
+                                        if let Some(pool) = settings
+                                            .failover_pools
+                                            .iter_mut()
+                                            .find(|pool| pool.id == pool_id)
+                                        {
+                                            match field {
+                                                0 => pool.requirements.requires_instructions = !enabled,
+                                                1 => pool.requirements.requires_tool_calls = !enabled,
+                                                2 => pool.requirements.requires_approvals = !enabled,
+                                                _ => pool.requirements.requires_reasoning = !enabled,
+                                            }
+                                            pool.revision = pool.revision.saturating_add(1);
+                                        }
+                                    }),
+                                    window,
+                                    cx,
+                                );
+                            }))
+                        }))
+                        .child(
+                            Button::new(format!("failover-access-{}", pool.id.as_str()))
+                                .ghost()
+                                .label(format!("Access: {:?}", pool.requirements.access_mode))
+                                .disabled(!access_changes)
+                                .tooltip(if access_changes {
+                                    "Cycle the required access ceiling"
+                                } else {
+                                    "No other access level is compatible with every member"
+                                })
+                                .on_click(cx.listener(move |this, _event, window, cx| {
+                                    let pool_id = pool_id_for_access.clone();
+                                    on_modify(
+                                        this,
+                                        Box::new(move |settings| {
+                                            if let Some(pool) = settings
+                                                .failover_pools
+                                                .iter_mut()
+                                                .find(|pool| pool.id == pool_id)
+                                            {
+                                                pool.requirements.access_mode = next_access;
+                                                pool.revision = pool.revision.saturating_add(1);
+                                            }
+                                        }),
+                                        window,
+                                        cx,
+                                    );
+                                })),
+                        ),
+                )
+                .children(pool.members.iter().enumerate().map(|(member_index, member)| {
+                    let provider = catalog
+                        .routing_providers
+                        .iter()
+                        .find(|provider| {
+                            provider.provider_instance_id == member.provider_instance_id
+                        });
+                    let provider_name = provider
+                        .map(|provider| provider.display_name.clone())
+                        .unwrap_or_else(|| "Missing provider".to_string());
+                    let subscription_name = catalog
+                        .subscriptions
+                        .iter()
+                        .find(|subscription| subscription.key == member.subscription_key)
+                        .map(|subscription| subscription.display_name.clone())
+                        .unwrap_or_else(|| "Missing subscription".to_string());
+                    let models = provider
+                        .map(|provider| provider.models.clone())
+                        .unwrap_or_default();
+                    let next_model = models
+                        .iter()
+                        .position(|model| model == &member.model)
+                        .and_then(|index| models.get((index + 1) % models.len().max(1)))
+                        .cloned()
+                        .or_else(|| models.first().cloned());
+                    let pool_id_for_model = pool.id.clone();
+                    let pool_id_for_less = pool.id.clone();
+                    let pool_id_for_more = pool.id.clone();
+                    let pool_id_for_remove = pool.id.clone();
+                    let current_preference = member.user_preference;
+                    div()
+                        .h_flex()
+                        .flex_wrap()
+                        .items_center()
+                        .justify_between()
+                        .gap_2()
+                        .p_2()
+                        .rounded(Radii::CHIP)
+                        .bg(theme.chrome.panel)
+                        .child(
+                            div()
+                                .v_flex()
+                                .child(
+                                    div()
+                                        .font_weight(FontWeight::BOLD)
+                                        .child(provider_name),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(Typography::META_SIZE)
+                                        .text_color(theme.chrome.text_t3)
+                                        .child(format!("Subscription: {subscription_name}")),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .h_flex()
+                                .flex_wrap()
+                                .gap_2()
+                                .child(
+                                    Button::new(format!(
+                                        "failover-model-{}-{member_index}",
+                                        pool.id.as_str()
+                                    ))
+                                    .ghost()
+                                    .label(format!("Model: {}", member.model))
+                                    .disabled(
+                                        models.is_empty()
+                                            || (models.len() == 1
+                                                && models.first() == Some(&member.model)),
+                                    )
+                                    .tooltip("Cycle the driver-declared model")
+                                    .on_click(cx.listener(move |this, _event, window, cx| {
+                                        let pool_id = pool_id_for_model.clone();
+                                        let next_model = next_model.clone();
+                                        on_modify(
+                                            this,
+                                            Box::new(move |settings| {
+                                                if let (Some(pool), Some(model)) = (
+                                                    settings.failover_pools.iter_mut().find(|pool| pool.id == pool_id),
+                                                    next_model,
+                                                ) && let Some(member) = pool.members.get_mut(member_index)
+                                                {
+                                                    member.model = model;
+                                                    pool.revision = pool.revision.saturating_add(1);
+                                                }
+                                            }),
+                                            window,
+                                            cx,
+                                        );
+                                    })),
+                                )
+                                .child(
+                                    Button::new(format!(
+                                        "failover-preference-less-{}-{member_index}",
+                                        pool.id.as_str()
+                                    ))
+                                    .ghost()
+                                    .label("Priority -")
+                                    .disabled(current_preference == 0)
+                                    .on_click(cx.listener(move |this, _event, window, cx| {
+                                        let pool_id = pool_id_for_less.clone();
+                                        on_modify(
+                                            this,
+                                            Box::new(move |settings| {
+                                                if let Some(pool) = settings.failover_pools.iter_mut().find(|pool| pool.id == pool_id)
+                                                    && let Some(member) = pool.members.get_mut(member_index)
+                                                {
+                                                    member.user_preference = member.user_preference.saturating_sub(100);
+                                                    pool.revision = pool.revision.saturating_add(1);
+                                                }
+                                            }),
+                                            window,
+                                            cx,
+                                        );
+                                    })),
+                                )
+                                .child(
+                                    Button::new(format!(
+                                        "failover-preference-more-{}-{member_index}",
+                                        pool.id.as_str()
+                                    ))
+                                    .ghost()
+                                    .label(format!("Priority: {current_preference}"))
+                                    .disabled(current_preference >= 1_000)
+                                    .on_click(cx.listener(move |this, _event, window, cx| {
+                                        let pool_id = pool_id_for_more.clone();
+                                        on_modify(
+                                            this,
+                                            Box::new(move |settings| {
+                                                if let Some(pool) = settings.failover_pools.iter_mut().find(|pool| pool.id == pool_id)
+                                                    && let Some(member) = pool.members.get_mut(member_index)
+                                                {
+                                                    member.user_preference = member.user_preference.saturating_add(100).min(1_000);
+                                                    pool.revision = pool.revision.saturating_add(1);
+                                                }
+                                            }),
+                                            window,
+                                            cx,
+                                        );
+                                    })),
+                                )
+                                .child(
+                                    Button::new(format!(
+                                        "failover-remove-member-{}-{member_index}",
+                                        pool.id.as_str()
+                                    ))
+                                    .ghost()
+                                    .label("Remove member")
+                                    .disabled(pool.members.len() <= 1)
+                                    .tooltip("A pool must retain at least one member")
+                                    .on_click(cx.listener(move |this, _event, window, cx| {
+                                        let pool_id = pool_id_for_remove.clone();
+                                        on_modify(
+                                            this,
+                                            Box::new(move |settings| {
+                                                if let Some(pool) = settings.failover_pools.iter_mut().find(|pool| pool.id == pool_id)
+                                                    && pool.members.len() > 1
+                                                    && member_index < pool.members.len()
+                                                {
+                                                    pool.members.remove(member_index);
+                                                    pool.revision = pool.revision.saturating_add(1);
+                                                }
+                                            }),
+                                            window,
+                                            cx,
+                                        );
+                                    })),
+                                ),
+                        )
+                }))
+                .child(
+                    div()
+                        .h_flex()
+                        .flex_wrap()
+                        .gap_2()
+                        .children(
+                            eligible_routing_choices(
+                                &state.settings,
+                                organization_index,
+                                catalog,
+                            )
+                            .into_iter()
+                            .filter(|(provider, _)| {
+                                !pool.members.iter().any(|member| {
+                                    member.provider_instance_id == provider.provider_instance_id
+                                }) && pool
+                                    .requirements
+                                    .validate_capabilities(provider.capabilities)
+                                    .is_ok()
+                            })
+                            .map(|(provider, _)| {
+                                let pool_id = pool.id.clone();
+                                let provider_id = provider.provider_instance_id.clone();
+                                let provider_name = provider.display_name.clone();
+                                let catalog = catalog.clone();
+                                Button::new(format!(
+                                    "failover-add-member-{}-{}",
+                                    pool.id.as_str(),
+                                    provider.provider_instance_id.as_str()
+                                ))
+                                .ghost()
+                                .label(format!("Add {provider_name}"))
+                                .on_click(cx.listener(move |this, _event, window, cx| {
+                                    let pool_id = pool_id.clone();
+                                    let provider_id = provider_id.clone();
+                                    let catalog = catalog.clone();
+                                    on_modify(
+                                        this,
+                                        Box::new(move |settings| {
+                                            add_failover_pool_member(
+                                                settings,
+                                                organization_index,
+                                                &pool_id,
+                                                &provider_id,
+                                                &catalog,
+                                            );
+                                        }),
+                                        window,
+                                        cx,
+                                    );
+                                }))
+                            }),
+                        ),
+                )
+                .into_any_element()
+        }))
         .into_any_element()
 }
 
@@ -2158,6 +2841,10 @@ fn render_advanced_tab<V: 'static>(
     let adv = &state.settings.advanced;
     let concurrency = adv.global_concurrency_limit;
     let max_checkpoints = adv.max_checkpoints_per_thread;
+    let usage_scanning = adv.usage_scanning_enabled;
+    let usage_hub_sync = adv.usage_hub_sync_enabled;
+    let capacity_routing = adv.capacity_routing_enabled;
+    let automatic_failover = adv.automatic_failover_enabled;
 
     div()
         .v_flex()
@@ -2264,6 +2951,101 @@ fn render_advanced_tab<V: 'static>(
                                 .font_family(Typography::MONO_FAMILY)
                                 .text_color(theme.accent_color())
                                 .child(format!("{max_checkpoints} checkpoints")),
+                        ),
+                ),
+        )
+        .child(
+            div()
+                .p_3()
+                .rounded(Radii::ROW)
+                .bg(theme.chrome.panel)
+                .border_1()
+                .border_color(rgba(0xffffff0d))
+                .v_flex()
+                .gap_3()
+                .child(
+                    div()
+                        .v_flex()
+                        .child(
+                            div()
+                                .text_size(Typography::TITLE_SIZE)
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(theme.chrome.text_t1)
+                                .child("Phase 4 rollback controls"),
+                        )
+                        .child(
+                            div()
+                                .text_size(Typography::SECONDARY_SIZE)
+                                .text_color(theme.chrome.text_t3)
+                                .child("Scanner and Hub sync changes take effect after server restart. Routing controls apply to subsequent turns."),
+                        ),
+                )
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .justify_between()
+                        .child("Usage transcript scanning")
+                        .child(
+                            Button::new("toggle-usage-scanning")
+                                .ghost()
+                                .label(if usage_scanning { "Enabled" } else { "Disabled" })
+                                .on_click(cx.listener(move |this, _event, window, cx| {
+                                    on_modify(this, Box::new(move |settings| {
+                                        settings.advanced.usage_scanning_enabled = !usage_scanning;
+                                    }), window, cx);
+                                })),
+                        ),
+                )
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .justify_between()
+                        .child("Hub usage synchronization")
+                        .child(
+                            Button::new("toggle-usage-hub-sync")
+                                .ghost()
+                                .label(if usage_hub_sync { "Enabled" } else { "Disabled" })
+                                .on_click(cx.listener(move |this, _event, window, cx| {
+                                    on_modify(this, Box::new(move |settings| {
+                                        settings.advanced.usage_hub_sync_enabled = !usage_hub_sync;
+                                    }), window, cx);
+                                })),
+                        ),
+                )
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .justify_between()
+                        .child("Capacity-aware route scoring")
+                        .child(
+                            Button::new("toggle-capacity-routing")
+                                .ghost()
+                                .label(if capacity_routing { "Enabled" } else { "Disabled" })
+                                .on_click(cx.listener(move |this, _event, window, cx| {
+                                    on_modify(this, Box::new(move |settings| {
+                                        settings.advanced.capacity_routing_enabled = !capacity_routing;
+                                    }), window, cx);
+                                })),
+                        ),
+                )
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .justify_between()
+                        .child("Automatic safe-state failover")
+                        .child(
+                            Button::new("toggle-automatic-failover")
+                                .ghost()
+                                .label(if automatic_failover { "Enabled" } else { "Disabled" })
+                                .on_click(cx.listener(move |this, _event, window, cx| {
+                                    on_modify(this, Box::new(move |settings| {
+                                        settings.advanced.automatic_failover_enabled = !automatic_failover;
+                                    }), window, cx);
+                                })),
                         ),
                 ),
         )
@@ -2626,5 +3408,120 @@ Host galahad
         assert_eq!(decrease_organization_concurrency(Some(2)), Some(1));
         assert_eq!(decrease_organization_concurrency(Some(1)), None);
         assert_eq!(decrease_organization_concurrency(None), None);
+    }
+
+    #[test]
+    fn failover_editor_uses_named_mappings_and_rejects_incompatible_members() {
+        fn capabilities(supports_tool_calls: bool) -> pandamux_core::ProviderCapabilities {
+            pandamux_core::ProviderCapabilities {
+                supports_streaming: true,
+                supports_tool_calls,
+                supports_sub_agents: true,
+                supports_system_prompt: true,
+                supports_reasoning: true,
+                supports_approvals: true,
+                supports_rate_limits: true,
+                supports_resume: false,
+                supports_images: true,
+                max_access_mode: AccessMode::FullAccess,
+            }
+        }
+
+        let environment_id = EnvironmentId::new("env-local");
+        let primary_id = ProviderInstanceId::new("provider-primary");
+        let fallback_id = ProviderInstanceId::new("provider-fallback");
+        let mut settings = UserSettings {
+            organizations: vec![pandamux_core::OrganizationPolicy {
+                id: pandamux_core::OrganizationId::new("org-work"),
+                display_name: "Work".to_string(),
+                project_ids: vec![pandamux_core::ProjectId::new("project-work")],
+                allowed_provider_instances: vec![primary_id.clone(), fallback_id.clone()],
+                allowed_subscriptions: vec![
+                    SubscriptionKey::new("subkey-primary"),
+                    SubscriptionKey::new("subkey-fallback"),
+                ],
+                failover_pool_ids: Vec::new(),
+                default_tier_mapping: None,
+                max_concurrency: Some(2),
+                daily_budget_micro_usd: None,
+                broadside: pandamux_core::BroadsidePolicy::default(),
+                revision: 1,
+            }],
+            ..UserSettings::default()
+        };
+        let mut catalog = UsageCatalogResult {
+            subscriptions: Vec::new(),
+            mappings: vec![
+                pandamux_protocol::UsageProviderSubscriptionMapping {
+                    environment_id: environment_id.clone(),
+                    provider_instance_id: primary_id.clone(),
+                    subscription_key: SubscriptionKey::new("subkey-primary"),
+                },
+                pandamux_protocol::UsageProviderSubscriptionMapping {
+                    environment_id: environment_id.clone(),
+                    provider_instance_id: fallback_id.clone(),
+                    subscription_key: SubscriptionKey::new("subkey-fallback"),
+                },
+            ],
+            routing_providers: vec![
+                RoutingProviderCatalogEntry {
+                    environment_id: environment_id.clone(),
+                    provider_instance_id: primary_id.clone(),
+                    provider: pandamux_core::ProviderKind::Custom,
+                    display_name: "A Primary".to_string(),
+                    capabilities: capabilities(true),
+                    models: vec!["mock-fast".to_string()],
+                },
+                RoutingProviderCatalogEntry {
+                    environment_id,
+                    provider_instance_id: fallback_id.clone(),
+                    provider: pandamux_core::ProviderKind::Custom,
+                    display_name: "B Fallback".to_string(),
+                    capabilities: capabilities(false),
+                    models: vec!["mock-fast".to_string()],
+                },
+            ],
+        };
+
+        assert!(create_organization_failover_pool(
+            &mut settings,
+            0,
+            &catalog
+        ));
+        let pool_id = settings.organizations[0].failover_pool_ids[0].clone();
+        assert_eq!(
+            settings.failover_pools[0].members[0].provider_instance_id,
+            primary_id
+        );
+        settings.failover_pools[0].requirements.requires_tool_calls = true;
+        assert!(!add_failover_pool_member(
+            &mut settings,
+            0,
+            &pool_id,
+            &fallback_id,
+            &catalog,
+        ));
+
+        catalog.routing_providers[1].capabilities = capabilities(true);
+        assert!(add_failover_pool_member(
+            &mut settings,
+            0,
+            &pool_id,
+            &fallback_id,
+            &catalog,
+        ));
+        assert_eq!(settings.failover_pools[0].members.len(), 2);
+        assert_eq!(settings.failover_pools[0].revision, 2);
+
+        let mut limited_member = settings.failover_pools[0].members[0].clone();
+        limited_member.declared_capabilities.max_access_mode = AccessMode::WorkspaceOnly;
+        assert_eq!(
+            next_compatible_access_mode(AccessMode::WorkspaceOnly, &[limited_member]),
+            AccessMode::ReadOnly
+        );
+
+        detach_organization_failover_pool(&mut settings, 0, &pool_id);
+        assert!(settings.organizations[0].failover_pool_ids.is_empty());
+        assert!(settings.failover_pools.is_empty());
     }
 }

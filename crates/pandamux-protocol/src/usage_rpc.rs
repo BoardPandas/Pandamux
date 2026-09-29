@@ -1,7 +1,8 @@
 use pandamux_core::{
     AgentId, CAPACITY_SNAPSHOT_SCHEMA_VERSION, CapacityProjection, CapacitySnapshot, EnvironmentId,
-    NodeStoreId, PricingVersionId, ProviderInstanceId, ScheduleId, SubscriptionKey, TokenCounts,
-    UsageObservation, UsageObservationId, UsageProvider, UsageSourceKind, UsageSubscription,
+    NodeStoreId, PricingVersionId, ProviderCapabilities, ProviderInstanceId, ProviderKind,
+    ScheduleId, SubscriptionKey, TokenCounts, UsageObservation, UsageObservationId, UsageProvider,
+    UsageSourceKind, UsageSubscription,
 };
 use serde::{Deserialize, Serialize};
 
@@ -50,6 +51,20 @@ pub struct UsageProviderSubscriptionMapping {
     pub subscription_key: SubscriptionKey,
 }
 
+/// Server-derived routing metadata used by the failover-pool editor. Capability
+/// claims and model choices come from registered drivers rather than user input.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutingProviderCatalogEntry {
+    pub environment_id: EnvironmentId,
+    pub provider_instance_id: ProviderInstanceId,
+    pub provider: ProviderKind,
+    pub display_name: String,
+    pub capabilities: ProviderCapabilities,
+    #[serde(default)]
+    pub models: Vec<String>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageCatalogResult {
@@ -57,6 +72,8 @@ pub struct UsageCatalogResult {
     pub subscriptions: Vec<UsageSubscription>,
     #[serde(default)]
     pub mappings: Vec<UsageProviderSubscriptionMapping>,
+    #[serde(default)]
+    pub routing_providers: Vec<RoutingProviderCatalogEntry>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

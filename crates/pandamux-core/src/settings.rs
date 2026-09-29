@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-pub const SETTINGS_SCHEMA_VERSION: u32 = 4;
+pub const SETTINGS_SCHEMA_VERSION: u32 = 6;
 
 /// Bounds for `terminal.scrollbackLines` (clamped on load and set).
 pub const SCROLLBACK_LINES_MIN: u32 = 1_000;
@@ -26,6 +26,8 @@ pub struct UserSettings {
     pub keyboard: KeyboardSettings,
     #[serde(default)]
     pub organizations: Vec<crate::organization::OrganizationPolicy>,
+    #[serde(default)]
+    pub failover_pools: Vec<crate::organization::FailoverPool>,
     #[serde(default = "default_tier_mapping_opt")]
     pub tier_mapping: Option<crate::organization::TierMapping>,
     #[serde(default = "default_providers")]
@@ -208,6 +210,7 @@ impl Default for UserSettings {
             terminal: TerminalSettings::default(),
             keyboard: KeyboardSettings::default(),
             organizations: Vec::new(),
+            failover_pools: Vec::new(),
             tier_mapping: Some(default_tier_mapping()),
             providers: default_providers(),
             environments: default_environments(),
@@ -240,6 +243,12 @@ impl UserSettings {
         }
         if self.version < 4 {
             self.version = 4;
+        }
+        if self.version < 5 {
+            self.version = 5;
+        }
+        if self.version < 6 {
+            self.version = 6;
         }
         for provider in &mut self.providers {
             if provider.enabled {
@@ -323,6 +332,10 @@ pub struct AdvancedSettings {
     pub max_image_size_bytes: u64,
     pub max_file_size_bytes: u64,
     pub max_turn_attachments_bytes: u64,
+    pub usage_scanning_enabled: bool,
+    pub usage_hub_sync_enabled: bool,
+    pub capacity_routing_enabled: bool,
+    pub automatic_failover_enabled: bool,
 }
 
 impl Default for AdvancedSettings {
@@ -333,6 +346,10 @@ impl Default for AdvancedSettings {
             max_image_size_bytes: crate::attachment::MAX_IMAGE_SIZE_BYTES,
             max_file_size_bytes: crate::attachment::MAX_FILE_SIZE_BYTES,
             max_turn_attachments_bytes: crate::attachment::MAX_TOTAL_ATTACHMENTS_PER_TURN_BYTES,
+            usage_scanning_enabled: true,
+            usage_hub_sync_enabled: true,
+            capacity_routing_enabled: true,
+            automatic_failover_enabled: true,
         }
     }
 }
@@ -415,6 +432,10 @@ mod tests {
         assert_eq!(settings.ui.theme, "dark");
         assert!(settings.ui.show_status_bar);
         assert!(settings.keyboard.pass_through.is_empty());
+        assert!(settings.advanced.usage_scanning_enabled);
+        assert!(settings.advanced.usage_hub_sync_enabled);
+        assert!(settings.advanced.capacity_routing_enabled);
+        assert!(settings.advanced.automatic_failover_enabled);
         let disabled_best_effort = settings
             .providers
             .iter()
@@ -442,6 +463,10 @@ mod tests {
     fn legacy_empty_json_loads_with_defaults() {
         let settings: UserSettings = serde_json::from_str("{}").expect("defaults");
         assert_eq!(settings.terminal.scrollback_lines, 10_000);
+        assert!(settings.advanced.usage_scanning_enabled);
+        assert!(settings.advanced.usage_hub_sync_enabled);
+        assert!(settings.advanced.capacity_routing_enabled);
+        assert!(settings.advanced.automatic_failover_enabled);
     }
 
     #[test]

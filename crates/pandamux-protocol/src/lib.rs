@@ -73,7 +73,8 @@ pub use terminal_rpc::{
     TerminalOutputEvent, TerminalResizeParams,
 };
 pub use thread_rpc::{
-    ThreadCancelTurnParams, ThreadCreateParams, ThreadGetParams, ThreadGetResult, ThreadListParams,
+    HubRoutingContext, ThreadCancelTurnParams, ThreadContinueParams, ThreadContinueResult,
+    ThreadCreateParams, ThreadGetParams, ThreadGetResult, ThreadListParams,
     ThreadRespondApprovalParams, ThreadResumeParams, ThreadResumeResult, ThreadSendTurnParams,
     ThreadSendTurnResult,
 };
@@ -81,9 +82,9 @@ pub use usage_rpc::{
     CapacityPushParams, CapacityPushResult, CapacityQueryCursor, CapacityQueryParams,
     CapacityQueryResult, CapacityRefreshParams, CapacityRefreshResult,
     DEFAULT_CAPACITY_REFRESH_TIMEOUT_MS, DEFAULT_USAGE_PAGE_SIZE, MAX_CAPACITY_REFRESH_TIMEOUT_MS,
-    MAX_CAPACITY_SNAPSHOTS_PER_PUSH, MAX_USAGE_PAGE_SIZE, UsageAckParams, UsageAckResult,
-    UsageAggregate, UsageBackfillCursor, UsageBackfillItem, UsageBackfillParams,
-    UsageBackfillResult, UsageCatalogResult, UsageCoverage, UsageCoverageGap,
+    MAX_CAPACITY_SNAPSHOTS_PER_PUSH, MAX_USAGE_PAGE_SIZE, RoutingProviderCatalogEntry,
+    UsageAckParams, UsageAckResult, UsageAggregate, UsageBackfillCursor, UsageBackfillItem,
+    UsageBackfillParams, UsageBackfillResult, UsageCatalogResult, UsageCoverage, UsageCoverageGap,
     UsageEnvironmentSyncCoverage, UsageEnvironmentSyncState, UsageExportItem, UsageExportParams,
     UsageExportResult, UsageNodeCoverageSnapshot, UsageProviderSubscriptionMapping,
     UsageQueryCursor, UsageQueryItem, UsageQueryParams, UsageQueryResult, UsageScannerDiagnostic,

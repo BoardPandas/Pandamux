@@ -1481,6 +1481,62 @@ Checkpoint acceptance:
 - A disallowed cross-organization candidate remains excluded even when it is the only healthy instance.
 - Duplicate continuation, approval, and tool-result delivery is idempotent across restart.
 
+##### Checkpoint 4F implementation record (2026-09-29)
+
+- Explicit compatible failover pools now persist in settings schema 6. Pool validation
+  requires each member to name its provider instance, model, instruction, tool, access,
+  and provider capabilities. The settings editor exposes member preference and required
+  capabilities while preserving a repair path for legacy pre-4F pool JSON that omitted
+  the new fields. Invalid legacy pools load but fail closed until repaired.
+- The deterministic router applies project and organization policy, capabilities, access
+  ceiling, authentication, compatibility, and local hard blocks before scoring capacity
+  confidence, health, concurrency, locality, and user preference. Every candidate has a
+  stable selected or rejected explanation. Remote node execution uses the Hub's canonical
+  policy and pool snapshot and revalidates it on the node; a missing Hub snapshot fails
+  closed, and only an authenticated node-proxy caller may carry remote routing context.
+- Providers emit visible-output, tool-side-effect, and external-commit transitions before
+  forwarding the associated event. A capacity failure can automatically retry once only
+  while the attempt remains safe. Once any boundary is crossed, the turn persists as
+  `InterruptedForCapacity` with its checkpoint, partial output, tool ledger, capacity
+  report, and exact provider execution evidence. Terminal attempt states are monotonic,
+  including across restart reconciliation.
+- Safe retry retargets the running turn to the selected provider and model. Every attempt
+  persists the exact provider kind, profile, binary, capabilities, and version used under
+  additive migration 11; migration 10 owns attempts, tool ledgers, continuations, and
+  delivery records. Usage backfill attributes a completed retry to that attempt rather
+  than to the turn's original route.
+- Cross-account continuation starts a fresh provider session with a bounded handoff and
+  the same verified worktree checkpoint; no transparent native resume is claimed.
+  Continuation, approval, and tool-result delivery records use stable payload identities.
+  Restart tests prove duplicate delivery does not execute twice, including two historical
+  approvals that reuse one provider request id on different turns.
+- Usage scanners, Hub sync, capacity-aware routing, and automatic failover have independent
+  rollback switches. Scanner and sync switches apply at process start; capacity routing
+  applies to the next turn; automatic failover applies at the next capacity decision.
+  Disabling them preserves observations, attempt evidence, and legacy tables.
+- **Local verification:** at workspace version `0.60.0`, focused migration, store, router,
+  lifecycle, safe-retry, approval, and restart tests passed. `cargo fmt --all -- --check`,
+  strict workspace Clippy, and `cargo test --workspace --quiet` passed. The workspace ran
+  412 tests with zero failures and two intentionally ignored real-shell terminal tests.
+  All `pandamux-server` targets type-check for `x86_64-pc-windows-gnu`; the Rust boundary
+  and Claude wiring guards passed. Fresh debug server and CLI artifacts completed
+  authenticated `system.hello`, `system.ping`, and `system.identify` calls against an
+  isolated runtime, and the desktop headless startup check passed. `cargo-deny` is not
+  installed on this host, so no advisory, license, ban, or source result is claimed.
+- **Acceptance boundary:** deterministic local fixtures and injected provider failures
+  satisfy the source-level 4F acceptance rows. No current desktop executable was exercised
+  interactively on Windows, and no live local-provider or Galahad multi-node failover
+  matrix was run. The deferred R0.5 physical laptop-disconnect and sleep rows also remain
+  open. Those gaps still block Phase 4 production acceptance and release. No push,
+  deployment, production activation, or release is claimed.
+- **Recovery preservation:** the original dirty checkout remains at recovered base
+  `9511d0e22d44`. Its 11 unfinished Phase 4 prototype source files were restored from the
+  R0.1 archive in a detached temporary worktree and compared byte-for-byte with the
+  original checkout before source editing; all matched. The archive patch SHA-256 is
+  `96117c5a4fe97b0448036a6154f2b9c0cf70b31a9417c33aea698b7aa0f9668a` and the archive
+  tar SHA-256 is `27cb07ad0ef5497e6b764d562bbc0828ffeb09e1c597cc08b49f54bc2f6754bd`.
+  Phase 4F remains isolated on the managed recovery branch.
+
 #### Phase 4 verification and completion record
 
 Run narrow unit and migration tests first, then crate tests, workspace fmt/clippy/tests, resolved-boundary checks, `cargo deny advisories licenses bans sources`, built-artifact smoke, and the local plus Galahad live matrix. Cargo commands remain serial in this repository.

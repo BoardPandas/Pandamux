@@ -161,15 +161,49 @@ budget limits, concurrency ceilings, organization tier defaults, and Broadside a
 or transcript permissions. Removing a last valid named route is blocked, and server-side
 impact review blocks removal of a provider used by an enabled schedule. Project
 assignment editing remains disabled because the current desktop has no canonical project
-catalog. Failover-pool editing is disabled with a Phase 4F explanation.
+catalog. The same surface creates and edits explicit failover pools. Each member binds a
+named provider instance and subscription to one server-derived model and capability set;
+requirements cover instruction delivery, tools, approvals, reasoning, and the access
+ceiling. Incompatible members are rejected before settings are committed.
 
 Project-bound local and remote thread creation and turns, schedule validation and run,
 and read-only MCP proposal validation resolve exactly one organization before provider
-selection. Missing or ambiguous assignment fails closed. Core failover candidate and
-Broadside authorizers reject disallowed policy values, but no runtime failover executor
-or Broadside share action exists to wire in this checkpoint. Remote schedule storage or
-execution, orchestrator schedules, and continue-existing-thread schedules are explicitly
-unavailable.
+selection. Missing or ambiguous assignment fails closed. Runtime failover applies that
+policy before capability, model, installation, authentication, health, local hard-block,
+and concurrency filters. Only eligible candidates receive capacity, health, concurrency,
+locality, and preference scores. Every selected and rejected candidate keeps a durable,
+deterministic explanation. For remote project turns and continuations, the Hub replaces
+caller input with its canonical organization and referenced-pool snapshot. The
+authenticated node validates that snapshot, every pool, and every member authorization
+again before routing. Broadside sharing still has no runtime action. Remote schedule
+storage or execution, orchestrator schedules, and continue-existing-thread schedules are
+explicitly unavailable.
+
+## Capacity interruption and continuation
+
+Migration 10 adds durable turn attempts, tool ledgers, continuations, and delivery
+records. Additive migration 11 attaches the exact execution configuration and probed
+provider version to each attempt. A completed retry becomes the authoritative provider,
+subscription, and model source for managed usage while the exhausted attempt remains
+immutable evidence. Provider adapters advance a monotonic attempt boundary before the server
+forwards visible output, tool activity, subagent activity, or an approval request. A
+capacity signal at the safe boundary may retry once on another eligible pool member. The
+exhausted provider is excluded, and the second attempt always starts a fresh session.
+
+Capacity exhaustion after any unsafe boundary never silently replays the turn. PandaMUX
+persists `InterruptedForCapacity` with the exact provider evidence, partial output,
+checkpoint, routing decision, and tool ledger. Its continuation verifies the worktree is
+still at the recorded checkpoint, sends a bounded handoff in a fresh provider session,
+and retires any source native resume token. The continuation target is linked before the
+handoff is sent, which makes duplicate requests restart-safe. Approval delivery is
+at-most-once and durable; completed tool results are immutable and accept an identical
+redelivery without creating another result.
+
+Advanced settings independently gate usage scanning, Hub synchronization,
+capacity-aware routing, and automatic failover. Scanner and Hub switches apply at the
+next process start. Capacity routing applies to the next turn, and automatic failover
+applies to the next capacity decision. Raw observations, read-only usage queries, and
+legacy tables remain intact when any switch is off.
 
 ## Accessibility boundary
 
@@ -204,7 +238,8 @@ provider profile.
 
 ## Current boundary
 
-Checkpoint 4E has local source implementation and verification evidence only. The
+Checkpoint 4F has local source implementation and verification evidence only. The
 deferred physical R0.5 laptop disconnect and sleep rows, native Phase 4D provider runtime
-acceptance, native Phase 4E interaction and accessibility acceptance, Phase 4F failover,
-and later release gates still block production acceptance and release.
+acceptance, native Phase 4E interaction and accessibility acceptance, the local plus
+Galahad live failover matrix, and later release gates still block production acceptance
+and release.

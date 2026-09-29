@@ -204,6 +204,16 @@ impl Server {
     }
 
     pub fn start_usage_scanner(&self) -> std::io::Result<()> {
+        let enabled = self
+            .store
+            .get_settings()
+            .map_err(|error| std::io::Error::other(error.to_string()))?
+            .unwrap_or_default()
+            .advanced
+            .usage_scanning_enabled;
+        if !enabled {
+            return Ok(());
+        }
         let mut scanner = self
             .usage_scanner
             .lock()
@@ -239,6 +249,16 @@ impl Server {
 
     pub fn start_usage_sync(&self) -> std::io::Result<()> {
         if self.config.role != ServerRole::Hub {
+            return Ok(());
+        }
+        let enabled = self
+            .store
+            .get_settings()
+            .map_err(|error| std::io::Error::other(error.to_string()))?
+            .unwrap_or_default()
+            .advanced
+            .usage_hub_sync_enabled;
+        if !enabled {
             return Ok(());
         }
         let mut sync = self
@@ -677,5 +697,39 @@ mod tests {
             .await
             .expect("provider task")
             .expect("provider connection");
+    }
+
+    #[test]
+    fn rollback_switches_prevent_usage_services_from_starting() {
+        let (_runtime_dir, server, _runtime) = test_server();
+        let mut settings = server
+            .store()
+            .get_settings()
+            .expect("load settings")
+            .unwrap_or_default();
+        settings.advanced.usage_scanning_enabled = false;
+        settings.advanced.usage_hub_sync_enabled = false;
+        server
+            .store()
+            .save_settings(&settings)
+            .expect("save settings");
+
+        server.start_usage_scanner().expect("scanner start gate");
+        server.start_usage_sync().expect("sync start gate");
+
+        assert!(
+            server
+                .usage_scanner
+                .lock()
+                .expect("usage scanner service lock")
+                .is_none()
+        );
+        assert!(
+            server
+                .usage_sync
+                .lock()
+                .expect("usage synchronization service lock")
+                .is_none()
+        );
     }
 }

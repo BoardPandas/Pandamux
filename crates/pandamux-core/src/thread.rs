@@ -66,6 +66,19 @@ impl ThreadWorkspace {
     }
 }
 
+impl AccessMode {
+    /// Stable permission ordering used when a route declares an access ceiling.
+    pub const fn security_rank(self) -> u8 {
+        match self {
+            Self::ReadOnly => 0,
+            Self::WorkspaceOnly => 1,
+            Self::Ask => 2,
+            Self::AutoEdit => 3,
+            Self::FullAccess => 4,
+        }
+    }
+}
+
 /// A dedicated git worktree backing a thread.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -162,6 +175,7 @@ pub enum TurnStatus {
     Completed,
     Failed,
     Interrupted,
+    InterruptedForCapacity,
 }
 
 /// Token and cost usage metrics recorded for a turn.

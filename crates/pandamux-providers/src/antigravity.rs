@@ -218,6 +218,7 @@ impl ProviderDriver for AntigravityDriver {
                 supports_rate_limits: false,
                 supports_resume: true,
                 supports_images: true,
+                max_access_mode: pandamux_core::AccessMode::FullAccess,
             },
             supported_models: Vec::new(),
         }

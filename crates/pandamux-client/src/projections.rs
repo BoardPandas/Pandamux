@@ -211,6 +211,23 @@ impl ThreadProjection {
                     message: format!("Budget limit exceeded: {limit}"),
                 });
             }
+            ThreadEventKind::CapacityInterrupted {
+                continuation_id,
+                provider_instance_id,
+                message,
+                ..
+            } => {
+                if let Some(turn) = self.turns.last_mut() {
+                    turn.status = TurnStatus::InterruptedForCapacity;
+                    turn.ended_at_ms = Some(event.at_ms);
+                }
+                self.thread.status = ThreadStatus::Idle;
+                self.items.push(TimelineItem::CapacityContinuation {
+                    continuation_id: continuation_id.as_str().to_string(),
+                    provider_instance_id: provider_instance_id.as_str().to_string(),
+                    message: message.clone(),
+                });
+            }
             ThreadEventKind::Notice { level, message } => {
                 self.items.push(TimelineItem::Notice {
                     level: level.clone(),
@@ -724,6 +741,11 @@ pub enum TimelineItem {
     },
     Notice {
         level: String,
+        message: String,
+    },
+    CapacityContinuation {
+        continuation_id: String,
+        provider_instance_id: String,
         message: String,
     },
     Error {

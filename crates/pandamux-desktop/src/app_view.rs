@@ -16,9 +16,9 @@ use pandamux_protocol::{
     GitCreatePrParams, GitCreatePrResult, GitPushParams, GitPushResult, GitStatusParams,
     GitStatusResult, ProviderHealthParams, ProviderHealthResult, ProviderLoginLaunchParams,
     ProviderLoginLaunchResult, ProviderLoginPreview, ProviderLoginPreviewParams, SettingsGetResult,
-    SettingsSetParams, SettingsSetResult, ThreadCancelTurnParams, ThreadCreateParams,
-    ThreadRespondApprovalParams, ThreadSendTurnParams, UsageCatalogResult, UsageQueryResult,
-    UsageSubscriptionSetParams,
+    SettingsSetParams, SettingsSetResult, ThreadCancelTurnParams, ThreadContinueParams,
+    ThreadContinueResult, ThreadCreateParams, ThreadRespondApprovalParams, ThreadSendTurnParams,
+    UsageCatalogResult, UsageQueryResult, UsageSubscriptionSetParams,
 };
 
 use crate::command_palette::{
@@ -229,6 +229,9 @@ impl AppView {
                         NotificationLevel::Warn,
                         cx,
                     );
+                }
+                pandamux_core::ThreadEventKind::CapacityInterrupted { message, .. } => {
+                    self.notify_user("Capacity Interrupted", message, NotificationLevel::Warn, cx);
                 }
                 pandamux_core::ThreadEventKind::Error { class, message, .. } => {
                     self.notify_user(
@@ -473,6 +476,7 @@ impl AppView {
             attachment_ids,
             model: Some(self.picker.model().to_string()),
             effort: self.picker.effort.clone(),
+            hub_routing_context: None,
         };
 
         self.composer.clear();
@@ -664,6 +668,54 @@ impl AppView {
             );
             drop(rx);
         }
+    }
+
+    /// Starts the durable continuation offered after unsafe capacity exhaustion.
+    pub fn continue_after_capacity(
+        &mut self,
+        thread_id: ThreadId,
+        continuation_id: String,
+        cx: &mut Context<Self>,
+    ) {
+        let params = ThreadContinueParams {
+            continuation_id: pandamux_core::ContinuationId::new(continuation_id),
+            thread_id: Some(thread_id),
+            provider_instance_id: None,
+            hub_routing_context: None,
+        };
+        let Some(bridge) = &self.bridge else {
+            self.notify_user(
+                "Continuation unavailable",
+                "The server bridge is unavailable.",
+                NotificationLevel::Error,
+                cx,
+            );
+            return;
+        };
+        let rx = bridge.send_request(
+            "thread.continue_capacity",
+            serde_json::to_value(&params).ok(),
+        );
+        cx.spawn(async move |this, cx| {
+            let result = decode_rpc_result::<ThreadContinueResult>(rx.await);
+            cx.update(|cx| {
+                let _ = this.update(cx, |this: &mut AppView, cx| match result {
+                    Ok(_) => this.notify_user(
+                        "Continuation started",
+                        "A fresh provider session is continuing from the saved checkpoint.",
+                        NotificationLevel::Info,
+                        cx,
+                    ),
+                    Err(error) => this.notify_user(
+                        "Continuation failed",
+                        &error,
+                        NotificationLevel::Error,
+                        cx,
+                    ),
+                });
+            });
+        })
+        .detach();
     }
 
     /// Cancels or interrupts the active turn.
@@ -1975,6 +2027,9 @@ impl AppView {
                         theme,
                         |this: &mut AppView, tid, req_id, dec, _win, cx| {
                             this.respond_approval(tid, req_id, dec, cx);
+                        },
+                        |this: &mut AppView, thread_id, continuation_id, _win, cx| {
+                            this.continue_after_capacity(thread_id, continuation_id, cx);
                         },
                         |this: &mut AppView, idx, _win, cx| {
                             this.timeline_state.selection.start(idx, 0);

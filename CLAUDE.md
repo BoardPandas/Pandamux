@@ -181,11 +181,40 @@ validation and execution, read-only MCP proposals, failover filtering, and Broad
 authorization use fail-closed policy primitives before provider selection. Missing or
 ambiguous project assignment fails closed on each implemented project-bound path. The
 organization UI edits named provider and subscription boundaries, budget, concurrency,
-tier defaults, and Broadside permissions. Project assignment stays disabled until a
-canonical project catalog exists, and capability-aware failover-pool editing remains
-Phase 4F work. There is no runtime Broadside share action or failover executor to wire in
-this checkpoint. Remote schedules, orchestrator schedules, and continue-existing-thread
+tier defaults, Broadside permissions, and explicit failover pools. Project assignment
+stays disabled until a canonical project catalog exists. There is no runtime Broadside
+share action. Remote schedules, orchestrator schedules, and continue-existing-thread
 schedules report explicit unavailable states.
+
+Phase 4F adds migration 10 for durable turn attempts, tool ledgers, audited
+continuations, and idempotent approval or tool-result deliveries. Additive migration 11
+attaches the exact provider kind, profile, binary override, capabilities, and probed
+version to each attempt so a safe retry preserves both provider executions and managed
+usage follows the completed attempt. Pool members bind one
+provider instance, named subscription, model, declared capability set, and user
+preference. Runtime selection rechecks those declarations against the registered driver,
+then applies organization policy, required capabilities and access, model compatibility,
+installation, authentication, health, capacity hard blocks, and concurrency before it
+scores any eligible member. Every decision stores an explanation for every candidate.
+For remote project turns and continuations, the Hub replaces caller input with its
+canonical organization and referenced-pool snapshot. The authenticated node validates
+that snapshot and each member authorization again before routing.
+
+Provider adapters emit a monotonic attempt boundary before visible output, tool activity,
+or approval interaction is forwarded. Capacity exhaustion retries once only from the
+safe boundary and excludes the exhausted provider. Any later exhaustion records exact
+provider evidence, partial output, tool ledger state, and a worktree checkpoint. The
+user-visible continuation starts a fresh provider session with a bounded handoff, verifies
+that checkpoint has not changed, and never carries a native resume token across provider
+instances. The continuation target is linked durably before its handoff reaches the
+provider, and duplicate continuation, approval, and completed tool-result delivery is
+idempotent across restart.
+
+Advanced settings expose independent rollback switches for usage scanning, Hub usage
+synchronization, capacity-aware routing, and automatic failover. Scanner and Hub service
+switches take effect at process start. Capacity routing applies on the next turn, while
+automatic failover applies at the next capacity decision. Disabling them does not remove
+observations or rewrite legacy tables.
 
 The source-level accessibility gate names icon controls, retains visible non-color
 status text, restores focus after the subscription editor, keeps errors visible, wraps

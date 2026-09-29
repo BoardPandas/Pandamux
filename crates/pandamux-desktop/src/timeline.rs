@@ -27,6 +27,7 @@ pub fn render_timeline_item<V: 'static>(
     on_approve: impl Fn(&mut V, ThreadId, String, ApprovalDecision, &mut Window, &mut Context<V>)
     + 'static
     + Copy,
+    on_continue: impl Fn(&mut V, ThreadId, String, &mut Window, &mut Context<V>) + 'static + Copy,
     cx: &mut Context<V>,
 ) -> AnyElement {
     match item {
@@ -341,6 +342,23 @@ pub fn render_timeline_item<V: 'static>(
         TimelineItem::Plan { steps } => render_plan_card(idx, steps, theme),
 
         TimelineItem::Notice { level, message } => render_notice_card(idx, level, message, theme),
+
+        TimelineItem::CapacityContinuation {
+            continuation_id,
+            provider_instance_id,
+            message,
+        } => render_capacity_continuation_card(
+            CapacityContinuationCard {
+                idx,
+                thread_id,
+                continuation_id,
+                provider_instance_id,
+                message,
+                theme,
+            },
+            on_continue,
+            cx,
+        ),
 
         TimelineItem::Error {
             class,
@@ -1257,6 +1275,84 @@ pub fn render_notice_card(idx: usize, level: &str, message: &str, theme: &Theme)
         .into_any_element()
 }
 
+struct CapacityContinuationCard<'a> {
+    idx: usize,
+    thread_id: &'a ThreadId,
+    continuation_id: &'a str,
+    provider_instance_id: &'a str,
+    message: &'a str,
+    theme: &'a Theme,
+}
+
+fn render_capacity_continuation_card<V: 'static>(
+    card: CapacityContinuationCard<'_>,
+    on_continue: impl Fn(&mut V, ThreadId, String, &mut Window, &mut Context<V>) + 'static + Copy,
+    cx: &mut Context<V>,
+) -> AnyElement {
+    let CapacityContinuationCard {
+        idx,
+        thread_id,
+        continuation_id,
+        provider_instance_id,
+        message,
+        theme,
+    } = card;
+    let thread_id = thread_id.clone();
+    let continuation_id = continuation_id.to_string();
+    div()
+        .id(ElementId::NamedInteger(
+            "capacity-continuation".into(),
+            idx as u64,
+        ))
+        .p_3()
+        .rounded(Radii::ROW)
+        .bg(rgba(0xd8b45e1a))
+        .border_1()
+        .border_color(theme.terminal.warn)
+        .v_flex()
+        .gap_2()
+        .child(
+            div()
+                .h_flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .font_weight(FontWeight::BOLD)
+                        .text_size(Typography::BODY_SIZE)
+                        .text_color(theme.terminal.warn)
+                        .child("Capacity interrupted"),
+                )
+                .child(
+                    div()
+                        .px_1p5()
+                        .py_0p5()
+                        .rounded(Radii::CHIP)
+                        .bg(rgba(0xffffff14))
+                        .text_size(Typography::META_SIZE)
+                        .text_color(theme.chrome.text_t2)
+                        .child(format!("Source: {provider_instance_id}")),
+                ),
+        )
+        .child(
+            div()
+                .text_size(Typography::BODY_SIZE)
+                .text_color(theme.chrome.text_t1)
+                .child(message.to_string()),
+        )
+        .child(
+            div().h_flex().justify_end().child(
+                Button::new(format!("continue-capacity-{idx}"))
+                    .primary()
+                    .label("Continue safely")
+                    .on_click(cx.listener(move |this, _event, window, cx| {
+                        on_continue(this, thread_id.clone(), continuation_id.clone(), window, cx);
+                    })),
+            ),
+        )
+        .into_any_element()
+}
+
 /// Renders a styled error card with recovery status and classification.
 pub fn render_error_card(
     idx: usize,
@@ -1850,6 +1946,9 @@ impl TimelineSelection {
                 }
                 TimelineItem::Error { message, .. } => out.push(format!("Error: {message}")),
                 TimelineItem::Notice { message, .. } => out.push(format!("Notice: {message}")),
+                TimelineItem::CapacityContinuation { message, .. } => {
+                    out.push(format!("Capacity interruption: {message}"));
+                }
                 TimelineItem::ChangedFiles { files, .. } => {
                     out.push(format!("Changed Files: {} files", files.len()));
                 }
@@ -2065,6 +2164,7 @@ pub fn render_virtualized_timeline<V: 'static>(
     on_approve: impl Fn(&mut V, ThreadId, String, ApprovalDecision, &mut Window, &mut Context<V>)
     + 'static
     + Copy,
+    on_continue: impl Fn(&mut V, ThreadId, String, &mut Window, &mut Context<V>) + 'static + Copy,
     on_select_item: impl Fn(&mut V, usize, &mut Window, &mut Context<V>) + 'static + Copy,
     on_jump_to_bottom: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
     cx: &mut Context<V>,
@@ -2118,7 +2218,13 @@ pub fn render_virtualized_timeline<V: 'static>(
                                 on_select_item(this, idx, win, cx);
                             }))
                             .child(render_timeline_item(
-                                idx, item, thread_id, theme, on_approve, cx,
+                                idx,
+                                item,
+                                thread_id,
+                                theme,
+                                on_approve,
+                                on_continue,
+                                cx,
                             )),
                     )
                 }))

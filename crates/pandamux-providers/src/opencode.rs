@@ -233,6 +233,7 @@ impl ProviderDriver for OpenCodeDriver {
                 supports_rate_limits: false,
                 supports_resume: true,
                 supports_images: false,
+                max_access_mode: pandamux_core::AccessMode::FullAccess,
             },
             supported_models: vec![
                 ModelInfo {
@@ -372,14 +373,17 @@ impl ProviderDriver for OpenCodeDriver {
                 let session_id = format!("opencode-srv-{}", uuid::Uuid::new_v4());
 
                 // Emit initial session event
-                let _ = tx
-                    .send(ProviderEvent::TextDelta {
-                        delta: format!(
+                let _ = crate::forward_provider_event(
+                    &tx,
+                    ProviderEvent::Notice {
+                        level: "info".to_string(),
+                        message: format!(
                             "Connected to OpenCode serve session {} for model {}\n",
                             session_id, create_req.model
                         ),
-                    })
-                    .await;
+                    },
+                )
+                .await;
 
                 Ok(Box::new(OpenCodeServeSession {
                     session_id,
@@ -433,7 +437,7 @@ impl ProviderDriver for OpenCodeDriver {
                     let mut reader = BufReader::new(stdout).lines();
                     while let Ok(Some(line)) = reader.next_line().await {
                         if let Some(event) = parse_acp_line(&line)
-                            && tx.send(event).await.is_err()
+                            && crate::forward_provider_event(&tx, event).await.is_err()
                         {
                             break;
                         }

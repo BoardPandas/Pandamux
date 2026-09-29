@@ -1,4 +1,5 @@
 use crate::ids::{EnvironmentId, ProviderInstanceId};
+use crate::thread::AccessMode;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -137,4 +138,12 @@ pub struct ProviderCapabilities {
     pub supports_resume: bool,
     #[serde(default)]
     pub supports_images: bool,
+    #[serde(default)]
+    pub max_access_mode: AccessMode,
+}
+
+impl ProviderCapabilities {
+    pub fn supports_access_mode(self, requested: AccessMode) -> bool {
+        requested.security_rank() <= self.max_access_mode.security_rank()
+    }
 }

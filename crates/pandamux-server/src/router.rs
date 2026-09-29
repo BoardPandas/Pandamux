@@ -23,15 +23,16 @@ use pandamux_protocol::{
     CapacityRefreshParams, CapacityRefreshResult, CheckpointDiffParams, CheckpointListParams,
     CheckpointRollbackParams, EnvironmentImportSshConfigParams, EnvironmentImportSshConfigResult,
     EnvironmentListResult, GitCommitParams, GitCreatePrParams, GitPushParams, GitStatusParams,
-    HarkDictatePromptParams, HarkSpellbookSyncParams, HelloParams, HelloResult, IdentifyResult,
-    McpCallToolParams, PROTOCOL_VERSION, PingResult, ProviderHealthParams, ProviderHealthReport,
-    ProviderHealthResult, ProviderLoginFlow, ProviderLoginGuidance, ProviderLoginLaunchParams,
-    ProviderLoginLaunchResult, ProviderLoginPreview, ProviderLoginPreviewParams, RpcError,
-    RpcRequest, RpcResponse, ScheduleRunParams, ScheduleRunResult, ScheduleSaveParams,
-    ScheduleValidateParams, ScheduleValidationResult, ServerCapabilities, ServerRole,
-    SettingsGetParams, SettingsGetResult, SettingsSetParams, SubAgentTreeItem, SubAgentTreeParams,
-    SubAgentTreeResult, TerminalAttachParams, TerminalCloseParams, TerminalInputParams,
-    TerminalOpenParams, TerminalResizeParams, ThreadCancelTurnParams, ThreadCreateParams,
+    HarkDictatePromptParams, HarkSpellbookSyncParams, HelloParams, HelloResult, HubRoutingContext,
+    IdentifyResult, McpCallToolParams, PROTOCOL_VERSION, PingResult, ProviderHealthParams,
+    ProviderHealthReport, ProviderHealthResult, ProviderLoginFlow, ProviderLoginGuidance,
+    ProviderLoginLaunchParams, ProviderLoginLaunchResult, ProviderLoginPreview,
+    ProviderLoginPreviewParams, RoutingProviderCatalogEntry, RpcError, RpcRequest, RpcResponse,
+    ScheduleRunParams, ScheduleRunResult, ScheduleSaveParams, ScheduleValidateParams,
+    ScheduleValidationResult, ServerCapabilities, ServerRole, SettingsGetParams, SettingsGetResult,
+    SettingsSetParams, SubAgentTreeItem, SubAgentTreeParams, SubAgentTreeResult,
+    TerminalAttachParams, TerminalCloseParams, TerminalInputParams, TerminalOpenParams,
+    TerminalResizeParams, ThreadCancelTurnParams, ThreadContinueParams, ThreadCreateParams,
     ThreadGetParams, ThreadListParams, ThreadRespondApprovalParams, ThreadResumeParams,
     ThreadSendTurnParams, UsageAckParams, UsageAckResult, UsageBackfillParams, UsageCatalogResult,
     UsageExportParams, UsageQueryParams, UsageSubscriptionSetParams, WorktreeSyncDeltaParams,
@@ -879,18 +880,11 @@ impl Router {
         serde_json::to_value(params).map_err(|error| RpcError::internal_error(error.to_string()))
     }
 
-    fn authorize_forwarded_thread_turn(
+    fn routing_context_for_forwarded_thread(
         &self,
-        params: &Value,
+        thread: &pandamux_core::Thread,
         target_environment: &EnvironmentId,
-    ) -> Result<(), RpcError> {
-        let params: ThreadSendTurnParams = serde_json::from_value(params.clone())
-            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
-        let thread = self
-            .store
-            .get_thread(&params.thread_id)
-            .map_err(|error| RpcError::internal_error(error.to_string()))?
-            .ok_or_else(|| RpcError::not_found("Thread not found"))?;
+    ) -> Result<Option<HubRoutingContext>, RpcError> {
         if &thread.environment_id != target_environment {
             return Err(RpcError::with_data(
                 -32030,
@@ -899,13 +893,69 @@ impl Router {
             ));
         }
         if let Some(project_id) = thread.project_id.as_ref() {
-            self.resolve_authorized_project_provider(
+            let (organization, _) = self.resolve_authorized_project_provider(
                 project_id,
                 target_environment,
                 Some(&thread.provider_instance_id),
             )?;
+            let failover_pools = organization
+                .failover_pool_ids
+                .iter()
+                .map(|pool_id| {
+                    self.store
+                        .get_failover_pool(pool_id)
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?
+                        .ok_or_else(|| {
+                            organization_policy_rpc_error(
+                                project_id,
+                                "organization references a missing failover pool",
+                            )
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            return Ok(Some(HubRoutingContext {
+                organization,
+                failover_pools,
+            }));
         }
-        Ok(())
+        Ok(None)
+    }
+
+    fn prepare_forwarded_thread_turn(
+        &self,
+        params: &Value,
+        target_environment: &EnvironmentId,
+    ) -> Result<Value, RpcError> {
+        let mut params: ThreadSendTurnParams = serde_json::from_value(params.clone())
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let thread = self
+            .store
+            .get_thread(&params.thread_id)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?
+            .ok_or_else(|| RpcError::not_found("Thread not found"))?;
+        params.hub_routing_context =
+            self.routing_context_for_forwarded_thread(&thread, target_environment)?;
+        serde_json::to_value(params).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn prepare_forwarded_continuation(
+        &self,
+        params: &Value,
+        target_environment: &EnvironmentId,
+    ) -> Result<Value, RpcError> {
+        let mut params: ThreadContinueParams = serde_json::from_value(params.clone())
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let thread_id = params.thread_id.as_ref().ok_or_else(|| {
+            RpcError::invalid_params("Remote capacity continuation requires threadId")
+        })?;
+        let thread = self
+            .store
+            .get_thread(thread_id)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?
+            .ok_or_else(|| RpcError::not_found("Thread not found"))?;
+        params.hub_routing_context =
+            self.routing_context_for_forwarded_thread(&thread, target_environment)?;
+        serde_json::to_value(params).map_err(|error| RpcError::internal_error(error.to_string()))
     }
 
     fn resolve_target_environment(
@@ -947,7 +997,21 @@ impl Router {
             }
         }
 
-        // 3. Terminal-scoped methods: look up terminal_id in remote_terminals map
+        // 3. Capacity continuation methods: resolve through the durable record.
+        let continuation_id_opt = params
+            .get("continuationId")
+            .or_else(|| params.get("continuation_id"))
+            .and_then(|v| v.as_str());
+        if let Some(continuation_id) = continuation_id_opt {
+            let continuation_id = pandamux_core::ContinuationId::new(continuation_id);
+            if let Ok(Some(continuation)) = self.store.get_continuation(&continuation_id)
+                && let Ok(Some(thread)) = self.store.get_thread(&continuation.thread_id)
+            {
+                return Some(thread.environment_id);
+            }
+        }
+
+        // 4. Terminal-scoped methods: look up terminal_id in remote_terminals map
         let terminal_id_opt = params
             .get("terminalId")
             .or_else(|| params.get("terminal_id"))
@@ -1011,15 +1075,33 @@ impl Router {
                         return Some(RpcResponse::error(id, error));
                     }
                 }
-            } else {
-                if (method == "thread.send_turn" || method == "thread.sendTurn")
-                    && let Err(error) = self.authorize_forwarded_thread_turn(&params, &target_env)
-                {
-                    if is_notification {
-                        return None;
+            } else if method == "thread.send_turn" || method == "thread.sendTurn" {
+                match self.prepare_forwarded_thread_turn(&params, &target_env) {
+                    Ok(params) => RpcRequest {
+                        params: Some(params),
+                        ..req.clone()
+                    },
+                    Err(error) => {
+                        if is_notification {
+                            return None;
+                        }
+                        return Some(RpcResponse::error(id, error));
                     }
-                    return Some(RpcResponse::error(id, error));
                 }
+            } else if method == "thread.continue_capacity" || method == "thread.continueCapacity" {
+                match self.prepare_forwarded_continuation(&params, &target_env) {
+                    Ok(params) => RpcRequest {
+                        params: Some(params),
+                        ..req.clone()
+                    },
+                    Err(error) => {
+                        if is_notification {
+                            return None;
+                        }
+                        return Some(RpcResponse::error(id, error));
+                    }
+                }
+            } else {
                 req.clone()
             };
 
@@ -1125,6 +1207,9 @@ impl Router {
             }
             "thread.respond_approval" | "thread.respondApproval" => {
                 self.handle_thread_respond_approval(params).await
+            }
+            "thread.continue_capacity" | "thread.continueCapacity" => {
+                self.handle_thread_continue_capacity(context, params).await
             }
             "thread.resume" => self.handle_thread_resume(params),
             "settings.get" | "config.get" => self.handle_settings_get(params),
@@ -1314,6 +1399,11 @@ impl Router {
         let result = if matches!(context.peer_role, PeerRole::NodeProxy) {
             self.thread_manager.send_turn_from_hub(p).await?
         } else {
+            if p.hub_routing_context.is_some() {
+                return Err(RpcError::unauthorized(
+                    "Hub routing context is accepted only from an authenticated node proxy",
+                ));
+            }
             self.thread_manager.send_turn(p).await?
         };
         serde_json::to_value(&result).map_err(|e| RpcError::internal_error(e.to_string()))
@@ -1331,6 +1421,28 @@ impl Router {
             serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
         self.thread_manager.respond_approval(p).await?;
         Ok(json!({ "acknowledged": true }))
+    }
+
+    async fn handle_thread_continue_capacity(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        let p: ThreadContinueParams =
+            serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
+        let result = if matches!(context.peer_role, PeerRole::NodeProxy) {
+            self.thread_manager
+                .continue_after_capacity_from_hub(p)
+                .await?
+        } else {
+            if p.hub_routing_context.is_some() {
+                return Err(RpcError::unauthorized(
+                    "Hub routing context is accepted only from an authenticated node proxy",
+                ));
+            }
+            self.thread_manager.continue_after_capacity(p).await?
+        };
+        serde_json::to_value(&result).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
     fn handle_thread_resume(&self, params: Value) -> Result<Value, RpcError> {
@@ -1404,6 +1516,7 @@ impl Router {
         if let Ok(p) = serde_json::from_value::<SettingsSetParams>(params.clone()) {
             if let Some(mut updated) = p.settings {
                 updated.normalize();
+                self.canonicalize_failover_pools(&mut updated)?;
                 self.store
                     .save_settings_with_organization_policies(&updated, Self::now_ms())
                     .map_err(|e| RpcError::internal_error(e.to_string()))?;
@@ -1412,6 +1525,7 @@ impl Router {
                 pandamux_core::settings_set(&mut current, &key, value)
                     .map_err(RpcError::invalid_params)?;
                 current.normalize();
+                self.canonicalize_failover_pools(&mut current)?;
                 self.store
                     .save_settings_with_organization_policies(&current, Self::now_ms())
                     .map_err(|e| RpcError::internal_error(e.to_string()))?;
@@ -1422,6 +1536,7 @@ impl Router {
         // 2. Try parsing directly as UserSettings
         if let Ok(mut settings) = serde_json::from_value::<UserSettings>(params) {
             settings.normalize();
+            self.canonicalize_failover_pools(&mut settings)?;
             self.store
                 .save_settings_with_organization_policies(&settings, Self::now_ms())
                 .map_err(|e| RpcError::internal_error(e.to_string()))?;
@@ -1429,6 +1544,76 @@ impl Router {
         }
 
         Err(RpcError::invalid_params("Invalid settings payload"))
+    }
+
+    fn canonicalize_failover_pools(&self, settings: &mut UserSettings) -> Result<(), RpcError> {
+        for pool in &mut settings.failover_pools {
+            let mut capabilities_changed = false;
+            for member in &mut pool.members {
+                let config = settings
+                    .providers
+                    .iter()
+                    .find(|provider| provider.id == member.provider_instance_id)
+                    .ok_or_else(|| {
+                        RpcError::invalid_params(format!(
+                            "Failover pool '{}' references a missing provider instance",
+                            pool.display_name
+                        ))
+                    })?;
+                if !config.enabled {
+                    return Err(RpcError::invalid_params(format!(
+                        "Failover pool '{}' references a disabled provider instance",
+                        pool.display_name
+                    )));
+                }
+                let driver = self.drivers.get(config.provider).ok_or_else(|| {
+                    RpcError::invalid_params(format!(
+                        "Failover pool '{}' references an unavailable provider driver",
+                        pool.display_name
+                    ))
+                })?;
+                let metadata = driver.metadata();
+                let mut declared_models = metadata
+                    .supported_models
+                    .iter()
+                    .map(|model| model.id.clone())
+                    .collect::<Vec<_>>();
+                if let Some(default_model) = config
+                    .settings
+                    .get("defaultModel")
+                    .and_then(Value::as_str)
+                    .filter(|model| !model.trim().is_empty())
+                {
+                    declared_models.push(default_model.to_string());
+                }
+                declared_models.sort();
+                declared_models.dedup();
+                if !declared_models.iter().any(|model| model == &member.model) {
+                    return Err(RpcError::invalid_params(format!(
+                        "Failover pool '{}' uses a model not declared by its provider driver",
+                        pool.display_name
+                    )));
+                }
+                if member.declared_capabilities != metadata.capabilities {
+                    member.declared_capabilities = metadata.capabilities;
+                    capabilities_changed = true;
+                }
+                pool.requirements
+                    .validate_capabilities(metadata.capabilities)
+                    .map_err(|reason| {
+                        RpcError::invalid_params(format!(
+                            "Failover pool '{}' has an incompatible member: {reason}",
+                            pool.display_name
+                        ))
+                    })?;
+            }
+            if capabilities_changed {
+                pool.revision = pool.revision.saturating_add(1);
+            }
+            pool.validate()
+                .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        }
+        Ok(())
     }
 
     async fn handle_provider_health(&self, params: Value) -> Result<Value, RpcError> {
@@ -1982,6 +2167,56 @@ impl Router {
 
     fn handle_usage_catalog(&self, context: &RequestContext) -> Result<Value, RpcError> {
         require_local_query_peer(context)?;
+        let settings = self
+            .store
+            .get_settings()
+            .map_err(|error| RpcError::internal_error(error.to_string()))?
+            .unwrap_or_default();
+        let mut routing_providers = Vec::new();
+        for config in settings
+            .providers
+            .iter()
+            .filter(|provider| provider.enabled)
+        {
+            let Some(driver) = self.drivers.get(config.provider) else {
+                continue;
+            };
+            let metadata = driver.metadata();
+            let mut models = metadata
+                .supported_models
+                .into_iter()
+                .map(|model| model.id)
+                .collect::<Vec<_>>();
+            if let Some(default_model) = config
+                .settings
+                .get("defaultModel")
+                .and_then(Value::as_str)
+                .filter(|model| !model.trim().is_empty())
+            {
+                models.push(default_model.to_string());
+            }
+            models.sort();
+            models.dedup();
+            if models.is_empty() {
+                continue;
+            }
+            routing_providers.push(RoutingProviderCatalogEntry {
+                environment_id: config
+                    .environment_id
+                    .clone()
+                    .unwrap_or_else(|| EnvironmentId::new(self.environment_id.clone())),
+                provider_instance_id: config.id.clone(),
+                provider: config.provider,
+                display_name: config.display_name.clone(),
+                capabilities: metadata.capabilities,
+                models,
+            });
+        }
+        routing_providers.sort_by(|left, right| {
+            left.display_name
+                .cmp(&right.display_name)
+                .then_with(|| left.provider_instance_id.cmp(&right.provider_instance_id))
+        });
         let result = UsageCatalogResult {
             subscriptions: self
                 .store
@@ -1991,6 +2226,7 @@ impl Router {
                 .store
                 .list_provider_subscription_mappings()
                 .map_err(|error| RpcError::internal_error(error.to_string()))?,
+            routing_providers,
         };
         serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
     }
@@ -2425,6 +2661,7 @@ impl Router {
                 attachment_ids: Vec::new(),
                 model: None,
                 effort: None,
+                hub_routing_context: None,
             })
             .await?;
         serde_json::to_value(ScheduleRunResult {
@@ -3925,7 +4162,10 @@ mod tests {
         let get_res = router.handle_request(get_req).await.unwrap();
         assert!(get_res.is_success());
         let get_val = get_res.result.unwrap();
-        assert_eq!(get_val["settings"]["version"], 4);
+        assert_eq!(
+            get_val["settings"]["version"],
+            pandamux_core::SETTINGS_SCHEMA_VERSION
+        );
         assert_eq!(get_val["settings"]["terminal"]["scrollbackLines"], 10_000);
 
         // 2. Update a specific key using config.set dotted path
@@ -4468,7 +4708,13 @@ mod tests {
         };
 
         let mock_thread_clone = mock_thread.clone();
+        let forwarded_methods = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let forwarded_methods_for_transport = forwarded_methods.clone();
         let mock_transport = Arc::new(MockEnvironmentTransport::new(move |req| {
+            forwarded_methods_for_transport
+                .lock()
+                .expect("forwarded methods")
+                .push(req.method.clone());
             let id = req.id.clone().unwrap_or(1.into());
             if req.method == "thread.create" {
                 Ok(RpcResponse::success(
@@ -4530,7 +4776,29 @@ mod tests {
         let get_val = get_res.result.unwrap();
         assert_eq!(get_val["thread"]["id"], "th-remote-1");
 
-        // 5. Test event relaying to Hub broadcaster
+        // 5. Continuations include thread identity so the Hub can route them.
+        let continuation_res = hub_router
+            .handle_request(RpcRequest::new(
+                4,
+                "thread.continue_capacity",
+                Some(json!({
+                    "continuationId": "continue-remote-1",
+                    "threadId": "th-remote-1"
+                })),
+            ))
+            .await
+            .expect("remote continuation response");
+        assert!(continuation_res.is_success());
+        assert_eq!(
+            forwarded_methods
+                .lock()
+                .expect("forwarded methods")
+                .last()
+                .map(String::as_str),
+            Some("thread.continue_capacity")
+        );
+
+        // 6. Test event relaying to Hub broadcaster
         let mut hub_events = hub_router.thread_manager().subscribe();
         mock_transport.emit_event(pandamux_protocol::EventEnvelope {
             subscription_id: "remote-sub".to_string(),
@@ -4689,6 +4957,25 @@ mod tests {
         assert_eq!(
             forwarded[0].params.as_ref().unwrap()["providerInstanceId"],
             "claude-default"
+        );
+        drop(forwarded);
+
+        let prepared_turn = hub_router
+            .prepare_forwarded_thread_turn(
+                &json!({
+                    "threadId": "thread-remote-policy",
+                    "text": "use the canonical remote policy"
+                }),
+                &remote_env,
+            )
+            .expect("prepare remote project turn");
+        assert_eq!(
+            prepared_turn["hubRoutingContext"]["organization"]["id"],
+            "org-remote"
+        );
+        assert_eq!(
+            prepared_turn["hubRoutingContext"]["failoverPools"],
+            json!([])
         );
     }
 

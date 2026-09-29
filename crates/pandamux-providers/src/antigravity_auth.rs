@@ -1144,7 +1144,7 @@ async fn dispatch_process_messages(
                         emit_terminal_failure(&events, message).await;
                     } else if let Ok(line) = serde_json::to_string(&value) {
                         if let Some(event) = parse_acp_line(&line) {
-                            let _ = events.send(event).await;
+                            let _ = crate::forward_provider_event(&events, event).await;
                         } else {
                             emit_terminal_failure(
                                 &events,
@@ -1248,14 +1248,16 @@ async fn dispatch_process_messages(
                                     "size": content.len(),
                                     "sha256": hex::encode(sha2::Sha256::digest(content.as_bytes()))
                                 });
-                                let _ = events
-                                    .send(ProviderEvent::ApprovalRequested {
+                                let _ = crate::forward_provider_event(
+                                    &events,
+                                    ProviderEvent::ApprovalRequested {
                                         request_id: key,
                                         kind: ApprovalKind::FileEdit,
                                         detail,
                                         command: Some(path.to_string_lossy().to_string()),
-                                    })
-                                    .await;
+                                    },
+                                )
+                                .await;
                             }
                         }
                     }
@@ -1287,7 +1289,7 @@ async fn dispatch_process_messages(
                         if let Ok(line) = serde_json::to_string(&value)
                             && let Some(event) = parse_acp_line(&line)
                         {
-                            let _ = events.send(event).await;
+                            let _ = crate::forward_provider_event(&events, event).await;
                         }
                     }
                     "session/update"
@@ -1297,7 +1299,7 @@ async fn dispatch_process_messages(
                         if let Ok(line) = serde_json::to_string(&value)
                             && let Some(event) = parse_acp_line(&line)
                         {
-                            let _ = events.send(event).await;
+                            let _ = crate::forward_provider_event(&events, event).await;
                         }
                     }
                     _ => {

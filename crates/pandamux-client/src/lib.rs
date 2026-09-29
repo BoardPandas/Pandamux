@@ -579,6 +579,35 @@ mod tests {
     }
 
     #[test]
+    fn capacity_interruption_projects_an_actionable_continuation() {
+        let mut projection = ThreadProjection::new(mock_thread("thread-capacity"));
+        projection.apply_event(&ThreadEvent {
+            thread_id: ThreadId::from("thread-capacity"),
+            seq: 1,
+            at_ms: 2_000,
+            kind: ThreadEventKind::CapacityInterrupted {
+                turn_id: TurnId::from("turn-capacity"),
+                attempt_id: pandamux_core::TurnAttemptId::new("attempt-capacity"),
+                continuation_id: pandamux_core::ContinuationId::new("continue-capacity"),
+                provider_instance_id: ProviderInstanceId::new("provider-work"),
+                message: "Continue from the saved checkpoint.".to_string(),
+            },
+        });
+
+        assert_eq!(projection.thread.status, ThreadStatus::Idle);
+        assert!(matches!(
+            projection.items.as_slice(),
+            [TimelineItem::CapacityContinuation {
+                continuation_id,
+                provider_instance_id,
+                message,
+            }] if continuation_id == "continue-capacity"
+                && provider_instance_id == "provider-work"
+                && message == "Continue from the saved checkpoint."
+        ));
+    }
+
+    #[test]
     fn nested_subagent_tree_hierarchy() {
         let thread = mock_thread("thread-sub");
         let mut proj = ThreadProjection::new(thread);

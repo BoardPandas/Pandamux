@@ -29,6 +29,14 @@ R0 development gate:
   organization-policy editing and enforcement, truthful health controls, and the
   source-level accessibility gate. Native Windows keyboard, scaling, forced-colors, and
   screen-reader acceptance remain explicitly unverified.
+- Phase 4F adds explicit capability-compatible failover pools, deterministic hard-filter-
+  first routing, durable per-attempt side-effect boundaries, one automatic retry only
+  before output, and audited fresh-session continuation after unsafe capacity exhaustion.
+  Authenticated remote turns carry a Hub-owned policy and pool snapshot that the node
+  validates again before selecting a route. Independent rollback switches preserve
+  observations while disabling scanning, Hub
+  synchronization, capacity-aware routing, or automatic failover. Native Windows and
+  live-provider acceptance remain explicitly unverified.
 
 See the completion records and acceptance criteria in [`tasks/plan-rewrite.md`](tasks/plan-rewrite.md).
 

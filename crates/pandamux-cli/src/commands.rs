@@ -146,6 +146,7 @@ pub async fn cmd_thread_send(
         attachment_ids: vec![],
         model: model.map(String::from),
         effort: effort.map(String::from),
+        hub_routing_context: None,
     };
 
     let res: ThreadSendTurnResult = client.call_typed("thread.send_turn", &params).await?;

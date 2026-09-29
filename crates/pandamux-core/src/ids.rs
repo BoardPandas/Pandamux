@@ -48,6 +48,8 @@ prefixed_id!(SshProfileId, "ssh-");
 prefixed_id!(ProjectId, "proj-");
 prefixed_id!(ThreadId, "thread-");
 prefixed_id!(TurnId, "turn-");
+prefixed_id!(TurnAttemptId, "attempt-");
+prefixed_id!(ContinuationId, "continuation-");
 prefixed_id!(EnvironmentId, "env-");
 prefixed_id!(ProviderInstanceId, "prov-");
 prefixed_id!(ScheduleId, "sch-");

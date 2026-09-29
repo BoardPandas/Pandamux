@@ -7,7 +7,9 @@ use pandamux_core::{
     provider_config::{ProviderCapabilities, ProviderInstanceConfig, ProviderKind},
 };
 use pandamux_protocol::RpcError;
-use pandamux_providers::{ProviderAuthStatus, ProviderDriver, ProviderHealth, ProviderSnapshot};
+use pandamux_providers::{
+    ModelInfo, ProviderAuthStatus, ProviderDriver, ProviderHealth, ProviderSnapshot,
+};
 
 use crate::{DriverRegistry, Store};
 
@@ -24,6 +26,7 @@ pub struct ResolvedProviderInstance {
     pub config: ProviderInstanceConfig,
     pub driver: Arc<dyn ProviderDriver>,
     pub capabilities: ProviderCapabilities,
+    pub supported_models: Vec<ModelInfo>,
 }
 
 pub struct ResolvedProviderExecution {
@@ -243,6 +246,7 @@ impl ProviderResolver {
             config: resolved,
             driver,
             capabilities: metadata.capabilities,
+            supported_models: metadata.supported_models,
         })
     }
 

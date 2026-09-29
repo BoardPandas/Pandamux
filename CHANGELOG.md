@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Added
 
+- **Added Phase 4F explicit failover pools and side-effect-aware capacity recovery.**
+  Organization settings now create and edit named pools whose provider, subscription,
+  model, capability, access, and preference claims are validated against server-derived
+  driver metadata. New turns apply organization, capability, model, authentication,
+  health, capacity, concurrency, locality, and user-preference policy through a
+  deterministic hard-filter-first router with durable explanations. Every provider
+  attempt records its routing decision plus exact execution snapshot and advances a
+  monotonic side-effect boundary before output, tool activity, or approval interaction is
+  forwarded. Completed retry identity drives managed usage attribution. Capacity exhaustion
+  retries at most once only before output; later exhaustion persists exact evidence,
+  partial output, checkpoint, and tool ledger state and offers an audited continuation in
+  a fresh provider session. Continuations and approval or tool-result deliveries are
+  restart-safe and idempotent, native resume tokens are retired across provider changes,
+  and independent rollback switches gate scanning, Hub synchronization, capacity-aware
+  routing, and automatic failover without deleting observations.
+
 - **Added the Phase 4E Usage, named-identity, organization-policy, and accessibility
   surfaces.** A top-level Usage rail now presents token-first totals, separately labeled
   provider-reported and API-equivalent spend, source freshness and coverage, equivalent

@@ -95,6 +95,7 @@ impl ProviderDriver for MockProviderDriver {
                 supports_rate_limits: true,
                 supports_resume: true,
                 supports_images: true,
+                max_access_mode: pandamux_core::AccessMode::FullAccess,
             },
             supported_models: vec![
                 ModelInfo {
@@ -253,11 +254,17 @@ impl ProviderDriver for MockProviderDriver {
 
         Box::pin(async move {
             let (tx, rx) = mpsc::channel(64);
+            let capacity_failure_mode = cfg
+                .settings
+                .get("capacityFailure")
+                .and_then(|value| value.as_str())
+                .map(str::to_string);
             let session = MockProviderSession {
                 tx: Some(tx),
                 rx: Some(rx),
                 resume_token: resume_to_issue,
                 last_turn_text: Arc::new(Mutex::new(None)),
+                capacity_failure_mode,
             };
             Ok(Box::new(session) as Box<dyn ProviderSession>)
         })
@@ -270,6 +277,7 @@ pub struct MockProviderSession {
     rx: Option<mpsc::Receiver<ProviderEvent>>,
     resume_token: Option<String>,
     last_turn_text: Arc<Mutex<Option<String>>>,
+    capacity_failure_mode: Option<String>,
 }
 
 impl ProviderSession for MockProviderSession {
@@ -297,6 +305,53 @@ impl ProviderSession for MockProviderSession {
             .clone();
 
         Box::pin(async move {
+            if let Some(mode) = self.capacity_failure_mode.clone() {
+                match mode.as_str() {
+                    "after_text" => {
+                        let _ = crate::forward_provider_event(
+                            &tx,
+                            ProviderEvent::TextDelta {
+                                delta: "partial mock output".to_string(),
+                            },
+                        )
+                        .await;
+                    }
+                    "after_file" | "after_command" | "after_network" | "after_tool" => {
+                        let _ = crate::forward_provider_event(
+                            &tx,
+                            ProviderEvent::ToolCallStarted {
+                                id: format!("capacity-{mode}"),
+                                name: mode.trim_start_matches("after_").to_string(),
+                                input: serde_json::json!({ "fixture": mode }),
+                            },
+                        )
+                        .await;
+                    }
+                    "after_approval" => {
+                        let _ = crate::forward_provider_event(
+                            &tx,
+                            ProviderEvent::ApprovalRequested {
+                                request_id: "capacity-approval".to_string(),
+                                kind: ApprovalKind::CommandExecution,
+                                detail: serde_json::json!({ "command": "fixture" }),
+                                command: Some("fixture".to_string()),
+                            },
+                        )
+                        .await;
+                    }
+                    _ => {}
+                }
+                let _ = crate::forward_provider_event(
+                    &tx,
+                    ProviderEvent::Error {
+                        message: "mock rate limit exhausted".to_string(),
+                        recoverable: true,
+                    },
+                )
+                .await;
+                return Ok(());
+            }
+
             if prompt.starts_with("error:") {
                 let _ = tx
                     .send(ProviderEvent::Error {
@@ -318,53 +373,63 @@ impl ProviderSession for MockProviderSession {
                     .trim_start_matches("request_approval:")
                     .trim()
                     .to_string();
-                let _ = tx
-                    .send(ProviderEvent::ApprovalRequested {
+                let _ = crate::forward_provider_event(
+                    &tx,
+                    ProviderEvent::ApprovalRequested {
                         request_id: "req-mock-1".to_string(),
                         kind: ApprovalKind::CommandExecution,
                         detail: serde_json::json!({ "command": cmd }),
                         command: Some(cmd),
-                    })
-                    .await;
+                    },
+                )
+                .await;
                 return Ok(());
             }
 
             if prompt.starts_with("tool:") {
                 let tool_name = prompt.trim_start_matches("tool:").trim().to_string();
-                let _ = tx
-                    .send(ProviderEvent::ToolCallStarted {
+                let _ = crate::forward_provider_event(
+                    &tx,
+                    ProviderEvent::ToolCallStarted {
                         id: "call-1".to_string(),
                         name: tool_name.clone(),
                         input: serde_json::json!({ "arg": "val" }),
-                    })
-                    .await;
-                let _ = tx
-                    .send(ProviderEvent::ToolCallFinished {
+                    },
+                )
+                .await;
+                let _ = crate::forward_provider_event(
+                    &tx,
+                    ProviderEvent::ToolCallFinished {
                         id: "call-1".to_string(),
                         output: Some(format!("Executed {tool_name}")),
                         error: None,
-                    })
-                    .await;
+                    },
+                )
+                .await;
             }
 
             if prompt.starts_with("subagent:") {
                 let agent_type = prompt.trim_start_matches("subagent:").trim().to_string();
-                let _ = tx
-                    .send(ProviderEvent::SubAgentSpawned {
+                let _ = crate::forward_provider_event(
+                    &tx,
+                    ProviderEvent::SubAgentSpawned {
                         tool_use_id: "sub-1".to_string(),
                         parent_tool_use_id: None,
                         agent_type: agent_type.clone(),
                         description: format!("Subagent {agent_type}"),
                         model: Some("mock-fast".to_string()),
-                    })
-                    .await;
+                    },
+                )
+                .await;
             }
 
-            let _ = tx
-                .send(ProviderEvent::TextDelta {
+            let _ = crate::forward_provider_event(
+                &tx,
+                ProviderEvent::TextDelta {
                     delta: format!("Echo: {prompt}"),
-                })
-                .await;
+                },
+            )
+            .await;
 
             let _ = tx
                 .send(ProviderEvent::TurnCompleted {
@@ -405,11 +470,13 @@ impl ProviderSession for MockProviderSession {
         Box::pin(async move {
             match decision {
                 ApprovalDecision::Approved => {
-                    let _ = tx
-                        .send(ProviderEvent::TextDelta {
+                    let _ = crate::forward_provider_event(
+                        &tx,
+                        ProviderEvent::TextDelta {
                             delta: format!("Approval {request_id} accepted"),
-                        })
-                        .await;
+                        },
+                    )
+                    .await;
                     let _ = tx
                         .send(ProviderEvent::TurnCompleted {
                             outcome: TurnOutcome::Success,
@@ -425,11 +492,13 @@ impl ProviderSession for MockProviderSession {
                         .await;
                 }
                 ApprovalDecision::Denied | ApprovalDecision::TimedOut => {
-                    let _ = tx
-                        .send(ProviderEvent::TextDelta {
+                    let _ = crate::forward_provider_event(
+                        &tx,
+                        ProviderEvent::TextDelta {
                             delta: format!("Approval {request_id} rejected"),
-                        })
-                        .await;
+                        },
+                    )
+                    .await;
                     let _ = tx
                         .send(ProviderEvent::TurnCompleted {
                             outcome: TurnOutcome::Success,

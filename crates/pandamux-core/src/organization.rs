@@ -1,4 +1,6 @@
 use crate::ids::{FailoverPoolId, OrganizationId, ProjectId, ProviderInstanceId, SubscriptionKey};
+use crate::provider_config::ProviderCapabilities;
+use crate::routing::RoutingCapabilityRequirements;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -37,9 +39,15 @@ pub struct BroadsidePolicy {
 pub struct FailoverPoolMember {
     pub provider_instance_id: ProviderInstanceId,
     pub subscription_key: SubscriptionKey,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub declared_capabilities: ProviderCapabilities,
+    #[serde(default)]
+    pub user_preference: u16,
 }
 
-/// Explicit provider routing pool. Phase 4F adds capability-aware editing and scoring.
+/// Explicit provider routing pool with capability-aware editing and scoring.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FailoverPool {
@@ -47,6 +55,8 @@ pub struct FailoverPool {
     pub display_name: String,
     #[serde(default)]
     pub members: Vec<FailoverPoolMember>,
+    #[serde(default)]
+    pub requirements: RoutingCapabilityRequirements,
     #[serde(default = "default_revision")]
     pub revision: u64,
 }
@@ -58,6 +68,12 @@ pub enum FailoverPoolError {
     EmptyMembers,
     ZeroRevision,
     DuplicateProviderInstance(ProviderInstanceId),
+    EmptyModel(ProviderInstanceId),
+    PreferenceOutOfRange(ProviderInstanceId),
+    CapabilityMismatch {
+        provider_instance_id: ProviderInstanceId,
+        reason: String,
+    },
 }
 
 impl fmt::Display for FailoverPoolError {
@@ -70,6 +86,23 @@ impl fmt::Display for FailoverPoolError {
             Self::DuplicateProviderInstance(instance_id) => {
                 write!(f, "duplicate failover provider instance: {instance_id}")
             }
+            Self::EmptyModel(instance_id) => {
+                write!(
+                    f,
+                    "failover provider instance {instance_id} must declare a model"
+                )
+            }
+            Self::PreferenceOutOfRange(instance_id) => write!(
+                f,
+                "failover provider instance {instance_id} preference must be at most 1000"
+            ),
+            Self::CapabilityMismatch {
+                provider_instance_id,
+                reason,
+            } => write!(
+                f,
+                "failover provider instance {provider_instance_id} is incompatible: {reason}"
+            ),
         }
     }
 }
@@ -107,6 +140,25 @@ impl FailoverPool {
                 return Err(FailoverPoolError::DuplicateProviderInstance(
                     member.provider_instance_id.clone(),
                 ));
+            }
+            if member.model.trim().is_empty() {
+                return Err(FailoverPoolError::EmptyModel(
+                    member.provider_instance_id.clone(),
+                ));
+            }
+            if member.user_preference > 1_000 {
+                return Err(FailoverPoolError::PreferenceOutOfRange(
+                    member.provider_instance_id.clone(),
+                ));
+            }
+            if let Err(reason) = self
+                .requirements
+                .validate_capabilities(member.declared_capabilities)
+            {
+                return Err(FailoverPoolError::CapabilityMismatch {
+                    provider_instance_id: member.provider_instance_id.clone(),
+                    reason,
+                });
             }
         }
         Ok(())
@@ -573,16 +625,26 @@ mod tests {
                 FailoverPoolMember {
                     provider_instance_id: ProviderInstanceId::new("codex-personal"),
                     subscription_key: SubscriptionKey::new("subkey-personal"),
+                    model: "codex-model".to_string(),
+                    declared_capabilities: ProviderCapabilities::default(),
+                    user_preference: 0,
                 },
                 FailoverPoolMember {
                     provider_instance_id: ProviderInstanceId::new("codex-work"),
                     subscription_key: SubscriptionKey::new("subkey-personal"),
+                    model: "codex-model".to_string(),
+                    declared_capabilities: ProviderCapabilities::default(),
+                    user_preference: 0,
                 },
                 FailoverPoolMember {
                     provider_instance_id: ProviderInstanceId::new("codex-work"),
                     subscription_key: SubscriptionKey::new("subkey-work"),
+                    model: "codex-model".to_string(),
+                    declared_capabilities: ProviderCapabilities::default(),
+                    user_preference: 0,
                 },
             ],
+            requirements: RoutingCapabilityRequirements::default(),
             revision: 1,
         };
 
@@ -650,11 +712,15 @@ mod tests {
         let member = FailoverPoolMember {
             provider_instance_id: ProviderInstanceId::new("codex-work"),
             subscription_key: SubscriptionKey::new("subkey-work"),
+            model: "codex-model".to_string(),
+            declared_capabilities: ProviderCapabilities::default(),
+            user_preference: 0,
         };
         let mut pool = FailoverPool {
             id: FailoverPoolId::new("pool-work"),
             display_name: "Work pool".to_string(),
             members: vec![member.clone(), member],
+            requirements: RoutingCapabilityRequirements::default(),
             revision: 1,
         };
         assert!(matches!(
@@ -664,5 +730,26 @@ mod tests {
 
         pool.members.clear();
         assert_eq!(pool.validate(), Err(FailoverPoolError::EmptyMembers));
+    }
+
+    #[test]
+    fn legacy_pool_member_loads_but_fails_closed_until_compatible() {
+        let json = r#"{
+            "id":"pool-legacy",
+            "displayName":"Legacy pool",
+            "members":[{
+                "providerInstanceId":"codex-work",
+                "subscriptionKey":"subkey-work"
+            }],
+            "revision":1
+        }"#;
+        let pool: FailoverPool = serde_json::from_str(json).expect("load legacy pool");
+        assert!(pool.members[0].model.is_empty());
+        assert_eq!(
+            pool.validate(),
+            Err(FailoverPoolError::EmptyModel(ProviderInstanceId::new(
+                "codex-work"
+            )))
+        );
     }
 }

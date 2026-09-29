@@ -3,7 +3,7 @@ use rusqlite::{Connection, Result, Transaction, params};
 use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const SCHEMA_VERSION: i64 = 9;
+pub const SCHEMA_VERSION: i64 = 11;
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -1235,6 +1235,98 @@ fn apply_migrations_to(conn: &mut Connection, target_version: i64) -> Result<()>
         tx.commit()?;
     }
 
+    if current < 10 && target_version >= 10 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(
+            "CREATE TABLE turn_attempts (
+                id TEXT PRIMARY KEY CHECK(id <> ''),
+                turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
+                thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+                ordinal INTEGER NOT NULL CHECK(ordinal > 0),
+                environment_id TEXT NOT NULL CHECK(environment_id <> ''),
+                provider_instance_id TEXT NOT NULL CHECK(provider_instance_id <> ''),
+                subscription_key TEXT CHECK(subscription_key IS NULL OR subscription_key <> ''),
+                model TEXT NOT NULL CHECK(model <> ''),
+                boundary TEXT NOT NULL,
+                status TEXT NOT NULL,
+                routing_json TEXT NOT NULL,
+                checkpoint TEXT,
+                partial_output TEXT NOT NULL DEFAULT '',
+                capacity_evidence_json TEXT,
+                started_at_ms INTEGER NOT NULL CHECK(started_at_ms >= 0),
+                ended_at_ms INTEGER CHECK(ended_at_ms >= started_at_ms),
+                UNIQUE(turn_id, ordinal)
+            );
+            CREATE INDEX idx_turn_attempts_turn
+                ON turn_attempts(turn_id, ordinal);
+
+            CREATE TABLE turn_tool_ledger (
+                attempt_id TEXT NOT NULL REFERENCES turn_attempts(id) ON DELETE CASCADE,
+                turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
+                provider_item_id TEXT NOT NULL CHECK(provider_item_id <> ''),
+                name TEXT NOT NULL CHECK(name <> ''),
+                input_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                output TEXT,
+                error TEXT,
+                updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0),
+                PRIMARY KEY(attempt_id, provider_item_id)
+            );
+            CREATE INDEX idx_turn_tool_ledger_turn
+                ON turn_tool_ledger(turn_id, attempt_id, provider_item_id);
+
+            CREATE TABLE continuations (
+                id TEXT PRIMARY KEY CHECK(id <> ''),
+                idempotency_key TEXT NOT NULL UNIQUE CHECK(idempotency_key <> ''),
+                thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+                turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
+                source_attempt_id TEXT NOT NULL REFERENCES turn_attempts(id),
+                target_provider_instance_id TEXT,
+                target_turn_id TEXT REFERENCES turns(id),
+                state TEXT NOT NULL,
+                handoff TEXT NOT NULL,
+                checkpoint TEXT CHECK(checkpoint IS NULL OR checkpoint <> ''),
+                created_at_ms INTEGER NOT NULL CHECK(created_at_ms >= 0),
+                updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= created_at_ms)
+            );
+            CREATE INDEX idx_continuations_turn
+                ON continuations(turn_id, created_at_ms, id);
+            CREATE UNIQUE INDEX idx_continuations_target_turn
+                ON continuations(target_turn_id) WHERE target_turn_id IS NOT NULL;
+
+            CREATE TABLE continuation_deliveries (
+                delivery_key TEXT PRIMARY KEY CHECK(delivery_key <> ''),
+                continuation_id TEXT REFERENCES continuations(id) ON DELETE CASCADE,
+                thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+                turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
+                kind TEXT NOT NULL,
+                item_id TEXT NOT NULL CHECK(item_id <> ''),
+                payload_sha256 TEXT NOT NULL CHECK(length(payload_sha256) = 64),
+                payload_json TEXT NOT NULL,
+                state TEXT NOT NULL,
+                created_at_ms INTEGER NOT NULL CHECK(created_at_ms >= 0),
+                delivered_at_ms INTEGER CHECK(delivered_at_ms >= created_at_ms)
+            );
+            CREATE INDEX idx_continuation_deliveries_turn
+                ON continuation_deliveries(turn_id, kind, item_id);",
+        )?;
+        tx.execute(
+            "INSERT INTO _migrations (version, applied_at_ms) VALUES (10, ?1)",
+            [now_ms() as i64],
+        )?;
+        tx.commit()?;
+    }
+
+    if current < 11 && target_version >= 11 {
+        let tx = conn.transaction()?;
+        tx.execute_batch("ALTER TABLE turn_attempts ADD COLUMN execution_json TEXT;")?;
+        tx.execute(
+            "INSERT INTO _migrations (version, applied_at_ms) VALUES (11, ?1)",
+            [now_ms() as i64],
+        )?;
+        tx.commit()?;
+    }
+
     Ok(())
 }
 
@@ -1261,6 +1353,15 @@ mod tests {
             |row| row.get::<_, bool>(0),
         )
         .expect("table lookup")
+    }
+
+    fn column_exists(conn: &Connection, table: &str, column: &str) -> bool {
+        let mut stmt = conn
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .expect("prepare column lookup");
+        stmt.query_map([], |row| row.get::<_, String>(1))
+            .expect("query columns")
+            .any(|name| name.is_ok_and(|name| name == column))
     }
 
     fn insert_legacy_bucket(conn: &Connection, day: &str, provider: &str, input_tokens: i64) {
@@ -1390,6 +1491,40 @@ mod tests {
         assert!(table_exists(&conn, "provider_health_snapshots"));
 
         apply_migrations(&mut conn).expect("repeat migration nine");
+        assert_eq!(migration_version(&conn), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn migration_ten_adds_durable_failover_state() {
+        let mut conn = Connection::open_in_memory().expect("open database");
+        apply_migrations_to(&mut conn, 9).expect("apply schema nine");
+
+        apply_migrations_to(&mut conn, 10).expect("apply migration ten");
+
+        for table in [
+            "turn_attempts",
+            "turn_tool_ledger",
+            "continuations",
+            "continuation_deliveries",
+        ] {
+            assert!(table_exists(&conn, table), "missing {table}");
+        }
+        assert_eq!(migration_version(&conn), 10);
+        apply_migrations_to(&mut conn, 10).expect("repeat migration ten");
+        assert_eq!(migration_version(&conn), 10);
+    }
+
+    #[test]
+    fn migration_eleven_adds_per_attempt_execution_evidence() {
+        let mut conn = Connection::open_in_memory().expect("open database");
+        apply_migrations_to(&mut conn, 10).expect("apply schema ten");
+        assert!(!column_exists(&conn, "turn_attempts", "execution_json"));
+
+        apply_migrations(&mut conn).expect("apply migration eleven");
+
+        assert!(column_exists(&conn, "turn_attempts", "execution_json"));
+        assert_eq!(migration_version(&conn), SCHEMA_VERSION);
+        apply_migrations(&mut conn).expect("repeat migration eleven");
         assert_eq!(migration_version(&conn), SCHEMA_VERSION);
     }
 

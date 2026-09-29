@@ -12,6 +12,7 @@ pub mod project;
 pub mod project_registry;
 pub mod provider_config;
 pub mod remote_manifest;
+pub mod routing;
 pub mod run;
 pub mod schedule;
 pub mod secrets;
@@ -43,9 +44,10 @@ pub use event::{
 pub use home::{HomeLayout, HomePane};
 pub use i18n::{Locale, Localizer};
 pub use ids::{
-    AgentId, EnvironmentId, FailoverPoolId, NodeStoreId, OrganizationId, PaneId, PricingVersionId,
-    ProjectId, ProviderInstanceId, RunId, ScheduleId, SshProfileId, SubscriptionKey, SurfaceId,
-    ThreadId, TurnId, UsageObservationId, WindowId, WorkspaceId,
+    AgentId, ContinuationId, EnvironmentId, FailoverPoolId, NodeStoreId, OrganizationId, PaneId,
+    PricingVersionId, ProjectId, ProviderInstanceId, RunId, ScheduleId, SshProfileId,
+    SubscriptionKey, SurfaceId, ThreadId, TurnAttemptId, TurnId, UsageObservationId, WindowId,
+    WorkspaceId,
 };
 pub use notification::{NewNotification, NotificationInfo, NotificationSource, Notifications};
 pub use organization::{
@@ -71,6 +73,13 @@ pub use provider_config::{
 pub use remote_manifest::{
     RemoteArch, RemoteBinaryKind, RemoteBinaryManifest, RemoteBinaryMeta, RemotePlatform,
     RemoteTargetBinaries, embedded_remote_manifest,
+};
+pub use routing::{
+    AttemptBoundary, AttemptExecutionEvidence, CapacityInterruptionEvidence, ContinuationDelivery,
+    ContinuationDeliveryKind, ContinuationDeliveryState, ContinuationRecord, ContinuationState,
+    RoutingAuthentication, RoutingCandidate, RoutingCapabilityRequirements, RoutingDecision,
+    RoutingEvaluation, RoutingHealth, RoutingScore, ToolLedgerEntry, ToolLedgerStatus, TurnAttempt,
+    TurnAttemptStatus, select_route,
 };
 pub use run::{Run, RunEvent, RunKind, RunStatus, RunTask, RunTaskStatus};
 pub use schedule::{

@@ -643,6 +643,7 @@ impl ProviderDriver for ClaudeDriver {
                 supports_rate_limits: false,
                 supports_resume: true,
                 supports_images: true,
+                max_access_mode: AccessMode::FullAccess,
             },
             supported_models: vec![
                 ModelInfo {
@@ -820,7 +821,7 @@ impl ProviderDriver for ClaudeDriver {
                         pending.insert(request.request_id, request.input);
                     }
                     if let Some(event) = parse_stream_json_line(&line)
-                        && tx.send(event).await.is_err()
+                        && crate::forward_provider_event(&tx, event).await.is_err()
                     {
                         break;
                     }

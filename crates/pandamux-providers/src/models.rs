@@ -1,5 +1,5 @@
 use pandamux_core::{
-    CapacityConfidence,
+    AttemptBoundary, CapacityConfidence,
     event::{ApprovalKind, TurnOutcome},
     provider_config::{ProviderCapabilities, ProviderKind},
     thread::{AccessMode, TurnUsage},
@@ -184,6 +184,10 @@ pub struct UsageLimits {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProviderEvent {
+    AttemptBoundaryAdvanced {
+        boundary: AttemptBoundary,
+        reason: String,
+    },
     TextDelta {
         delta: String,
     },
@@ -224,8 +228,163 @@ pub enum ProviderEvent {
     RateLimitObserved {
         details: serde_json::Value,
     },
+    CapacityExhausted {
+        details: serde_json::Value,
+    },
     Notice {
         level: String,
         message: String,
     },
+}
+
+impl ProviderEvent {
+    pub fn required_attempt_boundary(&self) -> Option<(AttemptBoundary, &'static str)> {
+        match self {
+            Self::TextDelta { .. } | Self::ReasoningDelta { .. } => Some((
+                AttemptBoundary::VisibleOutputBegun,
+                "provider visible output",
+            )),
+            Self::ToolCallStarted { .. } | Self::ToolCallFinished { .. } => Some((
+                AttemptBoundary::ToolSideEffectBegun,
+                "provider tool activity",
+            )),
+            Self::ApprovalRequested { .. } => Some((
+                AttemptBoundary::ExternallyCommitted,
+                "provider approval interaction",
+            )),
+            Self::SubAgentSpawned { .. } => Some((
+                AttemptBoundary::ToolSideEffectBegun,
+                "provider subagent activity",
+            )),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProviderEventForwardError;
+
+/// Forward one provider event while emitting the side-effect boundary first.
+pub async fn forward_provider_event(
+    events: &tokio::sync::mpsc::Sender<ProviderEvent>,
+    event: ProviderEvent,
+) -> Result<(), ProviderEventForwardError> {
+    if let Some((boundary, reason)) = event.required_attempt_boundary() {
+        events
+            .send(ProviderEvent::AttemptBoundaryAdvanced {
+                boundary,
+                reason: reason.to_string(),
+            })
+            .await
+            .map_err(|_| ProviderEventForwardError)?;
+    }
+    if let Some(details) = capacity_exhaustion_details(&event) {
+        events
+            .send(ProviderEvent::CapacityExhausted { details })
+            .await
+            .map_err(|_| ProviderEventForwardError)?;
+    }
+    events
+        .send(event)
+        .await
+        .map_err(|_| ProviderEventForwardError)
+}
+
+fn capacity_exhaustion_details(event: &ProviderEvent) -> Option<serde_json::Value> {
+    match event {
+        ProviderEvent::Error {
+            message,
+            recoverable: true,
+        } if message_is_capacity_exhaustion(message) => Some(serde_json::json!({
+            "source": "provider_error",
+            "message": message,
+        })),
+        ProviderEvent::RateLimitObserved { details }
+            if details_indicate_capacity_exhaustion(details) =>
+        {
+            Some(serde_json::json!({
+                "source": "provider_rate_limit",
+                "report": details,
+            }))
+        }
+        _ => None,
+    }
+}
+
+fn message_is_capacity_exhaustion(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    [
+        "rate limit",
+        "rate_limit",
+        "quota exhausted",
+        "quota exceeded",
+        "usage limit",
+        "too many requests",
+        "http 429",
+        "status 429",
+        "capacity exhausted",
+    ]
+    .iter()
+    .any(|needle| message.contains(needle))
+}
+
+fn details_indicate_capacity_exhaustion(details: &serde_json::Value) -> bool {
+    let text = details.to_string().to_ascii_lowercase();
+    (text.contains("\"hardlimit\":true") || text.contains("\"hard_limit\":true"))
+        && (text.contains("\"remainingmillionths\":0")
+            || text.contains("\"remaining_millionths\":0"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn visible_output_is_preceded_by_boundary_transition() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        forward_provider_event(
+            &tx,
+            ProviderEvent::TextDelta {
+                delta: "visible".to_string(),
+            },
+        )
+        .await
+        .expect("forward event");
+        assert!(matches!(
+            rx.recv().await,
+            Some(ProviderEvent::AttemptBoundaryAdvanced {
+                boundary: AttemptBoundary::VisibleOutputBegun,
+                ..
+            })
+        ));
+        assert!(matches!(
+            rx.recv().await,
+            Some(ProviderEvent::TextDelta { delta }) if delta == "visible"
+        ));
+    }
+
+    #[tokio::test]
+    async fn recoverable_rate_limit_is_promoted_before_original_error() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        forward_provider_event(
+            &tx,
+            ProviderEvent::Error {
+                message: "HTTP 429 rate limit".to_string(),
+                recoverable: true,
+            },
+        )
+        .await
+        .expect("forward event");
+        assert!(matches!(
+            rx.recv().await,
+            Some(ProviderEvent::CapacityExhausted { .. })
+        ));
+        assert!(matches!(
+            rx.recv().await,
+            Some(ProviderEvent::Error {
+                recoverable: true,
+                ..
+            })
+        ));
+    }
 }

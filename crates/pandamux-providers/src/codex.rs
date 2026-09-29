@@ -902,15 +902,17 @@ async fn run_codex_reader(
                         wire_id: message.get("id").cloned().unwrap_or(Value::Null),
                     },
                 );
-                if events
-                    .send(ProviderEvent::ApprovalRequested {
+                if crate::forward_provider_event(
+                    &events,
+                    ProviderEvent::ApprovalRequested {
                         request_id,
                         kind,
                         detail: params,
                         command,
-                    })
-                    .await
-                    .is_err()
+                    },
+                )
+                .await
+                .is_err()
                 {
                     break;
                 }
@@ -1042,7 +1044,7 @@ async fn run_codex_reader(
         };
 
         if let Some(event) = provider_event
-            && events.send(event).await.is_err()
+            && crate::forward_provider_event(&events, event).await.is_err()
         {
             break;
         }
@@ -1076,6 +1078,7 @@ impl ProviderDriver for CodexDriver {
                 supports_rate_limits: true,
                 supports_resume: true,
                 supports_images: true,
+                max_access_mode: AccessMode::FullAccess,
             },
             supported_models: vec![ModelInfo {
                 id: "default".to_string(),
