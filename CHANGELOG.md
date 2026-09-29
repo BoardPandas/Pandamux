@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Changed
 
+- **Updated Claude access policy mapping for the current CLI contract.** Read-only
+  sessions now use `plan`, approval-required sessions use `manual`, automatic edit
+  sessions use `acceptEdits`, and full-access sessions explicitly use
+  `bypassPermissions`. Contract coverage fixes all four mappings.
+- **Made unexpected provider process exits durably terminal.** A provider event stream
+  that closes without a completion now records its final checkpoint, failed turn state,
+  process error, `TurnCompleted`, and `TurnSettled` as a contiguous serialized sequence.
+  Explicit cancellation remains authoritative.
 - **Recorded the current Phase 3 recovery acceptance boundary.** The acceptance matrix
   now identifies the exact `0.54.7` Galahad artifact and Codex live evidence, preserves
   the managed-install and transfer proofs, and leaves Claude, Antigravity sign-in,

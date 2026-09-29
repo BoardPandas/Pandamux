@@ -26,7 +26,7 @@ pub use antigravity::{
     validate_callback_query, validate_google_oauth_url, validate_sanitized_environment,
     verify_bundle_archive_file,
 };
-pub use claude::{ClaudeDriver, ClaudeSession, build_claude_launch_args};
+pub use claude::{ClaudeDriver, ClaudeSession, build_claude_launch_args, claude_permission_mode};
 pub use codex::{CodexDriver, CodexSession};
 pub use cursor::{
     CursorDriver, build_cursor_preamble, evaluate_cursor_permission, resolve_cursor_binary,

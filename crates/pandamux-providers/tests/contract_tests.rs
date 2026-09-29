@@ -3,11 +3,13 @@ use pandamux_core::{
     event::TurnOutcome,
     ids::{ProviderInstanceId, ThreadId},
     provider_config::ProviderKind,
+    thread::AccessMode,
 };
 use pandamux_providers::{
     ENV_CLAUDE_CONFIG_DIR, ENV_CODEX_HOME, ENV_GEMINI_HOME, apply_profile_environment,
     build_claude_launch_args,
     claude::{ClaudeAuthStatus, ControlResponse, parse_stream_json_lines},
+    claude_permission_mode,
     codex::{
         CodexApprovalPolicy, CodexNotificationEvent, CodexSandboxPolicy, JsonRpcResponse,
         build_approval_response, build_thread_start_request, build_turn_start_request,
@@ -108,6 +110,18 @@ fn test_claude_control_denial_and_launch_args() {
     assert!(args.contains(&"--disallowedTools".into()));
     assert!(args.contains(&"--permission-mode".into()));
     assert!(args.contains(&"--session-id".into()));
+}
+
+#[test]
+fn test_claude_access_modes_map_to_supported_permission_modes() {
+    assert_eq!(claude_permission_mode(AccessMode::ReadOnly), "plan");
+    assert_eq!(claude_permission_mode(AccessMode::Ask), "manual");
+    assert_eq!(claude_permission_mode(AccessMode::WorkspaceOnly), "manual");
+    assert_eq!(claude_permission_mode(AccessMode::AutoEdit), "acceptEdits");
+    assert_eq!(
+        claude_permission_mode(AccessMode::FullAccess),
+        "bypassPermissions"
+    );
 }
 
 #[test]

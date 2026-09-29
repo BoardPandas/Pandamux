@@ -182,6 +182,16 @@ pub fn build_claude_launch_args(
     args
 }
 
+/// Maps PandaMUX access policy to a supported Claude Code permission mode.
+pub fn claude_permission_mode(access: AccessMode) -> &'static str {
+    match access {
+        AccessMode::ReadOnly => "plan",
+        AccessMode::Ask | AccessMode::WorkspaceOnly => "manual",
+        AccessMode::AutoEdit => "acceptEdits",
+        AccessMode::FullAccess => "bypassPermissions",
+    }
+}
+
 /// Parses NDJSON events from Claude Code stream-json output.
 pub fn parse_stream_json_lines(ndjson: &str) -> Result<ParsedClaudeStream, ProviderError> {
     let mut parsed = ParsedClaudeStream::default();
@@ -559,12 +569,7 @@ impl ProviderDriver for ClaudeDriver {
             let profile_dir = resolve_instance_profile_dir(&self.base_data_dir, cfg);
             ensure_profile_dir(&profile_dir)?;
 
-            let perm_mode = match spec.access {
-                AccessMode::ReadOnly => "ask",
-                AccessMode::Ask | AccessMode::WorkspaceOnly => "ask",
-                AccessMode::AutoEdit => "auto",
-                AccessMode::FullAccess => "auto",
-            };
+            let perm_mode = claude_permission_mode(spec.access);
 
             let preamble = spec.instructions.as_ref().map(|i| i.format_preamble());
             let (allowed_tools, disallowed_tools) = if let Some(tp) = &spec.tool_policy {

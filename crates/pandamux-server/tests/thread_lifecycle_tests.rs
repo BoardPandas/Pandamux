@@ -287,6 +287,100 @@ async fn test_thread_interrupt_flow() {
 }
 
 #[tokio::test]
+async fn provider_stream_close_emits_failed_terminal_sequence() {
+    let store = Store::in_memory().expect("open store");
+    configure_mock_instance(&store, "mock-default", 2);
+    let drivers = Arc::new(DriverRegistry::new());
+    drivers.register(
+        ProviderKind::Custom,
+        Arc::new(MockProviderDriver::new(
+            ProviderKind::Custom,
+            "Mock Provider",
+        )),
+    );
+    let router = Router::with_drivers(
+        store.clone(),
+        ServerRole::Hub,
+        "env-test".to_string(),
+        drivers,
+    );
+    let mut events = router.thread_manager().subscribe();
+
+    let created = router
+        .handle_request(RpcRequest::new(
+            1,
+            "thread.create",
+            Some(json!({
+                "title": "Stream Close Test",
+                "providerInstanceId": "mock-default",
+                "model": "mock-fast"
+            })),
+        ))
+        .await
+        .expect("create response");
+    let thread_id = created.result.expect("thread result")["id"]
+        .as_str()
+        .expect("thread id")
+        .to_string();
+
+    let sent = router
+        .handle_request(RpcRequest::new(
+            2,
+            "thread.send_turn",
+            Some(json!({
+                "threadId": thread_id,
+                "text": "close_stream"
+            })),
+        ))
+        .await
+        .expect("send response");
+    assert!(sent.is_success());
+
+    let mut settled = false;
+    for _ in 0..10 {
+        if let Ok(Ok(event)) = timeout(Duration::from_millis(500), events.recv()).await
+            && matches!(event.kind, ThreadEventKind::TurnSettled { .. })
+        {
+            settled = true;
+            break;
+        }
+    }
+    assert!(settled, "stream closure must settle the failed turn");
+
+    let persisted = store
+        .get_events(&ThreadId::from(thread_id.as_str()), None)
+        .expect("load failed lifecycle events");
+    assert!(
+        persisted
+            .windows(2)
+            .all(|events| events[1].seq == events[0].seq + 1),
+        "failed terminal events must remain contiguous"
+    );
+    assert!(persisted.iter().any(|event| matches!(
+        event.kind,
+        ThreadEventKind::TurnCompleted {
+            outcome: TurnOutcome::Failed
+        }
+    )));
+    assert!(matches!(
+        persisted.last().map(|event| &event.kind),
+        Some(ThreadEventKind::TurnSettled { .. })
+    ));
+
+    let final_get = router
+        .handle_request(RpcRequest::new(
+            3,
+            "thread.get",
+            Some(json!({ "threadId": thread_id })),
+        ))
+        .await
+        .expect("get response");
+    let result = final_get.result.expect("get result");
+    assert_eq!(result["thread"]["status"], "errored");
+    assert_eq!(result["turns"][0]["status"], "failed");
+}
+
+#[tokio::test]
 async fn test_thread_resumption_across_restart() {
     let store = Store::in_memory().expect("open store");
     configure_mock_instance(&store, "mock-default", 2);

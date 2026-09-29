@@ -134,7 +134,7 @@ impl ProviderDriver for MockProviderDriver {
         Box::pin(async move {
             let (tx, rx) = mpsc::channel(64);
             let session = MockProviderSession {
-                tx,
+                tx: Some(tx),
                 rx: Some(rx),
                 resume_token: resume_to_issue,
                 last_turn_text: Arc::new(Mutex::new(None)),
@@ -146,7 +146,7 @@ impl ProviderDriver for MockProviderDriver {
 
 /// Active mock provider session emitting simulated events on turn input.
 pub struct MockProviderSession {
-    tx: mpsc::Sender<ProviderEvent>,
+    tx: Option<mpsc::Sender<ProviderEvent>>,
     rx: Option<mpsc::Receiver<ProviderEvent>>,
     resume_token: Option<String>,
     last_turn_text: Arc<Mutex<Option<String>>>,
@@ -155,8 +155,26 @@ pub struct MockProviderSession {
 impl ProviderSession for MockProviderSession {
     fn send_turn<'a>(&'a mut self, input: TurnInput) -> BoxFuture<'a, Result<(), ProviderError>> {
         *self.last_turn_text.lock().unwrap() = Some(input.text.clone());
-        let tx = self.tx.clone();
         let prompt = input.text;
+
+        if prompt == "close_stream" {
+            let tx = self.tx.take().expect("mock event sender is available");
+            return Box::pin(async move {
+                let _ = tx
+                    .send(ProviderEvent::Error {
+                        message: "mock provider process exited".to_string(),
+                        recoverable: false,
+                    })
+                    .await;
+                Ok(())
+            });
+        }
+
+        let tx = self
+            .tx
+            .as_ref()
+            .expect("mock event sender is available")
+            .clone();
 
         Box::pin(async move {
             if prompt.starts_with("error:") {
@@ -258,7 +276,11 @@ impl ProviderSession for MockProviderSession {
         request_id: String,
         decision: ApprovalDecision,
     ) -> BoxFuture<'a, Result<(), ProviderError>> {
-        let tx = self.tx.clone();
+        let tx = self
+            .tx
+            .as_ref()
+            .expect("mock event sender is available")
+            .clone();
         Box::pin(async move {
             match decision {
                 ApprovalDecision::Approved => {
@@ -299,7 +321,11 @@ impl ProviderSession for MockProviderSession {
     }
 
     fn interrupt<'a>(&'a mut self) -> BoxFuture<'a, Result<(), ProviderError>> {
-        let tx = self.tx.clone();
+        let tx = self
+            .tx
+            .as_ref()
+            .expect("mock event sender is available")
+            .clone();
         Box::pin(async move {
             let _ = tx
                 .send(ProviderEvent::TurnCompleted {

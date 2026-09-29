@@ -991,7 +991,45 @@ impl ThreadManager {
                     if !still_active {
                         return;
                     }
+
+                    let worktree_dir = store
+                        .get_thread(&thread_id)
+                        .ok()
+                        .flatten()
+                        .map(|thread| PathBuf::from(thread.workspace.effective_path()))
+                        .unwrap_or_default();
+                    let checkpoint_after = crate::checkpoint::create_checkpoint(
+                        &worktree_dir,
+                        &thread_id,
+                        &turn_id,
+                        crate::checkpoint::CheckpointPhase::After,
+                    )
+                    .unwrap_or(None);
+                    let mut changed_files = Vec::new();
                     if let Ok(Some(mut turn)) = store.get_turn(&turn_id) {
+                        turn.checkpoint_after = checkpoint_after.clone();
+                        if let (Some(before), Some(after)) =
+                            (&turn.checkpoint_before, &checkpoint_after)
+                            && let Ok(stats) = crate::checkpoint::compute_changed_files(
+                                &worktree_dir,
+                                before,
+                                after,
+                            )
+                        {
+                            changed_files = stats
+                                .iter()
+                                .map(|stat| {
+                                    if stat.additions > 0 || stat.deletions > 0 {
+                                        format!(
+                                            "{} (+{} -{})",
+                                            stat.path, stat.additions, stat.deletions
+                                        )
+                                    } else {
+                                        stat.path.clone()
+                                    }
+                                })
+                                .collect();
+                        }
                         turn.status = TurnStatus::Failed;
                         turn.ended_at_ms = Some(finished_at);
                         let _ = store.save_turn(&turn);
@@ -1001,15 +1039,17 @@ impl ThreadManager {
                         thread.updated_at_ms = finished_at;
                         let _ = store.save_thread(&thread);
                     }
+                    let _ = crate::checkpoint::prune_old_checkpoints(&worktree_dir, &thread_id, 50);
+
                     let _event_guard = event_writer.lock().await;
-                    if let Some(stream_seq) = store
+                    if let Some(error_seq) = store
                         .get_latest_seq(&thread_id)
                         .ok()
                         .and_then(|seq| seq.checked_add(1))
                     {
                         let event = ThreadEvent {
                             thread_id: thread_id.clone(),
-                            seq: stream_seq,
+                            seq: error_seq,
                             at_ms: finished_at,
                             kind: ThreadEventKind::Error {
                                 class: "provider_process".to_string(),
@@ -1021,13 +1061,55 @@ impl ThreadManager {
                         if store.append_event(&event).is_ok() {
                             let _ = broadcaster.send(EventEnvelope {
                                 subscription_id: String::new(),
-                                environment_id: env_id.into(),
+                                environment_id: env_id.clone().into(),
                                 thread_id: Some(thread_id.clone()),
                                 run_id: None,
-                                seq: stream_seq,
+                                seq: error_seq,
                                 at_ms: finished_at,
                                 kind: event.kind,
                             });
+
+                            if let Some(completed_seq) = error_seq.checked_add(1) {
+                                let completed = ThreadEvent {
+                                    thread_id: thread_id.clone(),
+                                    seq: completed_seq,
+                                    at_ms: finished_at,
+                                    kind: ThreadEventKind::TurnCompleted {
+                                        outcome: TurnOutcome::Failed,
+                                    },
+                                };
+                                if store.append_event(&completed).is_ok() {
+                                    let _ = broadcaster.send(EventEnvelope {
+                                        subscription_id: String::new(),
+                                        environment_id: env_id.clone().into(),
+                                        thread_id: Some(thread_id.clone()),
+                                        run_id: None,
+                                        seq: completed_seq,
+                                        at_ms: finished_at,
+                                        kind: completed.kind,
+                                    });
+
+                                    if let Some(settled_seq) = completed_seq.checked_add(1) {
+                                        let settled = ThreadEvent {
+                                            thread_id: thread_id.clone(),
+                                            seq: settled_seq,
+                                            at_ms: finished_at,
+                                            kind: ThreadEventKind::TurnSettled { changed_files },
+                                        };
+                                        if store.append_event(&settled).is_ok() {
+                                            let _ = broadcaster.send(EventEnvelope {
+                                                subscription_id: String::new(),
+                                                environment_id: env_id.into(),
+                                                thread_id: Some(thread_id.clone()),
+                                                run_id: None,
+                                                seq: settled_seq,
+                                                at_ms: finished_at,
+                                                kind: settled.kind,
+                                            });
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                     if let Some(active) =
