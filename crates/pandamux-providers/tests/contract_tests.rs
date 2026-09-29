@@ -11,8 +11,8 @@ use pandamux_providers::{
     codex::{
         CodexApprovalPolicy, CodexNotificationEvent, CodexSandboxPolicy, JsonRpcResponse,
         build_approval_response, build_thread_start_request, build_turn_start_request,
-        build_turn_start_request_with_attachments, parse_codex_notification,
-        parse_rate_limits_response,
+        build_turn_start_request_with_attachments, codex_session_policies,
+        parse_codex_notification, parse_rate_limits_response,
     },
     resolve_command_shim, resolve_profile_dir,
 };
@@ -173,6 +173,44 @@ fn test_codex_schema_and_knobs_contract() {
             "type": "localImage",
             "path": "/workspace/diagram.png"
         })
+    );
+}
+
+#[test]
+fn test_codex_access_modes_preserve_the_pandamux_ceiling() {
+    use pandamux_core::thread::AccessMode;
+
+    assert_eq!(
+        codex_session_policies(AccessMode::ReadOnly),
+        (CodexSandboxPolicy::ReadOnly, CodexApprovalPolicy::Never)
+    );
+    assert_eq!(
+        codex_session_policies(AccessMode::Ask),
+        (
+            CodexSandboxPolicy::WorkspaceWrite,
+            CodexApprovalPolicy::Untrusted
+        )
+    );
+    assert_eq!(
+        codex_session_policies(AccessMode::WorkspaceOnly),
+        (
+            CodexSandboxPolicy::WorkspaceWrite,
+            CodexApprovalPolicy::OnRequest
+        )
+    );
+    assert_eq!(
+        codex_session_policies(AccessMode::AutoEdit),
+        (
+            CodexSandboxPolicy::WorkspaceWrite,
+            CodexApprovalPolicy::Never
+        )
+    );
+    assert_eq!(
+        codex_session_policies(AccessMode::FullAccess),
+        (
+            CodexSandboxPolicy::DangerFullAccess,
+            CodexApprovalPolicy::Never
+        )
     );
 }
 

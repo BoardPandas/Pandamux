@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Changed
 
+- **Made Codex Ask mode fail closed at the provider boundary.** Ask sessions now use
+  Codex's `untrusted` approval policy instead of `on-request`, so Codex cannot classify a
+  mutating command as safe and execute it without surfacing PandaMUX's approval flow. A
+  contract test fixes the sandbox and approval pair for every PandaMUX access mode.
 - **Recovered and hardened the Phase 3 production foundation.** The Hub now composes the
   SSH-backed node transport, the node proxy uses a versioned bounded protocol with replay
   and explicit stale state, and remote calls no longer fall back to local execution.

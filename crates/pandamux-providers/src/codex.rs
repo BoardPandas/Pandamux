@@ -46,6 +46,33 @@ pub enum CodexApprovalPolicy {
     Untrusted,
 }
 
+/// Maps PandaMUX's access ceiling to the closest Codex sandbox and approval pair.
+///
+/// `Ask` must use Codex's fail-closed policy. `on-request` lets Codex decide that a
+/// command is safe enough to run without consulting the user, which violates the
+/// PandaMUX contract for an explicitly approval-gated thread.
+pub fn codex_session_policies(access: AccessMode) -> (CodexSandboxPolicy, CodexApprovalPolicy) {
+    match access {
+        AccessMode::ReadOnly => (CodexSandboxPolicy::ReadOnly, CodexApprovalPolicy::Never),
+        AccessMode::Ask => (
+            CodexSandboxPolicy::WorkspaceWrite,
+            CodexApprovalPolicy::Untrusted,
+        ),
+        AccessMode::WorkspaceOnly => (
+            CodexSandboxPolicy::WorkspaceWrite,
+            CodexApprovalPolicy::OnRequest,
+        ),
+        AccessMode::AutoEdit => (
+            CodexSandboxPolicy::WorkspaceWrite,
+            CodexApprovalPolicy::Never,
+        ),
+        AccessMode::FullAccess => (
+            CodexSandboxPolicy::DangerFullAccess,
+            CodexApprovalPolicy::Never,
+        ),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcRequest {
     pub id: u64,
@@ -1047,19 +1074,7 @@ impl ProviderDriver for CodexDriver {
                     .await?;
             initialize_codex_app_server(&mut stdin, &mut lines).await?;
 
-            let sandbox = match spec.access {
-                AccessMode::ReadOnly => CodexSandboxPolicy::ReadOnly,
-                AccessMode::Ask | AccessMode::WorkspaceOnly | AccessMode::AutoEdit => {
-                    CodexSandboxPolicy::WorkspaceWrite
-                }
-                AccessMode::FullAccess => CodexSandboxPolicy::DangerFullAccess,
-            };
-
-            let approval_policy = match spec.access {
-                AccessMode::ReadOnly => CodexApprovalPolicy::Never,
-                AccessMode::Ask | AccessMode::WorkspaceOnly => CodexApprovalPolicy::OnRequest,
-                AccessMode::AutoEdit | AccessMode::FullAccess => CodexApprovalPolicy::Never,
-            };
+            let (sandbox, approval_policy) = codex_session_policies(spec.access);
 
             let preamble = spec.instructions.as_ref().map(|i| i.format_preamble());
             let start_req = if let Some(resume) = spec.resume.as_deref() {
