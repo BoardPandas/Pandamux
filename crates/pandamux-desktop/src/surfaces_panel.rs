@@ -275,6 +275,8 @@ pub fn render_surfaces_panel<V: 'static>(
                         Button::new("btn-close-surfaces")
                             .ghost()
                             .label("✕")
+                            .accessibility_label("Close surfaces panel")
+                            .tooltip("Close surfaces panel")
                             .on_click(cx.listener(move |this, _ev, win, cx| {
                                 on_toggle_open(this, win, cx);
                             })),

@@ -24,6 +24,11 @@ R0 development gate:
   authenticated Hub-to-node capacity exchange, bounded concurrent provider health with
   durable freshness, and explicit preview-before-launch login actions. Codex quota
   evidence can be Reported; unverified provider capacity remains Unknown.
+- Phase 4E adds the top-level Usage and capacity surface, pure client reducers for every
+  data and failure state, named subscription and provider presentation, canonical
+  organization-policy editing and enforcement, truthful health controls, and the
+  source-level accessibility gate. Native Windows keyboard, scaling, forced-colors, and
+  screen-reader acceptance remain explicitly unverified.
 
 See the completion records and acceptance criteria in [`tasks/plan-rewrite.md`](tasks/plan-rewrite.md).
 

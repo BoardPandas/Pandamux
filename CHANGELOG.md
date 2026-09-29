@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Added
 
+- **Added the Phase 4E Usage, named-identity, organization-policy, and accessibility
+  surfaces.** A top-level Usage rail now presents token-first totals, separately labeled
+  provider-reported and API-equivalent spend, source freshness and coverage, equivalent
+  data tables, conservative capacity evidence, and every required loading or failure
+  state through a pure client reducer. Users can name provider instances and subscription
+  boundaries without exposing opaque keys. Organization settings edit named routing
+  boundaries, budgets, concurrency, tier defaults, and Broadside permissions, while
+  project routes, local and remote turns, schedules, failover candidates, and read-only
+  MCP proposals enforce the canonical policy before provider selection. Provider health
+  now has truthful evidence details, targeted retry, and a separate explicit login flow.
+
 - **Added Phase 4D capacity, provider-health, and explicit login controls.** Nodes
   now persist schema-versioned quota revisions with source, confidence, freshness,
   reset, and hard-limit evidence, while authenticated Hub synchronization carries the

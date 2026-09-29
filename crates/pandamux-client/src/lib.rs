@@ -2,6 +2,7 @@ pub mod client;
 pub mod projections;
 pub mod token_queue;
 pub mod transport;
+pub mod usage;
 
 pub use client::PandamuxClient;
 pub use projections::{
@@ -10,6 +11,12 @@ pub use projections::{
 };
 pub use token_queue::TokenSmoothingQueue;
 pub use transport::{MockTransport, MockTransportPeer, TransportError};
+pub use usage::{
+    CapacityCard, UsageAction, UsageFilterChange, UsageFilterOptions, UsageFilters,
+    UsageLoadFailure, UsageViewState, UsageViewStatus, capacity_cards, classify_usage_result,
+    confidence_label, format_age, format_micro_usd, format_millionths, format_relative_time,
+    format_tokens, freshness_label, title_case_provider,
+};
 
 #[cfg(test)]
 mod tests {

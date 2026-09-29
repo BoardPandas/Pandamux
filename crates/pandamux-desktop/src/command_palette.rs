@@ -135,11 +135,19 @@ pub fn default_commands(
         action: CommandAction::SelectRail(RailTab::Agents),
     });
     items.push(CommandItem {
+        id: "nav-usage".to_string(),
+        icon: "◫",
+        title: "View Usage & Capacity".to_string(),
+        category: "Navigation",
+        shortcut: Some("Ctrl+3"),
+        action: CommandAction::SelectRail(RailTab::Usage),
+    });
+    items.push(CommandItem {
         id: "nav-terminals".to_string(),
         icon: "📟",
         title: "View Terminal Multiplexer".to_string(),
         category: "Navigation",
-        shortcut: Some("Ctrl+3"),
+        shortcut: Some("Ctrl+4"),
         action: CommandAction::SelectRail(RailTab::Terminal),
     });
     items.push(CommandItem {

@@ -2,18 +2,23 @@ use std::collections::HashMap;
 
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::InputState;
 use gpui_kit::gpui::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use pandamux_client::projections::ThreadProjection;
+use pandamux_client::{UsageAction, UsageFilterChange, UsageLoadFailure, UsageViewState};
 use pandamux_core::{
     AgentId, ApprovalDecision, EnvironmentId, Thread, ThreadEvent, ThreadId, ThreadStatus,
 };
 use pandamux_protocol::{
     AttachmentImportPathParams, AttachmentImportResult, AttachmentPutChunkParams,
-    AttachmentPutResult, EventEnvelope, GitCommitParams, GitCommitResult, GitCreatePrParams,
-    GitCreatePrResult, GitPushParams, GitPushResult, GitStatusParams, GitStatusResult,
-    ProviderHealthResult, SettingsGetResult, SettingsSetParams, ThreadCancelTurnParams,
-    ThreadCreateParams, ThreadRespondApprovalParams, ThreadSendTurnParams,
+    AttachmentPutResult, CapacityQueryResult, EventEnvelope, GitCommitParams, GitCommitResult,
+    GitCreatePrParams, GitCreatePrResult, GitPushParams, GitPushResult, GitStatusParams,
+    GitStatusResult, ProviderHealthParams, ProviderHealthResult, ProviderLoginLaunchParams,
+    ProviderLoginLaunchResult, ProviderLoginPreview, ProviderLoginPreviewParams, SettingsGetResult,
+    SettingsSetParams, SettingsSetResult, ThreadCancelTurnParams, ThreadCreateParams,
+    ThreadRespondApprovalParams, ThreadSendTurnParams, UsageCatalogResult, UsageQueryResult,
+    UsageSubscriptionSetParams,
 };
 
 use crate::command_palette::{
@@ -33,6 +38,46 @@ use crate::theme::{AccentColor, Radii, Spacing, Theme, Typography};
 use crate::timeline::{VirtualizedTimelineState, render_virtualized_timeline};
 use crate::titlebar::CustomTitlebar;
 use crate::tray::SystemTrayState;
+use crate::usage_view::{UsageEditorTarget, UsageFilterIntent, render_usage_view};
+
+fn wall_clock_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn decode_rpc_result<T: serde::de::DeserializeOwned>(
+    response: Result<
+        Result<pandamux_protocol::RpcResponse, String>,
+        tokio::sync::oneshot::error::RecvError,
+    >,
+) -> Result<T, String> {
+    let response = response.map_err(|error| error.to_string())??;
+    if let Some(error) = response.error {
+        return Err(error.message);
+    }
+    let value = response
+        .result
+        .ok_or_else(|| "Server returned no result".to_string())?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
+}
+
+fn cycle_value<T: Clone + PartialEq>(current: &Option<T>, mut values: Vec<T>) -> Option<T> {
+    let mut unique = Vec::new();
+    for value in values.drain(..) {
+        if !unique.contains(&value) {
+            unique.push(value);
+        }
+    }
+    match current {
+        None => unique.into_iter().next(),
+        Some(current) => unique
+            .iter()
+            .position(|candidate| candidate == current)
+            .and_then(|index| unique.get(index + 1).cloned()),
+    }
+}
 
 /// The primary application view for PandaMUX Desktop.
 pub struct AppView {
@@ -55,10 +100,17 @@ pub struct AppView {
     pub surfaces_panel: SurfacesPanelState,
     pub scratchpad: ScratchpadState,
     pub system_tray: SystemTrayState,
+    pub usage_view: UsageViewState,
+    pub usage_catalog: UsageCatalogResult,
+    usage_request_generation: u64,
+    usage_editor_target: Option<UsageEditorTarget>,
+    usage_editor_previous_focus: Option<WeakFocusHandle>,
+    usage_subscription_name_input: Entity<InputState>,
+    usage_account_label_input: Entity<InputState>,
 }
 
 impl AppView {
-    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (event_tx, event_rx) = smol::channel::unbounded::<EventEnvelope>();
         let (status_tx, status_rx) = smol::channel::unbounded::<ServerStatus>();
 
@@ -90,6 +142,11 @@ impl AppView {
         })
         .detach();
 
+        let usage_subscription_name_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Work subscription"));
+        let usage_account_label_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("na***@example.com"));
+
         let mut app = Self {
             theme: Theme::dark(AccentColor::Teal),
             server_status: ServerStatus::Connecting,
@@ -110,10 +167,18 @@ impl AppView {
             surfaces_panel: SurfacesPanelState::new(),
             scratchpad: ScratchpadState::new(),
             system_tray: SystemTrayState::new(),
+            usage_view: UsageViewState::default(),
+            usage_catalog: UsageCatalogResult::default(),
+            usage_request_generation: 0,
+            usage_editor_target: None,
+            usage_editor_previous_focus: None,
+            usage_subscription_name_input,
+            usage_account_label_input,
         };
 
         app.load_settings(cx);
-        app.run_health_checks(cx);
+        app.run_health_checks(None, cx);
+        app.load_usage(cx);
         app
     }
 
@@ -260,6 +325,9 @@ impl AppView {
         match action {
             CommandAction::SelectRail(tab) => {
                 self.select_rail_tab(tab);
+                if tab == RailTab::Usage {
+                    self.load_usage(cx);
+                }
             }
             CommandAction::ToggleTheme => {
                 self.toggle_theme(cx);
@@ -286,7 +354,7 @@ impl AppView {
                 self.refresh_git_status(cx);
             }
             CommandAction::CheckHealth => {
-                self.run_health_checks(cx);
+                self.run_health_checks(None, cx);
             }
             CommandAction::OpenSettings => {
                 self.select_rail_tab(RailTab::Settings);
@@ -844,6 +912,273 @@ impl AppView {
         }
     }
 
+    /// Loads the Usage projection and its display catalog through independent,
+    /// read-only RPCs. Requests are dispatched together so sequential awaits do
+    /// not serialize server work.
+    pub fn load_usage(&mut self, cx: &mut Context<Self>) {
+        self.usage_request_generation = self.usage_request_generation.wrapping_add(1);
+        let request_generation = self.usage_request_generation;
+        self.usage_view.reduce(UsageAction::LoadStarted);
+        let Some(bridge) = &self.bridge else {
+            self.usage_view.reduce(UsageAction::LoadFailed {
+                kind: UsageLoadFailure::Offline,
+                message: "Server bridge is unavailable".to_string(),
+            });
+            cx.notify();
+            return;
+        };
+        let usage_rx = bridge.send_request(
+            "usage.query",
+            serde_json::to_value(self.usage_view.filters.to_query_params()).ok(),
+        );
+        let capacity_rx = bridge.send_request(
+            "capacity.query",
+            serde_json::to_value(self.usage_view.filters.to_capacity_params()).ok(),
+        );
+        let catalog_rx = bridge.send_request("usage.catalog", None);
+        cx.spawn(async move |this, cx| {
+            let usage = decode_rpc_result::<UsageQueryResult>(usage_rx.await);
+            let capacity = decode_rpc_result::<CapacityQueryResult>(capacity_rx.await);
+            let catalog = decode_rpc_result::<UsageCatalogResult>(catalog_rx.await);
+            let _ = this.update(cx, |app, cx| {
+                if app.usage_request_generation != request_generation {
+                    return;
+                }
+                match (usage, capacity, catalog) {
+                    (Ok(usage), Ok(capacity), Ok(catalog)) => {
+                        app.usage_catalog = catalog;
+                        app.usage_view.reduce(UsageAction::Loaded {
+                            usage: Box::new(usage),
+                            capacity: Box::new(capacity),
+                            now_ms: wall_clock_ms(),
+                        });
+                    }
+                    (usage, capacity, catalog) => {
+                        let message = usage
+                            .err()
+                            .or_else(|| capacity.err())
+                            .or_else(|| catalog.err())
+                            .unwrap_or_else(|| "Usage request failed".to_string());
+                        let kind = if matches!(
+                            app.server_status,
+                            ServerStatus::Disconnected | ServerStatus::Connecting
+                        ) {
+                            UsageLoadFailure::Offline
+                        } else {
+                            UsageLoadFailure::Server
+                        };
+                        app.usage_view
+                            .reduce(UsageAction::LoadFailed { kind, message });
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    pub fn cycle_usage_filter(&mut self, intent: UsageFilterIntent, cx: &mut Context<Self>) {
+        let change = match intent {
+            UsageFilterIntent::Date => {
+                if self.usage_view.filters.from_ms.is_some() {
+                    UsageFilterChange::DateRange {
+                        from_ms: None,
+                        to_ms: None,
+                    }
+                } else {
+                    UsageFilterChange::DateRange {
+                        from_ms: Some(wall_clock_ms().saturating_sub(7 * 24 * 60 * 60 * 1_000)),
+                        to_ms: None,
+                    }
+                }
+            }
+            UsageFilterIntent::Environment => UsageFilterChange::Environment(cycle_value(
+                &self.usage_view.filters.environment_id,
+                self.settings_view
+                    .settings
+                    .environments
+                    .iter()
+                    .map(|environment| environment.id.clone())
+                    .chain(
+                        self.usage_view
+                            .filter_options
+                            .environment_ids
+                            .iter()
+                            .cloned(),
+                    )
+                    .collect(),
+            )),
+            UsageFilterIntent::Provider => UsageFilterChange::Provider(cycle_value(
+                &self.usage_view.filters.provider,
+                self.usage_catalog
+                    .subscriptions
+                    .iter()
+                    .map(|subscription| subscription.provider.clone())
+                    .chain(self.usage_view.filter_options.providers.iter().cloned())
+                    .collect(),
+            )),
+            UsageFilterIntent::Subscription => UsageFilterChange::Subscription(cycle_value(
+                &self.usage_view.filters.subscription_key,
+                self.usage_catalog
+                    .subscriptions
+                    .iter()
+                    .map(|subscription| subscription.key.clone())
+                    .chain(
+                        self.usage_view
+                            .filter_options
+                            .subscription_keys
+                            .iter()
+                            .cloned(),
+                    )
+                    .collect(),
+            )),
+            UsageFilterIntent::Agent => UsageFilterChange::Agent(cycle_value(
+                &self.usage_view.filters.agent_id,
+                self.usage_view.filter_options.agent_ids.clone(),
+            )),
+            UsageFilterIntent::Schedule => UsageFilterChange::Schedule(cycle_value(
+                &self.usage_view.filters.schedule_id,
+                self.usage_view.filter_options.schedule_ids.clone(),
+            )),
+            UsageFilterIntent::Model => UsageFilterChange::Model(cycle_value(
+                &self.usage_view.filters.model,
+                self.usage_view.filter_options.models.clone(),
+            )),
+            UsageFilterIntent::Source => UsageFilterChange::Source(cycle_value(
+                &self.usage_view.filters.source_kind,
+                self.usage_view.filter_options.source_kinds.clone(),
+            )),
+        };
+        self.usage_view.reduce(UsageAction::SetFilter(change));
+        self.load_usage(cx);
+    }
+
+    pub fn clear_usage_filters(&mut self, cx: &mut Context<Self>) {
+        self.usage_view.reduce(UsageAction::ClearFilters);
+        self.load_usage(cx);
+    }
+
+    pub fn begin_usage_subscription_edit(
+        &mut self,
+        target: UsageEditorTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.usage_editor_previous_focus = window.focused(cx).map(|handle| handle.downgrade());
+        let subscription = target.subscription_key.as_ref().and_then(|key| {
+            self.usage_catalog
+                .subscriptions
+                .iter()
+                .find(|subscription| &subscription.key == key)
+        });
+        let default_name = subscription
+            .map(|subscription| subscription.display_name.clone())
+            .unwrap_or_else(|| target.provider_display_name.clone());
+        let account_label = subscription
+            .and_then(|subscription| subscription.masked_account_label.clone())
+            .unwrap_or_default();
+        self.usage_subscription_name_input
+            .update(cx, |input, cx| input.set_value(default_name, window, cx));
+        self.usage_account_label_input
+            .update(cx, |input, cx| input.set_value(account_label, window, cx));
+        self.usage_editor_target = Some(target);
+        let name_focus = self.usage_subscription_name_input.read(cx).focus_handle(cx);
+        window.focus(&name_focus, cx);
+        cx.notify();
+    }
+
+    pub fn cancel_usage_subscription_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.usage_editor_target = None;
+        if let Some(previous_focus) = self
+            .usage_editor_previous_focus
+            .take()
+            .and_then(|handle| handle.upgrade())
+        {
+            window.focus(&previous_focus, cx);
+        }
+        cx.notify();
+    }
+
+    pub fn save_usage_subscription_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(target) = self.usage_editor_target.clone() else {
+            return;
+        };
+        let display_name = self
+            .usage_subscription_name_input
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
+        let account_label = self
+            .usage_account_label_input
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
+        if display_name.is_empty() {
+            self.usage_view.reduce(UsageAction::LoadFailed {
+                kind: UsageLoadFailure::Server,
+                message: "Subscription name is required".to_string(),
+            });
+            cx.notify();
+            return;
+        }
+        if account_label
+            .split_once('@')
+            .is_some_and(|(local, _)| !local.contains('*'))
+        {
+            self.usage_view.reduce(UsageAction::LoadFailed {
+                kind: UsageLoadFailure::Server,
+                message: "Email-shaped account labels must be masked".to_string(),
+            });
+            cx.notify();
+            return;
+        }
+        let params = UsageSubscriptionSetParams {
+            subscription_key: target.subscription_key,
+            environment_id: target.environment_id,
+            provider_instance_id: target.provider_instance_id,
+            provider: target.provider,
+            display_name,
+            masked_account_label: (!account_label.is_empty()).then_some(account_label),
+        };
+        let Some(bridge) = &self.bridge else {
+            self.usage_view.reduce(UsageAction::LoadFailed {
+                kind: UsageLoadFailure::Offline,
+                message: "Server bridge is unavailable".to_string(),
+            });
+            cx.notify();
+            return;
+        };
+        let rx = bridge.send_request("usage.subscription.set", serde_json::to_value(params).ok());
+        cx.spawn_in(window, async move |this, cx| {
+            let result = decode_rpc_result::<UsageCatalogResult>(rx.await);
+            let _ = this.update_in(cx, |app, window, cx| match result {
+                Ok(catalog) => {
+                    app.usage_catalog = catalog;
+                    app.usage_editor_target = None;
+                    if let Some(previous_focus) = app
+                        .usage_editor_previous_focus
+                        .take()
+                        .and_then(|handle| handle.upgrade())
+                    {
+                        window.focus(&previous_focus, cx);
+                    }
+                    app.load_usage(cx);
+                }
+                Err(message) => {
+                    app.usage_view.reduce(UsageAction::LoadFailed {
+                        kind: UsageLoadFailure::Server,
+                        message,
+                    });
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     /// Saves settings to the server daemon.
     pub fn save_settings(&mut self, cx: &mut Context<Self>) {
         if let Some(bridge) = &self.bridge {
@@ -855,72 +1190,204 @@ impl AppView {
             };
             let rx = bridge.send_request("settings.set", serde_json::to_value(&params).ok());
             cx.spawn(async move |this, cx| {
-                if let Ok(Ok(resp)) = rx.await
-                    && resp.is_success()
-                {
-                    let _ = this.update(cx, |app, cx| {
+                let result = decode_rpc_result::<SettingsSetResult>(rx.await);
+                let _ = this.update(cx, |app, cx| {
+                    if result.as_ref().is_ok_and(|result| result.success) {
                         app.settings_view.is_saving = false;
                         app.settings_view.status_banner =
                             Some(("Settings saved successfully".to_string(), false));
                         app.sync_theme_from_settings();
-                        cx.notify();
-                    });
-                } else {
-                    let _ = this.update(cx, |app, cx| {
+                    } else {
                         app.settings_view.is_saving = false;
-                        app.settings_view.status_banner =
-                            Some(("Failed to save settings".to_string(), true));
-                        cx.notify();
-                    });
-                }
+                        let message = result
+                            .err()
+                            .unwrap_or_else(|| "Failed to save settings".to_string());
+                        app.settings_view.status_banner = Some((message, true));
+                    }
+                    cx.notify();
+                });
             })
             .detach();
         }
     }
 
-    /// Triggers zero-spawn, offline health checks for all configured providers.
-    pub fn run_health_checks(&mut self, cx: &mut Context<Self>) {
-        if let Some(bridge) = &self.bridge {
-            self.settings_view.is_checking_health = true;
-            let rx = bridge.send_request("provider.health", None);
-            cx.spawn(async move |this, cx| {
-                if let Ok(Ok(resp)) = rx.await
-                    && let Some(val) = resp.result
-                    && let Ok(res) = serde_json::from_value::<ProviderHealthResult>(val)
-                {
-                    let _ = this.update(cx, |app, cx| {
-                        app.settings_view.health_reports = res.reports;
-                        app.settings_view.is_checking_health = false;
+    /// Triggers a bounded, non-interactive health check for one or all providers.
+    pub fn run_health_checks(
+        &mut self,
+        instance_id: Option<pandamux_core::ProviderInstanceId>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(bridge) = &self.bridge else {
+            self.settings_view.status_banner =
+                Some(("Server bridge is unavailable".to_string(), true));
+            cx.notify();
+            return;
+        };
+        self.settings_view.is_checking_health = true;
+        let request = instance_id.clone().map(|instance_id| ProviderHealthParams {
+            instance_id: Some(instance_id),
+            ..ProviderHealthParams::default()
+        });
+        let rx = bridge.send_request("provider.health", serde_json::to_value(request).ok());
+        cx.spawn(async move |this, cx| {
+            let result = decode_rpc_result::<ProviderHealthResult>(rx.await);
+            let _ = this.update(cx, |app, cx| {
+                match result {
+                    Ok(result) => {
+                        if instance_id.is_some() {
+                            for report in result.reports {
+                                if let Some(existing) = app
+                                    .settings_view
+                                    .health_reports
+                                    .iter_mut()
+                                    .find(|existing| existing.instance_id == report.instance_id)
+                                {
+                                    *existing = report;
+                                } else {
+                                    app.settings_view.health_reports.push(report);
+                                }
+                            }
+                        } else {
+                            app.settings_view.health_reports = result.reports;
+                        }
                         app.settings_view.status_banner = Some((
-                            "Offline health checks complete (Rule 1: zero-spawn, zero-auth)"
+                            if instance_id.is_some() {
+                                "Provider health check complete. No interactive login was started."
+                            } else {
+                                "Provider health checks complete. No interactive login was started."
+                            }
+                            .to_string(),
+                            false,
+                        ));
+                    }
+                    Err(message) => {
+                        app.settings_view.status_banner = Some((message, true));
+                    }
+                }
+                app.settings_view.is_checking_health = false;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub fn preview_provider_login(
+        &mut self,
+        provider_instance_id: pandamux_core::ProviderInstanceId,
+        environment_id: EnvironmentId,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(bridge) = &self.bridge else {
+            self.settings_view.status_banner =
+                Some(("Server bridge is unavailable".to_string(), true));
+            cx.notify();
+            return;
+        };
+        self.settings_view.is_login_busy = true;
+        self.settings_view.login_preview = None;
+        let rx = bridge.send_request(
+            "provider.login.preview",
+            serde_json::to_value(ProviderLoginPreviewParams {
+                provider_instance_id,
+                environment_id: Some(environment_id),
+            })
+            .ok(),
+        );
+        cx.spawn(async move |this, cx| {
+            let result = decode_rpc_result::<ProviderLoginPreview>(rx.await);
+            let _ = this.update(cx, |app, cx| {
+                app.settings_view.is_login_busy = false;
+                match result {
+                    Ok(preview) => {
+                        app.settings_view.login_preview = Some(preview);
+                        app.settings_view.status_banner = Some((
+                            "Login command prepared. Review it before opening a terminal."
                                 .to_string(),
                             false,
                         ));
-                        cx.notify();
-                    });
-                } else {
-                    let _ = this.update(cx, |app, cx| {
-                        app.settings_view.is_checking_health = false;
-                        cx.notify();
-                    });
+                    }
+                    Err(message) => {
+                        app.settings_view.status_banner = Some((message, true));
+                    }
                 }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub fn launch_provider_login(&mut self, cx: &mut Context<Self>) {
+        let Some(preview) = self.settings_view.login_preview.clone() else {
+            return;
+        };
+        let Some(bridge) = &self.bridge else {
+            self.settings_view.status_banner =
+                Some(("Server bridge is unavailable".to_string(), true));
+            cx.notify();
+            return;
+        };
+        self.settings_view.is_login_busy = true;
+        let rx = bridge.send_request(
+            "provider.login.launch",
+            serde_json::to_value(ProviderLoginLaunchParams {
+                preview_id: preview.preview_id,
+                provider_instance_id: preview.provider_instance_id,
+                environment_id: Some(preview.environment_id),
             })
-            .detach();
-        }
+            .ok(),
+        );
+        cx.spawn(async move |this, cx| {
+            let result = decode_rpc_result::<ProviderLoginLaunchResult>(rx.await);
+            let _ = this.update(cx, |app, cx| {
+                app.settings_view.is_login_busy = false;
+                match result {
+                    Ok(_) => {
+                        app.settings_view.login_preview = None;
+                        app.settings_view.status_banner = Some((
+                            "Login terminal opened. Complete authentication there, then retry health."
+                                .to_string(),
+                            false,
+                        ));
+                    }
+                    Err(message) => {
+                        app.settings_view.status_banner = Some((message, true));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub fn cancel_provider_login(&mut self, cx: &mut Context<Self>) {
+        self.settings_view.login_preview = None;
+        self.settings_view.is_login_busy = false;
+        self.settings_view.status_banner = Some(("Login cancelled".to_string(), false));
+        cx.notify();
     }
 
     /// Renders the Settings workspace surface.
-    fn render_settings_surface(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_settings_surface(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let server_status_label = format!("{}", self.server_status);
         render_settings_view(
             &self.settings_view,
+            &self.usage_catalog,
             theme,
             server_status_label,
             |this, _win, cx| {
                 this.save_settings(cx);
             },
+            |this, instance_id, _win, cx| {
+                this.run_health_checks(instance_id, cx);
+            },
+            |this, provider_instance_id, environment_id, _win, cx| {
+                this.preview_provider_login(provider_instance_id, environment_id, cx);
+            },
             |this, _win, cx| {
-                this.run_health_checks(cx);
+                this.launch_provider_login(cx);
+            },
+            |this, _win, cx| {
+                this.cancel_provider_login(cx);
             },
             |this, modifier, _win, cx| {
                 modifier(&mut this.settings_view.settings);
@@ -929,6 +1396,7 @@ impl AppView {
             },
             cx,
         )
+        .into_any_element()
     }
 
     /// Queries current Git status for the active thread worktree.
@@ -1157,11 +1625,16 @@ impl AppView {
                                 .h_flex()
                                 .items_center()
                                 .gap_1p5()
-                                .child(Button::new("btn-git-refresh").ghost().label("🔄").on_click(
-                                    cx.listener(|this, _event, _window, cx| {
-                                        this.refresh_git_status(cx);
-                                    }),
-                                ))
+                                .child(
+                                    Button::new("btn-git-refresh")
+                                        .ghost()
+                                        .label("🔄")
+                                        .accessibility_label("Refresh Git status")
+                                        .tooltip("Refresh Git status")
+                                        .on_click(cx.listener(|this, _event, _window, cx| {
+                                            this.refresh_git_status(cx);
+                                        })),
+                                )
                                 .child(
                                     Button::new("btn-git-commit")
                                         .ghost()
@@ -1210,11 +1683,17 @@ impl AppView {
 
 impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let active_title = self.active_thread_id.as_ref().and_then(|id| {
-            self.thread_projections
-                .get(id)
-                .map(|p| p.thread.title.as_str())
-        });
+        let active_title = if self.active_rail_tab == RailTab::Usage {
+            Some("Usage & Capacity")
+        } else if self.active_rail_tab == RailTab::Settings {
+            Some("Settings")
+        } else {
+            self.active_thread_id.as_ref().and_then(|id| {
+                self.thread_projections
+                    .get(id)
+                    .map(|p| p.thread.title.as_str())
+            })
+        };
 
         let theme = self.theme.clone();
         let server_status = self.server_status.clone();
@@ -1270,6 +1749,9 @@ impl Render for AppView {
                         &theme,
                         |this, tab, _win, cx| {
                             this.select_rail_tab(tab);
+                            if tab == RailTab::Usage {
+                                this.load_usage(cx);
+                            }
                             cx.notify();
                         },
                         cx,
@@ -1280,6 +1762,7 @@ impl Render for AppView {
                         &self.thread_order,
                         &self.thread_projections,
                         self.active_thread_id.as_ref(),
+                        &self.settings_view.settings.providers,
                         &theme,
                         |this, _win, cx| {
                             this.create_default_thread(cx);
@@ -1299,31 +1782,55 @@ impl Render for AppView {
                         cx,
                     ))
                     // 2c. Main Surface (Timeline + Header + Composer OR Settings View)
-                    .child(if self.active_rail_tab == RailTab::Settings {
-                        self.render_settings_surface(&theme, cx).into_any_element()
-                    } else {
-                        self.render_main_surface(&theme, cx).into_any_element()
+                    .child(match self.active_rail_tab {
+                        RailTab::Settings => {
+                            self.render_settings_surface(&theme, cx).into_any_element()
+                        }
+                        RailTab::Usage => render_usage_view(
+                            &self.usage_view,
+                            &self.usage_catalog,
+                            &self.settings_view.settings,
+                            self.usage_editor_target.as_ref(),
+                            &self.usage_subscription_name_input,
+                            &self.usage_account_label_input,
+                            &theme,
+                            wall_clock_ms(),
+                            |app, _window, cx| app.load_usage(cx),
+                            |app, intent, _window, cx| app.cycle_usage_filter(intent, cx),
+                            |app, _window, cx| app.clear_usage_filters(cx),
+                            |app, target, window, cx| {
+                                app.begin_usage_subscription_edit(target, window, cx);
+                            },
+                            |app, window, cx| app.save_usage_subscription_edit(window, cx),
+                            |app, window, cx| app.cancel_usage_subscription_edit(window, cx),
+                            cx,
+                        )
+                        .into_any_element(),
+                        _ => self.render_main_surface(&theme, cx).into_any_element(),
                     })
                     // 2d. Right-side Surfaces Panel
-                    .when(self.active_rail_tab != RailTab::Settings, |this| {
-                        this.child(render_surfaces_panel(
-                            &self.surfaces_panel,
-                            self.active_thread_id
-                                .as_ref()
-                                .and_then(|tid| self.thread_projections.get(tid)),
-                            &theme,
-                            |app, _win, cx| {
-                                app.toggle_surfaces_panel(cx);
-                            },
-                            |app, tab, _win, cx| {
-                                app.set_surface_tab(tab, cx);
-                            },
-                            |app, file, _win, cx| {
-                                app.select_surface_file(file, cx);
-                            },
-                            cx,
-                        ))
-                    }),
+                    .when(
+                        !matches!(self.active_rail_tab, RailTab::Settings | RailTab::Usage),
+                        |this| {
+                            this.child(render_surfaces_panel(
+                                &self.surfaces_panel,
+                                self.active_thread_id
+                                    .as_ref()
+                                    .and_then(|tid| self.thread_projections.get(tid)),
+                                &theme,
+                                |app, _win, cx| {
+                                    app.toggle_surfaces_panel(cx);
+                                },
+                                |app, tab, _win, cx| {
+                                    app.set_surface_tab(tab, cx);
+                                },
+                                |app, file, _win, cx| {
+                                    app.select_surface_file(file, cx);
+                                },
+                                cx,
+                            ))
+                        },
+                    ),
             )
             // 3. 26px Status Bar
             .child(self.render_statusbar(&theme))
@@ -1377,6 +1884,14 @@ impl AppView {
 
         if let Some(proj) = active_proj {
             let thread_id = proj.thread.id.clone();
+            let provider_display_name = self
+                .settings_view
+                .settings
+                .providers
+                .iter()
+                .find(|provider| provider.id == proj.thread.provider_instance_id)
+                .map(|provider| provider.display_name.clone())
+                .unwrap_or_else(|| "Unnamed provider instance".to_string());
             let is_busy = matches!(
                 proj.thread.status,
                 ThreadStatus::Working | ThreadStatus::AwaitingApproval
@@ -1419,8 +1934,7 @@ impl AppView {
                                                 .text_size(Typography::META_SIZE)
                                                 .text_color(theme.accent.color())
                                                 .child(format!(
-                                                    "Provider: {}",
-                                                    proj.thread.provider_instance_id.as_str()
+                                                    "Provider: {provider_display_name}"
                                                 )),
                                         )
                                         .child(
@@ -1609,5 +2123,21 @@ impl AppView {
             .text_color(theme.chrome.text_t3)
             .child(div().child(server_desc))
             .child(div().child(git_info))
+    }
+}
+
+#[cfg(test)]
+mod usage_filter_tests {
+    use super::cycle_value;
+    use core::prelude::v1::test;
+
+    #[test]
+    fn filter_cycle_reaches_every_known_choice_before_all() {
+        let choices = vec!["one".to_string(), "two".to_string(), "one".to_string()];
+        let first = cycle_value(&None, choices.clone());
+        assert_eq!(first.as_deref(), Some("one"));
+        let second = cycle_value(&first, choices.clone());
+        assert_eq!(second.as_deref(), Some("two"));
+        assert_eq!(cycle_value(&second, choices), None);
     }
 }

@@ -49,9 +49,9 @@ pub use ids::{
 };
 pub use notification::{NewNotification, NotificationInfo, NotificationSource, Notifications};
 pub use organization::{
-    BroadsidePolicy, FailoverPool, FailoverPoolError, FailoverPoolMember, ModelTarget,
-    OrganizationPolicy, OrganizationPolicyError, OrganizationSubscription, TierMapping,
-    resolve_project_organization,
+    BroadsideContent, BroadsidePolicy, FailoverPool, FailoverPoolError, FailoverPoolMember,
+    ModelTarget, OrganizationPolicy, OrganizationPolicyError, OrganizationSubscription,
+    TierMapping, resolve_project_organization,
 };
 pub use project::{
     FolderBreadcrumb, FolderEntry, FolderListing, ProjectError, ProjectErrorCategory, ProjectKey,

@@ -16,6 +16,7 @@ pub mod theme;
 pub mod timeline;
 pub mod titlebar;
 pub mod tray;
+pub mod usage_view;
 
 pub use app_view::AppView;
 pub use command_palette::{
@@ -56,6 +57,7 @@ pub use timeline::{
 };
 pub use titlebar::CustomTitlebar;
 pub use tray::{SystemTrayState, TrayAction, TrayMenuItem};
+pub use usage_view::{UsageEditorTarget, UsageFilterIntent, render_usage_view};
 
 #[cfg(test)]
 mod tests {

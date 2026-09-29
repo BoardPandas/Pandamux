@@ -154,6 +154,8 @@ impl CustomTitlebar {
                             Button::new("btn-titlebar-settings")
                                 .ghost()
                                 .label("⚙")
+                                .accessibility_label("Open settings")
+                                .tooltip("Open settings")
                                 .on_click(cx.listener(move |this, _event, window, cx| {
                                     on_open_settings(this, window, cx);
                                 })),

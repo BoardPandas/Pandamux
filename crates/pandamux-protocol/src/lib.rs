@@ -9,6 +9,7 @@ pub mod jsonrpc;
 pub mod mcp;
 pub mod provider_rpc;
 pub mod proxy;
+pub mod schedule_rpc;
 pub mod settings_rpc;
 pub mod subagent_rpc;
 pub mod subscription;
@@ -49,6 +50,10 @@ pub use provider_rpc::{
     ProviderLoginPreview, ProviderLoginPreviewParams,
 };
 pub use proxy::{PROXY_PROTOCOL_VERSION, ProxyMessage};
+pub use schedule_rpc::{
+    ScheduleRunParams, ScheduleRunResult, ScheduleSaveParams, ScheduleValidateParams,
+    ScheduleValidationResult,
+};
 pub use settings_rpc::{
     DEFAULT_PROVIDER_HEALTH_PAGE_SIZE, DEFAULT_PROVIDER_PROBE_CONCURRENCY,
     DEFAULT_PROVIDER_PROBE_TIMEOUT_MS, MAX_PROVIDER_HEALTH_PAGE_SIZE,
@@ -78,10 +83,11 @@ pub use usage_rpc::{
     DEFAULT_CAPACITY_REFRESH_TIMEOUT_MS, DEFAULT_USAGE_PAGE_SIZE, MAX_CAPACITY_REFRESH_TIMEOUT_MS,
     MAX_CAPACITY_SNAPSHOTS_PER_PUSH, MAX_USAGE_PAGE_SIZE, UsageAckParams, UsageAckResult,
     UsageAggregate, UsageBackfillCursor, UsageBackfillItem, UsageBackfillParams,
-    UsageBackfillResult, UsageCoverage, UsageCoverageGap, UsageEnvironmentSyncCoverage,
-    UsageEnvironmentSyncState, UsageExportItem, UsageExportParams, UsageExportResult,
-    UsageNodeCoverageSnapshot, UsageQueryCursor, UsageQueryItem, UsageQueryParams,
-    UsageQueryResult, UsageScannerDiagnostic, UsageSourceCoverageState,
+    UsageBackfillResult, UsageCatalogResult, UsageCoverage, UsageCoverageGap,
+    UsageEnvironmentSyncCoverage, UsageEnvironmentSyncState, UsageExportItem, UsageExportParams,
+    UsageExportResult, UsageNodeCoverageSnapshot, UsageProviderSubscriptionMapping,
+    UsageQueryCursor, UsageQueryItem, UsageQueryParams, UsageQueryResult, UsageScannerDiagnostic,
+    UsageSourceCoverageState, UsageSubscriptionSetParams,
 };
 pub use worktree_rpc::{WorktreeSyncDeltaParams, WorktreeSyncDeltaResult};
 

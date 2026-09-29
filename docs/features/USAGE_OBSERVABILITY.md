@@ -135,6 +135,56 @@ remote reachability failures stay structured, visible, and retryable; a failed i
 closes the newly opened terminal. Antigravity continues to use its dedicated browser
 OAuth flow, and unverified generic provider login launchers remain unavailable.
 
+## Usage, identity, and organization policy UI
+
+Usage is a top-level GPUI rail destination. Its state comes from a pure
+`pandamux-client` reducer that distinguishes loading, empty, ready, partial, stale,
+offline, malformed-source, migration-quarantine, and server-error results. Date,
+environment, provider, named subscription, agent, schedule, model, and source filters
+map directly to `usage.query`. Token totals are primary. Provider-reported spend and
+API-equivalent estimates stay separate, and missing prices, capacity, freshness, or
+health evidence render as Unknown or Not reported.
+
+Every aggregate includes source coverage and freshness. The surface provides a complete
+usage data table and text capacity summaries with confidence, evidence sources, as-of
+age, reset state, verified hard-limit state, and discount or exclusion reasons. Filter
+choices accumulate across narrowed result pages so an active filter does not disappear.
+
+The subscription editor joins opaque transport keys to user-defined subscription and
+provider-instance names. It stores only an optional masked account label and rejects an
+email-shaped label that does not contain masking. Thread chrome, Usage tables, capacity
+cards, and organization matrix cells present names rather than opaque provider or
+subscription keys.
+
+Organization settings edit allowed named instances and subscriptions, exact integer
+budget limits, concurrency ceilings, organization tier defaults, and Broadside artifact
+or transcript permissions. Removing a last valid named route is blocked, and server-side
+impact review blocks removal of a provider used by an enabled schedule. Project
+assignment editing remains disabled because the current desktop has no canonical project
+catalog. Failover-pool editing is disabled with a Phase 4F explanation.
+
+Project-bound local and remote thread creation and turns, schedule validation and run,
+and read-only MCP proposal validation resolve exactly one organization before provider
+selection. Missing or ambiguous assignment fails closed. Core failover candidate and
+Broadside authorizers reject disallowed policy values, but no runtime failover executor
+or Broadside share action exists to wire in this checkpoint. Remote schedule storage or
+execution, orchestrator schedules, and continue-existing-thread schedules are explicitly
+unavailable.
+
+## Accessibility boundary
+
+New icon-only controls have accessible names and tooltips. Buttons and inputs retain
+keyboard semantics, the subscription editor moves focus to its first field and restores
+the prior focus after save or cancel, status always includes text or symbols beyond
+color, and the Usage page wraps controls inside a vertical scroll surface. It uses no
+new animation, and errors remain visible until a retry or successful reload.
+
+The current GPUI primitives used here do not expose a live-region or semantic table API,
+so automated tests cannot prove error announcement or screen-reader table navigation.
+No native Windows keyboard-only, 200 percent scaling, reduced-motion, forced-colors, or
+screen-reader walkthrough was run for this checkpoint. These are acceptance gaps, not
+claims inferred from compilation.
+
 ## Diagnostics and privacy
 
 Usage queries expose source coverage, parser version, last scan and success times,
@@ -154,7 +204,7 @@ provider profile.
 
 ## Current boundary
 
-Checkpoint 4D is local implementation and verification evidence. The Phase 4E Usage and
-provider-identity UI is not implemented by this checkpoint. The deferred physical R0.5
-laptop disconnect and sleep rows, native Phase 4D runtime acceptance, and later release
-gates still block production acceptance and release.
+Checkpoint 4E has local source implementation and verification evidence only. The
+deferred physical R0.5 laptop disconnect and sleep rows, native Phase 4D provider runtime
+acceptance, native Phase 4E interaction and accessibility acceptance, Phase 4F failover,
+and later release gates still block production acceptance and release.

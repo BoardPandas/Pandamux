@@ -1413,6 +1413,58 @@ Checkpoint acceptance:
 - Cross-organization fixtures prove a disallowed personal subscription is filtered before scoring and cannot be approved implicitly by failover.
 - No plausible fake version, platform, account, price, capacity, or health value is rendered.
 
+##### Checkpoint 4E implementation record (2026-09-29)
+
+- Usage is a top-level rail destination. `pandamux-client` owns pure reducer, filter,
+  formatter, and capacity-card logic; GPUI renders the projection and dispatches intents.
+  Date, environment, provider, named subscription, agent, schedule, model, and source
+  filters map to the bounded query contract. Token totals remain primary, reported spend
+  and API-equivalent estimates stay separate, and all required data, freshness, source,
+  quarantine, offline, malformed, and server-error states remain explicit.
+- The Usage surface renders full source diagnostics, an equivalent data table, evidence-
+  qualified capacity cards, and a named subscription editor with optional masked account
+  labels. Opaque provider-instance and subscription keys remain transport join values and
+  are not presentation text. Editor focus moves to the first field and returns to the
+  prior control after save or cancel.
+- Organization settings render and edit named provider and subscription boundaries,
+  exact budget, concurrency, tier defaults, and Broadside sharing. Atomic settings
+  persistence validates revisioned canonical policies, requires at least one valid named
+  route, and performs blocking enabled-schedule impact review. Project-assignment editing
+  is disabled because no canonical project catalog exists, and failover-pool editing is
+  explicitly deferred to 4F.
+- Local and authenticated remote project threads revalidate policy before creation and
+  every turn. Schedule validate, save, and run paths apply the same policy. Read-only MCP
+  proposal validation returns names without granting approval. Core failover and
+  Broadside authorization primitives reject disallowed policy values before candidate
+  use. Missing or ambiguous organization assignment fails closed for each implemented
+  policy-sensitive path.
+- Provider health cards show version, authentication evidence, freshness, last success,
+  reason, targeted retry, and a separate preview-before-launch login action. Unknown and
+  unavailable values remain explicit. Icon-only controls added or touched by the
+  checkpoint have accessible names; status uses non-color text and symbols; the Usage
+  surface wraps and scrolls; and the full data table remains visible alongside summaries.
+- **Local verification:** at workspace version `0.59.0`, `cargo fmt --all -- --check`,
+  strict workspace Clippy, and `cargo test --workspace --quiet` passed. The workspace ran
+  387 tests with zero failures and two intentionally ignored real-shell terminal tests.
+  The Rust crate-boundary and Claude wiring guards passed, and every `pandamux-server`
+  target type-checks for the Windows GNU ABI. `cargo-deny` is unavailable on this host,
+  so no advisory, license, ban, or source result is claimed.
+- **Acceptance boundary:** no current desktop executable was exercised natively on
+  Windows. The required keyboard-only, 200 percent scaling, reduced-motion,
+  forced-colors, live-region, semantic-table, and screen-reader walkthroughs remain open.
+  GPUI primitives used by this surface do not expose live-region or semantic-table roles,
+  so persistent visible errors and the data table are source-verified but not claimed as
+  announced or screen-reader navigable. There is no runtime Broadside share action or
+  failover executor to integrate before 4F. Remote, orchestrator, and continue-existing-
+  thread schedules remain explicitly unavailable. The desktop's quick-create actions
+  are unscoped and do not invent a project assignment; project-bound callers supply a
+  canonical project id and receive fail-closed enforcement. No built-artifact smoke,
+  live provider matrix, push, deployment, or release is claimed for this checkpoint.
+- **Recovery preservation:** the original dirty checkout remains at its recovered base.
+  Its 11 unfinished prototype source files remain byte-identical to the archived R0.1
+  snapshot, and its later R0.1 plan record remains present. The Phase 4E work is isolated
+  on the managed recovery branch.
+
 #### Checkpoint 4F: explicit pools and side-effect-aware failover
 
 1. Add explicit failover-pool editing and validation. A pool can span compatible providers only when every member declares the required instruction, tool, model, and access capabilities.

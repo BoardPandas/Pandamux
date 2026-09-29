@@ -117,7 +117,7 @@ Windows uses a SID-scoped pipe name, a protected user-only DACL, remote-client r
 
 The v1 boundary is per OS user, not hostile same-user process isolation. FullAccess providers intentionally have host-user authority. Never describe a FullAccess session as process-isolated.
 
-The MCP surface is intentionally read-only in Phase 4. `read_settings` and `list_schedules` return purpose-built projections. They must never expose profile paths, provider environment overrides, arbitrary provider JSON, secrets, schedule prompts, repository paths, notification targets, or FullAccess state.
+The MCP surface is intentionally read-only in Phase 4. `read_settings` and `list_schedules` return purpose-built projections. `validate_thread_proposal` checks one named project, environment, and provider route without creating a thread or granting approval. These tools must never expose profile paths, provider environment overrides, arbitrary provider JSON, secrets, schedule prompts, repository paths, notification targets, FullAccess state, or opaque subscription keys.
 
 ## Provider execution
 
@@ -167,6 +167,31 @@ expiry. Unknown authentication is never Healthy. Claude and Codex login requires
 short-lived preview of the exact environment, instance, profile, and safely quoted
 command before the server opens a Terminal session. Antigravity retains its dedicated
 OAuth flow.
+
+Phase 4E adds Usage as a top-level GPUI rail destination. `pandamux-client::usage` owns
+the pure filter and status reducer, exact integer formatters, and presentation-safe
+capacity cards. The desktop renders token totals first, labels modeled cost as an
+API-equivalent estimate, keeps provider-reported spend separate, exposes source coverage
+and freshness, and provides text or table equivalents for all capacity and usage data.
+Subscription editing accepts a user-defined name and optional masked account label;
+opaque subscription and provider-instance keys are join values only.
+
+Project-scoped thread creation and turns, authenticated remote forwarding, schedule
+validation and execution, read-only MCP proposals, failover filtering, and Broadside
+authorization use fail-closed policy primitives before provider selection. Missing or
+ambiguous project assignment fails closed on each implemented project-bound path. The
+organization UI edits named provider and subscription boundaries, budget, concurrency,
+tier defaults, and Broadside permissions. Project assignment stays disabled until a
+canonical project catalog exists, and capability-aware failover-pool editing remains
+Phase 4F work. There is no runtime Broadside share action or failover executor to wire in
+this checkpoint. Remote schedules, orchestrator schedules, and continue-existing-thread
+schedules report explicit unavailable states.
+
+The source-level accessibility gate names icon controls, retains visible non-color
+status text, restores focus after the subscription editor, keeps errors visible, wraps
+controls, scrolls the Usage surface, and presents a full usage data table. Native Windows
+keyboard-only, 200 percent scaling, reduced-motion, forced-colors, and screen-reader
+acceptance are not established by Linux compilation or unit tests.
 
 ## Remote composition
 

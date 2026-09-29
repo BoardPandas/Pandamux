@@ -39,6 +39,67 @@ fn validate_optional_id(field: &str, value: Option<&str>) -> Result<(), String> 
     }
 }
 
+/// Display catalog for the Usage surface. Opaque keys remain in the transport
+/// contract for joins and filters but presentation must use subscription and
+/// provider-instance display names.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageProviderSubscriptionMapping {
+    pub environment_id: EnvironmentId,
+    pub provider_instance_id: ProviderInstanceId,
+    pub subscription_key: SubscriptionKey,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageCatalogResult {
+    #[serde(default)]
+    pub subscriptions: Vec<UsageSubscription>,
+    #[serde(default)]
+    pub mappings: Vec<UsageProviderSubscriptionMapping>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageSubscriptionSetParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subscription_key: Option<SubscriptionKey>,
+    pub environment_id: EnvironmentId,
+    pub provider_instance_id: ProviderInstanceId,
+    pub provider: UsageProvider,
+    pub display_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub masked_account_label: Option<String>,
+}
+
+impl UsageSubscriptionSetParams {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_optional_id(
+            "subscriptionKey",
+            self.subscription_key.as_ref().map(SubscriptionKey::as_str),
+        )?;
+        validate_optional_id("environmentId", Some(self.environment_id.as_str()))?;
+        validate_optional_id(
+            "providerInstanceId",
+            Some(self.provider_instance_id.as_str()),
+        )?;
+        if self.display_name.trim().is_empty() {
+            return Err("displayName must not be empty".to_string());
+        }
+        if matches!(&self.provider, UsageProvider::Unknown(value) if value.trim().is_empty()) {
+            return Err("provider must not be empty".to_string());
+        }
+        if self
+            .masked_account_label
+            .as_deref()
+            .is_some_and(|label| label.trim().is_empty())
+        {
+            return Err("maskedAccountLabel must be absent or non-empty".to_string());
+        }
+        Ok(())
+    }
+}
+
 /// Hub-only request for one bounded node outbox page.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

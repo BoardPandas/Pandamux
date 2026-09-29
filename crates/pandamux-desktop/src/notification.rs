@@ -172,6 +172,11 @@ pub fn render_toast_overlay<V: 'static>(
                             Button::new(format!("btn-dismiss-{}", toast.id))
                                 .ghost()
                                 .label("✕")
+                                .accessibility_label(format!(
+                                    "Dismiss {} notification",
+                                    toast.title
+                                ))
+                                .tooltip("Dismiss notification")
                                 .on_click(cx.listener(move |this, _event, window, cx| {
                                     on_dismiss(this, toast_id.clone(), window, cx);
                                 })),

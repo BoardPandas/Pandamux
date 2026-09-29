@@ -6,7 +6,7 @@ use tokio::sync::{Mutex, broadcast, mpsc};
 
 use pandamux_core::{
     CAPACITY_SNAPSHOT_SCHEMA_VERSION, CapacityConfidence, CapacityEvidenceScope, CapacitySnapshot,
-    DEFAULT_CAPACITY_MAX_AGE_MS, EnvironmentId, ProviderKind,
+    DEFAULT_CAPACITY_MAX_AGE_MS, EnvironmentId, ProjectId, ProviderKind,
     event::{ThreadEvent, ThreadEventKind, ToolCallStatus, TurnOutcome},
     ids::{ThreadId, TurnId},
     thread::{Thread, ThreadStatus, ThreadWorkspace, Turn, TurnInput, TurnStatus},
@@ -31,6 +31,17 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+fn organization_policy_error(project_id: &ProjectId, message: impl Into<String>) -> RpcError {
+    RpcError::with_data(
+        -32030,
+        message,
+        serde_json::json!({
+            "reason": "organization_policy_denied",
+            "projectId": project_id,
+        }),
+    )
 }
 
 fn record_local_codex_capacity(
@@ -294,6 +305,20 @@ impl ThreadManager {
 
     /// Creates and persists a new thread with optional git worktree.
     pub fn create_thread(&self, params: ThreadCreateParams) -> Result<Thread, RpcError> {
+        self.create_thread_with_policy(params, true)
+    }
+
+    /// Creates a thread after an authenticated Hub has already applied the
+    /// canonical organization policy and pinned the provider instance.
+    pub fn create_thread_from_hub(&self, params: ThreadCreateParams) -> Result<Thread, RpcError> {
+        self.create_thread_with_policy(params, false)
+    }
+
+    fn create_thread_with_policy(
+        &self,
+        params: ThreadCreateParams,
+        enforce_organization_policy: bool,
+    ) -> Result<Thread, RpcError> {
         let now = now_ms();
         let default_cwd = std::env::current_dir()
             .unwrap_or_default()
@@ -309,11 +334,57 @@ impl ThreadManager {
         let environment_id = params
             .environment_id
             .unwrap_or_else(|| EnvironmentId::from(self.environment_id.as_str()));
-        let provider_instance_id = match params.provider_instance_id {
-            Some(instance_id) => instance_id,
-            None => self
-                .provider_resolver
-                .default_instance_id(&environment_id)?,
+        let provider_instance_id = if enforce_organization_policy
+            && let Some(project_id) = params.project_id.as_ref()
+        {
+            let policy = self
+                .store
+                .organization_policy_for_project(project_id)
+                .map_err(|error| organization_policy_error(project_id, error.to_string()))?;
+            match params.provider_instance_id {
+                Some(instance_id) => {
+                    self.store
+                        .authorize_provider_for_project(project_id, &environment_id, &instance_id)
+                        .map_err(|error| {
+                            organization_policy_error(project_id, error.to_string())
+                        })?;
+                    instance_id
+                }
+                None => {
+                    let mut selected = None;
+                    for instance_id in &policy.allowed_provider_instances {
+                        if self
+                            .store
+                            .authorize_provider_for_project(
+                                project_id,
+                                &environment_id,
+                                instance_id,
+                            )
+                            .is_ok()
+                            && self
+                                .provider_resolver
+                                .resolve(instance_id, &environment_id)
+                                .is_ok()
+                        {
+                            selected = Some(instance_id.clone());
+                            break;
+                        }
+                    }
+                    selected.ok_or_else(|| {
+                        organization_policy_error(
+                            project_id,
+                            "organization has no enabled provider with an allowed named subscription",
+                        )
+                    })?
+                }
+            }
+        } else {
+            match params.provider_instance_id {
+                Some(instance_id) => instance_id,
+                None => self
+                    .provider_resolver
+                    .default_instance_id(&environment_id)?,
+            }
         };
         self.provider_resolver
             .resolve(&provider_instance_id, &environment_id)?;
@@ -398,6 +469,23 @@ impl ThreadManager {
         &self,
         params: ThreadSendTurnParams,
     ) -> Result<ThreadSendTurnResult, RpcError> {
+        self.send_turn_with_policy(params, true).await
+    }
+
+    /// Dispatches a turn after an authenticated Hub has revalidated the
+    /// mirrored thread against its canonical organization policy.
+    pub async fn send_turn_from_hub(
+        &self,
+        params: ThreadSendTurnParams,
+    ) -> Result<ThreadSendTurnResult, RpcError> {
+        self.send_turn_with_policy(params, false).await
+    }
+
+    async fn send_turn_with_policy(
+        &self,
+        params: ThreadSendTurnParams,
+        enforce_organization_policy: bool,
+    ) -> Result<ThreadSendTurnResult, RpcError> {
         let mut thread = self
             .store
             .get_thread(&params.thread_id)
@@ -415,6 +503,15 @@ impl ThreadManager {
             return Err(RpcError::invalid_params(
                 "Thread is awaiting approval response",
             ));
+        }
+        if enforce_organization_policy && let Some(project_id) = thread.project_id.as_ref() {
+            self.store
+                .authorize_provider_for_project(
+                    project_id,
+                    &thread.environment_id,
+                    &thread.provider_instance_id,
+                )
+                .map_err(|error| organization_policy_error(project_id, error.to_string()))?;
         }
 
         let turn_id = TurnId::generate();

@@ -11,15 +11,16 @@ pub use usage_phase4c::{
 use pandamux_core::{
     AgentId, AttachmentRecord, CapacityConfidence, CapacityEvidenceScope, CapacitySnapshot,
     EnvironmentId, FailoverPool, NodeStoreId, OrganizationPolicy, ProjectId, ProviderCapabilities,
-    ProviderInstanceId, ProviderKind, ScheduleId, ScheduleRecord, SubscriptionKey, Thread,
-    ThreadEvent, ThreadEventKind, ThreadId, ThreadOrigin, TokenCounts, Turn, TurnId, TurnStatus,
-    TurnUsage, UsageObservation, UsageObservationId, UsageProvider, UsageSourceKind,
+    ProviderInstanceId, ProviderKind, ScheduleId, ScheduleRecord, ScheduleTarget, SubscriptionKey,
+    Thread, ThreadEvent, ThreadEventKind, ThreadId, ThreadOrigin, TokenCounts, Turn, TurnId,
+    TurnStatus, TurnUsage, UsageObservation, UsageObservationId, UsageProvider, UsageSourceKind,
     UsageSubscription, UsageUnknownField, UserSettings, project_capacity_revisions,
 };
 use pandamux_protocol::{
     CapacityQueryCursor, CapacityQueryParams, CapacityQueryResult, EventEnvelope, UsageExportItem,
-    UsageExportParams, UsageExportResult, UsageQueryCursor, UsageQueryItem, UsageQueryParams,
-    UsageQueryResult, UsageScannerDiagnostic, UsageSourceCoverageState,
+    UsageExportParams, UsageExportResult, UsageProviderSubscriptionMapping, UsageQueryCursor,
+    UsageQueryItem, UsageQueryParams, UsageQueryResult, UsageScannerDiagnostic,
+    UsageSourceCoverageState,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use sha2::{Digest, Sha256};
@@ -839,6 +840,252 @@ impl Store {
         Ok(policy)
     }
 
+    pub fn authorize_provider_for_project(
+        &self,
+        project_id: &ProjectId,
+        environment_id: &EnvironmentId,
+        provider_instance_id: &ProviderInstanceId,
+    ) -> Result<(OrganizationPolicy, SubscriptionKey), StoreError> {
+        let policy = self.organization_policy_for_project(project_id)?;
+        policy
+            .authorize_provider_instance(provider_instance_id)
+            .map_err(|error| StoreError::Data(error.to_string()))?;
+        let (subscription_key, _) = self
+            .usage_subscription_for_provider(environment_id, provider_instance_id)?
+            .ok_or_else(|| {
+                StoreError::Data("provider instance has no named subscription mapping".to_string())
+            })?;
+        policy
+            .authorize_route(provider_instance_id, &subscription_key)
+            .map_err(|error| StoreError::Data(error.to_string()))?;
+        Ok((policy, subscription_key))
+    }
+
+    /// Persist user settings and the canonical organization tables in one
+    /// transaction. Policy changes require a revision bump and provider removal
+    /// is blocked while an enabled schedule still names that instance.
+    pub fn save_settings_with_organization_policies(
+        &self,
+        settings: &UserSettings,
+        updated_at_ms: u64,
+    ) -> Result<(), StoreError> {
+        let updated_at_ms = checked_i64(updated_at_ms, "organization policy updated_at_ms")?;
+        let settings_json = serde_json::to_string(settings)?;
+        let mut organization_ids = BTreeSet::new();
+        let mut assigned_projects = BTreeMap::<String, String>::new();
+        for policy in &settings.organizations {
+            policy
+                .validate()
+                .map_err(|error| StoreError::Data(error.to_string()))?;
+            if !organization_ids.insert(policy.id.as_str().to_string()) {
+                return Err(StoreError::Data(format!(
+                    "duplicate organization id: {}",
+                    policy.id
+                )));
+            }
+            for project_id in &policy.project_ids {
+                if let Some(existing) = assigned_projects.insert(
+                    project_id.as_str().to_string(),
+                    policy.id.as_str().to_string(),
+                ) {
+                    return Err(StoreError::Data(format!(
+                        "project {project_id} is assigned to both {existing} and {}",
+                        policy.id
+                    )));
+                }
+            }
+        }
+
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let provider_subscription_mappings = {
+            let mut stmt = tx.prepare(
+                "SELECT provider_instance_id, subscription_key
+                 FROM provider_subscription_mappings",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            rows.collect::<Result<BTreeSet<_>, _>>()?
+        };
+        let enabled_provider_ids = settings
+            .providers
+            .iter()
+            .filter(|provider| provider.enabled)
+            .map(|provider| provider.id.as_str())
+            .collect::<BTreeSet<_>>();
+        for policy in &settings.organizations {
+            let has_valid_provider = policy.allowed_provider_instances.iter().any(|provider| {
+                enabled_provider_ids.contains(provider.as_str())
+                    && provider_subscription_mappings.iter().any(
+                        |(mapped_provider, subscription_key)| {
+                            mapped_provider == provider.as_str()
+                                && policy
+                                    .allowed_subscriptions
+                                    .iter()
+                                    .any(|allowed| allowed.as_str() == subscription_key)
+                        },
+                    )
+            });
+            if !has_valid_provider {
+                return Err(StoreError::Data(format!(
+                    "impact review blocked organization '{}' from losing its last valid named provider",
+                    policy.display_name
+                )));
+            }
+        }
+        let existing = {
+            let mut stmt = tx.prepare(
+                "SELECT id, revision, policy_json FROM organization_policies ORDER BY id ASC",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?;
+            rows.map(|row| row.map(|(id, revision, json)| (id, (revision, json))))
+                .collect::<Result<BTreeMap<_, _>, _>>()?
+        };
+        let enabled_schedule_routes = {
+            let mut stmt = tx.prepare(
+                "SELECT definition_json FROM schedules WHERE enabled = 1 ORDER BY id ASC",
+            )?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+            let mut routes = Vec::new();
+            for row in rows {
+                let schedule: ScheduleRecord = serde_json::from_str(&row?)?;
+                if let ScheduleTarget::Session {
+                    provider: Some(provider),
+                    ..
+                } = &schedule.target
+                {
+                    routes.push((
+                        provider.clone(),
+                        schedule.project_id.clone(),
+                        schedule.name.clone(),
+                    ));
+                }
+            }
+            routes
+        };
+
+        for policy in &settings.organizations {
+            let policy_json = serde_json::to_string(policy)?;
+            if let Some((existing_revision, existing_json)) = existing.get(policy.id.as_str()) {
+                let revision = checked_i64(policy.revision, "organization policy revision")?;
+                if revision < *existing_revision {
+                    return Err(StoreError::Data(format!(
+                        "organization {} revision {} is older than stored revision {}",
+                        policy.id, policy.revision, existing_revision
+                    )));
+                }
+                if revision == *existing_revision && policy_json != *existing_json {
+                    return Err(StoreError::Data(format!(
+                        "organization {} changed without a revision increment",
+                        policy.id
+                    )));
+                }
+
+                let previous: OrganizationPolicy = serde_json::from_str(existing_json)?;
+                let removed = previous
+                    .allowed_provider_instances
+                    .iter()
+                    .filter(|provider| !policy.allowed_provider_instances.contains(provider));
+                for provider in removed {
+                    if let Some((_, _, schedule_name)) = enabled_schedule_routes.iter().find(
+                        |(scheduled_provider, project_id, _)| {
+                            scheduled_provider == provider.as_str()
+                                && project_id.as_ref().is_none_or(|project_id| {
+                                    previous.project_ids.contains(project_id)
+                                })
+                        },
+                    ) {
+                        let provider_name = settings
+                            .providers
+                            .iter()
+                            .find(|candidate| &candidate.id == provider)
+                            .map(|candidate| candidate.display_name.as_str())
+                            .unwrap_or("Unnamed provider instance");
+                        return Err(StoreError::Data(format!(
+                            "impact review blocked removal of '{provider_name}' because enabled schedule '{schedule_name}' uses it"
+                        )));
+                    }
+                }
+            }
+        }
+
+        for (id, (_, existing_json)) in &existing {
+            if !organization_ids.contains(id) {
+                let previous: OrganizationPolicy = serde_json::from_str(existing_json)?;
+                for provider in previous.allowed_provider_instances {
+                    if let Some((_, _, schedule_name)) = enabled_schedule_routes.iter().find(
+                        |(scheduled_provider, project_id, _)| {
+                            scheduled_provider == provider.as_str()
+                                && project_id.as_ref().is_none_or(|project_id| {
+                                    previous.project_ids.contains(project_id)
+                                })
+                        },
+                    ) {
+                        let provider_name = settings
+                            .providers
+                            .iter()
+                            .find(|candidate| candidate.id == provider)
+                            .map(|candidate| candidate.display_name.as_str())
+                            .unwrap_or("Unnamed provider instance");
+                        return Err(StoreError::Data(format!(
+                            "impact review blocked removal of organization '{}' because enabled schedule '{schedule_name}' uses '{provider_name}'",
+                            previous.display_name
+                        )));
+                    }
+                }
+            }
+        }
+
+        tx.execute(
+            "INSERT INTO settings (key, value_json) VALUES ('user_settings', ?1)
+             ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json",
+            [settings_json],
+        )?;
+        tx.execute("DELETE FROM organization_project_assignments", [])?;
+        for policy in &settings.organizations {
+            let revision = checked_i64(policy.revision, "organization policy revision")?;
+            let policy_json = serde_json::to_string(policy)?;
+            tx.execute(
+                "INSERT INTO organization_policies (
+                    id, display_name, revision, policy_json, updated_at_ms
+                 ) VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(id) DO UPDATE SET
+                    display_name = excluded.display_name,
+                    revision = excluded.revision,
+                    policy_json = excluded.policy_json,
+                    updated_at_ms = excluded.updated_at_ms",
+                params![
+                    policy.id.as_str(),
+                    policy.display_name,
+                    revision,
+                    policy_json,
+                    updated_at_ms,
+                ],
+            )?;
+            for project_id in &policy.project_ids {
+                tx.execute(
+                    "INSERT INTO organization_project_assignments (project_id, organization_id)
+                     VALUES (?1, ?2)",
+                    params![project_id.as_str(), policy.id.as_str()],
+                )?;
+            }
+        }
+        for id in existing.keys() {
+            if !organization_ids.contains(id) {
+                tx.execute("DELETE FROM organization_policies WHERE id = ?1", [id])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     // Normalized usage
 
     pub fn save_usage_subscription(
@@ -866,13 +1113,28 @@ impl Store {
         }
         let updated_at_ms = checked_i64(updated_at_ms, "usage subscription updated_at_ms")?;
         let conn = self.conn.lock().unwrap();
+        let existing_provider = conn
+            .query_row(
+                "SELECT provider FROM usage_subscriptions WHERE subscription_key = ?1",
+                [subscription.key.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        if existing_provider
+            .as_deref()
+            .is_some_and(|provider| provider != subscription.provider.as_str())
+        {
+            return Err(StoreError::Data(
+                "an existing named subscription cannot be reassigned to another provider"
+                    .to_string(),
+            ));
+        }
         conn.execute(
             "INSERT INTO usage_subscriptions (
                 subscription_key, provider, display_name, masked_account_label,
                 created_at_ms, updated_at_ms
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
              ON CONFLICT(subscription_key) DO UPDATE SET
-                provider = excluded.provider,
                 display_name = excluded.display_name,
                 masked_account_label = excluded.masked_account_label,
                 updated_at_ms = excluded.updated_at_ms",
@@ -884,6 +1146,134 @@ impl Store {
                 updated_at_ms,
             ],
         )?;
+        Ok(())
+    }
+
+    pub fn list_usage_subscriptions(&self) -> Result<Vec<UsageSubscription>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT subscription_key, provider, display_name, masked_account_label
+             FROM usage_subscriptions
+             ORDER BY provider ASC, display_name ASC, subscription_key ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(UsageSubscription {
+                key: SubscriptionKey::from(row.get::<_, String>(0)?),
+                provider: UsageProvider::from(row.get::<_, String>(1)?),
+                display_name: row.get(2)?,
+                masked_account_label: row.get(3)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
+    }
+
+    pub fn list_provider_subscription_mappings(
+        &self,
+    ) -> Result<Vec<UsageProviderSubscriptionMapping>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT environment_id, provider_instance_id, subscription_key
+             FROM provider_subscription_mappings
+             ORDER BY environment_id ASC, provider_instance_id ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(UsageProviderSubscriptionMapping {
+                environment_id: EnvironmentId::from(row.get::<_, String>(0)?),
+                provider_instance_id: ProviderInstanceId::from(row.get::<_, String>(1)?),
+                subscription_key: SubscriptionKey::from(row.get::<_, String>(2)?),
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
+    }
+
+    /// Atomically update the user-facing subscription metadata and the provider
+    /// instance that consumes that quota boundary.
+    pub fn save_usage_subscription_mapping(
+        &self,
+        subscription: &UsageSubscription,
+        environment_id: &EnvironmentId,
+        provider_instance_id: &ProviderInstanceId,
+        updated_at_ms: u64,
+    ) -> Result<(), StoreError> {
+        if subscription.key.as_str().trim().is_empty()
+            || subscription.display_name.trim().is_empty()
+            || subscription.provider.as_str().trim().is_empty()
+        {
+            return Err(StoreError::Data(
+                "usage subscription key, provider, and display name must not be empty".to_string(),
+            ));
+        }
+        if subscription
+            .masked_account_label
+            .as_deref()
+            .and_then(|label| label.split_once('@'))
+            .is_some_and(|(local, _)| !local.contains('*'))
+        {
+            return Err(StoreError::Data(
+                "usage subscription email labels must be masked".to_string(),
+            ));
+        }
+        for (field, value) in [
+            ("environment id", environment_id.as_str()),
+            ("provider instance id", provider_instance_id.as_str()),
+        ] {
+            if value.trim().is_empty() {
+                return Err(StoreError::Data(format!("{field} must not be empty")));
+            }
+        }
+        let updated_at_ms = checked_i64(updated_at_ms, "usage subscription updated_at_ms")?;
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let existing_provider = tx
+            .query_row(
+                "SELECT provider FROM usage_subscriptions WHERE subscription_key = ?1",
+                [subscription.key.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        if existing_provider
+            .as_deref()
+            .is_some_and(|provider| provider != subscription.provider.as_str())
+        {
+            return Err(StoreError::Data(
+                "an existing named subscription cannot be reassigned to another provider"
+                    .to_string(),
+            ));
+        }
+        tx.execute(
+            "INSERT INTO usage_subscriptions (
+                subscription_key, provider, display_name, masked_account_label,
+                created_at_ms, updated_at_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+             ON CONFLICT(subscription_key) DO UPDATE SET
+                display_name = excluded.display_name,
+                masked_account_label = excluded.masked_account_label,
+                updated_at_ms = excluded.updated_at_ms",
+            params![
+                subscription.key.as_str(),
+                subscription.provider.as_str(),
+                subscription.display_name,
+                subscription.masked_account_label,
+                updated_at_ms,
+            ],
+        )?;
+        tx.execute(
+            "INSERT INTO provider_subscription_mappings (
+                environment_id, provider_instance_id, subscription_key, updated_at_ms
+             ) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(environment_id, provider_instance_id) DO UPDATE SET
+                subscription_key = excluded.subscription_key,
+                updated_at_ms = excluded.updated_at_ms",
+            params![
+                environment_id.as_str(),
+                provider_instance_id.as_str(),
+                subscription.key.as_str(),
+                updated_at_ms,
+            ],
+        )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -2311,6 +2701,7 @@ impl Store {
     // ── Schedules ─────────────────────────────────────────────────────────
 
     pub fn save_schedule(&self, schedule: &ScheduleRecord) -> Result<(), StoreError> {
+        schedule.validate().map_err(StoreError::Data)?;
         let conn = self.conn.lock().unwrap();
         let def_json = serde_json::to_string(schedule)?;
         let updated_ms = std::time::SystemTime::now()
@@ -2349,6 +2740,19 @@ impl Store {
         }
 
         Ok(result)
+    }
+
+    pub fn get_schedule(&self, id: &ScheduleId) -> Result<Option<ScheduleRecord>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let json = conn
+            .query_row(
+                "SELECT definition_json FROM schedules WHERE id = ?1",
+                [id.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        json.map(|json| serde_json::from_str(&json).map_err(StoreError::from))
+            .transpose()
     }
 
     // ── Settings ──────────────────────────────────────────────────────────
@@ -3535,7 +3939,7 @@ mod tests {
             id: pandamux_core::FailoverPoolId::new(id),
             display_name: "Primary pool".to_string(),
             members: vec![pandamux_core::FailoverPoolMember {
-                provider_instance_id: ProviderInstanceId::new("claude-work"),
+                provider_instance_id: ProviderInstanceId::new("claude-default"),
                 subscription_key: SubscriptionKey::new("subkey-work"),
             }],
             revision: 1,
@@ -3547,7 +3951,7 @@ mod tests {
             id: pandamux_core::OrganizationId::new(id),
             display_name: "Work organization".to_string(),
             project_ids: vec![ProjectId::new(project_id)],
-            allowed_provider_instances: vec![ProviderInstanceId::new("claude-work")],
+            allowed_provider_instances: vec![ProviderInstanceId::new("claude-default")],
             allowed_subscriptions: vec![SubscriptionKey::new("subkey-work")],
             failover_pool_ids: vec![pandamux_core::FailoverPoolId::new("pool-work")],
             default_tier_mapping: None,
@@ -3555,6 +3959,37 @@ mod tests {
             daily_budget_micro_usd: Some(10_000_000),
             broadside: pandamux_core::BroadsidePolicy::default(),
             revision: 1,
+        }
+    }
+
+    fn configure_policy_mappings(store: &Store) {
+        for (key, provider, display_name, provider_instance) in [
+            (
+                "subkey-work",
+                UsageProvider::Claude,
+                "Work Claude",
+                "claude-default",
+            ),
+            (
+                "subkey-codex",
+                UsageProvider::Codex,
+                "Work Codex",
+                "codex-default",
+            ),
+        ] {
+            store
+                .save_usage_subscription_mapping(
+                    &UsageSubscription {
+                        key: SubscriptionKey::new(key),
+                        provider,
+                        display_name: display_name.to_string(),
+                        masked_account_label: None,
+                    },
+                    &EnvironmentId::new("env-local"),
+                    &ProviderInstanceId::new(provider_instance),
+                    999,
+                )
+                .expect("save policy mapping");
         }
     }
 
@@ -3637,6 +4072,200 @@ mod tests {
                 .revision,
             2
         );
+    }
+
+    #[test]
+    fn settings_persist_canonical_policy_and_route_by_named_subscription() {
+        let store = Store::in_memory().expect("open store");
+        let subscription = UsageSubscription {
+            key: SubscriptionKey::new("subkey-work"),
+            provider: UsageProvider::Claude,
+            display_name: "Work Claude".to_string(),
+            masked_account_label: Some("te***@example.com".to_string()),
+        };
+        store
+            .save_usage_subscription_mapping(
+                &subscription,
+                &EnvironmentId::new("env-local"),
+                &ProviderInstanceId::new("claude-default"),
+                1000,
+            )
+            .expect("save named subscription mapping");
+
+        let settings = UserSettings {
+            organizations: vec![organization_policy("org-work", "proj-one")],
+            ..UserSettings::default()
+        };
+        store
+            .save_settings_with_organization_policies(&settings, 1001)
+            .expect("save canonical settings");
+        let (policy, key) = store
+            .authorize_provider_for_project(
+                &ProjectId::new("proj-one"),
+                &EnvironmentId::new("env-local"),
+                &ProviderInstanceId::new("claude-default"),
+            )
+            .expect("allowed route");
+        assert_eq!(policy.display_name, "Work organization");
+        assert_eq!(key, subscription.key);
+        assert!(
+            store
+                .authorize_provider_for_project(
+                    &ProjectId::new("proj-one"),
+                    &EnvironmentId::new("env-local"),
+                    &ProviderInstanceId::new("claude-personal"),
+                )
+                .is_err()
+        );
+
+        let catalog = store
+            .list_usage_subscriptions()
+            .expect("subscription catalog");
+        assert_eq!(catalog[0].display_name, "Work Claude");
+        assert_eq!(
+            store
+                .list_provider_subscription_mappings()
+                .expect("mapping catalog")
+                .len(),
+            1
+        );
+
+        let mut wrong_provider = subscription.clone();
+        wrong_provider.provider = UsageProvider::Codex;
+        let error = store
+            .save_usage_subscription_mapping(
+                &wrong_provider,
+                &EnvironmentId::new("env-local"),
+                &ProviderInstanceId::new("codex-work"),
+                1002,
+            )
+            .expect_err("subscription provider identity must be immutable");
+        assert!(error.to_string().contains("cannot be reassigned"));
+    }
+
+    #[test]
+    fn organization_provider_removal_requires_schedule_impact_review() {
+        let store = Store::in_memory().expect("open store");
+        configure_policy_mappings(&store);
+        let mut policy = organization_policy("org-work", "proj-one");
+        policy
+            .allowed_provider_instances
+            .push(ProviderInstanceId::new("codex-default"));
+        policy
+            .allowed_subscriptions
+            .push(SubscriptionKey::new("subkey-codex"));
+        let settings = UserSettings {
+            organizations: vec![policy.clone()],
+            ..UserSettings::default()
+        };
+        store
+            .save_settings_with_organization_policies(&settings, 1000)
+            .expect("save initial policy");
+        store
+            .save_schedule(&ScheduleRecord {
+                id: ScheduleId::new("schedule-policy-impact"),
+                name: "Nightly review".to_string(),
+                project_id: Some(ProjectId::new("proj-one")),
+                environment: pandamux_core::ScheduleEnvironmentRef {
+                    id: EnvironmentId::new("env-local"),
+                    display_name: "Local".to_string(),
+                },
+                trigger: pandamux_core::ScheduleTrigger {
+                    cron: "0 0 * * *".to_string(),
+                    timezone: "UTC".to_string(),
+                },
+                target: ScheduleTarget::Session {
+                    project_path: "/repo".to_string(),
+                    prompt: "Review".to_string(),
+                    provider: Some("claude-default".to_string()),
+                    model: None,
+                    thread_mode: Default::default(),
+                },
+                approval: Default::default(),
+                overlap: Default::default(),
+                catch_up: Default::default(),
+                budget: Default::default(),
+                notify: Vec::new(),
+                full_access_opt_in: false,
+                enabled: true,
+            })
+            .expect("save enabled schedule");
+
+        policy.revision = 2;
+        policy.allowed_provider_instances = vec![ProviderInstanceId::new("codex-default")];
+        policy.allowed_subscriptions = vec![SubscriptionKey::new("subkey-codex")];
+        let removed_settings = UserSettings {
+            organizations: vec![policy],
+            ..settings
+        };
+        let error = store
+            .save_settings_with_organization_policies(&removed_settings, 1001)
+            .expect_err("provider removal must be blocked");
+        assert!(error.to_string().contains("impact review blocked"));
+        assert!(error.to_string().contains("Nightly review"));
+        assert!(!error.to_string().contains("claude-default"));
+    }
+
+    #[test]
+    fn schedule_impact_review_is_scoped_to_the_assigned_organization() {
+        let store = Store::in_memory().expect("open store");
+        configure_policy_mappings(&store);
+        let mut work = organization_policy("org-work", "proj-one");
+        work.allowed_provider_instances
+            .push(ProviderInstanceId::new("codex-default"));
+        work.allowed_subscriptions
+            .push(SubscriptionKey::new("subkey-codex"));
+        let mut personal = organization_policy("org-personal", "proj-two");
+        personal
+            .allowed_provider_instances
+            .push(ProviderInstanceId::new("codex-default"));
+        personal
+            .allowed_subscriptions
+            .push(SubscriptionKey::new("subkey-codex"));
+        let mut settings = UserSettings {
+            organizations: vec![work, personal.clone()],
+            ..UserSettings::default()
+        };
+        store
+            .save_settings_with_organization_policies(&settings, 1000)
+            .expect("save initial policies");
+        store
+            .save_schedule(&ScheduleRecord {
+                id: ScheduleId::new("schedule-work-only"),
+                name: "Work review".to_string(),
+                project_id: Some(ProjectId::new("proj-one")),
+                environment: pandamux_core::ScheduleEnvironmentRef {
+                    id: EnvironmentId::new("env-local"),
+                    display_name: "Local".to_string(),
+                },
+                trigger: pandamux_core::ScheduleTrigger {
+                    cron: "0 0 * * *".to_string(),
+                    timezone: "UTC".to_string(),
+                },
+                target: ScheduleTarget::Session {
+                    project_path: "/repo".to_string(),
+                    prompt: "Review".to_string(),
+                    provider: Some("claude-default".to_string()),
+                    model: None,
+                    thread_mode: Default::default(),
+                },
+                approval: Default::default(),
+                overlap: Default::default(),
+                catch_up: Default::default(),
+                budget: Default::default(),
+                notify: Vec::new(),
+                full_access_opt_in: false,
+                enabled: true,
+            })
+            .expect("save work schedule");
+
+        personal.revision = 2;
+        personal.allowed_provider_instances = vec![ProviderInstanceId::new("codex-default")];
+        personal.allowed_subscriptions = vec![SubscriptionKey::new("subkey-codex")];
+        settings.organizations[1] = personal;
+        store
+            .save_settings_with_organization_policies(&settings, 1001)
+            .expect("unrelated work schedule must not block personal policy edit");
     }
 
     fn usage_observation(id: &str, input: u64) -> UsageObservation {

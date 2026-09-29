@@ -230,6 +230,8 @@ pub enum OrganizationPolicyError {
     EmptyDisplayName,
     ZeroRevision,
     ZeroConcurrency,
+    EmptyAllowedProviders,
+    EmptyAllowedSubscriptions,
     DuplicateReference {
         field: &'static str,
         value: String,
@@ -237,6 +239,10 @@ pub enum OrganizationPolicyError {
     EmptyTierName,
     EmptyTierModel(String),
     TierProviderNotAllowed(ProviderInstanceId),
+    ProviderNotAllowed(ProviderInstanceId),
+    SubscriptionNotAllowed(SubscriptionKey),
+    BroadsideArtifactsDenied,
+    BroadsideTranscriptsDenied,
     MissingProjectAssignment(ProjectId),
     AmbiguousProjectAssignment(ProjectId),
     InvalidPolicy {
@@ -254,16 +260,31 @@ impl fmt::Display for OrganizationPolicyError {
             Self::ZeroConcurrency => {
                 f.write_str("organization max concurrency must be greater than zero")
             }
+            Self::EmptyAllowedProviders => {
+                f.write_str("organization must allow at least one provider instance")
+            }
+            Self::EmptyAllowedSubscriptions => {
+                f.write_str("organization must allow at least one subscription")
+            }
             Self::DuplicateReference { field, value } => {
                 write!(f, "duplicate {field} reference: {value}")
             }
             Self::EmptyTierName => f.write_str("tier name must not be empty"),
             Self::EmptyTierModel(tier) => write!(f, "tier {tier} must name a model"),
-            Self::TierProviderNotAllowed(provider) => {
-                write!(
-                    f,
-                    "tier provider is not allowed by organization: {provider}"
-                )
+            Self::TierProviderNotAllowed(_) => {
+                f.write_str("tier provider is not allowed by organization")
+            }
+            Self::ProviderNotAllowed(_) => {
+                f.write_str("provider instance is not allowed by organization")
+            }
+            Self::SubscriptionNotAllowed(_) => {
+                f.write_str("subscription is not allowed by organization")
+            }
+            Self::BroadsideArtifactsDenied => {
+                f.write_str("organization does not allow Broadside artifact sharing")
+            }
+            Self::BroadsideTranscriptsDenied => {
+                f.write_str("organization does not allow Broadside transcript sharing")
             }
             Self::MissingProjectAssignment(project) => {
                 write!(f, "project has no organization assignment: {project}")
@@ -297,6 +318,12 @@ impl OrganizationPolicy {
         }
         if self.max_concurrency == Some(0) {
             return Err(OrganizationPolicyError::ZeroConcurrency);
+        }
+        if self.allowed_provider_instances.is_empty() {
+            return Err(OrganizationPolicyError::EmptyAllowedProviders);
+        }
+        if self.allowed_subscriptions.is_empty() {
+            return Err(OrganizationPolicyError::EmptyAllowedSubscriptions);
         }
         ensure_unique("project", self.project_ids.iter().map(ProjectId::as_str))?;
         ensure_unique(
@@ -338,6 +365,86 @@ impl OrganizationPolicy {
         }
         Ok(())
     }
+
+    /// Authorize a concrete provider runtime and quota boundary before routing.
+    pub fn authorize_provider_instance(
+        &self,
+        provider_instance_id: &ProviderInstanceId,
+    ) -> Result<(), OrganizationPolicyError> {
+        self.validate()?;
+        if !self
+            .allowed_provider_instances
+            .iter()
+            .any(|allowed| allowed == provider_instance_id)
+        {
+            return Err(OrganizationPolicyError::ProviderNotAllowed(
+                provider_instance_id.clone(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Authorize a concrete provider runtime and quota boundary before routing.
+    pub fn authorize_route(
+        &self,
+        provider_instance_id: &ProviderInstanceId,
+        subscription_key: &SubscriptionKey,
+    ) -> Result<(), OrganizationPolicyError> {
+        self.authorize_provider_instance(provider_instance_id)?;
+        if !self
+            .allowed_subscriptions
+            .iter()
+            .any(|allowed| allowed == subscription_key)
+        {
+            return Err(OrganizationPolicyError::SubscriptionNotAllowed(
+                subscription_key.clone(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn authorize_broadside(
+        &self,
+        content: BroadsideContent,
+    ) -> Result<(), OrganizationPolicyError> {
+        self.validate()?;
+        match content {
+            BroadsideContent::Artifact if !self.broadside.allow_artifacts => {
+                Err(OrganizationPolicyError::BroadsideArtifactsDenied)
+            }
+            BroadsideContent::Transcript if !self.broadside.allow_transcripts => {
+                Err(OrganizationPolicyError::BroadsideTranscriptsDenied)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Apply organization hard filters before any failover scoring. A pool
+    /// member never gains access merely because it is healthy or the only
+    /// candidate.
+    pub fn eligible_failover_members<'a>(
+        &self,
+        pool: &'a FailoverPool,
+    ) -> Result<Vec<&'a FailoverPoolMember>, OrganizationPolicyError> {
+        self.validate()?;
+        Ok(pool
+            .members
+            .iter()
+            .filter(|member| {
+                self.allowed_provider_instances
+                    .contains(&member.provider_instance_id)
+                    && self
+                        .allowed_subscriptions
+                        .contains(&member.subscription_key)
+            })
+            .collect())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BroadsideContent {
+    Artifact,
+    Transcript,
 }
 
 fn ensure_unique<'a>(
@@ -424,6 +531,66 @@ mod tests {
                 .as_str(),
             "org-work"
         );
+    }
+
+    #[test]
+    fn route_and_broadside_authorization_fail_closed() {
+        let mut policy = policy("org-work", "proj-one");
+        policy
+            .authorize_route(
+                &ProviderInstanceId::new("codex-work"),
+                &SubscriptionKey::new("subkey-work"),
+            )
+            .expect("allowed route");
+        let denied = policy
+            .authorize_route(
+                &ProviderInstanceId::new("codex-personal"),
+                &SubscriptionKey::new("subkey-personal"),
+            )
+            .expect_err("personal provider must be denied");
+        assert!(matches!(
+            &denied,
+            OrganizationPolicyError::ProviderNotAllowed(_)
+        ));
+        assert!(!denied.to_string().contains("codex-personal"));
+        assert_eq!(
+            policy.authorize_broadside(BroadsideContent::Artifact),
+            Err(OrganizationPolicyError::BroadsideArtifactsDenied)
+        );
+        policy.broadside.allow_artifacts = true;
+        policy
+            .authorize_broadside(BroadsideContent::Artifact)
+            .expect("artifact sharing allowed");
+    }
+
+    #[test]
+    fn cross_organization_failover_is_filtered_before_scoring() {
+        let policy = policy("org-work", "proj-one");
+        let pool = FailoverPool {
+            id: FailoverPoolId::new("pool-mixed"),
+            display_name: "Mixed accounts".to_string(),
+            members: vec![
+                FailoverPoolMember {
+                    provider_instance_id: ProviderInstanceId::new("codex-personal"),
+                    subscription_key: SubscriptionKey::new("subkey-personal"),
+                },
+                FailoverPoolMember {
+                    provider_instance_id: ProviderInstanceId::new("codex-work"),
+                    subscription_key: SubscriptionKey::new("subkey-personal"),
+                },
+                FailoverPoolMember {
+                    provider_instance_id: ProviderInstanceId::new("codex-work"),
+                    subscription_key: SubscriptionKey::new("subkey-work"),
+                },
+            ],
+            revision: 1,
+        };
+
+        let eligible = policy
+            .eligible_failover_members(&pool)
+            .expect("valid policy");
+        assert_eq!(eligible.len(), 1);
+        assert_eq!(eligible[0].subscription_key.as_str(), "subkey-work");
     }
 
     #[test]

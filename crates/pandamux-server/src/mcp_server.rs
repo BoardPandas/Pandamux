@@ -1,5 +1,7 @@
 use crate::store::Store;
-use pandamux_core::{ScheduleRecord, ScheduleTarget, UserSettings};
+use pandamux_core::{
+    EnvironmentId, ProjectId, ProviderInstanceId, ScheduleRecord, ScheduleTarget, UserSettings,
+};
 use pandamux_protocol::{McpCallToolParams, McpCallToolResult, McpContentItem, McpToolDefinition};
 use serde_json::json;
 
@@ -31,6 +33,21 @@ impl McpServer {
                 input_schema: json!({
                     "type": "object",
                     "properties": {}
+                }),
+            },
+            McpToolDefinition {
+                name: "validate_thread_proposal".to_string(),
+                description: "Validate a proposed project/provider route without creating a thread"
+                    .to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "projectId": { "type": "string", "minLength": 1 },
+                        "environmentId": { "type": "string", "minLength": 1 },
+                        "providerInstanceId": { "type": "string", "minLength": 1 }
+                    },
+                    "required": ["projectId", "environmentId", "providerInstanceId"],
+                    "additionalProperties": false
                 }),
             },
         ]
@@ -76,6 +93,101 @@ impl McpServer {
                     is_error: true,
                 },
             },
+            "validate_thread_proposal" => {
+                let project_id = params
+                    .arguments
+                    .get("projectId")
+                    .and_then(|value| value.as_str());
+                let environment_id = params
+                    .arguments
+                    .get("environmentId")
+                    .and_then(|value| value.as_str());
+                let provider_instance_id = params
+                    .arguments
+                    .get("providerInstanceId")
+                    .and_then(|value| value.as_str());
+                let Some((project_id, environment_id, provider_instance_id)) = project_id
+                    .zip(environment_id)
+                    .zip(provider_instance_id)
+                    .map(|((project, environment), provider)| (project, environment, provider))
+                else {
+                    return McpCallToolResult {
+                        content: vec![McpContentItem::Text {
+                            text:
+                                "Proposal requires projectId, environmentId, and providerInstanceId"
+                                    .to_string(),
+                        }],
+                        is_error: true,
+                    };
+                };
+                match self.store.authorize_provider_for_project(
+                    &ProjectId::new(project_id),
+                    &EnvironmentId::new(environment_id),
+                    &ProviderInstanceId::new(provider_instance_id),
+                ) {
+                    Ok((policy, subscription_key)) => {
+                        let provider = self
+                            .store
+                            .get_settings()
+                            .ok()
+                            .flatten()
+                            .unwrap_or_default()
+                            .providers
+                            .into_iter()
+                            .find(|provider| provider.id.as_str() == provider_instance_id);
+                        let Some(provider) = provider.filter(|provider| {
+                            provider.enabled
+                                && provider
+                                    .environment_id
+                                    .as_ref()
+                                    .is_none_or(|configured| configured.as_str() == environment_id)
+                        }) else {
+                            return McpCallToolResult {
+                                content: vec![McpContentItem::Text {
+                                    text: serde_json::to_string_pretty(&json!({
+                                        "allowed": false,
+                                        "reason": "Named provider is disabled or unavailable in the requested environment",
+                                        "note": "Rejected before routing or scoring"
+                                    }))
+                                    .unwrap_or_default(),
+                                }],
+                                is_error: true,
+                            };
+                        };
+                        let subscription_name = self
+                            .store
+                            .usage_subscription_by_key(&subscription_key)
+                            .ok()
+                            .flatten()
+                            .map(|subscription| subscription.display_name)
+                            .unwrap_or_else(|| "Named subscription unavailable".to_string());
+                        McpCallToolResult {
+                            content: vec![McpContentItem::Text {
+                                text: serde_json::to_string_pretty(&json!({
+                                    "allowed": true,
+                                    "organization": policy.display_name,
+                                    "providerInstanceName": provider.display_name,
+                                    "subscriptionName": subscription_name,
+                                    "note": "Validation does not create a thread or grant approval"
+                                }))
+                                .unwrap_or_default(),
+                            }],
+                            is_error: false,
+                        }
+                    }
+                    Err(error) => McpCallToolResult {
+                        content: vec![McpContentItem::Text {
+                            text: serde_json::to_string_pretty(&json!({
+                                "allowed": false,
+                                "reason": error.to_string(),
+                                "note": "Rejected before routing or scoring"
+                            }))
+                            .unwrap_or_default(),
+                        }],
+                        is_error: true,
+                    },
+                }
+            }
             unknown => McpCallToolResult {
                 content: vec![McpContentItem::Text {
                     text: format!("Unknown tool: {unknown}"),
@@ -190,6 +302,7 @@ mod tests {
             .save_schedule(&ScheduleRecord {
                 id: ScheduleId::new("schedule-safe-id"),
                 name: "Nightly Review".to_string(),
+                project_id: Some(pandamux_core::ProjectId::new("project-safe-id")),
                 environment: ScheduleEnvironmentRef {
                     id: EnvironmentId::new("env-local"),
                     display_name: "Local".to_string(),
@@ -240,5 +353,73 @@ mod tests {
                 assert!(!text.contains(secret), "projection leaked {secret}");
             }
         }
+    }
+
+    #[test]
+    fn mcp_proposals_validate_policy_without_implicit_approval() {
+        let store = Store::in_memory().expect("store");
+        store
+            .save_usage_subscription_mapping(
+                &pandamux_core::UsageSubscription {
+                    key: pandamux_core::SubscriptionKey::new("subkey-work"),
+                    provider: pandamux_core::UsageProvider::Codex,
+                    display_name: "Work Codex".to_string(),
+                    masked_account_label: None,
+                },
+                &EnvironmentId::new("env-local"),
+                &ProviderInstanceId::new("codex-default"),
+                1000,
+            )
+            .expect("save mapping");
+        store
+            .save_organization_policy(
+                &pandamux_core::OrganizationPolicy {
+                    id: pandamux_core::OrganizationId::new("org-work"),
+                    display_name: "Work".to_string(),
+                    project_ids: vec![ProjectId::new("project-work")],
+                    allowed_provider_instances: vec![ProviderInstanceId::new("codex-default")],
+                    allowed_subscriptions: vec![pandamux_core::SubscriptionKey::new("subkey-work")],
+                    failover_pool_ids: Vec::new(),
+                    default_tier_mapping: None,
+                    max_concurrency: None,
+                    daily_budget_micro_usd: None,
+                    broadside: Default::default(),
+                    revision: 1,
+                },
+                1000,
+            )
+            .expect("save policy");
+        let server = McpServer::new(store);
+
+        let allowed = server.call_tool(&McpCallToolParams {
+            name: "validate_thread_proposal".to_string(),
+            arguments: json!({
+                "projectId": "project-work",
+                "environmentId": "env-local",
+                "providerInstanceId": "codex-default"
+            }),
+        });
+        assert!(!allowed.is_error);
+        let McpContentItem::Text { text } = &allowed.content[0] else {
+            panic!("expected validation text")
+        };
+        assert!(text.contains("does not create a thread or grant approval"));
+        assert!(text.contains("Work Codex"));
+        assert!(!text.contains("codex-default"));
+
+        let denied = server.call_tool(&McpCallToolParams {
+            name: "validate_thread_proposal".to_string(),
+            arguments: json!({
+                "projectId": "project-work",
+                "environmentId": "env-local",
+                "providerInstanceId": "codex-personal"
+            }),
+        });
+        assert!(denied.is_error);
+        let McpContentItem::Text { text } = &denied.content[0] else {
+            panic!("expected rejection text")
+        };
+        assert!(text.contains("Rejected before routing or scoring"));
+        assert!(!text.contains("codex-personal"));
     }
 }

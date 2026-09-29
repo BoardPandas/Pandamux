@@ -5,9 +5,11 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use pandamux_core::{
-    CAPACITY_SNAPSHOT_SCHEMA_VERSION, CapacityConfidence, CapacityEvidenceScope, CapacitySnapshot,
-    DEFAULT_CAPACITY_MAX_AGE_MS, EnvironmentId, ProviderKind, ThreadEventKind, UsageSubscription,
-    UserSettings,
+    AccessMode, AgentId, CAPACITY_SNAPSHOT_SCHEMA_VERSION, CapacityConfidence,
+    CapacityEvidenceScope, CapacitySnapshot, DEFAULT_CAPACITY_MAX_AGE_MS, EnvironmentId,
+    OrganizationPolicy, ProviderInstanceId, ProviderKind, RunId, ScheduleApprovalPolicy,
+    ScheduleRecord, ScheduleTarget, SubscriptionKey, ThreadEventKind, ThreadOrigin,
+    UsageSubscription, UserSettings,
 };
 use pandamux_protocol::antigravity_rpc::{
     AntigravityDiscardUploadParams, AntigravityInstallParams, AntigravityOAuthRelayParams,
@@ -25,13 +27,15 @@ use pandamux_protocol::{
     McpCallToolParams, PROTOCOL_VERSION, PingResult, ProviderHealthParams, ProviderHealthReport,
     ProviderHealthResult, ProviderLoginFlow, ProviderLoginGuidance, ProviderLoginLaunchParams,
     ProviderLoginLaunchResult, ProviderLoginPreview, ProviderLoginPreviewParams, RpcError,
-    RpcRequest, RpcResponse, ServerCapabilities, ServerRole, SettingsGetParams, SettingsGetResult,
-    SettingsSetParams, SubAgentTreeItem, SubAgentTreeParams, SubAgentTreeResult,
-    TerminalAttachParams, TerminalCloseParams, TerminalInputParams, TerminalOpenParams,
-    TerminalResizeParams, ThreadCancelTurnParams, ThreadCreateParams, ThreadGetParams,
-    ThreadListParams, ThreadRespondApprovalParams, ThreadResumeParams, ThreadSendTurnParams,
-    UsageAckParams, UsageAckResult, UsageBackfillParams, UsageExportParams, UsageQueryParams,
-    WorktreeSyncDeltaParams, WorktreeSyncDeltaResult,
+    RpcRequest, RpcResponse, ScheduleRunParams, ScheduleRunResult, ScheduleSaveParams,
+    ScheduleValidateParams, ScheduleValidationResult, ServerCapabilities, ServerRole,
+    SettingsGetParams, SettingsGetResult, SettingsSetParams, SubAgentTreeItem, SubAgentTreeParams,
+    SubAgentTreeResult, TerminalAttachParams, TerminalCloseParams, TerminalInputParams,
+    TerminalOpenParams, TerminalResizeParams, ThreadCancelTurnParams, ThreadCreateParams,
+    ThreadGetParams, ThreadListParams, ThreadRespondApprovalParams, ThreadResumeParams,
+    ThreadSendTurnParams, UsageAckParams, UsageAckResult, UsageBackfillParams, UsageCatalogResult,
+    UsageExportParams, UsageQueryParams, UsageSubscriptionSetParams, WorktreeSyncDeltaParams,
+    WorktreeSyncDeltaResult,
 };
 
 use crate::attachment::AttachmentManager;
@@ -391,6 +395,20 @@ fn usage_params_error(reason: &str, message: impl Into<String>) -> RpcError {
         message,
         json!({
             "reason": reason,
+        }),
+    )
+}
+
+fn organization_policy_rpc_error(
+    project_id: &pandamux_core::ProjectId,
+    message: impl Into<String>,
+) -> RpcError {
+    RpcError::with_data(
+        -32030,
+        message,
+        json!({
+            "reason": "organization_policy_denied",
+            "projectId": project_id,
         }),
     )
 }
@@ -795,6 +813,101 @@ impl Router {
         response
     }
 
+    fn resolve_authorized_project_provider(
+        &self,
+        project_id: &pandamux_core::ProjectId,
+        environment_id: &EnvironmentId,
+        requested: Option<&ProviderInstanceId>,
+    ) -> Result<(OrganizationPolicy, ProviderInstanceId), RpcError> {
+        let policy = self
+            .store
+            .organization_policy_for_project(project_id)
+            .map_err(|error| organization_policy_rpc_error(project_id, error.to_string()))?;
+        if let Some(requested) = requested {
+            self.store
+                .authorize_provider_for_project(project_id, environment_id, requested)
+                .map_err(|error| organization_policy_rpc_error(project_id, error.to_string()))?;
+            self.provider_resolver
+                .resolve(requested, environment_id)
+                .map_err(|_| {
+                    organization_policy_rpc_error(
+                        project_id,
+                        "allowed named provider is unavailable in the target environment",
+                    )
+                })?;
+            return Ok((policy, requested.clone()));
+        }
+
+        let selected = policy
+            .allowed_provider_instances
+            .iter()
+            .find(|candidate| {
+                self.store
+                    .authorize_provider_for_project(project_id, environment_id, candidate)
+                    .is_ok()
+                    && self
+                        .provider_resolver
+                        .resolve(candidate, environment_id)
+                        .is_ok()
+            })
+            .cloned()
+            .ok_or_else(|| {
+                organization_policy_rpc_error(
+                    project_id,
+                    "organization has no enabled provider with an allowed named subscription",
+                )
+            })?;
+        Ok((policy, selected))
+    }
+
+    fn prepare_forwarded_thread_create(
+        &self,
+        params: &Value,
+        target_environment: &EnvironmentId,
+    ) -> Result<Value, RpcError> {
+        let mut params: ThreadCreateParams = serde_json::from_value(params.clone())
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        if let Some(project_id) = params.project_id.as_ref() {
+            let (_, provider_instance_id) = self.resolve_authorized_project_provider(
+                project_id,
+                target_environment,
+                params.provider_instance_id.as_ref(),
+            )?;
+            params.provider_instance_id = Some(provider_instance_id);
+        }
+        params.environment_id = Some(target_environment.clone());
+        serde_json::to_value(params).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn authorize_forwarded_thread_turn(
+        &self,
+        params: &Value,
+        target_environment: &EnvironmentId,
+    ) -> Result<(), RpcError> {
+        let params: ThreadSendTurnParams = serde_json::from_value(params.clone())
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let thread = self
+            .store
+            .get_thread(&params.thread_id)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?
+            .ok_or_else(|| RpcError::not_found("Thread not found"))?;
+        if &thread.environment_id != target_environment {
+            return Err(RpcError::with_data(
+                -32030,
+                "Thread environment disagrees with the routed environment",
+                json!({ "reason": "organization_policy_environment_mismatch" }),
+            ));
+        }
+        if let Some(project_id) = thread.project_id.as_ref() {
+            self.resolve_authorized_project_provider(
+                project_id,
+                target_environment,
+                Some(&thread.provider_instance_id),
+            )?;
+        }
+        Ok(())
+    }
+
     fn resolve_target_environment(
         &self,
         method: &str,
@@ -802,7 +915,13 @@ impl Router {
     ) -> Option<pandamux_core::ids::EnvironmentId> {
         if matches!(
             method,
-            "usage.export" | "usage.backfill" | "usage.ack" | "usage.query" | "capacity.query"
+            "usage.export"
+                | "usage.backfill"
+                | "usage.ack"
+                | "usage.query"
+                | "usage.catalog"
+                | "usage.subscription.set"
+                | "capacity.query"
         ) {
             return None;
         }
@@ -879,6 +998,31 @@ impl Router {
             && let Some(target_env) = self.resolve_target_environment(&method, &params)
             && !self.environment_router.is_local(&Some(target_env.clone()))
         {
+            let request_to_forward = if method == "thread.create" {
+                match self.prepare_forwarded_thread_create(&params, &target_env) {
+                    Ok(params) => RpcRequest {
+                        params: Some(params),
+                        ..req.clone()
+                    },
+                    Err(error) => {
+                        if is_notification {
+                            return None;
+                        }
+                        return Some(RpcResponse::error(id, error));
+                    }
+                }
+            } else {
+                if (method == "thread.send_turn" || method == "thread.sendTurn")
+                    && let Err(error) = self.authorize_forwarded_thread_turn(&params, &target_env)
+                {
+                    if is_notification {
+                        return None;
+                    }
+                    return Some(RpcResponse::error(id, error));
+                }
+                req.clone()
+            };
+
             // Sync referenced attachments across tunnel before dispatching remote turn
             if (method == "thread.send_turn" || method == "thread.sendTurn")
                 && let Some(tid_str) = params.get("threadId").and_then(|v| v.as_str())
@@ -920,11 +1064,11 @@ impl Router {
             }
 
             let forwarded = if method == "antigravity.install" {
-                self.forward_remote_antigravity_install(&target_env, &req)
+                self.forward_remote_antigravity_install(&target_env, &request_to_forward)
                     .await
             } else {
                 self.environment_router
-                    .forward_request(&target_env, &req)
+                    .forward_request(&target_env, &request_to_forward)
                     .await
             };
 
@@ -970,10 +1114,12 @@ impl Router {
             "system.hello" => self.handle_hello(params),
             "system.identify" => self.handle_identify(),
             "system.capabilities" => self.handle_capabilities(),
-            "thread.create" => self.handle_thread_create(params),
+            "thread.create" => self.handle_thread_create(context, params),
             "thread.get" => self.handle_thread_get(params),
             "thread.list" => self.handle_thread_list(params),
-            "thread.send_turn" | "thread.sendTurn" => self.handle_thread_send_turn(params).await,
+            "thread.send_turn" | "thread.sendTurn" => {
+                self.handle_thread_send_turn(context, params).await
+            }
             "thread.cancel_turn" | "thread.interrupt" => {
                 self.handle_thread_cancel_turn(params).await
             }
@@ -990,9 +1136,14 @@ impl Router {
             "usage.backfill" => self.handle_usage_backfill(context, params),
             "usage.ack" => self.handle_usage_ack(context, params),
             "usage.query" => self.handle_usage_query(context, params),
+            "usage.catalog" => self.handle_usage_catalog(context),
+            "usage.subscription.set" => self.handle_usage_subscription_set(context, params),
             "capacity.query" => self.handle_capacity_query(context, params),
             "capacity.refresh" => self.handle_capacity_refresh(context, params).await,
             "capacity.push" => self.handle_capacity_push(context, params),
+            "schedule.validate" => self.handle_schedule_validate(context, params),
+            "schedule.save" => self.handle_schedule_save(context, params),
+            "schedule.run" => self.handle_schedule_run(context, params).await,
             "mcp.list_tools" => self.handle_mcp_list_tools(),
             "mcp.call_tool" => self.handle_mcp_call_tool(params),
             "notification.post" => self.handle_notification_post(params).await,
@@ -1114,10 +1265,25 @@ impl Router {
         serde_json::to_value(caps).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
-    fn handle_thread_create(&self, params: Value) -> Result<Value, RpcError> {
+    fn handle_thread_create(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
         let p: ThreadCreateParams =
             serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
-        let thread = self.thread_manager.create_thread(p)?;
+        let thread = if matches!(context.peer_role, PeerRole::NodeProxy) {
+            if p.project_id.is_some() && p.provider_instance_id.is_none() {
+                return Err(RpcError::with_data(
+                    -32030,
+                    "Hub-authorized project routes must pin a named provider",
+                    json!({ "reason": "organization_policy_preauthorization_missing" }),
+                ));
+            }
+            self.thread_manager.create_thread_from_hub(p)?
+        } else {
+            self.thread_manager.create_thread(p)?
+        };
         serde_json::to_value(&thread).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
@@ -1138,10 +1304,18 @@ impl Router {
         serde_json::to_value(threads).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
-    async fn handle_thread_send_turn(&self, params: Value) -> Result<Value, RpcError> {
+    async fn handle_thread_send_turn(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
         let p: ThreadSendTurnParams =
             serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
-        let result = self.thread_manager.send_turn(p).await?;
+        let result = if matches!(context.peer_role, PeerRole::NodeProxy) {
+            self.thread_manager.send_turn_from_hub(p).await?
+        } else {
+            self.thread_manager.send_turn(p).await?
+        };
         serde_json::to_value(&result).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
@@ -1231,7 +1405,7 @@ impl Router {
             if let Some(mut updated) = p.settings {
                 updated.normalize();
                 self.store
-                    .save_settings(&updated)
+                    .save_settings_with_organization_policies(&updated, Self::now_ms())
                     .map_err(|e| RpcError::internal_error(e.to_string()))?;
                 return Ok(json!({ "success": true }));
             } else if let (Some(key), Some(value)) = (p.key, p.value) {
@@ -1239,7 +1413,7 @@ impl Router {
                     .map_err(RpcError::invalid_params)?;
                 current.normalize();
                 self.store
-                    .save_settings(&current)
+                    .save_settings_with_organization_policies(&current, Self::now_ms())
                     .map_err(|e| RpcError::internal_error(e.to_string()))?;
                 return Ok(json!({ "success": true }));
             }
@@ -1249,7 +1423,7 @@ impl Router {
         if let Ok(mut settings) = serde_json::from_value::<UserSettings>(params) {
             settings.normalize();
             self.store
-                .save_settings(&settings)
+                .save_settings_with_organization_policies(&settings, Self::now_ms())
                 .map_err(|e| RpcError::internal_error(e.to_string()))?;
             return Ok(json!({ "success": true }));
         }
@@ -1806,6 +1980,83 @@ impl Router {
         serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
     }
 
+    fn handle_usage_catalog(&self, context: &RequestContext) -> Result<Value, RpcError> {
+        require_local_query_peer(context)?;
+        let result = UsageCatalogResult {
+            subscriptions: self
+                .store
+                .list_usage_subscriptions()
+                .map_err(|error| RpcError::internal_error(error.to_string()))?,
+            mappings: self
+                .store
+                .list_provider_subscription_mappings()
+                .map_err(|error| RpcError::internal_error(error.to_string()))?,
+        };
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn handle_usage_subscription_set(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_local_query_peer(context)?;
+        let params: UsageSubscriptionSetParams =
+            serde_json::from_value(params).map_err(|error| {
+                usage_params_error(
+                    "usage_subscription_params_invalid",
+                    format!("Invalid usage.subscription.set params: {error}"),
+                )
+            })?;
+        params
+            .validate()
+            .map_err(|error| usage_params_error("usage_subscription_invalid", error))?;
+
+        let resolved = self
+            .provider_resolver
+            .resolve_allow_disabled(&params.provider_instance_id, &params.environment_id)?;
+        if pandamux_core::UsageProvider::from(resolved.config.provider) != params.provider {
+            return Err(usage_params_error(
+                "usage_subscription_provider_mismatch",
+                "subscription provider does not match the configured provider instance",
+            ));
+        }
+        if let Some(subscription_key) = params.subscription_key.as_ref()
+            && let Some(existing) = self
+                .store
+                .usage_subscription_by_key(subscription_key)
+                .map_err(|error| RpcError::internal_error(error.to_string()))?
+            && existing.provider != params.provider
+        {
+            return Err(usage_params_error(
+                "usage_subscription_provider_change_denied",
+                "an existing named subscription cannot be reassigned to another provider",
+            ));
+        }
+
+        let subscription = UsageSubscription {
+            key: params.subscription_key.unwrap_or_else(|| {
+                SubscriptionKey::new(format!("subscription-{}", uuid::Uuid::new_v4().simple()))
+            }),
+            provider: params.provider,
+            display_name: params.display_name.trim().to_string(),
+            masked_account_label: params
+                .masked_account_label
+                .map(|label| label.trim().to_string()),
+        };
+        self.store
+            .save_usage_subscription_mapping(
+                &subscription,
+                &params.environment_id,
+                &params.provider_instance_id,
+                Self::now_ms(),
+            )
+            .map_err(|error| {
+                usage_params_error("usage_subscription_save_failed", error.to_string())
+            })?;
+        self.handle_usage_catalog(context)
+    }
+
     fn handle_capacity_query(
         &self,
         context: &RequestContext,
@@ -1977,6 +2228,208 @@ impl Router {
             .map_err(|error| RpcError::internal_error(error.to_string()))?;
         serde_json::to_value(CapacityPushResult {
             accepted: u32::try_from(snapshots.len()).unwrap_or(u32::MAX),
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn validate_schedule_policy(
+        &self,
+        schedule: &ScheduleRecord,
+    ) -> Result<(Option<OrganizationPolicy>, Option<ProviderInstanceId>), RpcError> {
+        schedule.validate().map_err(|error| {
+            RpcError::with_data(
+                -32602,
+                error,
+                json!({ "reason": "schedule_definition_invalid" }),
+            )
+        })?;
+
+        if matches!(&schedule.target, ScheduleTarget::Orchestrator { .. }) {
+            return Err(RpcError::with_data(
+                -32031,
+                "Orchestrator schedule validation is not available in this checkpoint",
+                json!({ "reason": "schedule_orchestrator_unavailable" }),
+            ));
+        }
+        if matches!(
+            &schedule.target,
+            ScheduleTarget::Session {
+                thread_mode: pandamux_core::ScheduleThreadMode::ContinueExistingThread,
+                ..
+            }
+        ) {
+            return Err(RpcError::with_data(
+                -32031,
+                "Continue-existing-thread schedules are not available in this checkpoint",
+                json!({ "reason": "schedule_continue_unavailable" }),
+            ));
+        }
+        let project_id = schedule.project_id.as_ref().ok_or_else(|| {
+            RpcError::with_data(
+                -32030,
+                "policy-sensitive schedule has no project organization",
+                json!({ "reason": "organization_policy_missing" }),
+            )
+        })?;
+        let requested = match &schedule.target {
+            ScheduleTarget::Session { provider, .. } => {
+                provider.as_deref().map(ProviderInstanceId::new)
+            }
+            ScheduleTarget::Agent { .. } | ScheduleTarget::Orchestrator { .. } => None,
+        };
+        let (policy, provider_instance_id) = self.resolve_authorized_project_provider(
+            project_id,
+            &schedule.environment.id,
+            requested.as_ref(),
+        )?;
+        Ok((Some(policy), Some(provider_instance_id)))
+    }
+
+    fn handle_schedule_validate(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_local_query_peer(context)?;
+        let params: ScheduleValidateParams = serde_json::from_value(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let result = match self.validate_schedule_policy(&params.schedule) {
+            Ok((policy, _)) => ScheduleValidationResult {
+                valid: true,
+                organization_name: policy.map(|policy| policy.display_name),
+                blocking_reasons: Vec::new(),
+            },
+            Err(error) => ScheduleValidationResult {
+                valid: false,
+                organization_name: None,
+                blocking_reasons: vec![error.message],
+            },
+        };
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn handle_schedule_save(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_local_query_peer(context)?;
+        let params: ScheduleSaveParams = serde_json::from_value(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        self.validate_schedule_policy(&params.schedule)?;
+        if !self
+            .environment_router
+            .is_local(&Some(params.schedule.environment.id.clone()))
+        {
+            return Err(RpcError::with_data(
+                -32031,
+                "Remote schedule storage is not available in this checkpoint",
+                json!({ "reason": "schedule_remote_storage_unavailable" }),
+            ));
+        }
+        self.store
+            .save_schedule(&params.schedule)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        Ok(json!({ "success": true }))
+    }
+
+    async fn handle_schedule_run(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_local_query_peer(context)?;
+        let params: ScheduleRunParams = serde_json::from_value(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let schedule = self
+            .store
+            .get_schedule(&params.schedule_id)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?
+            .ok_or_else(|| RpcError::not_found("Schedule not found"))?;
+        if !schedule.enabled {
+            return Err(RpcError::with_data(
+                -32031,
+                "Schedule is disabled",
+                json!({ "reason": "schedule_disabled" }),
+            ));
+        }
+        if !self
+            .environment_router
+            .is_local(&Some(schedule.environment.id.clone()))
+        {
+            return Err(RpcError::with_data(
+                -32031,
+                "Remote schedule execution is not available in this checkpoint",
+                json!({ "reason": "schedule_remote_execution_unavailable" }),
+            ));
+        }
+        if schedule.approval == ScheduleApprovalPolicy::ApproveFirst && !params.approved {
+            return Err(RpcError::with_data(
+                -32031,
+                "Schedule requires explicit approval before its first run",
+                json!({ "reason": "schedule_approval_required" }),
+            ));
+        }
+        let (_, provider_instance_id) = self.validate_schedule_policy(&schedule)?;
+        let provider_instance_id = provider_instance_id.ok_or_else(|| {
+            RpcError::internal_error("validated schedule did not resolve a provider")
+        })?;
+
+        let (cwd, prompt, model, agent_id) = match &schedule.target {
+            ScheduleTarget::Agent {
+                agent,
+                project_path,
+                prompt,
+            } => (
+                project_path.clone(),
+                prompt.clone(),
+                None,
+                Some(AgentId::new(agent)),
+            ),
+            ScheduleTarget::Session {
+                project_path,
+                prompt,
+                model,
+                ..
+            } => (project_path.clone(), prompt.clone(), model.clone(), None),
+            ScheduleTarget::Orchestrator { .. } => unreachable!("handled above"),
+        };
+        let mut thread = self.thread_manager.create_thread(ThreadCreateParams {
+            project_id: schedule.project_id.clone(),
+            environment_id: Some(schedule.environment.id.clone()),
+            title: Some(format!("Scheduled: {}", schedule.name)),
+            provider_instance_id: Some(provider_instance_id),
+            model,
+            effort: None,
+            access_mode: Some(if schedule.full_access_opt_in {
+                AccessMode::FullAccess
+            } else {
+                AccessMode::WorkspaceOnly
+            }),
+            agent_id,
+            cwd: Some(cwd),
+            worktree: None,
+        })?;
+        thread.origin = ThreadOrigin::Schedule {
+            schedule_id: schedule.id,
+            run_id: RunId::generate(),
+        };
+        self.store
+            .save_thread(&thread)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        let turn = self
+            .thread_manager
+            .send_turn(ThreadSendTurnParams {
+                thread_id: thread.id.clone(),
+                text: prompt,
+                attachment_ids: Vec::new(),
+                model: None,
+                effort: None,
+            })
+            .await?;
+        serde_json::to_value(ScheduleRunResult {
+            thread_id: thread.id,
+            turn_id: turn.turn_id,
         })
         .map_err(|error| RpcError::internal_error(error.to_string()))
     }
@@ -2854,6 +3307,272 @@ mod tests {
         let res = router.handle_request(caps_req).await.expect("response");
         assert!(res.is_success());
         assert_eq!(res.result.unwrap()["streaming"], true);
+    }
+
+    fn add_mock_organization_policy(store: &Store) {
+        store
+            .save_usage_subscription_mapping(
+                &pandamux_core::UsageSubscription {
+                    key: pandamux_core::SubscriptionKey::new("subkey-work"),
+                    provider: pandamux_core::UsageProvider::Custom,
+                    display_name: "Work Custom".to_string(),
+                    masked_account_label: Some("te***@example.com".to_string()),
+                },
+                &EnvironmentId::new("env-test"),
+                &pandamux_core::ProviderInstanceId::new("mock-default"),
+                1000,
+            )
+            .expect("save subscription mapping");
+        let mut settings = store
+            .get_settings()
+            .expect("load settings")
+            .expect("mock settings");
+        settings.organizations = vec![pandamux_core::OrganizationPolicy {
+            id: pandamux_core::OrganizationId::new("org-work"),
+            display_name: "Work".to_string(),
+            project_ids: vec![pandamux_core::ProjectId::new("project-work")],
+            allowed_provider_instances: vec![pandamux_core::ProviderInstanceId::new(
+                "mock-default",
+            )],
+            allowed_subscriptions: vec![pandamux_core::SubscriptionKey::new("subkey-work")],
+            failover_pool_ids: Vec::new(),
+            default_tier_mapping: None,
+            max_concurrency: Some(2),
+            daily_budget_micro_usd: None,
+            broadside: Default::default(),
+            revision: 1,
+        }];
+        store
+            .save_settings_with_organization_policies(&settings, 1001)
+            .expect("save canonical settings");
+    }
+
+    #[tokio::test]
+    async fn usage_catalog_edit_and_project_routing_are_fail_closed() {
+        let store = Store::in_memory().expect("open store");
+        let router = mock_router(store.clone());
+        add_mock_organization_policy(&store);
+
+        let catalog = router
+            .handle_request(RpcRequest::new(1, "usage.catalog", None))
+            .await
+            .expect("catalog response");
+        assert_eq!(
+            catalog.result.as_ref().unwrap()["subscriptions"][0]["displayName"],
+            "Work Custom"
+        );
+
+        let edited = router
+            .handle_request(RpcRequest::new(
+                2,
+                "usage.subscription.set",
+                Some(json!({
+                    "subscriptionKey": "subkey-work",
+                    "environmentId": "env-test",
+                    "providerInstanceId": "mock-default",
+                    "provider": "custom",
+                    "displayName": "Primary Work Custom",
+                    "maskedAccountLabel": "wo***@example.com"
+                })),
+            ))
+            .await
+            .expect("edit response");
+        assert!(edited.is_success());
+        assert_eq!(
+            edited.result.as_ref().unwrap()["subscriptions"][0]["displayName"],
+            "Primary Work Custom"
+        );
+
+        let allowed = router
+            .handle_request(RpcRequest::new(
+                3,
+                "thread.create",
+                Some(json!({
+                    "projectId": "project-work",
+                    "environmentId": "env-test",
+                    "providerInstanceId": "mock-default",
+                    "title": "Allowed"
+                })),
+            ))
+            .await
+            .expect("allowed route response");
+        assert!(allowed.is_success());
+
+        let missing = router
+            .handle_request(RpcRequest::new(
+                4,
+                "thread.create",
+                Some(json!({
+                    "projectId": "project-personal",
+                    "environmentId": "env-test",
+                    "providerInstanceId": "mock-default"
+                })),
+            ))
+            .await
+            .expect("missing policy response");
+        assert_eq!(
+            missing.error.expect("missing policy denied").data.unwrap()["reason"],
+            "organization_policy_denied"
+        );
+
+        let disallowed = router
+            .handle_request(RpcRequest::new(
+                5,
+                "thread.create",
+                Some(json!({
+                    "projectId": "project-work",
+                    "environmentId": "env-test",
+                    "providerInstanceId": "personal-instance"
+                })),
+            ))
+            .await
+            .expect("disallowed route response");
+        assert_eq!(
+            disallowed.error.expect("route denied").data.unwrap()["reason"],
+            "organization_policy_denied"
+        );
+    }
+
+    #[tokio::test]
+    async fn schedule_validation_applies_organization_policy_before_save() {
+        let store = Store::in_memory().expect("open store");
+        let router = mock_router(store.clone());
+        add_mock_organization_policy(&store);
+        let mut schedule = ScheduleRecord {
+            id: pandamux_core::ScheduleId::new("schedule-work"),
+            name: "Work review".to_string(),
+            project_id: Some(pandamux_core::ProjectId::new("project-work")),
+            environment: pandamux_core::ScheduleEnvironmentRef {
+                id: EnvironmentId::new("env-test"),
+                display_name: "Local test".to_string(),
+            },
+            trigger: pandamux_core::ScheduleTrigger {
+                cron: "0 0 * * *".to_string(),
+                timezone: "UTC".to_string(),
+            },
+            target: ScheduleTarget::Session {
+                project_path: "/repo".to_string(),
+                prompt: "Review the repository".to_string(),
+                provider: Some("mock-default".to_string()),
+                model: Some("mock-model".to_string()),
+                thread_mode: Default::default(),
+            },
+            approval: ScheduleApprovalPolicy::ApproveFirst,
+            overlap: Default::default(),
+            catch_up: Default::default(),
+            budget: Default::default(),
+            notify: Vec::new(),
+            full_access_opt_in: false,
+            enabled: true,
+        };
+        let valid = router
+            .handle_request(RpcRequest::new(
+                1,
+                "schedule.validate",
+                Some(json!({ "schedule": schedule.clone() })),
+            ))
+            .await
+            .expect("validation response");
+        assert_eq!(valid.result.as_ref().unwrap()["valid"], true);
+
+        let saved = router
+            .handle_request(RpcRequest::new(
+                2,
+                "schedule.save",
+                Some(json!({ "schedule": schedule.clone() })),
+            ))
+            .await
+            .expect("save response");
+        assert!(saved.is_success());
+
+        let approval_required = router
+            .handle_request(RpcRequest::new(
+                20,
+                "schedule.run",
+                Some(json!({
+                    "scheduleId": "schedule-work",
+                    "approved": false
+                })),
+            ))
+            .await
+            .expect("approval response");
+        assert_eq!(
+            approval_required
+                .error
+                .expect("approval required")
+                .data
+                .unwrap()["reason"],
+            "schedule_approval_required"
+        );
+
+        if let ScheduleTarget::Session { provider, .. } = &mut schedule.target {
+            *provider = Some("personal-instance".to_string());
+        }
+        let invalid = router
+            .handle_request(RpcRequest::new(
+                3,
+                "schedule.validate",
+                Some(json!({ "schedule": schedule.clone() })),
+            ))
+            .await
+            .expect("invalid validation response");
+        assert_eq!(invalid.result.as_ref().unwrap()["valid"], false);
+        assert!(
+            invalid.result.as_ref().unwrap()["blockingReasons"][0]
+                .as_str()
+                .unwrap()
+                .contains("not allowed")
+        );
+
+        if let ScheduleTarget::Session {
+            provider,
+            thread_mode,
+            ..
+        } = &mut schedule.target
+        {
+            *provider = Some("mock-default".to_string());
+            *thread_mode = pandamux_core::ScheduleThreadMode::ContinueExistingThread;
+        }
+        let continue_unavailable = router
+            .handle_request(RpcRequest::new(
+                4,
+                "schedule.validate",
+                Some(json!({ "schedule": schedule.clone() })),
+            ))
+            .await
+            .expect("continue validation response");
+        assert_eq!(
+            continue_unavailable.result.as_ref().unwrap()["valid"],
+            false
+        );
+        assert!(
+            continue_unavailable.result.as_ref().unwrap()["blockingReasons"][0]
+                .as_str()
+                .unwrap()
+                .contains("not available")
+        );
+
+        schedule.target = ScheduleTarget::Orchestrator {
+            prompt: "Coordinate the review".to_string(),
+        };
+        let orchestrator_unavailable = router
+            .handle_request(RpcRequest::new(
+                5,
+                "schedule.validate",
+                Some(json!({ "schedule": schedule })),
+            ))
+            .await
+            .expect("orchestrator validation response");
+        assert_eq!(
+            orchestrator_unavailable.result.as_ref().unwrap()["valid"],
+            false
+        );
+        assert!(
+            orchestrator_unavailable.result.as_ref().unwrap()["blockingReasons"][0]
+                .as_str()
+                .unwrap()
+                .contains("not available")
+        );
     }
 
     #[tokio::test]
@@ -3828,6 +4547,149 @@ mod tests {
         let relayed = hub_events.recv().await.unwrap();
         assert_eq!(relayed.environment_id.as_str(), "env-remote");
         assert_eq!(relayed.seq, 101);
+    }
+
+    #[tokio::test]
+    async fn remote_project_routes_are_filtered_and_pinned_before_forwarding() {
+        use crate::environment_router::MockEnvironmentTransport;
+        use pandamux_core::{
+            OrganizationId, OrganizationPolicy, ProjectId, ProviderInstanceId, SubscriptionKey,
+            Thread, ThreadId, ThreadOrigin, ThreadStatus, ThreadWorkspace, UsageProvider,
+            UsageSubscription,
+        };
+        use std::sync::Mutex as StdMutex;
+
+        let store = Store::in_memory().expect("store");
+        let remote_env = EnvironmentId::new("env-remote-policy");
+        for (key, provider, instance, name) in [
+            (
+                "subkey-remote-claude",
+                UsageProvider::Claude,
+                "claude-default",
+                "Remote Claude",
+            ),
+            (
+                "subkey-remote-codex",
+                UsageProvider::Codex,
+                "codex-default",
+                "Remote Codex",
+            ),
+        ] {
+            store
+                .save_usage_subscription_mapping(
+                    &UsageSubscription {
+                        key: SubscriptionKey::new(key),
+                        provider,
+                        display_name: name.to_string(),
+                        masked_account_label: None,
+                    },
+                    &remote_env,
+                    &ProviderInstanceId::new(instance),
+                    1000,
+                )
+                .expect("save remote mapping");
+        }
+        let settings = UserSettings {
+            organizations: vec![OrganizationPolicy {
+                id: OrganizationId::new("org-remote"),
+                display_name: "Remote work".to_string(),
+                project_ids: vec![ProjectId::new("project-remote")],
+                allowed_provider_instances: vec![ProviderInstanceId::new("claude-default")],
+                allowed_subscriptions: vec![SubscriptionKey::new("subkey-remote-claude")],
+                failover_pool_ids: Vec::new(),
+                default_tier_mapping: None,
+                max_concurrency: None,
+                daily_budget_micro_usd: None,
+                broadside: Default::default(),
+                revision: 1,
+            }],
+            ..UserSettings::default()
+        };
+        store
+            .save_settings_with_organization_policies(&settings, 1001)
+            .expect("save remote policy");
+
+        let hub_router = Router::new(store.clone(), ServerRole::Hub, "env-local".to_string());
+        let forwarded = Arc::new(StdMutex::new(Vec::new()));
+        let forwarded_for_transport = forwarded.clone();
+        let remote_env_for_transport = remote_env.clone();
+        let transport = Arc::new(MockEnvironmentTransport::new(move |request| {
+            forwarded_for_transport
+                .lock()
+                .expect("forwarded requests")
+                .push(request.clone());
+            let params: ThreadCreateParams =
+                serde_json::from_value(request.params.clone().expect("thread create params"))
+                    .expect("decode forwarded create");
+            let thread = Thread {
+                id: ThreadId::new("thread-remote-policy"),
+                project_id: params.project_id,
+                environment_id: remote_env_for_transport.clone(),
+                parent_thread_id: None,
+                title: params.title.unwrap_or_else(|| "Remote policy".to_string()),
+                provider_instance_id: params
+                    .provider_instance_id
+                    .expect("Hub pins provider before forwarding"),
+                model: params.model.unwrap_or_else(|| "default".to_string()),
+                effort: params.effort,
+                access_mode: params.access_mode.unwrap_or_default(),
+                workspace: ThreadWorkspace {
+                    cwd: params.cwd.unwrap_or_else(|| "/remote/project".to_string()),
+                    worktree: params.worktree,
+                },
+                status: ThreadStatus::Idle,
+                agent: None,
+                origin: ThreadOrigin::Manual,
+                created_at_ms: 100,
+                updated_at_ms: 100,
+            };
+            Ok(RpcResponse::success(
+                request.id.clone().unwrap_or(1.into()),
+                serde_json::to_value(thread).expect("encode thread"),
+            ))
+        }));
+        hub_router
+            .environment_router()
+            .register_transport(remote_env.clone(), transport, None)
+            .await;
+
+        let denied = hub_router
+            .handle_request(RpcRequest::new(
+                1,
+                "thread.create",
+                Some(json!({
+                    "projectId": "project-remote",
+                    "environmentId": remote_env.as_str(),
+                    "providerInstanceId": "codex-default"
+                })),
+            ))
+            .await
+            .expect("denied response");
+        assert_eq!(
+            denied.error.expect("route denied").data.unwrap()["reason"],
+            "organization_policy_denied"
+        );
+        assert!(forwarded.lock().expect("forwarded requests").is_empty());
+
+        let allowed = hub_router
+            .handle_request(RpcRequest::new(
+                2,
+                "thread.create",
+                Some(json!({
+                    "projectId": "project-remote",
+                    "environmentId": remote_env.as_str(),
+                    "title": "Remote policy"
+                })),
+            ))
+            .await
+            .expect("allowed response");
+        assert!(allowed.is_success());
+        let forwarded = forwarded.lock().expect("forwarded requests");
+        assert_eq!(forwarded.len(), 1);
+        assert_eq!(
+            forwarded[0].params.as_ref().unwrap()["providerInstanceId"],
+            "claude-default"
+        );
     }
 
     #[tokio::test]

@@ -1,10 +1,10 @@
-use gpui_kit::base::StyledExt as _;
+use gpui_kit::base::{Disableable as _, StyledExt as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::gpui::*;
 use gpui_kit::prelude::FluentBuilder as _;
-use pandamux_core::UserSettings;
-use pandamux_core::provider_config::ProviderKind;
-use pandamux_protocol::ProviderHealthReport;
+use pandamux_client::{format_age, format_micro_usd};
+use pandamux_core::{EnvironmentId, ProviderInstanceId, UserSettings};
+use pandamux_protocol::{ProviderHealthReport, ProviderLoginPreview, UsageCatalogResult};
 
 use crate::theme::{AccentColor, Radii, Theme, Typography};
 
@@ -13,6 +13,7 @@ use crate::theme::{AccentColor, Radii, Theme, Typography};
 pub enum SettingsCategory {
     #[default]
     Providers,
+    Organizations,
     Environments,
     Terminal,
     General,
@@ -23,6 +24,7 @@ impl SettingsCategory {
     pub fn title(&self) -> &'static str {
         match self {
             Self::Providers => "Providers & Tier Mapping",
+            Self::Organizations => "Organizations & Policy",
             Self::Environments => "Remote Environments & Nodes",
             Self::Terminal => "Terminal Configuration",
             Self::General => "General & Appearance",
@@ -33,7 +35,10 @@ impl SettingsCategory {
     pub fn subtitle(&self) -> &'static str {
         match self {
             Self::Providers => {
-                "Configure scoped provider instances, model targets, and run zero-spawn offline health checks."
+                "Configure scoped provider instances, model targets, health evidence, and explicit login actions."
+            }
+            Self::Organizations => {
+                "Edit canonical project, provider, subscription, budget, and Broadside boundaries."
             }
             Self::Environments => {
                 "Manage local and remote SSH environments, daemon versions, bootstrap states, and host connectivity."
@@ -53,6 +58,7 @@ impl SettingsCategory {
     pub fn icon(&self) -> &'static str {
         match self {
             Self::Providers => "🔑",
+            Self::Organizations => "🏢",
             Self::Environments => "🖥️",
             Self::Terminal => "📟",
             Self::General => "🎨",
@@ -71,6 +77,8 @@ pub struct SettingsViewState {
     pub is_checking_health: bool,
     pub is_saving: bool,
     pub status_banner: Option<(String, bool)>, // (message, is_error)
+    pub login_preview: Option<ProviderLoginPreview>,
+    pub is_login_busy: bool,
 }
 
 impl Default for SettingsViewState {
@@ -83,6 +91,8 @@ impl Default for SettingsViewState {
             is_checking_health: false,
             is_saving: false,
             status_banner: None,
+            login_preview: None,
+            is_login_busy: false,
         }
     }
 }
@@ -144,13 +154,48 @@ fn format_number(n: impl Into<u64>) -> String {
     out
 }
 
+const ORGANIZATION_BUDGET_STEP_MICRO_USD: u64 = 10_000_000;
+
+fn increase_organization_budget(current: Option<u64>) -> Option<u64> {
+    Some(
+        current
+            .unwrap_or_default()
+            .saturating_add(ORGANIZATION_BUDGET_STEP_MICRO_USD),
+    )
+}
+
+fn decrease_organization_budget(current: Option<u64>) -> Option<u64> {
+    current.and_then(|value| {
+        value
+            .checked_sub(ORGANIZATION_BUDGET_STEP_MICRO_USD)
+            .filter(|remaining| *remaining > 0)
+    })
+}
+
+fn increase_organization_concurrency(current: Option<u32>) -> Option<u32> {
+    Some(current.unwrap_or_default().saturating_add(1).max(1))
+}
+
+fn decrease_organization_concurrency(current: Option<u32>) -> Option<u32> {
+    current.and_then(|value| value.checked_sub(1).filter(|remaining| *remaining > 0))
+}
+
 /// Renders the complete Settings view based on active category.
+#[allow(clippy::too_many_arguments)]
 pub fn render_settings_view<V: 'static>(
     state: &SettingsViewState,
+    usage_catalog: &UsageCatalogResult,
     theme: &Theme,
     server_status: String,
     on_save: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
-    on_check_health: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
+    on_check_health: impl Fn(&mut V, Option<ProviderInstanceId>, &mut Window, &mut Context<V>)
+    + 'static
+    + Copy,
+    on_preview_login: impl Fn(&mut V, ProviderInstanceId, EnvironmentId, &mut Window, &mut Context<V>)
+    + 'static
+    + Copy,
+    on_launch_login: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
+    on_cancel_login: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
     on_modify: impl Fn(
         &mut V,
         Box<dyn FnOnce(&mut UserSettings) + Send + 'static>,
@@ -160,7 +205,7 @@ pub fn render_settings_view<V: 'static>(
     + 'static
     + Copy,
     cx: &mut Context<V>,
-) -> impl IntoElement {
+) -> AnyElement {
     div()
         .flex_1()
         .h_full()
@@ -212,8 +257,19 @@ pub fn render_settings_view<V: 'static>(
         })
         // Category Content Body
         .child(match state.active_category {
-            SettingsCategory::Providers => {
-                render_providers_tab(state, theme, on_check_health, on_modify, cx)
+            SettingsCategory::Providers => render_providers_tab(
+                state,
+                theme,
+                on_check_health,
+                on_preview_login,
+                on_launch_login,
+                on_cancel_login,
+                on_modify,
+                cx,
+            )
+            .into_any_element(),
+            SettingsCategory::Organizations => {
+                render_organizations_tab(state, usage_catalog, theme, on_modify, cx)
                     .into_any_element()
             }
             SettingsCategory::Environments => {
@@ -229,6 +285,7 @@ pub fn render_settings_view<V: 'static>(
                 render_advanced_tab(state, theme, server_status, on_modify, cx).into_any_element()
             }
         })
+        .into_any_element()
 }
 
 /// Renders the Settings category header and save actions.
@@ -236,9 +293,11 @@ fn render_settings_header<V: 'static>(
     state: &SettingsViewState,
     theme: &Theme,
     on_save: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
-    on_check_health: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
+    on_check_health: impl Fn(&mut V, Option<ProviderInstanceId>, &mut Window, &mut Context<V>)
+    + 'static
+    + Copy,
     cx: &mut Context<V>,
-) -> impl IntoElement {
+) -> AnyElement {
     let cat = state.active_category;
 
     div()
@@ -289,8 +348,9 @@ fn render_settings_header<V: 'static>(
                             } else {
                                 "⚡ Check Health"
                             })
+                            .disabled(state.is_checking_health)
                             .on_click(cx.listener(move |this, _event, window, cx| {
-                                on_check_health(this, window, cx);
+                                on_check_health(this, None, window, cx);
                             })),
                     )
                 })
@@ -307,13 +367,22 @@ fn render_settings_header<V: 'static>(
                         })),
                 ),
         )
+        .into_any_element()
 }
 
 /// Renders the Providers & Tier Mapping settings panel.
+#[allow(clippy::too_many_arguments)]
 fn render_providers_tab<V: 'static>(
     state: &SettingsViewState,
     theme: &Theme,
-    _on_check_health: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
+    on_check_health: impl Fn(&mut V, Option<ProviderInstanceId>, &mut Window, &mut Context<V>)
+    + 'static
+    + Copy,
+    on_preview_login: impl Fn(&mut V, ProviderInstanceId, EnvironmentId, &mut Window, &mut Context<V>)
+    + 'static
+    + Copy,
+    on_launch_login: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
+    on_cancel_login: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
     on_modify: impl Fn(
         &mut V,
         Box<dyn FnOnce(&mut UserSettings) + Send + 'static>,
@@ -323,7 +392,11 @@ fn render_providers_tab<V: 'static>(
     + 'static
     + Copy,
     cx: &mut Context<V>,
-) -> impl IntoElement {
+) -> AnyElement {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
     div()
         .v_flex()
         .gap_4()
@@ -347,7 +420,7 @@ fn render_providers_tab<V: 'static>(
                                 .text_size(Typography::TITLE_SIZE)
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(theme.chrome.text_t1)
-                                .child("Zero-Spawn Health Status (Rule 1)"),
+                        .child("Provider Health Evidence"),
                         )
                         .child(
                             div()
@@ -357,14 +430,14 @@ fn render_providers_tab<V: 'static>(
                                 .bg(rgba(0x43d9c922))
                                 .text_size(Typography::META_SIZE)
                                 .text_color(rgb(0x43d9c9))
-                                .child("Never Triggers Auth"),
+                                .child("Login Is Always Separate"),
                         ),
                 )
                 .child(
                     div()
                         .text_size(Typography::SECONDARY_SIZE)
                         .text_color(theme.chrome.text_t3)
-                        .child("Health checks inspect local disk manifests, CLI binary resolution, and profile credentials. Antigravity bundles are never spawned (saving ~1 GB PyInstaller unpack per check), and no interactive OAuth logins are triggered."),
+                        .child("Health probes may run bounded non-interactive status/version commands. They never start an interactive login or provider session; login requires a separate preview and confirmation."),
                 ),
         )
         // 2. Provider Instances List
@@ -381,16 +454,79 @@ fn render_providers_tab<V: 'static>(
                 )
                 .children(state.settings.providers.iter().enumerate().map(|(idx, inst)| {
                     let instance_id = inst.id.clone();
-                    let health_report = state.health_reports.iter().find(|r| r.instance_id == instance_id);
-                    let (status_text, status_color, bg_pill) = match health_report.map(|r| r.status.as_str()) {
-                        Some("healthy") => ("● Healthy", rgb(0x7fd88f), rgba(0x7fd88f22)),
-                        Some("unauthenticated") => ("▲ Unauthenticated", rgb(0xd8b45e), rgba(0xd8b45e22)),
-                        Some("degraded") => ("▲ Degraded", rgb(0xd8b45e), rgba(0xd8b45e22)),
-                        Some("unavailable") => ("✕ Unavailable", rgb(0xf87171), rgba(0xf8717122)),
-                        _ => ("○ Not Checked", rgb(0x888899), rgba(0x88889922)),
-                    };
-
-                    let badge = health_report.and_then(|r| r.account_badge.as_ref());
+                    let health_instance_id = instance_id.clone();
+                    let environment_id = inst
+                        .environment_id
+                        .clone()
+                        .unwrap_or_else(|| EnvironmentId::new("env-local"));
+                    let health_report = state
+                        .health_reports
+                        .iter()
+                        .find(|report| report.instance_id == instance_id);
+                    let (status_text, status_color, bg_pill) =
+                        match health_report.map(|report| report.status.as_str()) {
+                            Some("healthy") => ("● Healthy", rgb(0x7fd88f), rgba(0x7fd88f22)),
+                            Some("unauthenticated") => {
+                                ("▲ Unauthenticated", rgb(0xd8b45e), rgba(0xd8b45e22))
+                            }
+                            Some("degraded") => {
+                                ("▲ Degraded", rgb(0xd8b45e), rgba(0xd8b45e22))
+                            }
+                            Some("unavailable") => {
+                                ("✕ Unavailable", rgb(0xf87171), rgba(0xf8717122))
+                            }
+                            Some("disabled") => {
+                                ("○ Disabled", rgb(0x888899), rgba(0x88889922))
+                            }
+                            Some("configured") => {
+                                ("○ Configured", rgb(0x94a3b8), rgba(0x94a3b822))
+                            }
+                            Some(_) => ("? Unknown", rgb(0x94a3b8), rgba(0x94a3b822)),
+                            None => ("○ Not checked", rgb(0x888899), rgba(0x88889922)),
+                        };
+                    let version = health_report
+                        .and_then(|report| report.version.as_deref())
+                        .unwrap_or("Not reported");
+                    let reason = health_report
+                        .and_then(|report| report.reason.as_deref())
+                        .unwrap_or("No reason reported");
+                    let authentication = health_report
+                        .map(|report| {
+                            format!(
+                                "{} ({})",
+                                report.authentication_state, report.authentication_confidence
+                            )
+                        })
+                        .unwrap_or_else(|| "Unknown (not reported)".to_string());
+                    let freshness = health_report.map_or_else(
+                        || "Not reported".to_string(),
+                        |report| {
+                            if now_ms <= report.expires_at_ms {
+                                format!("Fresh · checked {}", format_age(now_ms, Some(report.checked_at_ms)))
+                            } else {
+                                format!("Stale · checked {}", format_age(now_ms, Some(report.checked_at_ms)))
+                            }
+                        },
+                    );
+                    let last_success = health_report
+                        .and_then(|report| report.last_success_at_ms)
+                        .map(|timestamp| format_age(now_ms, Some(timestamp)))
+                        .unwrap_or_else(|| "Not reported".to_string());
+                    let guidance = health_report.and_then(|report| report.login_guidance.as_ref());
+                    let login_available = guidance.is_some_and(|guidance| guidance.available);
+                    let login_tooltip = guidance.map_or_else(
+                        || "Login guidance is not reported".to_string(),
+                        |guidance| {
+                            if guidance.available {
+                                guidance.summary.clone()
+                            } else {
+                                guidance
+                                    .unavailable_reason
+                                    .clone()
+                                    .unwrap_or_else(|| guidance.summary.clone())
+                            }
+                        },
+                    );
                     let is_enabled = inst.enabled;
 
                     div()
@@ -401,7 +537,6 @@ fn render_providers_tab<V: 'static>(
                         .border_color(if is_enabled { rgba(0xffffff0d) } else { rgba(0xffffff05) })
                         .v_flex()
                         .gap_2()
-                        // Row 1: Icon, Name, Provider Kind, Status Badge, Enabled Switch
                         .child(
                             div()
                                 .h_flex()
@@ -409,22 +544,8 @@ fn render_providers_tab<V: 'static>(
                                 .justify_between()
                                 .child(
                                     div()
-                                        .h_flex()
-                                        .items_center()
-                                        .gap_2()
-                                        .child(
-                                            div()
-                                                .text_size(Typography::TITLE_SIZE)
-                                                .child(match inst.provider {
-                                                    ProviderKind::Claude => "🟣",
-                                                    ProviderKind::Codex => "🟢",
-                                                    ProviderKind::Antigravity => "🔵",
-                                                    ProviderKind::Cursor => "⚡",
-                                                    ProviderKind::Grok => "🚀",
-                                                    ProviderKind::OpenCode => "💻",
-                                                    _ => "🤖",
-                                                }),
-                                        )
+                                        .v_flex()
+                                        .gap_1()
                                         .child(
                                             div()
                                                 .text_size(Typography::TITLE_SIZE)
@@ -434,13 +555,12 @@ fn render_providers_tab<V: 'static>(
                                         )
                                         .child(
                                             div()
-                                                .px_2()
-                                                .py_0p5()
-                                                .rounded(Radii::CHIP)
-                                                .bg(theme.chrome.panel2)
                                                 .text_size(Typography::META_SIZE)
                                                 .text_color(theme.chrome.text_t3)
-                                                .child(inst.id.as_str().to_string()),
+                                                .child(format!(
+                                                    "{} provider · version {version}",
+                                                    inst.provider.as_str()
+                                                )),
                                         ),
                                 )
                                 .child(
@@ -448,7 +568,6 @@ fn render_providers_tab<V: 'static>(
                                         .h_flex()
                                         .items_center()
                                         .gap_2()
-                                        // Health pill
                                         .child(
                                             div()
                                                 .px_2()
@@ -460,52 +579,79 @@ fn render_providers_tab<V: 'static>(
                                                 .text_color(status_color)
                                                 .child(status_text),
                                         )
-                                        // Account / subscription badge
-                                        .when_some(badge, |this, b| {
-                                            this.child(
-                                                div()
-                                                    .px_2()
-                                                    .py_0p5()
-                                                    .rounded(Radii::CHIP)
-                                                    .bg(theme.chrome.panel2)
-                                                    .text_size(Typography::META_SIZE)
-                                                    .text_color(theme.chrome.text_t2)
-                                                    .child(b.clone()),
-                                            )
-                                        })
-                                        // Enable/Disable toggle
                                         .child(
                                             Button::new(format!("toggle-enable-{}", inst.id.as_str()))
                                                 .ghost()
                                                 .label(if is_enabled { "Enabled" } else { "Disabled" })
+                                                .accessibility_label(format!(
+                                                    "{} {}",
+                                                    if is_enabled { "Disable" } else { "Enable" },
+                                                    inst.display_name
+                                                ))
                                                 .on_click(cx.listener(move |this, _event, window, cx| {
-                                                    on_modify(this, Box::new(move |s| {
-                                                        if let Some(p) = s.providers.get_mut(idx) {
-                                                            p.enabled = !p.enabled;
+                                                    on_modify(this, Box::new(move |settings| {
+                                                        if let Some(provider) = settings.providers.get_mut(idx) {
+                                                            provider.enabled = !provider.enabled;
                                                         }
                                                     }), window, cx);
                                                 })),
                                         ),
                                 ),
                         )
-                        // Row 2: Profile directory info & Concurrency limit
+                        .child(
+                            div()
+                                .v_flex()
+                                .gap_1()
+                                .text_size(Typography::SECONDARY_SIZE)
+                                .text_color(theme.chrome.text_t2)
+                                .child(format!("Authentication: {authentication}"))
+                                .child(format!("Freshness: {freshness}"))
+                                .child(format!("Last successful snapshot: {last_success}"))
+                                .child(format!("Reason: {reason}"))
+                                .when_some(health_report.and_then(|report| report.account_badge.as_ref()), |this, badge| {
+                                    this.child(format!("Account: {badge}"))
+                                }),
+                        )
                         .child(
                             div()
                                 .h_flex()
                                 .items_center()
                                 .justify_between()
-                                .text_size(Typography::SECONDARY_SIZE)
-                                .text_color(theme.chrome.text_t3)
                                 .child(
                                     div()
                                         .h_flex()
                                         .gap_2()
-                                        .child("Profile Path:")
                                         .child(
-                                            div()
-                                                .text_color(theme.chrome.text_t2)
-                                                .font_family(Typography::MONO_FAMILY)
-                                                .child(inst.profile_dir.clone()),
+                                            Button::new(format!("retry-health-{}", inst.id.as_str()))
+                                                .ghost()
+                                                .label("Retry health")
+                                                .disabled(state.is_checking_health)
+                                                .accessibility_label(format!("Retry health check for {}", inst.display_name))
+                                                .on_click(cx.listener(move |this, _event, window, cx| {
+                                                    on_check_health(
+                                                        this,
+                                                        Some(health_instance_id.clone()),
+                                                        window,
+                                                        cx,
+                                                    );
+                                                })),
+                                        )
+                                        .child(
+                                            Button::new(format!("login-provider-{}", inst.id.as_str()))
+                                                .ghost()
+                                                .label("Prepare login")
+                                                .disabled(!login_available || state.is_login_busy)
+                                                .accessibility_label(format!("Prepare login for {}", inst.display_name))
+                                                .tooltip(login_tooltip)
+                                                .on_click(cx.listener(move |this, _event, window, cx| {
+                                                    on_preview_login(
+                                                        this,
+                                                        instance_id.clone(),
+                                                        environment_id.clone(),
+                                                        window,
+                                                        cx,
+                                                    );
+                                                })),
                                         ),
                                 )
                                 .child(
@@ -517,11 +663,12 @@ fn render_providers_tab<V: 'static>(
                                         .child(
                                             Button::new(format!("inc-conc-{}", inst.id.as_str()))
                                                 .ghost()
-                                                .label("▲")
+                                                .label("Increase")
+                                                .accessibility_label(format!("Increase concurrency for {}", inst.display_name))
                                                 .on_click(cx.listener(move |this, _event, window, cx| {
-                                                    on_modify(this, Box::new(move |s| {
-                                                        if let Some(p) = s.providers.get_mut(idx) {
-                                                            p.concurrency_limit = (p.concurrency_limit + 1).min(8);
+                                                    on_modify(this, Box::new(move |settings| {
+                                                        if let Some(provider) = settings.providers.get_mut(idx) {
+                                                            provider.concurrency_limit = (provider.concurrency_limit + 1).min(8);
                                                         }
                                                     }), window, cx);
                                                 })),
@@ -529,11 +676,12 @@ fn render_providers_tab<V: 'static>(
                                         .child(
                                             Button::new(format!("dec-conc-{}", inst.id.as_str()))
                                                 .ghost()
-                                                .label("▼")
+                                                .label("Decrease")
+                                                .accessibility_label(format!("Decrease concurrency for {}", inst.display_name))
                                                 .on_click(cx.listener(move |this, _event, window, cx| {
-                                                    on_modify(this, Box::new(move |s| {
-                                                        if let Some(p) = s.providers.get_mut(idx) {
-                                                            p.concurrency_limit = (p.concurrency_limit.saturating_sub(1)).max(1);
+                                                    on_modify(this, Box::new(move |settings| {
+                                                        if let Some(provider) = settings.providers.get_mut(idx) {
+                                                            provider.concurrency_limit = (provider.concurrency_limit.saturating_sub(1)).max(1);
                                                         }
                                                     }), window, cx);
                                                 })),
@@ -542,6 +690,48 @@ fn render_providers_tab<V: 'static>(
                         )
                 })),
         )
+        .when_some(state.login_preview.as_ref(), |this, preview| {
+            this.child(
+                div()
+                    .p_3()
+                    .v_flex()
+                    .gap_2()
+                    .rounded(Radii::ROW)
+                    .bg(theme.chrome.panel2)
+                    .border_1()
+                    .border_color(theme.accent.color())
+                    .child(
+                        div()
+                            .font_weight(FontWeight::BOLD)
+                            .child("Confirm provider login"),
+                    )
+                    .child(format!("Profile: {}", preview.profile))
+                    .child(format!("Command: {}", preview.display_command))
+                    .child("Opening the terminal is the first side effect. Health checks never perform this action.")
+                    .child(
+                        div()
+                            .h_flex()
+                            .gap_2()
+                            .child(
+                                Button::new("confirm-provider-login")
+                                    .primary()
+                                    .label("Open login terminal")
+                                    .disabled(state.is_login_busy)
+                                    .on_click(cx.listener(move |this, _event, window, cx| {
+                                        on_launch_login(this, window, cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("cancel-provider-login")
+                                    .ghost()
+                                    .label("Cancel")
+                                    .on_click(cx.listener(move |this, _event, window, cx| {
+                                        on_cancel_login(this, window, cx);
+                                    })),
+                            ),
+                    ),
+            )
+        })
         // 3. Tier Mapping Card
         .child(
             div()
@@ -573,6 +763,13 @@ fn render_providers_tab<V: 'static>(
                             state.settings.tier_mapping.as_ref().map(|tm| {
                                 tm.tiers.iter().map(|(tier, target)| {
                                     let tier_name = tier.clone();
+                                    let instance_name = state
+                                        .settings
+                                        .providers
+                                        .iter()
+                                        .find(|provider| provider.id == target.provider_instance_id)
+                                        .map(|provider| provider.display_name.clone())
+                                        .unwrap_or_else(|| "Missing named instance".to_string());
                                     div()
                                         .h_flex()
                                         .items_center()
@@ -595,7 +792,7 @@ fn render_providers_tab<V: 'static>(
                                                     div()
                                                         .text_size(Typography::META_SIZE)
                                                         .text_color(theme.chrome.text_t3)
-                                                        .child(format!("Instance: {}", target.provider_instance_id.as_str())),
+                                                        .child(format!("Instance: {instance_name}")),
                                                 ),
                                         )
                                         .child(
@@ -634,6 +831,829 @@ fn render_providers_tab<V: 'static>(
                         ),
                 ),
         )
+        .into_any_element()
+}
+
+fn render_organizations_tab<V: 'static>(
+    state: &SettingsViewState,
+    catalog: &UsageCatalogResult,
+    theme: &Theme,
+    on_modify: impl Fn(
+        &mut V,
+        Box<dyn FnOnce(&mut UserSettings) + Send + 'static>,
+        &mut Window,
+        &mut Context<V>,
+    )
+    + 'static
+    + Copy,
+    cx: &mut Context<V>,
+) -> AnyElement {
+    div()
+        .v_flex()
+        .gap_3()
+        .when(state.settings.organizations.is_empty(), |this| {
+            this.child(
+                div()
+                    .p_3()
+                    .v_flex()
+                    .gap_2()
+                    .rounded(Radii::ROW)
+                    .bg(theme.chrome.panel)
+                    .border_1()
+                    .border_color(rgba(0xffffff0d))
+                    .child("No canonical organization policy is configured.")
+                    .child(
+                        div()
+                            .text_size(Typography::SECONDARY_SIZE)
+                            .text_color(theme.chrome.text_t3)
+                            .child("Project-scoped routing, schedules, MCP proposals, failover, and Broadside sharing fail closed until a project is assigned by a policy-capable workflow."),
+                    )
+                    .child(
+                        Button::new("create-organization-unavailable")
+                            .ghost()
+                            .label("Create organization")
+                            .disabled(true)
+                            .tooltip("Unavailable: the current project catalog does not expose a safe assignment editor"),
+                    ),
+            )
+        })
+        .children(
+            state
+                .settings
+                .organizations
+                .iter()
+                .enumerate()
+                .map(|(organization_index, organization)| {
+                    let provider_count = organization.allowed_provider_instances.len();
+                    let valid_provider_count = organization
+                        .allowed_provider_instances
+                        .iter()
+                        .filter(|provider_id| {
+                            let Some(provider) = state
+                                .settings
+                                .providers
+                                .iter()
+                                .find(|provider| &provider.id == *provider_id)
+                            else {
+                                return false;
+                            };
+                            if !provider.enabled {
+                                return false;
+                            }
+                            let environment_id = provider
+                                .environment_id
+                                .clone()
+                                .unwrap_or_else(|| EnvironmentId::new("env-local"));
+                            catalog.mappings.iter().any(|mapping| {
+                                mapping.provider_instance_id == provider.id
+                                    && mapping.environment_id == environment_id
+                                    && organization
+                                        .allowed_subscriptions
+                                        .contains(&mapping.subscription_key)
+                                    && catalog.subscriptions.iter().any(|subscription| {
+                                        subscription.key == mapping.subscription_key
+                                    })
+                            })
+                        })
+                        .count();
+                    div()
+                        .p_3()
+                        .v_flex()
+                        .gap_3()
+                        .rounded(Radii::ROW)
+                        .bg(theme.chrome.panel)
+                        .border_1()
+                        .border_color(rgba(0xffffff0d))
+                        .child(
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .justify_between()
+                                .child(
+                                    div()
+                                        .v_flex()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .text_size(Typography::TITLE_SIZE)
+                                                .font_weight(FontWeight::BOLD)
+                                                .text_color(theme.chrome.text_t1)
+                                                .child(organization.display_name.clone()),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(Typography::META_SIZE)
+                                                .text_color(theme.chrome.text_t3)
+                                                .child(format!(
+                                                    "{} project assignment{} · revision {}",
+                                                    organization.project_ids.len(),
+                                                    if organization.project_ids.len() == 1 { "" } else { "s" },
+                                                    organization.revision
+                                                )),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(Typography::SECONDARY_SIZE)
+                                        .text_color(theme.chrome.text_t2)
+                                        .child(format!(
+                                            "Valid named routes: {valid_provider_count}/{provider_count}"
+                                        )),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .v_flex()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .text_size(Typography::GROUP_HEADER_SIZE)
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(theme.chrome.text_t2)
+                                        .child("PROVIDER / SUBSCRIPTION MATRIX"),
+                                )
+                                .children(
+                                    organization
+                                        .allowed_provider_instances
+                                        .iter()
+                                        .map(|provider_id| {
+                                            let provider = state
+                                                .settings
+                                                .providers
+                                                .iter()
+                                                .find(|provider| &provider.id == provider_id);
+                                            let provider_environment_id = provider
+                                                .and_then(|provider| provider.environment_id.clone())
+                                                .unwrap_or_else(|| EnvironmentId::new("env-local"));
+                                            let mapping = catalog
+                                                .mappings
+                                                .iter()
+                                                .find(|mapping| {
+                                                    &mapping.provider_instance_id == provider_id
+                                                        && mapping.environment_id
+                                                            == provider_environment_id
+                                                });
+                                            let subscription = mapping.and_then(|mapping| {
+                                                catalog.subscriptions.iter().find(|subscription| {
+                                                    subscription.key == mapping.subscription_key
+                                                })
+                                            });
+                                            let provider_is_valid = provider.is_some_and(|provider| provider.enabled)
+                                                && mapping.is_some_and(|mapping| {
+                                                    organization
+                                                        .allowed_subscriptions
+                                                        .contains(&mapping.subscription_key)
+                                                })
+                                                && subscription.is_some();
+                                            let removal_blocked = provider_count <= 1
+                                                || (provider_is_valid
+                                                    && valid_provider_count <= 1);
+                                            let provider_name = provider
+                                                .map(|provider| provider.display_name.clone())
+                                                .unwrap_or_else(|| "Missing provider instance".to_string());
+                                            let subscription_name = subscription
+                                                .map(|subscription| subscription.display_name.clone())
+                                                .unwrap_or_else(|| "No named subscription".to_string());
+                                            let provider_id = provider_id.clone();
+                                            let subscription_key = mapping
+                                                .map(|mapping| mapping.subscription_key.clone());
+                                            let subscription_used_by_another_provider =
+                                                subscription_key.as_ref().is_some_and(|key| {
+                                                    organization
+                                                        .allowed_provider_instances
+                                                        .iter()
+                                                        .filter(|candidate| {
+                                                            candidate.as_str()
+                                                                != provider_id.as_str()
+                                                        })
+                                                        .any(|candidate| {
+                                                            catalog.mappings.iter().any(|mapping| {
+                                                                mapping.provider_instance_id
+                                                                    == *candidate
+                                                                    && mapping.subscription_key
+                                                                        == *key
+                                                            })
+                                                        })
+                                                });
+                                            div()
+                                                .h_flex()
+                                                .items_center()
+                                                .justify_between()
+                                                .p_2()
+                                                .rounded(Radii::CHIP)
+                                                .bg(theme.chrome.panel2)
+                                                .child(
+                                                    div()
+                                                        .v_flex()
+                                                        .gap_1()
+                                                        .child(
+                                                            div()
+                                                                .font_weight(FontWeight::BOLD)
+                                                                .child(provider_name.clone()),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .text_size(Typography::META_SIZE)
+                                                                .text_color(theme.chrome.text_t3)
+                                                                .child(format!("Subscription: {subscription_name}")),
+                                                        ),
+                                                )
+                                                .child(
+                                                    Button::new(format!(
+                                                        "remove-org-provider-{organization_index}-{}",
+                                                        provider_id.as_str()
+                                                    ))
+                                                    .ghost()
+                                                    .label("Remove")
+                                                    .disabled(removal_blocked)
+                                                    .tooltip(if removal_blocked {
+                                                        "Blocked: an organization must keep at least one valid named provider"
+                                                    } else {
+                                                        "Removal is checked against enabled schedules when saved"
+                                                    })
+                                                    .accessibility_label(format!(
+                                                        "Remove {provider_name} from {}",
+                                                        organization.display_name
+                                                    ))
+                                                    .on_click(cx.listener(move |this, _event, window, cx| {
+                                                        let provider_id = provider_id.clone();
+                                                        let subscription_key = subscription_key.clone();
+                                                        let subscription_used_by_another_provider =
+                                                            subscription_used_by_another_provider;
+                                                        on_modify(
+                                                            this,
+                                                            Box::new(move |settings| {
+                                                                if let Some(policy) = settings.organizations.get_mut(organization_index) {
+                                                                    policy.allowed_provider_instances.retain(|candidate| candidate != &provider_id);
+                                                                    if let Some(subscription_key) = subscription_key
+                                                                        && !subscription_used_by_another_provider
+                                                                        && policy.allowed_subscriptions.len() > 1
+                                                                    {
+                                                                        policy.allowed_subscriptions.retain(|candidate| candidate != &subscription_key);
+                                                                    }
+                                                                    policy.revision = policy.revision.saturating_add(1);
+                                                                }
+                                                            }),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    })),
+                                                )
+                                        }),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .v_flex()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .text_size(Typography::GROUP_HEADER_SIZE)
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(theme.chrome.text_t2)
+                                        .child("ADD NAMED INSTANCE"),
+                                )
+                                .children(state.settings.providers.iter().filter_map(|provider| {
+                                    if organization.allowed_provider_instances.contains(&provider.id) {
+                                        return None;
+                                    }
+                                    let provider_environment_id = provider
+                                        .environment_id
+                                        .clone()
+                                        .unwrap_or_else(|| EnvironmentId::new("env-local"));
+                                    let mapping = catalog
+                                        .mappings
+                                        .iter()
+                                        .find(|mapping| {
+                                            mapping.provider_instance_id == provider.id
+                                                && mapping.environment_id
+                                                    == provider_environment_id
+                                        });
+                                    let subscription = mapping.and_then(|mapping| {
+                                        catalog.subscriptions.iter().find(|subscription| {
+                                            subscription.key == mapping.subscription_key
+                                        })
+                                    });
+                                    let provider_id = provider.id.clone();
+                                    let subscription_key = mapping.map(|mapping| mapping.subscription_key.clone());
+                                    let provider_name = provider.display_name.clone();
+                                    Some(
+                                        Button::new(format!(
+                                            "add-org-provider-{organization_index}-{}",
+                                            provider.id.as_str()
+                                        ))
+                                        .ghost()
+                                        .label(format!("Add {provider_name}"))
+                                        .disabled(subscription.is_none() || !provider.enabled)
+                                        .tooltip(if !provider.enabled {
+                                            "Enable this named provider before adding it"
+                                        } else if subscription.is_some() {
+                                            "Add the named instance and its subscription boundary"
+                                        } else {
+                                            "Name this provider's subscription in Usage before adding it"
+                                        })
+                                        .on_click(cx.listener(move |this, _event, window, cx| {
+                                            let provider_id = provider_id.clone();
+                                            let subscription_key = subscription_key.clone();
+                                            on_modify(
+                                                this,
+                                                Box::new(move |settings| {
+                                                    if let (Some(policy), Some(subscription_key)) = (
+                                                        settings.organizations.get_mut(organization_index),
+                                                        subscription_key,
+                                                    ) {
+                                                        policy.allowed_provider_instances.push(provider_id);
+                                                        if !policy.allowed_subscriptions.contains(&subscription_key) {
+                                                            policy.allowed_subscriptions.push(subscription_key);
+                                                        }
+                                                        policy.revision = policy.revision.saturating_add(1);
+                                                    }
+                                                }),
+                                                window,
+                                                cx,
+                                            );
+                                        })),
+                                    )
+                                })),
+                        )
+                        .child(
+                            div()
+                                .v_flex()
+                                .gap_2()
+                                .child({
+                                    let current = organization.daily_budget_micro_usd;
+                                    let organization_name = organization.display_name.clone();
+                                    div()
+                                        .h_flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .p_2()
+                                        .rounded(Radii::CHIP)
+                                        .bg(theme.chrome.panel2)
+                                        .child(
+                                            div()
+                                                .v_flex()
+                                                .child(
+                                                    div()
+                                                        .font_weight(FontWeight::BOLD)
+                                                        .child("Daily API-equivalent budget"),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(Typography::META_SIZE)
+                                                        .text_color(theme.chrome.text_t3)
+                                                        .child(current.map_or_else(
+                                                            || "Not set".to_string(),
+                                                            |value| format_micro_usd(Some(value)),
+                                                        )),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .h_flex()
+                                                .gap_2()
+                                                .child(
+                                                    Button::new(format!(
+                                                        "decrease-org-budget-{organization_index}"
+                                                    ))
+                                                    .ghost()
+                                                    .label("Decrease $10")
+                                                    .disabled(current.is_none())
+                                                    .accessibility_label(format!(
+                                                        "Decrease daily budget for {organization_name} by 10 dollars"
+                                                    ))
+                                                    .on_click(cx.listener(
+                                                        move |this, _event, window, cx| {
+                                                            on_modify(
+                                                                this,
+                                                                Box::new(move |settings| {
+                                                                    if let Some(policy) = settings
+                                                                        .organizations
+                                                                        .get_mut(organization_index)
+                                                                    {
+                                                                        policy.daily_budget_micro_usd =
+                                                                            decrease_organization_budget(
+                                                                                current,
+                                                                            );
+                                                                        policy.revision = policy
+                                                                            .revision
+                                                                            .saturating_add(1);
+                                                                    }
+                                                                }),
+                                                                window,
+                                                                cx,
+                                                            );
+                                                        },
+                                                    )),
+                                                )
+                                                .child({
+                                                    let organization_name =
+                                                        organization.display_name.clone();
+                                                    Button::new(format!(
+                                                        "increase-org-budget-{organization_index}"
+                                                    ))
+                                                    .ghost()
+                                                    .label("Increase $10")
+                                                    .accessibility_label(format!(
+                                                        "Increase daily budget for {organization_name} by 10 dollars"
+                                                    ))
+                                                    .on_click(cx.listener(
+                                                        move |this, _event, window, cx| {
+                                                            on_modify(
+                                                                this,
+                                                                Box::new(move |settings| {
+                                                                    if let Some(policy) = settings
+                                                                        .organizations
+                                                                        .get_mut(organization_index)
+                                                                    {
+                                                                        policy.daily_budget_micro_usd =
+                                                                            increase_organization_budget(
+                                                                                current,
+                                                                            );
+                                                                        policy.revision = policy
+                                                                            .revision
+                                                                            .saturating_add(1);
+                                                                    }
+                                                                }),
+                                                                window,
+                                                                cx,
+                                                            );
+                                                        },
+                                                    ))
+                                                }),
+                                        )
+                                })
+                                .child({
+                                    let current = organization.max_concurrency;
+                                    let organization_name = organization.display_name.clone();
+                                    div()
+                                        .h_flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .p_2()
+                                        .rounded(Radii::CHIP)
+                                        .bg(theme.chrome.panel2)
+                                        .child(
+                                            div()
+                                                .v_flex()
+                                                .child(
+                                                    div()
+                                                        .font_weight(FontWeight::BOLD)
+                                                        .child("Concurrency ceiling"),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(Typography::META_SIZE)
+                                                        .text_color(theme.chrome.text_t3)
+                                                        .child(
+                                                            current
+                                                                .map(|value| value.to_string())
+                                                                .unwrap_or_else(|| {
+                                                                    "Not set".to_string()
+                                                                }),
+                                                        ),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .h_flex()
+                                                .gap_2()
+                                                .child(
+                                                    Button::new(format!(
+                                                        "decrease-org-concurrency-{organization_index}"
+                                                    ))
+                                                    .ghost()
+                                                    .label("Decrease")
+                                                    .disabled(current.is_none())
+                                                    .accessibility_label(format!(
+                                                        "Decrease concurrency ceiling for {organization_name}"
+                                                    ))
+                                                    .on_click(cx.listener(
+                                                        move |this, _event, window, cx| {
+                                                            on_modify(
+                                                                this,
+                                                                Box::new(move |settings| {
+                                                                    if let Some(policy) = settings
+                                                                        .organizations
+                                                                        .get_mut(organization_index)
+                                                                    {
+                                                                        policy.max_concurrency =
+                                                                            decrease_organization_concurrency(
+                                                                                current,
+                                                                            );
+                                                                        policy.revision = policy
+                                                                            .revision
+                                                                            .saturating_add(1);
+                                                                    }
+                                                                }),
+                                                                window,
+                                                                cx,
+                                                            );
+                                                        },
+                                                    )),
+                                                )
+                                                .child({
+                                                    let organization_name =
+                                                        organization.display_name.clone();
+                                                    Button::new(format!(
+                                                        "increase-org-concurrency-{organization_index}"
+                                                    ))
+                                                    .ghost()
+                                                    .label("Increase")
+                                                    .accessibility_label(format!(
+                                                        "Increase concurrency ceiling for {organization_name}"
+                                                    ))
+                                                    .on_click(cx.listener(
+                                                        move |this, _event, window, cx| {
+                                                            on_modify(
+                                                                this,
+                                                                Box::new(move |settings| {
+                                                                    if let Some(policy) = settings
+                                                                        .organizations
+                                                                        .get_mut(organization_index)
+                                                                    {
+                                                                        policy.max_concurrency =
+                                                                            increase_organization_concurrency(
+                                                                                current,
+                                                                            );
+                                                                        policy.revision = policy
+                                                                            .revision
+                                                                            .saturating_add(1);
+                                                                    }
+                                                                }),
+                                                                window,
+                                                                cx,
+                                                            );
+                                                        },
+                                                    ))
+                                                }),
+                                        )
+                                })
+                                .child({
+                                    let workspace_mapping = state.settings.tier_mapping.clone();
+                                    let workspace_mapping_is_allowed = workspace_mapping
+                                        .as_ref()
+                                        .is_some_and(|mapping| {
+                                            mapping.tiers.values().all(|target| {
+                                                organization
+                                                    .allowed_provider_instances
+                                                    .contains(&target.provider_instance_id)
+                                            })
+                                        });
+                                    let has_override = organization.default_tier_mapping.is_some();
+                                    div()
+                                        .v_flex()
+                                        .gap_2()
+                                        .p_2()
+                                        .rounded(Radii::CHIP)
+                                        .bg(theme.chrome.panel2)
+                                        .child(
+                                            div()
+                                                .h_flex()
+                                                .items_center()
+                                                .justify_between()
+                                                .child(
+                                                    div()
+                                                        .v_flex()
+                                                        .child(
+                                                            div()
+                                                                .font_weight(FontWeight::BOLD)
+                                                                .child("Default capability tiers"),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .text_size(Typography::META_SIZE)
+                                                                .text_color(theme.chrome.text_t3)
+                                                                .child(if has_override {
+                                                                    "Organization override"
+                                                                } else {
+                                                                    "No organization override"
+                                                                }),
+                                                        ),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .h_flex()
+                                                        .gap_2()
+                                                        .child({
+                                                            let mapping = workspace_mapping.clone();
+                                                            Button::new(format!(
+                                                                "apply-org-tier-map-{organization_index}"
+                                                            ))
+                                                            .ghost()
+                                                            .label("Use workspace mapping")
+                                                            .disabled(!workspace_mapping_is_allowed)
+                                                            .tooltip(if workspace_mapping_is_allowed {
+                                                                "Copy the current workspace tier mapping into this organization"
+                                                            } else {
+                                                                "Unavailable: the workspace mapping names a provider outside this organization"
+                                                            })
+                                                            .on_click(cx.listener(
+                                                                move |this, _event, window, cx| {
+                                                                    let mapping = mapping.clone();
+                                                                    on_modify(
+                                                                        this,
+                                                                        Box::new(move |settings| {
+                                                                            if let Some(policy) = settings
+                                                                                .organizations
+                                                                                .get_mut(organization_index)
+                                                                            {
+                                                                                policy.default_tier_mapping =
+                                                                                    mapping;
+                                                                                policy.revision = policy
+                                                                                    .revision
+                                                                                    .saturating_add(1);
+                                                                            }
+                                                                        }),
+                                                                        window,
+                                                                        cx,
+                                                                    );
+                                                                },
+                                                            ))
+                                                        })
+                                                        .child(
+                                                            Button::new(format!(
+                                                                "clear-org-tier-map-{organization_index}"
+                                                            ))
+                                                            .ghost()
+                                                            .label("Clear override")
+                                                            .disabled(!has_override)
+                                                            .on_click(cx.listener(
+                                                                move |this, _event, window, cx| {
+                                                                    on_modify(
+                                                                        this,
+                                                                        Box::new(move |settings| {
+                                                                            if let Some(policy) = settings
+                                                                                .organizations
+                                                                                .get_mut(organization_index)
+                                                                            {
+                                                                                policy.default_tier_mapping =
+                                                                                    None;
+                                                                                policy.revision = policy
+                                                                                    .revision
+                                                                                    .saturating_add(1);
+                                                                            }
+                                                                        }),
+                                                                        window,
+                                                                        cx,
+                                                                    );
+                                                                },
+                                                            )),
+                                                        ),
+                                                ),
+                                        )
+                                        .children(
+                                            organization
+                                                .default_tier_mapping
+                                                .iter()
+                                                .flat_map(|mapping| mapping.tiers.iter())
+                                                .map(|(tier, target)| {
+                                                    let provider_name = state
+                                                        .settings
+                                                        .providers
+                                                        .iter()
+                                                        .find(|provider| {
+                                                            provider.id
+                                                                == target.provider_instance_id
+                                                        })
+                                                        .map(|provider| {
+                                                            provider.display_name.clone()
+                                                        })
+                                                        .unwrap_or_else(|| {
+                                                            "Missing named provider".to_string()
+                                                        });
+                                                    div()
+                                                        .h_flex()
+                                                        .items_center()
+                                                        .justify_between()
+                                                        .child(format!("{}: {provider_name}", tier))
+                                                        .child(target.model.clone())
+                                                }),
+                                        )
+                                })
+                                .child(
+                                    div()
+                                        .h_flex()
+                                        .flex_wrap()
+                                        .gap_2()
+                                        .child(
+                                            Button::new(format!(
+                                                "edit-org-projects-{organization_index}"
+                                            ))
+                                            .ghost()
+                                            .label(format!(
+                                                "Project assignments: {}",
+                                                organization.project_ids.len()
+                                            ))
+                                            .disabled(true)
+                                            .tooltip("Unavailable: the current project catalog does not expose a safe assignment editor"),
+                                        )
+                                        .child(
+                                            Button::new(format!(
+                                                "edit-org-failover-{organization_index}"
+                                            ))
+                                            .ghost()
+                                            .label(format!(
+                                                "Failover pools: {}",
+                                                organization.failover_pool_ids.len()
+                                            ))
+                                            .disabled(true)
+                                            .tooltip("Unavailable until the capability-aware Phase 4F pool editor is implemented"),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .v_flex()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .text_size(Typography::GROUP_HEADER_SIZE)
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(theme.chrome.text_t2)
+                                        .child("BROADSIDE SHARING"),
+                                )
+                                .child(
+                                    div()
+                                        .h_flex()
+                                        .flex_wrap()
+                                        .gap_2()
+                                        .child({
+                                            let enabled = organization.broadside.allow_artifacts;
+                                            Button::new(format!(
+                                                "broadside-artifacts-{organization_index}"
+                                            ))
+                                            .ghost()
+                                            .label(format!(
+                                                "Artifacts: {}",
+                                                if enabled { "Allowed" } else { "Blocked" }
+                                            ))
+                                            .accessibility_label(
+                                                "Toggle Broadside artifact sharing",
+                                            )
+                                            .on_click(cx.listener(
+                                                move |this, _event, window, cx| {
+                                                    on_modify(
+                                                        this,
+                                                        Box::new(move |settings| {
+                                                            if let Some(policy) = settings
+                                                                .organizations
+                                                                .get_mut(organization_index)
+                                                            {
+                                                                policy.broadside.allow_artifacts =
+                                                                    !enabled;
+                                                                policy.revision = policy
+                                                                    .revision
+                                                                    .saturating_add(1);
+                                                            }
+                                                        }),
+                                                        window,
+                                                        cx,
+                                                    );
+                                                },
+                                            ))
+                                        })
+                                        .child({
+                                            let enabled =
+                                                organization.broadside.allow_transcripts;
+                                            Button::new(format!(
+                                                "broadside-transcripts-{organization_index}"
+                                            ))
+                                            .ghost()
+                                            .label(format!(
+                                                "Transcripts: {}",
+                                                if enabled { "Allowed" } else { "Blocked" }
+                                            ))
+                                            .accessibility_label(
+                                                "Toggle Broadside transcript sharing",
+                                            )
+                                            .on_click(cx.listener(
+                                                move |this, _event, window, cx| {
+                                                    on_modify(
+                                                        this,
+                                                        Box::new(move |settings| {
+                                                            if let Some(policy) = settings
+                                                                .organizations
+                                                                .get_mut(organization_index)
+                                                            {
+                                                                policy.broadside.allow_transcripts =
+                                                                    !enabled;
+                                                                policy.revision = policy
+                                                                    .revision
+                                                                    .saturating_add(1);
+                                                            }
+                                                        }),
+                                                        window,
+                                                        cx,
+                                                    );
+                                                },
+                                            ))
+                                        }),
+                                ),
+                        )
+                }),
+        )
+        .into_any_element()
 }
 
 /// Renders the Terminal settings panel.
@@ -1192,6 +2212,8 @@ fn render_advanced_tab<V: 'static>(
                                     Button::new("inc-global-conc")
                                         .ghost()
                                         .label("▲")
+                                        .accessibility_label("Increase global concurrency")
+                                        .tooltip("Increase global concurrency")
                                         .on_click(cx.listener(move |this, _event, window, cx| {
                                             on_modify(this, Box::new(move |s| {
                                                 s.advanced.global_concurrency_limit = (s.advanced.global_concurrency_limit + 1).min(16);
@@ -1202,6 +2224,8 @@ fn render_advanced_tab<V: 'static>(
                                     Button::new("dec-global-conc")
                                         .ghost()
                                         .label("▼")
+                                        .accessibility_label("Decrease global concurrency")
+                                        .tooltip("Decrease global concurrency")
                                         .on_click(cx.listener(move |this, _event, window, cx| {
                                             on_modify(this, Box::new(move |s| {
                                                 s.advanced.global_concurrency_limit = (s.advanced.global_concurrency_limit.saturating_sub(1)).max(1);
@@ -1581,5 +2605,26 @@ Host galahad
         let reimported = state.import_ssh_hosts(Some(config));
         assert_eq!(reimported, 0);
         assert_eq!(state.environments.len(), 2);
+    }
+
+    #[test]
+    fn organization_limit_controls_preserve_unset_and_positive_values() {
+        assert_eq!(increase_organization_budget(None), Some(10_000_000));
+        assert_eq!(
+            increase_organization_budget(Some(10_000_000)),
+            Some(20_000_000)
+        );
+        assert_eq!(
+            decrease_organization_budget(Some(20_000_000)),
+            Some(10_000_000)
+        );
+        assert_eq!(decrease_organization_budget(Some(10_000_000)), None);
+        assert_eq!(decrease_organization_budget(None), None);
+
+        assert_eq!(increase_organization_concurrency(None), Some(1));
+        assert_eq!(increase_organization_concurrency(Some(1)), Some(2));
+        assert_eq!(decrease_organization_concurrency(Some(2)), Some(1));
+        assert_eq!(decrease_organization_concurrency(Some(1)), None);
+        assert_eq!(decrease_organization_concurrency(None), None);
     }
 }
