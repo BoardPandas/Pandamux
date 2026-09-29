@@ -2,11 +2,11 @@
 
 Date opened: 2026-09-28
 
-Last updated: 2026-09-28
+Last updated: 2026-09-29
 
 Status: **Open. The exact Galahad artifact, lifecycle, managed install, transfer,
-and Codex, Claude, and Antigravity provider rows have live evidence. The required
-30-minute physical laptop disconnect and sleep checks and native Windows acceptance
+Codex, Claude, and Antigravity provider rows, and native Windows IPC behavior have
+live evidence. The required 30-minute physical laptop disconnect and sleep checks
 remain open.**
 
 This record separates source and fixture verification from production acceptance.
@@ -31,6 +31,9 @@ Galahad row.
 - Exact live artifact version: `0.54.11`
 - R0 node artifact manifest:
   `target/r0-node-artifacts/0.54.11/x86_64-unknown-linux-musl/r0-node-manifest.txt`
+- Native Windows acceptance commit: `b314ae79f1f16d1eac3a5360eba340dda70884e8`
+- Native Windows acceptance version: `0.54.12`
+- Native Windows build target: `x86_64-pc-windows-gnu`
 - Publication: disabled
 
 ## Source and fixture evidence
@@ -48,10 +51,65 @@ Galahad row.
 | Unix local control boundary | Pass | Authenticated CLI checks and tests cover private runtime modes, peer credentials, scoped capabilities, immutable request context, and redacted MCP projections |
 | Windows security module MSVC type-check | Pass with scope limitation | The exact `windows_security.rs` module compiled to metadata for `x86_64-pc-windows-msvc` against `windows-sys 0.61.2` |
 | Windows workspace cross-check | Pass with scope limitation | `cargo check --workspace --all-targets --target x86_64-pc-windows-gnu` compiled the workspace and Windows-only tests without warnings |
-| Native Windows IPC behavior | Not run | A Windows host is still required for SID, DACL, remote-client, PID and image, and anti-squatting behavior |
+| Native Windows IPC behavior | Pass | Exact `0.54.12` server and CLI artifacts from clean commit `b314ae7` passed SID-scoped naming, the user-only DACL, remote-client rejection, PID and image enforcement, and first-instance anti-squatting on Windows 11 |
 | Best-effort provider disabled-state contract | Pass on exact Galahad artifact | Exact `0.54.7` health reports persisted Cursor, Grok, and OpenCode as disabled with typed code, message, and remediation fields |
 
+## Native Windows IPC evidence
+
+The exact Windows binaries were built from clean commit
+`b314ae79f1f16d1eac3a5360eba340dda70884e8` and workspace version `0.54.12` with:
+
+```bash
+rustup target add x86_64-pc-windows-gnu
+CARGO_TARGET_DIR=/tmp/pandamux-r0-windows-target cargo build --locked --release \
+  --target x86_64-pc-windows-gnu -p pandamux-server -p pandamux-cli
+```
+
+| Artifact | Size | SHA-256 |
+|---|---:|---|
+| `pandamux-server.exe` | 24,646,772 | `3905612691373864a9a72b13cac4747131df4c5a1c5900cde9e3e1df601578b6` |
+| `pandamux-cli.exe` | 4,088,486 | `816039e496e7a434438d9494df111249e7aa2ee314f40edb413faf699cb21e6e` |
+| Transfer ZIP | 9,727,955 | `1a3659f76ef886b132305d7d22f351860f5b9a6108999cea0951ad04fb741f95` |
+
+The execution host was Windows 11 Pro system `COLT-SHINE`. Tests ran inside its
+isolated Hyper-V guest `SF-C4AD-VM`, Windows 11 Enterprise Evaluation build 26200,
+as local user `SF-C4AD-VM\C4adUser`, SID
+`S-1-5-21-3343393599-1391300870-1798795327-1001`. The server created pipe
+`\\.\pipe\pandamux-hub-S-1-5-21-3343393599-1391300870-1798795327-1001`.
+The exact CLI reported `pandamux v0.54.12`; authenticated `ping` passed at about
+0.6 ms, and `identify` returned `platform=windows`, `role=hub`, and protocol 3.
+
+The same-user PowerShell control probe reached the protected pipe but was rejected
+before routing. Server stderr recorded `Rejected local pipe client: named-pipe client
+image is not approved: powershell.exe`. A separate `SF-C4AD-VM\C4adAdmin` process was
+denied with `Access to the path is denied.` A second PandaMUX server process exited 1
+with Windows error code 5, `PermissionDenied`, and `Access is denied`, while the first
+server remained healthy and answered another authenticated ping.
+
+Remote-client rejection was verified with a controlled baseline. The guest temporarily
+used Hyper-V's `Default Switch`, where the host was `172.25.80.1` and the guest was
+`172.25.86.186`. A control pipe with the same user ACL but without remote rejection
+accepted the authenticated host connection and returned `CONTROL_OK`. The corresponding
+host connection to the PandaMUX pipe failed with `Access to the path is denied`. Local
+PandaMUX pings passed immediately before and after the remote probe, and the integrated
+result reported `Passed: true`.
+
+Checkpoint `pre-pandamux-r0-b314ae7-20260929` protected the guest before mutation.
+Attaching the test network triggered a Hyper-V save and restore that rolled the guest
+disk back to that checkpoint, so the deciding run attached networking first, waited for
+restore, then recopied and rehashed both binaries before testing. At acceptance cleanup,
+the temporary credential mapping, firewall rule, guest network attachment, and test
+processes were removed. A later audit found no PandaMUX guest staging root, firewall
+rule, or process. The shared C4ad lab had subsequently acquired newer unrelated
+checkpoints and a new network attachment, which this recovery run deliberately left
+untouched. The host-side PandaMUX staging directory was removed, and the SupportForge
+remote session was explicitly disconnected.
+
 ## R0.5 live matrix
+
+Provider execution rows are decided on Galahad, the Phase 3 remote environment. The
+Local Windows cells retain whether the same provider scenario was also repeated there;
+the required Windows-specific R0.5 evidence is the native IPC row above.
 
 | Row | Local Windows | Galahad | Status and evidence |
 |---|---|---|---|
@@ -194,9 +252,9 @@ No upstream push occurred.
 On 2026-09-28, the user granted full authorization to run the live matrix, including
 provider quota, OAuth or CLI login, binary and file transfer, Galahad daemon changes,
 temporary node egress blocking, and coordinated disconnect or sleep checks. Public push
-and release publication remain outside this recovery run. Both browser login flows are
-complete. The physical laptop disconnect and sleep checks and the native Windows run
-still require interactive or external-host participation when those rows are scheduled.
+and release publication remain outside this recovery run. Both browser login flows and
+the native Windows run are complete. The physical laptop disconnect and sleep checks
+still require interactive participation when those rows are scheduled.
 
 ## Gate decision
 

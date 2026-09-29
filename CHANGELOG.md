@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Changed
 
+- **Completed native Windows IPC acceptance for R0.5.** Exact `0.54.12`
+  Windows server and CLI artifacts passed SID-scoped pipe naming, same-user control,
+  the user-only DACL, client PID and image rejection, first-instance anti-squatting,
+  and controlled remote-client rejection on the isolated Colt-Shine Hyper-V guest.
+  The recovery gate remains open only for the required 30-minute physical laptop
+  disconnect and sleep checks.
 - **Archived authenticated Claude and Antigravity R0 evidence.** The Phase 3 acceptance
   record now identifies the exact `0.54.11` Galahad artifact and captures both live
   provider matrices while keeping the required physical laptop and native Windows rows

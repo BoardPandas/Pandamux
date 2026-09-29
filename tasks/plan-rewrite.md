@@ -981,7 +981,7 @@ Exit criteria: Antigravity's managed bundle is installed on Galahad by node-side
 
 ### Recovery Gate R0: prove the Phase 3 foundation before extending it
 
-**Why this gate exists:** When R0 opened, Phase 3 had implementation commits, but the production hub did not compose a remote transport, the server did not complete the proxy command, thread execution did not resolve the selected provider instance, and the documented live matrix had not been archived. Phase 4 usage, capacity, and failover would otherwise have observed and routed a placeholder system. R0.2 through R0.4 now correct those foundations; R0.5 remains open for the physical laptop and native Windows rows.
+**Why this gate exists:** When R0 opened, Phase 3 had implementation commits, but the production hub did not compose a remote transport, the server did not complete the proxy command, thread execution did not resolve the selected provider instance, and the documented live matrix had not been archived. Phase 4 usage, capacity, and failover would otherwise have observed and routed a placeholder system. R0.2 through R0.4 now correct those foundations; R0.5 remains open for the physical laptop disconnect and sleep rows.
 
 #### R0.1 Preserve and classify the unfinished Phase 4 attempt
 
@@ -1045,15 +1045,15 @@ Acceptance:
 
 - **R0.2 production routing:** `pandamux-server` now owns `pandamux-remote` composition and consumes only the `pty` half of `pandamux-term`. The versioned proxy bridge provides bounded request and event queues, cancellation, protocol and environment negotiation, durable replay cursors, explicit stale state, reconnect, and joined cleanup. Six proxy transport integration fixtures pass. `scripts/r0-node-artifacts.sh` requires an exact clean commit, both Galahad binaries, a fresh size and SHA-256 manifest, verification before and after transfer, and disabled publication.
 - **R0.3 exact provider execution:** one shared resolver loads the typed stored instance for its environment, applies exact profile, binary, settings, environment overrides, enabled state, compatibility, health, and concurrency, and returns structured failures. Threads, turns, health, login, provider launch, and process audit retain the same typed instance ID. Permits remain owned for the full provider-process lifetime and are released on every tested cancellation and shutdown path. No production Custom fallback remains. Orchestrator and scheduler execution do not yet exist; Phase 5 and Phase 6 must use this resolver when those paths become real.
-- **R0.4 local boundary:** accepting transports assign immutable request contexts. Control, MCP, provider-child, node-proxy, and internal roles have distinct server-owned scopes. Provider tokens expire, require the exact thread on every allowed call, and cannot upgrade through request fields. Unix runtime, record, and socket modes, symlink and ownership checks, and peer credentials are enforced and tested. Windows code uses a SID-scoped pipe, protected user-only DACL, remote-client rejection, connecting PID and executable validation, and first-instance anti-squatting. The exact security module type-checks for MSVC, and the full Windows server plus all targets cross-check for the GNU ABI without warnings. Native Windows behavior remains a live acceptance item because this Linux host cannot run Windows binaries and lacks the MSVC linker and libraries.
+- **R0.4 local boundary:** accepting transports assign immutable request contexts. Control, MCP, provider-child, node-proxy, and internal roles have distinct server-owned scopes. Provider tokens expire, require the exact thread on every allowed call, and cannot upgrade through request fields. Unix runtime, record, and socket modes, symlink and ownership checks, and peer credentials are enforced and tested. Windows code uses a SID-scoped pipe, protected user-only DACL, remote-client rejection, connecting PID and executable validation, and first-instance anti-squatting. The exact security module type-checks for MSVC, and the full Windows server plus all targets cross-check for the GNU ABI without warnings. Exact native Windows behavior later passed under R0.5 from commit `b314ae7` and version `0.54.12`.
 - **MCP and developer truth:** general MCP reads now use explicit redacted projections with sentinel tests for provider paths, environment overrides, arbitrary JSON, secret-like values, schedule prompts, repository paths, notification targets, and FullAccess state. `README.md`, `CLAUDE.md`, and `docs/README.md` route contributors to the GPUI desktop, current crates and commands, authenticated server composition, and open recovery gate. The removed Iced wiki is labeled historical.
 - **Verification:** `cargo test --workspace` passed 291 tests with zero failures and two intentionally ignored real-shell terminal tests at `e562ae4`. Strict workspace Clippy, formatting, whitespace, crate-boundary, wiring, and focused compile checks passed. A production Unix socket smoke authenticated the real CLI for `ping` and `identify` and observed `0700`, `0600`, and `0600` modes for the runtime directory, record, and socket. These are implementation checks, not R0.5 production acceptance.
 
 #### R0.5 Archive the Phase 3 production acceptance matrix
 
-Live results and required evidence are tracked in [`docs/operations/PHASE3_ACCEPTANCE.md`](../docs/operations/PHASE3_ACCEPTANCE.md). The record is open; no live Windows or Galahad row has been inferred from fixture coverage.
+Live results and required evidence are tracked in [`docs/operations/PHASE3_ACCEPTANCE.md`](../docs/operations/PHASE3_ACCEPTANCE.md). The record is open for the physical laptop rows; every accepted native Windows and Galahad result is backed by direct live evidence rather than inferred from fixture coverage.
 
-R0.5 preflight found that the recovered Antigravity path used placeholder release metadata, shell-script stand-ins for the Google bundle, a fabricated OAuth flow, and success responses without a live ACP process. The recovery implementation now uses the pinned Google ACP 1.1.1 bundles, streaming size and SHA-256 verification, two-entry hardened extraction, real initialize and session traffic, strict OAuth relay validation, workspace-confined file capabilities, opaque permission option IDs, cancellation and process cleanup, node download plus verified hub-to-node SFTP fallback, and private profile and scratch directories. Exact-commit Galahad runs prove both managed-install paths, idle and busy lifecycle behavior, the remote transfer layer, stored best-effort-provider disabled states, the full Codex row on `0.54.7`, and the authenticated Claude and Antigravity rows on `0.54.11`. The required physical laptop disconnect and sleep checks and native Windows rows remain gating.
+R0.5 preflight found that the recovered Antigravity path used placeholder release metadata, shell-script stand-ins for the Google bundle, a fabricated OAuth flow, and success responses without a live ACP process. The recovery implementation now uses the pinned Google ACP 1.1.1 bundles, streaming size and SHA-256 verification, two-entry hardened extraction, real initialize and session traffic, strict OAuth relay validation, workspace-confined file capabilities, opaque permission option IDs, cancellation and process cleanup, node download plus verified hub-to-node SFTP fallback, and private profile and scratch directories. Exact-commit Galahad runs prove both managed-install paths, idle and busy lifecycle behavior, the remote transfer layer, stored best-effort-provider disabled states, the full Codex row on `0.54.7`, and the authenticated Claude and Antigravity rows on `0.54.11`. Exact `0.54.12` Windows binaries prove the native IPC boundary. Only the required physical laptop disconnect and sleep checks remain gating.
 
 Run the matrix against local Windows and Galahad with exact binary SHAs and captured artifacts:
 
@@ -1070,7 +1070,7 @@ Gate exit:
 - R0 closes only when every required row passes or the plan explicitly re-scopes that row with user approval. A checked implementation step is not a substitute.
 - Ships: internal CI artifacts only.
 
-##### R0.5 Galahad progress record, 2026-09-28
+##### R0.5 live progress record, 2026-09-28 through 2026-09-29
 
 - **Exact node lifecycle:** clean commit
   `28614286b6ce2e9b14f1c4279bee4cd69709eb34` produced publication-disabled `0.54.11`
@@ -1112,14 +1112,20 @@ Gate exit:
 - **Best-effort providers:** settings schema v3 now persists Cursor, Grok, and OpenCode
   disabled by default with typed code, message, and remediation fields, and provider
   health exposes each structured reason on the exact deployed artifact.
+- **Native Windows IPC:** exact `0.54.12` server and CLI binaries from clean commit
+  `b314ae79f1f16d1eac3a5360eba340dda70884e8` ran on the isolated `SF-C4AD-VM`
+  Windows 11 guest. SID-scoped naming, authenticated same-user CLI access, the
+  protected user-only DACL, connecting-process image rejection, cross-user denial,
+  first-instance anti-squatting, controlled remote-client rejection, and post-probe
+  server health all passed. Exact sizes, hashes, guest identity, cleanup, and the
+  Hyper-V restore ordering are archived in the acceptance record.
 - **Verification:** exact `0.54.11` passed 302 workspace tests with zero failures and two
   intentional real-shell ignores, strict Clippy, formatting, whitespace, crate-boundary,
   and wiring guards. `cargo-deny` is unavailable on this host, so no advisory result is
   claimed.
 - **Gate remains open:** the required 30-minute physical laptop disconnect and
-  full-screen-terminal sleep and native Windows behavior still require interactive or
-  external-host evidence. Browser authentication and all three Galahad provider rows
-  are complete.
+  full-screen-terminal sleep still require interactive evidence. Browser authentication,
+  native Windows IPC, and all three Galahad provider rows are complete.
 
 ### Phase 4: Provider observability, usage, capacity, policy, and safe failover
 

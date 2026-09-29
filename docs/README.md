@@ -31,7 +31,7 @@ The server is the production owner of remote composition and durable state. The 
 
 ## Active recovery gate
 
-The unfinished Phase 4 prototype has been preserved under Recovery Gate R0.1. R0.2 through R0.4 establish production remote routing, exact provider-instance resolution, and authenticated local control. R0.5 remains the required live Windows and Galahad acceptance matrix. Checked source implementation is not a substitute for that matrix.
+The unfinished Phase 4 prototype has been preserved under Recovery Gate R0.1. R0.2 through R0.4 establish production remote routing, exact provider-instance resolution, and authenticated local control. R0.5 has exact live evidence for Galahad and native Windows IPC; the required 30-minute physical laptop disconnect and sleep checks remain open. Checked source implementation is not a substitute for that remaining acceptance.
 
 The authoritative completion records, unresolved rows, and exact acceptance criteria are in [`tasks/plan-rewrite.md`](../tasks/plan-rewrite.md).
 

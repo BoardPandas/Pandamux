@@ -15,7 +15,7 @@ For current facts, use this order:
 
 The only version source is `[workspace.package] version` in the root [`Cargo.toml`](Cargo.toml). Crates inherit it with `version.workspace = true`.
 
-The codebase is at the Phase 4 recovery gate. R0.1 preserves the unfinished usage prototype; R0.2 completes production proxy routing; R0.3 enforces exact provider-instance execution; R0.4 secures the local control boundary. R0.5 still requires live Windows and Galahad acceptance with exact artifact hashes. Do not call the rewrite production-accepted, released, or shipped before that matrix passes and its record is archived.
+The codebase is at the Phase 4 recovery gate. R0.1 preserves the unfinished usage prototype; R0.2 completes production proxy routing; R0.3 enforces exact provider-instance execution; R0.4 secures the local control boundary. R0.5 has exact live evidence for Galahad and native Windows IPC, while the required 30-minute physical laptop disconnect and sleep checks remain open. Do not call the rewrite production-accepted, released, or shipped before the matrix passes and its record is archived.
 
 ## Build and development
 

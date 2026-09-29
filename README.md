@@ -15,7 +15,7 @@ The codebase is in the recovery gate before continuing Phase 4 provider observab
 - R0.2 implements Hub-to-node routing through a versioned SSH exec proxy, reconnect semantics, event replay, and joined cleanup.
 - R0.3 resolves every provider turn from the exact stored provider instance and holds per-instance capacity for the provider process lifetime.
 - R0.4 secures local IPC with server-assigned request contexts, distinct capabilities, OS-user boundaries, and redacted MCP reads.
-- R0.5 is still a required live acceptance gate on local Windows and Galahad. The current source must not be described as production-accepted or released until that matrix is archived.
+- R0.5 has exact live evidence for Galahad and native Windows IPC. The required 30-minute physical laptop disconnect and sleep checks remain open, so the current source must not be described as production-accepted or released.
 
 See the completion records and acceptance criteria in [`tasks/plan-rewrite.md`](tasks/plan-rewrite.md).
 
