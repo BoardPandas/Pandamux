@@ -907,23 +907,27 @@ fn render_subscription_editor<V: 'static>(
                         "Edit {} subscription",
                         target.provider_display_name
                     )))
-                    .child(
-                        div().v_flex().gap_1().child("Subscription name").child(
-                            Input::new(name_input)
-                                .accessibility_id("usage.subscription.name")
-                                .aria_label("Subscription name"),
+                    .child(div().v_flex().gap_1().child("Subscription name").child(
+                        editor_text_input(
+                            name_input,
+                            "usage-subscription-name-input",
+                            "usage.subscription.name",
+                            "Subscription name",
+                            cx,
                         ),
-                    )
+                    ))
                     .child(
                         div()
                             .v_flex()
                             .gap_1()
                             .child("Masked account label (optional)")
-                            .child(
-                                Input::new(account_input)
-                                    .accessibility_id("usage.subscription.masked-account")
-                                    .aria_label("Masked account label"),
-                            ),
+                            .child(editor_text_input(
+                                account_input,
+                                "usage-masked-account-input",
+                                "usage.subscription.masked-account",
+                                "Masked account label",
+                                cx,
+                            )),
                     )
                     .child(
                         div()
@@ -948,6 +952,40 @@ fn render_subscription_editor<V: 'static>(
                     ),
             )
         })
+        .into_any_element()
+}
+
+fn editor_text_input(
+    state: &Entity<InputState>,
+    element_id: &'static str,
+    accessibility_id: &'static str,
+    label: &'static str,
+    cx: &mut App,
+) -> AnyElement {
+    // gpui-component 0.6.6 exposes its TextInput node on a frame focus handle,
+    // while text editing uses the state focus handle. Track the real handle on
+    // PandaMUX's semantic node so UIA and screen readers observe keyboard focus.
+    let focus_handle = state.read(cx).focus_handle(cx);
+    let value = state.read(cx).value();
+    let accessibility_state = state.clone();
+
+    div()
+        .id(element_id)
+        .w_full()
+        .role(Role::TextInput)
+        .track_focus(&focus_handle)
+        .accessibility_id(accessibility_id)
+        .aria_label(label)
+        .aria_value(value)
+        .on_a11y_action(AccessibleAction::SetValue, move |data, window, cx| {
+            let Some(accesskit::ActionData::Value(value)) = data else {
+                return;
+            };
+            accessibility_state.update(cx, |state, cx| {
+                state.replace_all(value.to_string(), window, cx);
+            });
+        })
+        .child(Input::new(state).role(gpui_kit::component::RoleOverride::Presentational))
         .into_any_element()
 }
 
