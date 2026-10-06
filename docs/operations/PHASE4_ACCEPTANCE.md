@@ -1,21 +1,30 @@
 # Phase 4 Acceptance Record
 
 Date: 2026-09-29
+Updated: 2026-10-06
 
 Status: **Implementation recorded, live acceptance incomplete.** The exact 0.60.0
 source and artifacts passed native Windows startup, Galahad live turns for Codex,
 Claude, and Antigravity, real Hub-to-node SSH routing, and a bounded Hub usage pull.
-The full Usage interaction and accessibility matrix, weekly reconciliation, and
-live side-effect-aware failover matrix are not yet complete. R0.5's two explicitly
-deferred physical laptop rows remain production-acceptance and release blockers.
-No push, deployment, production activation, or release occurred.
+An exact 0.60.3 native Windows follow-up passed the Usage editor focus and direct
+UI Automation Cancel rows after one transient initial focus-publication miss and
+three clean follow-up runs. The remaining Usage visual and screen-reader matrix,
+weekly reconciliation, and live side-effect-aware failover matrix are not yet
+complete. R0.5's two explicitly deferred physical laptop rows remain
+production-acceptance and release blockers. No push, deployment, production
+activation, or release occurred.
 
 ## Source and preservation boundary
 
 - Exact executable source: clean `codex/recovery-r0` commit
   `96aad1d16f357f1bc70d46b9889ad403550a4d1a`, version `0.60.0`.
-- This record and the dependency-policy compatibility fix use workspace version
-  `0.60.1`. No 0.60.1 Windows or Galahad executable is claimed as tested here.
+- Exact native Usage accessibility follow-up source: clean `codex/recovery-r0`
+  commit `2be212f9a290637add9a4f5c662ca3155da98a0c`, version `0.60.3`.
+- The intermediate 0.60.2 commit `8a52d2a21da1d5d0f69540864a6162d2b30375bc`
+  repaired direct UI Automation activation for Save and Cancel. The 0.60.3
+  follow-up exposed the editor text fields on semantic nodes tied to their real
+  editing focus. This documentation follow-up uses workspace version `0.60.4`.
+  No 0.60.4 Windows or Galahad executable is claimed as tested here.
 - Original checkout: `/home/brandon/Repos/Pandamux` at recovery baseline
   `9511d0e22d44` with the unfinished Phase 4 prototype preserved. R0.1 archived
   a binary-safe patch and untracked-file tar, recorded their hashes, and verified
@@ -72,6 +81,35 @@ rendered cleanly. The exact guest server and CLI also passed authenticated
 SYSTEM test is not a substitute for the 0.60.0 normal-user named-pipe security
 matrix. The earlier exact 0.54.12 normal-user matrix is recorded in
 `docs/operations/PHASE3_ACCEPTANCE.md`.
+
+### Exact 0.60.3 native accessibility repair artifacts
+
+The follow-up source moved from Linux to COLT-SHINE as a prerequisite-bound Git
+bundle with SHA-256
+`401089dc7c06f3097e2292f20262582c93a4131dcee12e707c1ef0afb35a18b5`.
+The host decoded and verified the bundle, cloned the already accepted isolated
+source, fetched only the repair commit, checked out exact commit `2be212f`, and
+proved a clean worktree before and after building. The host's existing
+`C:\Github\Pandamux` checkout was not edited.
+
+Native MSVC release builds used Visual Studio 2019 Build Tools, Rust 1.98.1,
+the Windows SDK shader compiler, four Cargo jobs, and locked dependencies:
+
+```powershell
+cargo build --locked --release -p pandamux-desktop
+cargo build --locked --release -p pandamux-server -p pandamux-cli
+```
+
+| Artifact | Bytes | SHA-256 |
+|-|-:|-|
+| Windows MSVC `pandamux.exe` | 27,189,760 | `2f9fb97a6bc6a9c9633fe5987ce75931f58556ca6439e5a563344dfd2f51cb9e` |
+| Windows MSVC `pandamux-server.exe` | 13,798,400 | `21b1aa84aae621610d5e8b9d7bd43651f9ebcee591b25e20197bddbfa41adef6` |
+| Windows MSVC `pandamux-cli.exe` | 1,323,520 | `342834e38bfccd54177b094ff45fe6adb4b9aeee19ba9921b3cf4e18c03a7302` |
+
+The exact `pandamux.exe --headless` run exited 0 and reported all checks passed.
+Build scripts, full logs, exit files, source, bundle, probe scripts, results, and
+the assembled `run-bin` remain under
+`C:\ProgramData\PandaMUX\acceptance\phase4-2be212f`.
 
 ## Galahad live provider and Hub evidence
 
@@ -151,21 +189,49 @@ Opening the Claude subscription editor exposed named `Subscription name` and
 character changed the unsaved name field from `Claude Code` to `Claude CodeX`,
 proving that keyboard input reached the field. No save was invoked.
 
-The keyboard Cancel path passed: Enter on the focused Cancel button closed the
-editor and restored accessibility focus to `Edit subscription for Claude Code`.
-The screen-reader path remains **unverified**: UI Automation's focused element
-was the top-level `PandaMUX` window, and none of the exposed editor controls
-reported `HasKeyboardFocus`, even while typing reached the name field. UI
-Automation's Invoke action on Cancel only focused that button; Enter was then
-required to activate it. Probe results `ui-probe.json` through
-`ui-probe-9.json` are retained under the guest acceptance LocalAppData directory.
-The final scheduled task returned 0, was unregistered, and no acceptance
-process remained running on the guest.
+The 0.60.0 keyboard Cancel path passed: Enter on the focused Cancel button
+closed the editor and restored accessibility focus to `Edit subscription for
+Claude Code`. Its screen-reader path remained **unverified** because UI
+Automation reported the top-level `PandaMUX` window as focused, and its Invoke
+action on Cancel only focused the button. Probe results `ui-probe.json` through
+`ui-probe-9.json` remain under the guest acceptance LocalAppData directory.
 
-This is native control exposure and invocation evidence. It does not establish
-announcement of usage values or table text to a screen reader, 200 percent
-scaling, reduced motion, forced colors, or visual non-color state. Those rows
-remain open.
+The exact 0.60.3 follow-up ran in the active limited
+`COLT-SHINE\B_StL` console session with a new isolated LocalAppData profile per
+run. The target behavior was deliberately narrow: UIA focused the existing Edit
+button and keyboard Enter opened the editor, then the application had to publish
+the name field as focused without a corrective UIA focus call. A single UIA
+Invoke on Cancel then had to close the editor and restore focus to the original
+Edit button.
+
+The first strict 0.60.3 run was a transient miss: keyboard input still changed
+`Claude Code` to `Claude CodeX`, direct UIA Cancel closed the editor, and no
+process leaked, but UIA reported the top-level window instead of the input. A
+fresh diagnostic run then passed before its later explicit focus diagnostic,
+and two additional fresh-profile strict repeats passed without any corrective
+focus call. In all three passing runs:
+
+- the focused element was named `Subscription name`, had type
+  `ControlType.Edit`, AutomationId `usage.subscription.name`, and
+  `HasKeyboardFocus=true`;
+- the same node was keyboard-focusable, a control and content element, and
+  exposed the UIA Value pattern;
+- keyboard input changed the unsaved value from `Claude Code` to
+  `Claude CodeX`;
+- one UIA Invoke on Cancel closed the editor; and
+- focus returned to `Edit subscription for Claude Code` with
+  `HasKeyboardFocus=true`.
+
+The diagnostic task and both strict repeat tasks returned 0, were unregistered,
+and left no exact acceptance process running. This closes the functional editor
+focus and direct Cancel rows with repeat evidence. The initial transient miss
+remains recorded and should be watched during the remaining screen-reader and
+full-matrix runs rather than being treated as nonexistent.
+
+This is native control exposure, keyboard focus, and invocation evidence. It
+does not establish announcement of usage values or table text to a screen
+reader, 200 percent scaling, reduced motion, forced colors, or visual non-color
+state. Those rows remain open.
 
 ## Static verification and remaining gates
 
@@ -177,6 +243,12 @@ and desktop headless smoke. These are separate from the live artifact results.
 The 0.60.1 documentation and dependency-policy follow-up also passed workspace
 formatting, strict Clippy, and the full 412-test workspace suite with the same
 two intentional ignores.
+
+The 0.60.2 and 0.60.3 accessibility repairs each passed local formatting,
+strict workspace Clippy, the full workspace suite with 412 passed, 0 failed,
+and the same two intentional real-shell ignores, the Rust boundary guard,
+Claude wiring guard, dependency policy, and desktop headless startup. The exact
+0.60.3 commit additionally passed the native MSVC builds and UIA follow-up above.
 
 `cargo-deny` 0.20.2 could not parse the old `deny.toml` syntax. The follow-up
 configuration change removed deprecated keys and scoped seven existing
@@ -194,20 +266,27 @@ especially for the scoped MPL-2.0 exceptions.
 
 Phase 4 cannot yet be marked exited under `tasks/plan-rewrite.md`:
 
-1. Complete the native Usage keyboard matrix beyond the verified 20-step Tab
-   and editor Cancel paths, repair or verify editor accessibility focus and
-   UI Automation Cancel invocation, and archive 200 percent scaling,
-   reduced-motion, forced-colors, non-color-status, and screen-reader results.
+1. Complete the native Usage keyboard matrix beyond the verified 20-step Tab,
+   editor focus, and direct UIA Cancel paths. Archive 200 percent scaling,
+   reduced-motion, forced-colors, non-color-status, and screen-reader results,
+   while watching for recurrence of the recorded transient focus miss.
 2. Reconcile seven-day totals within two percent against defensible provider
    reports where available; show Unknown for providers without such a source.
 3. Run the live local plus Galahad restart, rotation, reconnect, bounded
    backfill, capacity, safe-retry, and post-side-effect interruption matrix.
    The current live turn and saturation results do not prove these behaviors.
-4. Re-run the 0.60.0 normal-user Windows named-pipe security matrix if this
-   artifact is to inherit a current-version production IPC claim.
+4. Re-run the normal-user Windows named-pipe security matrix on the current
+   candidate if it is to inherit a current-version production IPC claim.
 5. Complete the explicitly deferred R0.5 30-minute physical laptop disconnect
    and sleep checks before production acceptance or release.
 
 The acceptance VM is still a shared lab. Its existing network attachment and
-unrelated Hyper-V checkpoints were left untouched. No installer, updater,
-signed artifact, deployment, or production activation was tested.
+unrelated Hyper-V checkpoints were left untouched during the 0.60.0 matrix. No
+installer, updater, signed artifact, deployment, or production activation was
+tested.
+
+During the 0.60.3 follow-up, the guest adapter was temporarily attached to the
+existing Default Switch only to assess guest availability. Final cleanup on
+COLT-SHINE verified the adapter back in its original disconnected state with no
+switch, no exact acceptance process, no acceptance scheduled task, and a clean
+exact source clone. No checkpoint was created, applied, or changed.

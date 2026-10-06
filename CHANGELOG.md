@@ -81,6 +81,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Reconciled the Phase 4 plan and acceptance record through the exact 0.60.3
+  native accessibility follow-up.** The record now separates the repaired Usage
+  editor focus and direct UI Automation Cancel rows from the still-open visual,
+  screen-reader, reconciliation, failover, current IPC, and physical-laptop gates.
+
 - **Restored the dependency policy check.** Current `cargo-deny` now validates
   advisories, sources, bans, and a narrow license allowlist with version-scoped
   exceptions for seven existing transitive crates; it still reports a yanked

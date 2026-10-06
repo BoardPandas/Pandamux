@@ -78,6 +78,11 @@ Terminology used throughout:
 
 ## 2. Current repo review (refreshed 2026-09-28)
 
+> This section preserves the review snapshot that justified Recovery Gate R0.
+> The implementation and acceptance delta through 2026-10-06 is recorded in
+> Section 2.1 and in the checkpoint completion records. Where they conflict,
+> the newer evidence controls.
+
 - Verified baseline: workspace `0.53.44`, edition 2024, `rust-version = "1.88"`; `master` and `origin/master` both point to `9511d0e22d44`.
 - Phases 0 to 3 and Phase 4 Step 1 have implementation commits, but checked boxes are not production acceptance. The Phase 3 live matrix in its exit criteria has not been archived.
 - Remote routing is incomplete in the production composition. `ProxyTunnel` exists, but there is no registered production `EnvironmentTransport`, and `pandamux-server proxy` is not implemented end to end. Thread execution also constructs a placeholder provider configuration instead of resolving the stored provider instance and its profile, binary, settings, environment, enabled state, and concurrency policy.
@@ -93,6 +98,31 @@ Terminology used throughout:
 - Release automation is stale scaffolding. `release.yml` builds deleted `pandamux-app`, expects removed packager metadata, omits the server and remote ARM64 artifacts, and does not gate signing on the current CI suite. The updater was not ported. The checked-in remote manifest and Winget metadata are placeholders or internally inconsistent.
 - Root `README.md`, `CLAUDE.md`, and the maintained `docs/` wiki still describe the removed Iced multiplexer and contradict the implemented GPUI chat-first architecture. Minimal developer-truth corrections belong in the recovery gate; a complete user and release documentation pass remains in Phase 7.
 - The worktree contains user-owned uncommitted Phase 4 files. Recovery work must preserve them, take an explicit snapshot, use narrow staging, and never reset or clean them.
+
+### 2.1 Current recovery delta (2026-10-06)
+
+- R0.1 preserved and restore-tested the dirty Phase 4 prototype. The original
+  checkout remains untouched at `9511d0e22d44`; implementation continues only
+  in the managed `codex/recovery-r0` worktree.
+- R0.2 through R0.4 and Phase 4A through 4F are implemented. The exact 0.60.0
+  acceptance commit proved native Windows startup, live Codex, Claude, and
+  Antigravity turns on Galahad, production SSH proxy composition, policy denial,
+  and bounded Hub usage synchronization. Those results are partial Phase 4
+  acceptance, not a production release claim.
+- Exact 0.60.3 commit `2be212f9a290637add9a4f5c662ca3155da98a0c`
+  repairs the Usage editor accessibility bridge. Three fresh-profile native
+  Windows runs published the name field as the focused TextInput, accepted
+  keyboard input, activated Cancel through one UIA Invoke, and returned focus
+  to Edit. One earlier transient focus-publication miss remains recorded for
+  recurrence monitoring.
+- Phase 4 remains open on the rest of the native accessibility and visual
+  matrix, seven-day reconciliation, live restart and failover behavior, and a
+  current-version normal-user named-pipe matrix. The re-scoped physical laptop
+  disconnect and sleep rows remain production-acceptance and release blockers.
+- Phase 5 implementation has not started. The next development work is the
+  ordered Phase 4 closure sequence in its verification record, followed by the
+  Phase 5 dependency and boundary gate. Phase 6 depends on accepted Phase 5
+  run-state and agent contracts. Phase 7 remains the only shipping phase.
 
 ## 3. Kept, deleted, new
 
@@ -1465,6 +1495,31 @@ Checkpoint acceptance:
   snapshot, and its later R0.1 plan record remains present. The Phase 4E work is isolated
   on the managed recovery branch.
 
+##### Checkpoint 4E native accessibility follow-up (2026-10-06)
+
+- Exact Windows MSVC artifacts from clean commit
+  `2be212f9a290637add9a4f5c662ca3155da98a0c`, version `0.60.3`, passed native
+  build and headless startup on COLT-SHINE. The accepted desktop SHA-256 is
+  `2f9fb97a6bc6a9c9633fe5987ce75931f58556ca6439e5a563344dfd2f51cb9e`.
+- Opening the subscription editor now defers focus until the field is mounted.
+  Its semantic TextInput node tracks the real editing handle. Save and Cancel
+  expose direct UIA Click actions without losing keyboard, pointer, theme, or
+  visible focus behavior.
+- One initial strict run still published the window as focused even though
+  keyboard editing and direct Cancel worked. A fresh diagnostic run and two
+  subsequent unmodified strict runs all passed without a corrective input-focus
+  call. Each reported `Subscription name`, `ControlType.Edit`, AutomationId
+  `usage.subscription.name`, and `HasKeyboardFocus=true`; one UIA Invoke on
+  Cancel closed the editor and restored focus to the originating Edit button.
+- This follow-up closes the functional editor focus and UIA Cancel rows with
+  repeat evidence. Screen-reader announcement, 200 percent scale, reduced
+  motion, forced colors, and complete non-color-state review remain open. The
+  transient miss remains an explicit observation target in those runs.
+- Local verification at 0.60.3 passed formatting, strict workspace Clippy, 412
+  workspace tests with zero failures and two intentional real-shell ignores,
+  crate-boundary and Claude wiring guards, `cargo deny check`, and desktop
+  headless startup. No push, deployment, activation, or release occurred.
+
 #### Checkpoint 4F: explicit pools and side-effect-aware failover
 
 1. Add explicit failover-pool editing and validation. A pool can span compatible providers only when every member declares the required instruction, tool, model, and access capabilities.
@@ -1546,9 +1601,29 @@ Checkpoint acceptance:
 
 Run narrow unit and migration tests first, then crate tests, workspace fmt/clippy/tests, resolved-boundary checks, `cargo deny advisories licenses bans sources`, built-artifact smoke, and the local plus Galahad live matrix. Cargo commands remain serial in this repository.
 
-The 2026-09-29 exact-artifact live record is
-`docs/operations/PHASE4_ACCEPTANCE.md`. It advances provider, Hub transport,
-Hub usage, and native Windows startup evidence, but does not close this exit gate.
+The exact-artifact live record is `docs/operations/PHASE4_ACCEPTANCE.md`, updated
+through 2026-10-06. It advances provider, Hub transport, Hub usage, native
+Windows startup, Usage editor focus, and direct accessibility activation
+evidence, but does not close this exit gate.
+
+Current execution order:
+
+1. Finish the remaining 4E native matrix on the exact candidate: full keyboard
+   walkthrough, screen-reader smoke, 200 percent scale, reduced motion, forced
+   colors, non-color status, actionable errors, and data-table equivalence.
+2. Run a bounded seven-day 4B and 4C reconciliation against defensible provider
+   reports. Record Unknown instead of substituting a synthetic comparison where
+   no provider report exists.
+3. Run the live local plus Galahad 4B, 4C, and 4F durability matrix: scanner
+   restart, append and rotation, reconnect, retention gap and bounded backfill,
+   capacity evidence, safe retry, and post-side-effect interruption.
+4. Re-run the current candidate's normal-user Windows named-pipe matrix so the
+   Phase 4 artifact can inherit a current-version IPC claim.
+5. Close Phase 4 development only after items 1 through 4 are archived. Then
+   begin the Phase 5 dependency and boundary gate before adding orchestration
+   dependencies or crates. The physical 30-minute laptop disconnect and sleep
+   rows may run in parallel when the hardware session is available, but remain
+   mandatory before Phase 7 can enable release or publication.
 
 Phase 4 exits only when:
 
