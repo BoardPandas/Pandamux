@@ -1136,8 +1136,10 @@ impl AppView {
             .update(cx, |input, cx| input.set_value(account_label, window, cx));
         self.usage_editor_target = Some(target);
         let name_focus = self.usage_subscription_name_input.read(cx).focus_handle(cx);
-        window.focus(&name_focus, cx);
         cx.notify();
+        window.defer(cx, move |window, cx| {
+            window.focus(&name_focus, cx);
+        });
     }
 
     pub fn cancel_usage_subscription_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1855,6 +1857,7 @@ impl Render for AppView {
                             },
                             |app, window, cx| app.save_usage_subscription_edit(window, cx),
                             |app, window, cx| app.cancel_usage_subscription_edit(window, cx),
+                            window,
                             cx,
                         )
                         .into_any_element(),

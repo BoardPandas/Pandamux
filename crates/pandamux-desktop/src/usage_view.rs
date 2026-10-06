@@ -1,7 +1,8 @@
-use gpui_kit::base::{Disableable as _, StyledExt as _};
+use gpui_kit::base::{Button as AccessibleButton, Disableable as _, StyledExt as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::{ActiveTheme as _, ThemeStyled as _};
 use gpui_kit::gpui::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use pandamux_client::{
@@ -62,6 +63,12 @@ pub struct UsageEditorTarget {
     pub provider_display_name: String,
 }
 
+#[derive(Clone, Copy)]
+enum EditorButtonStyle {
+    Primary,
+    Ghost,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn render_usage_view<V: 'static>(
     state: &UsageViewState,
@@ -78,6 +85,7 @@ pub fn render_usage_view<V: 'static>(
     on_edit: impl Fn(&mut V, UsageEditorTarget, &mut Window, &mut Context<V>) + 'static + Copy,
     on_save_editor: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
     on_cancel_editor: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
+    window: &mut Window,
     cx: &mut Context<V>,
 ) -> AnyElement {
     div()
@@ -181,6 +189,7 @@ pub fn render_usage_view<V: 'static>(
                     on_edit,
                     on_save_editor,
                     on_cancel_editor,
+                    window,
                     cx,
                 )),
         )
@@ -794,6 +803,7 @@ fn render_subscription_editor<V: 'static>(
     on_edit: impl Fn(&mut V, UsageEditorTarget, &mut Window, &mut Context<V>) + 'static + Copy,
     on_save_editor: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
     on_cancel_editor: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
+    window: &mut Window,
     cx: &mut Context<V>,
 ) -> AnyElement {
     div()
@@ -919,25 +929,110 @@ fn render_subscription_editor<V: 'static>(
                         div()
                             .h_flex()
                             .gap_2()
-                            .child(
-                                Button::new("usage-save-subscription")
-                                    .primary()
-                                    .label("Save subscription")
-                                    .on_click(cx.listener(move |this, _event, window, cx| {
-                                        on_save_editor(this, window, cx);
-                                    })),
-                            )
-                            .child(
-                                Button::new("usage-cancel-subscription")
-                                    .ghost()
-                                    .label("Cancel")
-                                    .on_click(cx.listener(move |this, _event, window, cx| {
-                                        on_cancel_editor(this, window, cx);
-                                    })),
-                            ),
+                            .child(editor_action_button(
+                                "usage-save-subscription",
+                                "Save subscription",
+                                EditorButtonStyle::Primary,
+                                on_save_editor,
+                                window,
+                                cx,
+                            ))
+                            .child(editor_action_button(
+                                "usage-cancel-subscription",
+                                "Cancel",
+                                EditorButtonStyle::Ghost,
+                                on_cancel_editor,
+                                window,
+                                cx,
+                            )),
                     ),
             )
         })
+        .into_any_element()
+}
+
+fn editor_action_button<V: 'static>(
+    id: &'static str,
+    label: &'static str,
+    style: EditorButtonStyle,
+    on_activate: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
+    window: &mut Window,
+    cx: &mut Context<V>,
+) -> AnyElement {
+    // gpui-component's styled Button does not expose StatefulInteractiveElement,
+    // so UI Automation Click falls back to pointer synthesis. Keep the component's
+    // presentation here while giving these editor actions a direct Click handler.
+    let component_theme = cx.theme();
+    let (background, hover_background, active_background, foreground, hover_foreground): (
+        Background,
+        Background,
+        Background,
+        Hsla,
+        Hsla,
+    ) = match style {
+        EditorButtonStyle::Primary => (
+            component_theme.tokens.button_primary.into(),
+            component_theme.tokens.button_primary_hover.into(),
+            component_theme.tokens.button_primary_active.into(),
+            component_theme.button_primary_foreground,
+            component_theme.button_primary_foreground,
+        ),
+        EditorButtonStyle::Ghost => {
+            let accent: Background = component_theme.tokens.accent.into();
+            let hover_background = if component_theme.mode.is_dark() {
+                accent.opacity(0.5)
+            } else {
+                accent
+            };
+            (
+                component_theme.transparent.into(),
+                hover_background,
+                component_theme.tokens.button_active.into(),
+                component_theme.secondary_foreground,
+                component_theme.accent_foreground,
+            )
+        }
+    };
+    let active_foreground = foreground;
+    let radius = component_theme.radius;
+    let focus_handle = window
+        .use_keyed_state(id, cx, |_, cx| cx.focus_handle())
+        .read(cx)
+        .clone();
+    let is_focused = focus_handle.is_focused(window);
+
+    AccessibleButton::new(id)
+        .accessibility_label(label)
+        .flex_shrink_0()
+        .cursor_default()
+        .h_8()
+        .px_2p5()
+        .rounded(radius)
+        .bg(background)
+        .text_color(foreground)
+        .text_base()
+        .line_height(relative(1.25))
+        .hover(move |style| style.bg(hover_background).text_color(hover_foreground))
+        .active(move |style| style.bg(active_background).text_color(active_foreground))
+        .track_focus(&focus_handle)
+        .on_click(cx.listener(move |this, _event, window, cx| {
+            on_activate(this, window, cx);
+        }))
+        .on_a11y_action(AccessibleAction::Click, {
+            let activate = cx.listener(move |this, _event: &(), window, cx| {
+                on_activate(this, window, cx);
+            });
+            move |_data, window, cx| activate(&(), window, cx)
+        })
+        .child(
+            div()
+                .min_w_0()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis()
+                .child(label),
+        )
+        .when(is_focused, |button| button.focus_ring_style(window, cx))
         .into_any_element()
 }
 

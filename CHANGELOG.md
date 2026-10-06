@@ -322,6 +322,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Usage subscription editing now works with assistive technology.** Opening the editor
+  moves focus after its controls are mounted, and Save and Cancel respond directly to
+  accessibility activation while retaining their keyboard, pointer, theme, and visible
+  focus behavior.
+
 - **Codex sessions now speak the authenticated App Server 0.158.0 contract.** Sessions
   complete the required initialize handshake, retain server-issued thread and turn IDs,
   use current sandbox and approval fields, answer server-initiated approvals, interrupt
