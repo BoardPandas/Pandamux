@@ -1013,7 +1013,9 @@ impl AppView {
                             .unwrap_or_else(|| "Usage request failed".to_string());
                         let kind = if matches!(
                             app.server_status,
-                            ServerStatus::Disconnected | ServerStatus::Connecting
+                            ServerStatus::Disconnected
+                                | ServerStatus::Connecting
+                                | ServerStatus::Failed(_)
                         ) {
                             UsageLoadFailure::Offline
                         } else {

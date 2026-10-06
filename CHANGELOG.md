@@ -336,6 +336,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Usage requests no longer stay in Loading forever when the server is unavailable.**
+  The desktop bridge now rejects queued requests after server discovery or IPC
+  connection failures and rejects in-flight requests when a connected server
+  disconnects. Usage presents the persistent Offline alert and Retry recovery
+  cue instead of waiting on response channels that cannot complete.
+
 - **Usage subscription editing now works with assistive technology.** Opening the editor
   moves focus after its controls are mounted, the semantic TextInput nodes now track the
   real editing focus recognized by Windows UI Automation, and Save and Cancel respond

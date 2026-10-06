@@ -65,6 +65,27 @@ pub enum BridgeCommand {
     },
 }
 
+fn fail_queued_requests(command_rx: &mut mpsc::Receiver<BridgeCommand>, message: &str) -> usize {
+    let mut failed = 0;
+    while let Ok(BridgeCommand::Request { response_tx, .. }) = command_rx.try_recv() {
+        let _ = response_tx.send(Err(message.to_string()));
+        failed += 1;
+    }
+    failed
+}
+
+async fn fail_pending_requests(pending_requests: &PendingRequests, message: &str) -> usize {
+    let requests = {
+        let mut pending = pending_requests.lock().await;
+        pending.drain().map(|(_, tx)| tx).collect::<Vec<_>>()
+    };
+    let failed = requests.len();
+    for response_tx in requests {
+        let _ = response_tx.send(Err(message.to_string()));
+    }
+    failed
+}
+
 /// Handle allowing the GPUI thread to interact with the Tokio server bridge.
 ///
 /// NOTE on Drop ordering: `command_tx` and `shutdown_tx` are declared BEFORE
@@ -187,9 +208,14 @@ pub fn spawn_server_bridge(
                 let runtime_info = match ensure_server_running().await {
                     Ok(info) => info,
                     Err(err) => {
+                        let request_error = format!("Server unavailable: {err}");
                         let _ = status_tx.send(ServerStatus::Failed(err)).await;
+                        fail_queued_requests(&mut command_rx, &request_error);
                         tokio::select! {
-                            _ = shutdown_rx.recv() => break 'reconnect_loop,
+                            _ = shutdown_rx.recv() => {
+                                fail_queued_requests(&mut command_rx, "Bridge shutting down");
+                                break 'reconnect_loop;
+                            },
                             _ = tokio::time::sleep(Duration::from_millis(retry_backoff_ms)) => {
                                 retry_backoff_ms = (retry_backoff_ms * 3 / 2).min(3000);
                                 continue 'reconnect_loop;
@@ -208,11 +234,16 @@ pub fn spawn_server_bridge(
                         s
                     }
                     Err(e) => {
+                        let request_error = format!("IPC connection failed: {e}");
                         let _ = status_tx
-                            .send(ServerStatus::Failed(format!("IPC connection failed: {e}")))
+                            .send(ServerStatus::Failed(request_error.clone()))
                             .await;
+                        fail_queued_requests(&mut command_rx, &request_error);
                         tokio::select! {
-                            _ = shutdown_rx.recv() => break 'reconnect_loop,
+                            _ = shutdown_rx.recv() => {
+                                fail_queued_requests(&mut command_rx, "Bridge shutting down");
+                                break 'reconnect_loop;
+                            },
                             _ = tokio::time::sleep(Duration::from_millis(retry_backoff_ms)) => {
                                 retry_backoff_ms = (retry_backoff_ms * 3 / 2).min(3000);
                                 continue 'reconnect_loop;
@@ -242,8 +273,15 @@ pub fn spawn_server_bridge(
                 hello_line.push('\n');
                 if writer.write_all(hello_line.as_bytes()).await.is_err() {
                     let _ = status_tx.send(ServerStatus::Disconnected).await;
+                    fail_queued_requests(
+                        &mut command_rx,
+                        "Server disconnected during handshake",
+                    );
                     tokio::select! {
-                        _ = shutdown_rx.recv() => break 'reconnect_loop,
+                        _ = shutdown_rx.recv() => {
+                            fail_queued_requests(&mut command_rx, "Bridge shutting down");
+                            break 'reconnect_loop;
+                        },
                         _ = tokio::time::sleep(Duration::from_millis(500)) => continue 'reconnect_loop,
                     }
                 }
@@ -274,8 +312,15 @@ pub fn spawn_server_bridge(
                 sub_line.push('\n');
                 if writer.write_all(sub_line.as_bytes()).await.is_err() {
                     let _ = status_tx.send(ServerStatus::Disconnected).await;
+                    fail_queued_requests(
+                        &mut command_rx,
+                        "Server disconnected during subscription",
+                    );
                     tokio::select! {
-                        _ = shutdown_rx.recv() => break 'reconnect_loop,
+                        _ = shutdown_rx.recv() => {
+                            fail_queued_requests(&mut command_rx, "Bridge shutting down");
+                            break 'reconnect_loop;
+                        },
                         _ = tokio::time::sleep(Duration::from_millis(500)) => continue 'reconnect_loop,
                     }
                 }
@@ -289,9 +334,12 @@ pub fn spawn_server_bridge(
                     .await;
 
                 // 5. Main event and request loop
+                let disconnect_reason;
                 'event_loop: loop {
                     tokio::select! {
                         _ = shutdown_rx.recv() => {
+                            fail_pending_requests(&pending_requests, "Bridge shutting down").await;
+                            fail_queued_requests(&mut command_rx, "Bridge shutting down");
                             break 'reconnect_loop;
                         }
 
@@ -307,12 +355,28 @@ pub fn spawn_server_bridge(
                                     if let Ok(mut json) = serde_json::to_string(&req) {
                                         json.push('\n');
                                         if writer.write_all(json.as_bytes()).await.is_err() {
+                                            disconnect_reason =
+                                                "Server disconnected while sending a request".to_string();
                                             let _ = status_tx.send(ServerStatus::Disconnected).await;
                                             break 'event_loop;
                                         }
+                                    } else {
+                                        let mut pending = pending_requests.lock().await;
+                                        if let Some(tx) = pending.remove(&id) {
+                                            let _ = tx.send(Err(
+                                                "Failed to serialize server request".to_string(),
+                                            ));
+                                        }
                                     }
                                 }
-                                None => break 'reconnect_loop,
+                                None => {
+                                    fail_pending_requests(
+                                        &pending_requests,
+                                        "Bridge request channel closed",
+                                    )
+                                    .await;
+                                    break 'reconnect_loop;
+                                }
                             }
                         }
 
@@ -336,10 +400,13 @@ pub fn spawn_server_bridge(
                                         }
                                 }
                                 Ok(None) => {
+                                    disconnect_reason = "Server closed the IPC connection".to_string();
                                     let _ = status_tx.send(ServerStatus::Disconnected).await;
                                     break 'event_loop;
                                 }
-                                Err(_) => {
+                                Err(error) => {
+                                    disconnect_reason =
+                                        format!("Server IPC read failed: {error}");
                                     let _ = status_tx.send(ServerStatus::Disconnected).await;
                                     break 'event_loop;
                                 }
@@ -348,9 +415,14 @@ pub fn spawn_server_bridge(
                     }
                 }
 
+                fail_pending_requests(&pending_requests, &disconnect_reason).await;
+
                 // Pause briefly before attempting reconnection
                 tokio::select! {
-                    _ = shutdown_rx.recv() => break 'reconnect_loop,
+                    _ = shutdown_rx.recv() => {
+                        fail_queued_requests(&mut command_rx, "Bridge shutting down");
+                        break 'reconnect_loop;
+                    },
                     _ = tokio::time::sleep(Duration::from_millis(500)) => {}
                 }
             }
@@ -486,3 +558,52 @@ async fn connect_ipc(pipe_path: &str) -> Result<Box<dyn AsyncReadWrite + Send>, 
 /// Helper trait combining Tokio's `AsyncRead`, `AsyncWrite`, and `Unpin`.
 pub trait AsyncReadWrite: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin {}
 impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin> AsyncReadWrite for T {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn queued_requests_receive_the_connection_failure() {
+        let (command_tx, mut command_rx) = mpsc::channel(2);
+        let (response_tx, response_rx) = oneshot::channel();
+        assert!(
+            command_tx
+                .try_send(BridgeCommand::Request {
+                    method: "usage.query",
+                    params: None,
+                    response_tx,
+                })
+                .is_ok(),
+            "queue request"
+        );
+
+        assert_eq!(
+            fail_queued_requests(&mut command_rx, "Server unavailable"),
+            1
+        );
+        let response = response_rx.blocking_recv().expect("bridge response");
+        assert_eq!(
+            response.expect_err("connection failure"),
+            "Server unavailable"
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_requests_receive_the_disconnect_failure() {
+        let pending_requests: PendingRequests = Arc::new(Mutex::new(HashMap::new()));
+        let (response_tx, response_rx) = oneshot::channel();
+        pending_requests.lock().await.insert(42, response_tx);
+
+        assert_eq!(
+            fail_pending_requests(&pending_requests, "Server disconnected").await,
+            1
+        );
+        assert!(pending_requests.lock().await.is_empty());
+        let response = response_rx.await.expect("bridge response");
+        assert_eq!(
+            response.expect_err("disconnect failure"),
+            "Server disconnected"
+        );
+    }
+}
