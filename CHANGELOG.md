@@ -336,6 +336,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Component controls now retain readable contrast in both PandaMUX themes.**
+  The global GPUI component theme now starts in Dark mode with the PandaMUX
+  shell and follows every loaded or interactive light/dark setting change.
+  Buttons, inputs, hover states, and focus styles no longer resolve light-theme
+  foregrounds on dark PandaMUX surfaces.
+
 - **Usage requests no longer stay in Loading forever when the server is unavailable.**
   The desktop bridge now rejects queued requests after server discovery or IPC
   connection failures and rejects in-flight requests when a connected server

@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::InputState;
+use gpui_kit::component::{Theme as ComponentTheme, ThemeMode as ComponentThemeMode};
 use gpui_kit::gpui::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use pandamux_client::projections::ThreadProjection;
@@ -272,7 +273,7 @@ impl AppView {
             "light".to_string()
         };
         self.settings_view.settings.ui.theme = new_theme.clone();
-        self.sync_theme_from_settings();
+        self.sync_theme_from_settings(cx);
         self.notify_user(
             "Theme Updated",
             &format!("Switched to {new_theme} theme"),
@@ -285,7 +286,7 @@ impl AppView {
     /// Updates the accent color and persists.
     pub fn set_accent(&mut self, accent: AccentColor, cx: &mut Context<Self>) {
         self.settings_view.settings.ui.accent = accent.name().to_string();
-        self.sync_theme_from_settings();
+        self.sync_theme_from_settings(cx);
         self.notify_user(
             "Accent Color Updated",
             &format!("Accent color set to {}", accent.name()),
@@ -929,7 +930,7 @@ impl AppView {
     }
 
     /// Synchronizes the active GPUI Theme from the loaded user settings.
-    pub fn sync_theme_from_settings(&mut self) {
+    pub fn sync_theme_from_settings(&mut self, cx: &mut Context<Self>) {
         let accent = match self.settings_view.settings.ui.accent.as_str() {
             "gold" => AccentColor::Gold,
             "blue" => AccentColor::Blue,
@@ -942,6 +943,15 @@ impl AppView {
         } else {
             Theme::dark(accent)
         };
+        ComponentTheme::change(
+            if is_light {
+                ComponentThemeMode::Light
+            } else {
+                ComponentThemeMode::Dark
+            },
+            None,
+            cx,
+        );
     }
 
     /// Loads settings from the server daemon.
@@ -955,7 +965,7 @@ impl AppView {
                 {
                     let _ = this.update(cx, |app, cx| {
                         app.settings_view.settings = res.settings;
-                        app.sync_theme_from_settings();
+                        app.sync_theme_from_settings(cx);
                         cx.notify();
                     });
                 }
@@ -1252,7 +1262,7 @@ impl AppView {
                         app.settings_view.is_saving = false;
                         app.settings_view.status_banner =
                             Some(("Settings saved successfully".to_string(), false));
-                        app.sync_theme_from_settings();
+                        app.sync_theme_from_settings(cx);
                     } else {
                         app.settings_view.is_saving = false;
                         let message = result
@@ -1447,7 +1457,7 @@ impl AppView {
             },
             |this, modifier, _win, cx| {
                 modifier(&mut this.settings_view.settings);
-                this.sync_theme_from_settings();
+                this.sync_theme_from_settings(cx);
                 cx.notify();
             },
             cx,
