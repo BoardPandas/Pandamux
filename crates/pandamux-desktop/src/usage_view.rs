@@ -704,7 +704,10 @@ fn table_row(
     header: bool,
     theme: &Theme,
 ) -> AnyElement {
+    let values = values.map(Into::into);
+    let accessibility_label = table_row_accessibility_label(&values, header);
     TableRow::new(format!("usage-data-table-row-{row_index}"), row_index)
+        .aria_label(accessibility_label)
         .h_flex()
         .min_h(px(36.0))
         .px_2()
@@ -717,7 +720,6 @@ fn table_row(
         })
         .children(values.into_iter().enumerate().map(|(index, value)| {
             let column_index = index + 1;
-            let value = value.into();
             let id = format!("usage-data-table-cell-{row_index}-{column_index}");
             let text_size = if header {
                 Typography::META_SIZE
@@ -758,6 +760,30 @@ fn table_row(
             }
         }))
         .into_any_element()
+}
+
+fn table_row_accessibility_label(values: &[SharedString; 6], header: bool) -> String {
+    if header {
+        return format!(
+            "Usage observations columns: {}; {}; {}; {}; {}; {}.",
+            values[0].as_ref(),
+            values[1].as_ref(),
+            values[2].as_ref(),
+            values[3].as_ref(),
+            values[4].as_ref(),
+            values[5].as_ref(),
+        );
+    }
+
+    format!(
+        "Usage observation. Provider instance: {}; Subscription: {}; Model: {}; Tokens: {}; Source: {}; Observed: {}.",
+        values[0].as_ref(),
+        values[1].as_ref(),
+        values[2].as_ref(),
+        values[3].as_ref(),
+        values[4].as_ref(),
+        values[5].as_ref(),
+    )
 }
 
 fn render_capacity_cards(
@@ -1175,6 +1201,37 @@ mod tests {
         assert_eq!(
             filter_label(UsageFilterIntent::Schedule, &state, &catalog, &settings),
             "Schedule: nightly"
+        );
+    }
+
+    #[test]
+    fn usage_table_rows_expose_complete_text_equivalents() {
+        let headers = [
+            "Provider instance",
+            "Subscription",
+            "Model",
+            "Tokens",
+            "Source",
+            "Observed",
+        ]
+        .map(SharedString::from);
+        let values = [
+            "Claude Code",
+            "Work",
+            "sonnet",
+            "1,234",
+            "managed turn",
+            "2 minutes ago",
+        ]
+        .map(SharedString::from);
+
+        assert_eq!(
+            table_row_accessibility_label(&headers, true),
+            "Usage observations columns: Provider instance; Subscription; Model; Tokens; Source; Observed."
+        );
+        assert_eq!(
+            table_row_accessibility_label(&values, false),
+            "Usage observation. Provider instance: Claude Code; Subscription: Work; Model: sonnet; Tokens: 1,234; Source: managed turn; Observed: 2 minutes ago."
         );
     }
 }
