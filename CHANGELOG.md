@@ -346,6 +346,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Claude usage now reconciles by exact assistant message identity.** Repeated
+  stream chunks for one message contribute once, distinct assistant messages
+  remain separate token components with their actual model and cache categories,
+  and terminal result cost remains a separate turn-level fact. Managed and
+  transcript observations tolerate timestamp skew and optional cost enrichment,
+  while conflicting measurements remain visible with partial source coverage.
+  Ambiguous historical result UUID and message-ID overlaps remain unmerged and
+  appear as explicit legacy reconciliation debt.
+
 - **Component controls now retain readable contrast in both PandaMUX themes.**
   The global GPUI component theme now starts in Dark mode with the PandaMUX
   shell and follows every loaded or interactive light/dark setting change.

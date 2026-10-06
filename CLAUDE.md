@@ -137,6 +137,16 @@ text, profile paths, canonical source paths, or unmasked account labels. Additiv
 migration 7 carries the scanner state and reconciliation indexes; migrations 4 through
 6 remain immutable.
 
+Additive migration 12 corrects Claude usage identity without rewriting migrations 1
+through 11. A stateful per-turn parser deduplicates repeated stream chunks by exact
+assistant message id and retains every distinct assistant message. Managed usage stores
+one token component per message with the reported model and cache categories, plus one
+separate terminal result cost fact. Reconciliation uses only exact provider message
+identity. Timestamp skew and one missing optional cost can converge, while conflicting
+provider, instance, subscription, model, or token measurements remain separate and keep
+source coverage Partial with a durable diagnostic. Existing ambiguous result UUID and
+message id history is preserved rather than guessed from timestamps.
+
 Phase 4C keeps node outboxes and Hub ingestion bounded. The Hub owns one asynchronous
 synchronization service, persists its database at `data/hub.db` by default, and commits
 each authenticated environment's observations with its node-store identity and

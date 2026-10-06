@@ -129,7 +129,7 @@ impl Store {
                     cached_input_tokens, cache_write_tokens, output_tokens,
                     reasoning_tokens, other_tokens_json, unknown_fields_json,
                     provider_reported_micro_usd, source_record_count,
-                    thread_id, turn_id, agent_id, schedule_id
+                    thread_id, turn_id, agent_id, schedule_id, fact_kind
              FROM usage_observations
              WHERE source_node_store_id = ?1
                AND source_outbox_seq <= ?2
@@ -1022,12 +1022,12 @@ fn upsert_remote_observation(
             input_tokens, cached_input_tokens, cache_write_tokens, output_tokens,
             reasoning_tokens, other_tokens_json, unknown_fields_json,
             provider_reported_micro_usd, source_record_count, thread_id,
-            turn_id, agent_id, schedule_id, created_at_ms, reconciliation_key,
+            turn_id, agent_id, schedule_id, fact_kind, created_at_ms, reconciliation_key,
             source_node_store_id, source_outbox_seq, hub_sync_run_id
          ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
             ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25,
-            NULL, ?26, ?27, ?28
+            ?26, NULL, ?27, ?28, ?29
          ) ON CONFLICT(environment_id, observation_id) DO UPDATE SET
             source_kind = excluded.source_kind,
             parser_version = excluded.parser_version,
@@ -1051,6 +1051,7 @@ fn upsert_remote_observation(
             turn_id = excluded.turn_id,
             agent_id = excluded.agent_id,
             schedule_id = excluded.schedule_id,
+            fact_kind = excluded.fact_kind,
             created_at_ms = excluded.created_at_ms,
             reconciliation_key = NULL,
             source_node_store_id = excluded.source_node_store_id,
@@ -1090,6 +1091,7 @@ fn upsert_remote_observation(
             observation.turn_id.as_ref().map(TurnId::as_str),
             observation.agent_id.as_ref().map(|value| value.as_str()),
             observation.schedule_id.as_ref().map(|value| value.as_str()),
+            observation.fact_kind.as_str(),
             checked_i64(store_now_ms(), "remote usage ingestion time")?,
             node_store_id.as_str(),
             checked_i64(outbox_seq, "remote outbox sequence")?,
@@ -1139,8 +1141,8 @@ mod tests {
     use super::*;
     use pandamux_core::{
         AgentId, PricingVersionId, ProviderInstanceId, ScheduleId, SubscriptionKey, TokenCounts,
-        UsageObservationId, UsagePricingRates, UsagePricingRule, UsageProvider, UsageSourceKind,
-        UsageSubscription, UsageUnknownField,
+        UsageFactKind, UsageObservationId, UsagePricingRates, UsagePricingRule, UsageProvider,
+        UsageSourceKind, UsageSubscription, UsageUnknownField,
     };
     use pandamux_protocol::{
         UsageBackfillCursor, UsageExportItem, UsageExportParams, UsageNodeCoverageSnapshot,
@@ -1195,6 +1197,7 @@ mod tests {
             turn_id: None,
             agent_id: None,
             schedule_id: None,
+            fact_kind: UsageFactKind::TokenComponent,
         }
     }
 
@@ -1384,6 +1387,12 @@ mod tests {
         assert_eq!(query.aggregate.observation_count, 2);
         assert_eq!(query.aggregate.tokens.input, 30);
         assert_eq!(query.items.len(), 2);
+        assert!(
+            query
+                .items
+                .iter()
+                .all(|item| item.observation.fact_kind == UsageFactKind::TokenComponent)
+        );
         assert_eq!(query.coverage.quarantined_count, 7);
         assert_eq!(query.coverage.latest_source_at_ms, Some(2_500));
         assert_eq!(query.coverage.scanner_diagnostics.len(), 1);

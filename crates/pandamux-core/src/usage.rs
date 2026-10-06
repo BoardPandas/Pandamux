@@ -153,6 +153,63 @@ impl<'de> Deserialize<'de> for UsageSourceKind {
     }
 }
 
+/// Semantic role of one normalized usage fact.
+///
+/// Aggregate is the backward-compatible default for observations written before
+/// component-aware accounting was introduced.
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum UsageFactKind {
+    #[default]
+    Aggregate,
+    TokenComponent,
+    TurnCost,
+    Unknown(String),
+}
+
+impl UsageFactKind {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Aggregate => "aggregate",
+            Self::TokenComponent => "token_component",
+            Self::TurnCost => "turn_cost",
+            Self::Unknown(value) => value,
+        }
+    }
+
+    pub fn is_aggregate(&self) -> bool {
+        self == &Self::Aggregate
+    }
+}
+
+impl From<String> for UsageFactKind {
+    fn from(value: String) -> Self {
+        match value.as_str() {
+            "aggregate" => Self::Aggregate,
+            "token_component" => Self::TokenComponent,
+            "turn_cost" => Self::TurnCost,
+            _ => Self::Unknown(value),
+        }
+    }
+}
+
+impl Serialize for UsageFactKind {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for UsageFactKind {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer).map(Self::from)
+    }
+}
+
 /// Fine-grained token counts with forward-compatible named categories.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -180,6 +237,8 @@ pub enum UsageUnknownField {
     Identity,
     InputTokens,
     OutputTokens,
+    CacheReadTokens,
+    CacheWriteTokens,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -452,6 +511,8 @@ pub struct UsageObservation {
     pub agent_id: Option<AgentId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule_id: Option<ScheduleId>,
+    #[serde(default, skip_serializing_if = "UsageFactKind::is_aggregate")]
+    pub fact_kind: UsageFactKind,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -505,6 +566,9 @@ impl UsageObservation {
         }
         if matches!(&self.source_kind, UsageSourceKind::Unknown(value) if value.trim().is_empty()) {
             return Err(UsageObservationError::EmptyUnknownValue("source kind"));
+        }
+        if matches!(&self.fact_kind, UsageFactKind::Unknown(value) if value.trim().is_empty()) {
+            return Err(UsageObservationError::EmptyUnknownValue("fact kind"));
         }
         if self
             .model
@@ -1013,6 +1077,7 @@ mod tests {
             turn_id: None,
             agent_id: None,
             schedule_id: None,
+            fact_kind: UsageFactKind::Aggregate,
         }
     }
 

@@ -3,7 +3,7 @@ use rusqlite::{Connection, Result, Transaction, params};
 use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const SCHEMA_VERSION: i64 = 11;
+pub const SCHEMA_VERSION: i64 = 12;
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -1327,6 +1327,168 @@ fn apply_migrations_to(conn: &mut Connection, target_version: i64) -> Result<()>
         tx.commit()?;
     }
 
+    if current < 12 && target_version >= 12 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(
+            "ALTER TABLE usage_observations ADD COLUMN fact_kind TEXT NOT NULL
+                DEFAULT 'aggregate' CHECK(fact_kind <> '');
+
+            UPDATE usage_observations
+               SET fact_kind = CASE
+                    WHEN input_tokens + cached_input_tokens + cache_write_tokens +
+                         output_tokens + reasoning_tokens > 0
+                        THEN 'token_component'
+                    WHEN provider_reported_micro_usd IS NOT NULL
+                        THEN 'turn_cost'
+                    ELSE 'aggregate'
+               END
+             WHERE source_kind = 'claude_transcript';
+
+            DROP INDEX idx_usage_observations_reconciliation;
+            DROP INDEX idx_usage_observations_managed_turn;
+
+            CREATE INDEX idx_usage_observations_reconciliation
+                ON usage_observations(
+                    environment_id,
+                    reconciliation_key
+                )
+                WHERE reconciliation_key IS NOT NULL;
+
+            CREATE INDEX idx_usage_observations_exact_component
+                ON usage_observations(
+                    environment_id,
+                    fact_kind,
+                    provider_native_session_id,
+                    provider_native_turn_id
+                )
+                WHERE provider_native_turn_id IS NOT NULL;
+
+            CREATE UNIQUE INDEX idx_usage_observations_managed_aggregate
+                ON usage_observations(environment_id, turn_id)
+                WHERE source_kind = 'managed_turn'
+                  AND turn_id IS NOT NULL
+                  AND fact_kind = 'aggregate';
+
+            CREATE UNIQUE INDEX idx_usage_observations_managed_component
+                ON usage_observations(
+                    environment_id,
+                    turn_id,
+                    fact_kind,
+                    provider_native_turn_id
+                )
+                WHERE source_kind = 'managed_turn'
+                  AND turn_id IS NOT NULL
+                  AND fact_kind IN ('token_component', 'turn_cost')
+                  AND provider_native_turn_id IS NOT NULL;
+
+            CREATE TABLE managed_usage_backfill_state (
+                environment_id TEXT NOT NULL CHECK(environment_id <> ''),
+                turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
+                usage_json TEXT NOT NULL,
+                expected_fact_count INTEGER NOT NULL CHECK(expected_fact_count > 0),
+                completed_at_ms INTEGER NOT NULL CHECK(completed_at_ms >= 0),
+                PRIMARY KEY(environment_id, turn_id)
+            );
+
+            CREATE TABLE managed_usage_backfill_facts (
+                environment_id TEXT NOT NULL CHECK(environment_id <> ''),
+                turn_id TEXT NOT NULL,
+                fact_kind TEXT NOT NULL CHECK(
+                    fact_kind IN ('aggregate', 'token_component', 'turn_cost')
+                ),
+                provider_native_turn_id TEXT NOT NULL,
+                PRIMARY KEY(
+                    environment_id,
+                    turn_id,
+                    fact_kind,
+                    provider_native_turn_id
+                ),
+                FOREIGN KEY(environment_id, turn_id)
+                    REFERENCES managed_usage_backfill_state(environment_id, turn_id)
+                    ON DELETE CASCADE
+            );
+
+            CREATE TABLE usage_reconciliation_mismatches (
+                environment_id TEXT NOT NULL CHECK(environment_id <> ''),
+                managed_observation_id TEXT NOT NULL CHECK(managed_observation_id <> ''),
+                transcript_observation_id TEXT NOT NULL CHECK(transcript_observation_id <> ''),
+                provider_instance_id TEXT NOT NULL CHECK(provider_instance_id <> ''),
+                source_kind TEXT NOT NULL CHECK(
+                    source_kind IN ('claude_transcript', 'codex_transcript')
+                ),
+                detected_at_ms INTEGER NOT NULL CHECK(detected_at_ms >= 0),
+                PRIMARY KEY(
+                    environment_id,
+                    managed_observation_id,
+                    transcript_observation_id
+                ),
+                FOREIGN KEY(environment_id, managed_observation_id)
+                    REFERENCES usage_observations(environment_id, observation_id)
+                    ON DELETE CASCADE,
+                FOREIGN KEY(environment_id, transcript_observation_id)
+                    REFERENCES usage_observations(environment_id, observation_id)
+                    ON DELETE CASCADE
+            );
+
+            CREATE TABLE usage_legacy_reconciliation_debt (
+                environment_id TEXT NOT NULL CHECK(environment_id <> ''),
+                provider_instance_id TEXT NOT NULL CHECK(provider_instance_id <> ''),
+                source_kind TEXT NOT NULL CHECK(source_kind = 'claude_transcript'),
+                parser_version INTEGER NOT NULL CHECK(parser_version > 0),
+                detected_at_ms INTEGER NOT NULL CHECK(detected_at_ms >= 0),
+                latest_source_at_ms INTEGER CHECK(latest_source_at_ms >= 0),
+                transcript_observation_count INTEGER NOT NULL
+                    CHECK(transcript_observation_count > 0),
+                managed_observation_count INTEGER NOT NULL
+                    CHECK(managed_observation_count > 0),
+                PRIMARY KEY(environment_id, provider_instance_id, source_kind)
+            );
+
+            INSERT INTO usage_legacy_reconciliation_debt (
+                environment_id, provider_instance_id, source_kind,
+                parser_version, detected_at_ms, latest_source_at_ms,
+                transcript_observation_count, managed_observation_count
+            )
+            SELECT transcript.environment_id,
+                   transcript.provider_instance_id,
+                   transcript.source_kind,
+                   MAX(transcript.parser_version),
+                   MAX(transcript.created_at_ms),
+                   MAX(transcript.occurred_at_ms),
+                   COUNT(*),
+                   (
+                       SELECT COUNT(*)
+                         FROM usage_observations managed
+                        WHERE managed.environment_id = transcript.environment_id
+                          AND managed.provider_instance_id = transcript.provider_instance_id
+                          AND managed.provider = 'claude'
+                          AND managed.source_kind = 'managed_turn'
+                          AND managed.fact_kind = 'aggregate'
+                   )
+              FROM usage_observations transcript
+             WHERE transcript.provider = 'claude'
+               AND transcript.source_kind = 'claude_transcript'
+               AND transcript.parser_version < 2
+               AND EXISTS (
+                   SELECT 1
+                     FROM usage_observations managed
+                    WHERE managed.environment_id = transcript.environment_id
+                      AND managed.provider_instance_id = transcript.provider_instance_id
+                      AND managed.provider = 'claude'
+                      AND managed.source_kind = 'managed_turn'
+                      AND managed.fact_kind = 'aggregate'
+               )
+             GROUP BY transcript.environment_id,
+                      transcript.provider_instance_id,
+                      transcript.source_kind;",
+        )?;
+        tx.execute(
+            "INSERT INTO _migrations (version, applied_at_ms) VALUES (12, ?1)",
+            [now_ms() as i64],
+        )?;
+        tx.commit()?;
+    }
+
     Ok(())
 }
 
@@ -1525,6 +1687,139 @@ mod tests {
         assert!(column_exists(&conn, "turn_attempts", "execution_json"));
         assert_eq!(migration_version(&conn), SCHEMA_VERSION);
         apply_migrations(&mut conn).expect("repeat migration eleven");
+        assert_eq!(migration_version(&conn), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn migration_twelve_preserves_history_and_allows_managed_components() {
+        let mut conn = Connection::open_in_memory().expect("open database");
+        apply_migrations_to(&mut conn, 11).expect("apply schema eleven");
+        conn.execute(
+            "INSERT INTO usage_subscriptions (
+                subscription_key, provider, display_name, created_at_ms, updated_at_ms
+             ) VALUES ('subkey-p4c1', 'claude', 'P4-C1 fixture', 1, 1)",
+            [],
+        )
+        .expect("insert subscription");
+        conn.execute(
+            "INSERT INTO usage_observations (
+                environment_id, observation_id, source_kind, parser_version,
+                provider_native_session_id, provider_native_turn_id, occurred_at_ms,
+                provider, provider_instance_id, subscription_key, model,
+                input_tokens, cached_input_tokens, cache_write_tokens, output_tokens,
+                reasoning_tokens, other_tokens_json, provider_reported_micro_usd,
+                created_at_ms
+             ) VALUES (
+                'env-p4c1', 'legacy-transcript', 'claude_transcript', 1,
+                'session-p4c1', 'message-p4c1', 1000, 'claude', 'claude-p4c1',
+                'subkey-p4c1', 'claude-actual', 11, 3, 2, 7, 0, '{}', 1234, 1000
+             )",
+            [],
+        )
+        .expect("insert legacy transcript observation");
+        conn.execute(
+            "INSERT INTO usage_observations (
+                environment_id, observation_id, source_kind, parser_version,
+                provider_native_session_id, provider_native_turn_id, occurred_at_ms,
+                provider, provider_instance_id, subscription_key, model,
+                input_tokens, cached_input_tokens, cache_write_tokens, output_tokens,
+                reasoning_tokens, other_tokens_json, provider_reported_micro_usd,
+                turn_id, created_at_ms
+             ) VALUES (
+                'env-p4c1', 'legacy-managed-result', 'managed_turn', 1,
+                'session-p4c1', 'result-uuid', 1001, 'claude', 'claude-p4c1',
+                'subkey-p4c1', 'selected-model', 11, 3, 2, 7, 0, '{}', 1234,
+                'legacy-pandamux-turn', 1001
+             )",
+            [],
+        )
+        .expect("insert legacy managed result observation");
+
+        apply_migrations(&mut conn).expect("apply migration twelve");
+
+        let preserved: (String, i64, i64) = conn
+            .query_row(
+                "SELECT fact_kind, input_tokens, provider_reported_micro_usd
+                   FROM usage_observations
+                  WHERE observation_id = 'legacy-transcript'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("query classified legacy observation");
+        assert_eq!(preserved, ("token_component".to_string(), 11, 1234));
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM usage_observations
+                  WHERE observation_id IN ('legacy-transcript', 'legacy-managed-result')",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("count ambiguous legacy pair"),
+            2
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT fact_kind FROM usage_observations
+                  WHERE observation_id = 'legacy-managed-result'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("query legacy managed fact kind"),
+            "aggregate"
+        );
+        assert!(table_exists(&conn, "managed_usage_backfill_state"));
+        assert!(table_exists(&conn, "managed_usage_backfill_facts"));
+        assert!(table_exists(&conn, "usage_reconciliation_mismatches"));
+        assert!(table_exists(&conn, "usage_legacy_reconciliation_debt"));
+        assert_eq!(
+            conn.query_row(
+                "SELECT transcript_observation_count, managed_observation_count
+                   FROM usage_legacy_reconciliation_debt
+                  WHERE environment_id = 'env-p4c1'
+                    AND provider_instance_id = 'claude-p4c1'",
+                [],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .expect("query legacy reconciliation debt"),
+            (1, 1)
+        );
+        let diagnostics = super::super::load_usage_scanner_diagnostics(
+            &conn,
+            &pandamux_protocol::UsageQueryParams::default(),
+        )
+        .expect("load legacy debt diagnostics");
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].coverage_state,
+            pandamux_protocol::UsageSourceCoverageState::Partial
+        );
+        assert_eq!(
+            diagnostics[0].last_safe_error_code.as_deref(),
+            Some("legacy_reconciliation_debt")
+        );
+
+        for (observation_id, message_id) in [
+            ("managed-component-one", "message-one"),
+            ("managed-component-two", "message-two"),
+        ] {
+            conn.execute(
+                "INSERT INTO usage_observations (
+                    environment_id, observation_id, source_kind, parser_version,
+                    provider_native_session_id, provider_native_turn_id, occurred_at_ms,
+                    provider, provider_instance_id, subscription_key, model,
+                    input_tokens, cached_input_tokens, cache_write_tokens, output_tokens,
+                    reasoning_tokens, other_tokens_json, provider_reported_micro_usd,
+                    turn_id, created_at_ms, fact_kind
+                 ) VALUES (
+                    'env-p4c1', ?1, 'managed_turn', 2, 'session-p4c1', ?2, 1000,
+                    'claude', 'claude-p4c1', 'subkey-p4c1', 'claude-actual',
+                    5, 0, 0, 2, 0, '{}', NULL, 'pandamux-turn', 1000,
+                    'token_component'
+                 )",
+                params![observation_id, message_id],
+            )
+            .expect("insert managed component");
+        }
         assert_eq!(migration_version(&conn), SCHEMA_VERSION);
     }
 

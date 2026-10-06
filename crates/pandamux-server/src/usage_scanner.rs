@@ -1,6 +1,6 @@
 use crate::store::{Store, StoreError, UsageQuarantineRecord, UsageScannerCursor};
 use pandamux_core::{
-    EnvironmentId, NodeStoreId, ProviderInstanceId, ProviderKind, SubscriptionKey,
+    EnvironmentId, NodeStoreId, ProviderInstanceId, ProviderKind, SubscriptionKey, UsageFactKind,
     UsageObservation, UsageObservationId, UsageProvider, UsageSourceKind,
 };
 use pandamux_protocol::{UsageScannerDiagnostic, UsageSourceCoverageState};
@@ -804,7 +804,13 @@ fn scan_file(
                         report.safe_error_code = Some(error.code.to_string());
                     }
                     TranscriptRecordOutcome::Usage(usage) => {
-                        if !usage.unknown_fields.is_empty() {
+                        if usage.unknown_fields.iter().any(|field| {
+                            !matches!(
+                                field,
+                                pandamux_core::UsageUnknownField::CacheReadTokens
+                                    | pandamux_core::UsageUnknownField::CacheWriteTokens
+                            )
+                        }) {
                             report.partial = true;
                             report.safe_error_code = Some("usage_fields_unknown".to_string());
                         }
@@ -1104,6 +1110,11 @@ fn parsed_observation(
         turn_id: None,
         agent_id: None,
         schedule_id: None,
+        fact_kind: if source.parser_provider == TranscriptProvider::Claude {
+            UsageFactKind::TokenComponent
+        } else {
+            UsageFactKind::Aggregate
+        },
     }
 }
 
@@ -1473,11 +1484,12 @@ mod tests {
         let temp = TempDir::new().expect("temporary transcript root");
         let path = temp.path().join("mixed.jsonl");
         let first = claude_record("msg-1", 1, 10);
+        let repeated_chunk = claude_record("msg-1", 9, 10);
         let second = claude_record("msg-2", 2, 20);
         let oversized = format!("{{\"padding\":\"{}\"}}", "x".repeat(600));
         fs::write(
             &path,
-            format!("{first}\n{first}\n{{bad json}}\n{oversized}\n{second}\n"),
+            format!("{first}\n{repeated_chunk}\n{{bad json}}\n{oversized}\n{second}\n"),
         )
         .expect("write mixed transcript");
         let store = configure_store();
@@ -1492,6 +1504,12 @@ mod tests {
             .query_usage(&UsageQueryParams::default())
             .expect("query mixed usage");
         assert_eq!(query.coverage.quarantined_count, 2);
+        assert!(
+            query
+                .items
+                .iter()
+                .all(|item| item.observation.fact_kind == UsageFactKind::TokenComponent)
+        );
         assert_eq!(query.coverage.scanner_diagnostics.len(), 1);
         assert_eq!(
             query.coverage.scanner_diagnostics[0].coverage_state,

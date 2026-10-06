@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeSet;
 
-pub const CLAUDE_TRANSCRIPT_PARSER_VERSION: u32 = 1;
+pub const CLAUDE_TRANSCRIPT_PARSER_VERSION: u32 = 2;
 pub const CODEX_TRANSCRIPT_PARSER_VERSION: u32 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -141,7 +141,7 @@ impl TranscriptParser {
             first_timestamp_ms(value, &["/timestamp", "/created_at", "/message/created_at"]);
         let model = first_nonempty_string(value, &["/model", "/message/model"]);
         let provider_native_turn_id =
-            first_nonempty_string(value, &["/turnId", "/turn_id", "/message/id", "/uuid"]);
+            first_nonempty_string(value, &["/message/id", "/turnId", "/turn_id", "/uuid"]);
         let mut unknown_fields = tokens.unknown_fields;
         record_unknowns(
             &mut unknown_fields,
@@ -282,8 +282,7 @@ fn parse_token_counts(
             "cached_input_tokens",
             "cachedInputTokens",
         ],
-    )?
-    .unwrap_or(0);
+    )?;
     let cache_write = parse_optional_u64(
         value,
         &[
@@ -291,8 +290,7 @@ fn parse_token_counts(
             "cache_write_input_tokens",
             "cacheWriteInputTokens",
         ],
-    )?
-    .unwrap_or(0);
+    )?;
     let reasoning =
         parse_optional_u64(value, &["reasoning_tokens", "reasoningTokens"])?.unwrap_or(0);
 
@@ -303,11 +301,17 @@ fn parse_token_counts(
     if output.is_none() {
         unknown_fields.insert(UnknownUsageField::OutputTokens);
     }
+    if provider == TranscriptProvider::Claude && cached_input.is_none() {
+        unknown_fields.insert(UnknownUsageField::CacheReadTokens);
+    }
+    if provider == TranscriptProvider::Claude && cache_write.is_none() {
+        unknown_fields.insert(UnknownUsageField::CacheWriteTokens);
+    }
     Ok(ParsedTokenCounts {
         counts: TokenCounts {
             input: input.unwrap_or(0),
-            cached_input,
-            cache_write,
+            cached_input: cached_input.unwrap_or(0),
+            cache_write: cache_write.unwrap_or(0),
             output: output.unwrap_or(0),
             reasoning,
             ..TokenCounts::default()
@@ -589,7 +593,25 @@ mod tests {
                 UnknownUsageField::OccurredAt,
                 UnknownUsageField::Model,
                 UnknownUsageField::Identity,
+                UnknownUsageField::CacheReadTokens,
+                UnknownUsageField::CacheWriteTokens,
             ])
+        );
+    }
+
+    #[test]
+    fn claude_message_identity_wins_over_result_and_row_identifiers() {
+        let mut parser = TranscriptParser::new(TranscriptProvider::Claude);
+        assert_eq!(parser.parser_version(), 2);
+        let outcome = parser.parse_complete_record(
+            br#"{"type":"assistant","turnId":"result-turn","uuid":"row-uuid","message":{"id":"assistant-message","model":"claude-actual","usage":{"input_tokens":4,"output_tokens":2}}}"#,
+        );
+        let TranscriptRecordOutcome::Usage(usage) = outcome else {
+            panic!("expected parsed usage");
+        };
+        assert_eq!(
+            usage.provider_native_turn_id.as_deref(),
+            Some("assistant-message")
         );
     }
 

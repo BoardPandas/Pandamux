@@ -102,13 +102,13 @@ pub use ssh::{
 pub use terminal::{RingBufferConfig, TerminalResize, TerminalSessionMeta};
 pub use thread::{
     AccessMode, AgentInstanceRef, Thread, ThreadOrigin, ThreadStatus, ThreadWorkspace, Turn,
-    TurnInput, TurnStatus, TurnUsage, TurnUsageProvenance, WorktreeRef,
+    TurnInput, TurnStatus, TurnUsage, TurnUsageComponent, TurnUsageProvenance, WorktreeRef,
 };
 pub use usage::{
     CAPACITY_SNAPSHOT_SCHEMA_VERSION, CapacityConfidence, CapacityEvidenceScope, CapacityFreshness,
     CapacityProjection, CapacitySnapshot, DEFAULT_CAPACITY_MAX_AGE_MS, DailyBudgetLedger,
-    TokenCounts, TokenUsageSummary, UsageArithmeticError, UsageBucket, UsageObservation,
-    UsageObservationError, UsagePricingRates, UsagePricingRule, UsagePricingVersion, UsageProvider,
-    UsageRecord, UsageSourceKind, UsageSubscription, UsageUnknownField, estimate_usage_micro_usd,
-    project_capacity_revisions,
+    TokenCounts, TokenUsageSummary, UsageArithmeticError, UsageBucket, UsageFactKind,
+    UsageObservation, UsageObservationError, UsagePricingRates, UsagePricingRule,
+    UsagePricingVersion, UsageProvider, UsageRecord, UsageSourceKind, UsageSubscription,
+    UsageUnknownField, estimate_usage_micro_usd, project_capacity_revisions,
 };

@@ -36,12 +36,27 @@ only bounded reason codes and SHA-256 hashes, then parsing resumes at the next r
 
 ## Reconciliation
 
-Managed turn facts are normalized before transcript sources during every scan. Native
-provider session and turn identifiers are preferred. When the same strong identity is
-seen in both sources, the managed measurement and PandaMUX attribution win and only one
-fact remains queryable. If a transcript was committed first, the fact is promoted in
-place and a new outbox sequence advertises the authoritative revision. Replays are
-idempotent, and measurement disagreement marks source coverage partial.
+Migration 12 adds component-aware facts while preserving migrations 1 through 11 and
+older aggregate `TurnUsage` records. Claude stream parsing is stateful for one CLI turn.
+Repeated thinking or text chunks with the same exact assistant `message.id` contribute
+once, while every distinct assistant message remains a separate token component. Each
+component retains its actual reported model, input and output tokens, cache-read and
+cache-write categories, and optional provider occurrence time. The terminal result UUID
+identifies a separate turn-level cost fact, so total turn cost is never assigned to the
+last assistant message.
+
+Managed turn facts are normalized before transcript sources during every scan. Managed
+and transcript token components reconcile only when provider session and assistant
+message identity match exactly. Timestamp skew and one missing optional cost may enrich
+that fact. If a transcript was committed first, the compatible fact is promoted in place
+and a new outbox sequence advertises the authoritative revision. Conflicting provider,
+provider instance, subscription, model, cost, or token measurements remain separate and
+keep source coverage Partial with a durable `managed_transcript_mismatch` diagnostic.
+Replays, restarts, Hub synchronization, and component-aware backfill are idempotent.
+Existing result-UUID and assistant-message pairs are not merged by timestamp or value.
+Migration 12 records scopes containing both parser-v1 Claude transcript facts and
+legacy managed aggregates as `legacy_reconciliation_debt`, keeping coverage Partial
+until an explicit reviewed repair is applied to a clone.
 
 Missing timestamps, models, identities, or required token fields are not replaced with
 plausible defaults. They produce absent fields and partial coverage diagnostics.

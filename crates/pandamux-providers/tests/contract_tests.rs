@@ -8,7 +8,7 @@ use pandamux_core::{
 use pandamux_providers::{
     ENV_CLAUDE_CONFIG_DIR, ENV_CODEX_HOME, ENV_GEMINI_HOME, apply_profile_environment,
     build_claude_interrupt_request, build_claude_launch_args, build_claude_user_message,
-    claude::{ClaudeAuthStatus, ControlResponse, parse_stream_json_lines},
+    claude::{ClaudeAuthStatus, ClaudeStreamEventParser, ControlResponse, parse_stream_json_lines},
     claude_disallowed_tools, claude_permission_mode,
     codex::{
         CodexApprovalPolicy, CodexNotificationEvent, CodexSandboxPolicy, JsonRpcResponse,
@@ -240,6 +240,107 @@ fn test_claude_current_stream_output_schema() {
         Some(pandamux_providers::ProviderEvent::ToolCallFinished { id, error: None, .. })
             if id == "tool-current"
     ));
+}
+
+#[test]
+fn test_claude_stream_accumulates_exact_message_components() {
+    let lines = [
+        serde_json::json!({
+            "type": "system",
+            "session_id": "session-component"
+        }),
+        serde_json::json!({
+            "type": "assistant",
+            "session_id": "session-component",
+            "timestamp": "2026-10-06T10:00:01Z",
+            "message": {
+                "id": "message-thinking-and-text",
+                "model": "claude-actual-one",
+                "content": [{"type": "thinking", "thinking": "reasoning"}],
+                "usage": {"input_tokens": 10, "output_tokens": 1}
+            }
+        }),
+        serde_json::json!({
+            "type": "assistant",
+            "session_id": "session-component",
+            "timestamp": "2026-10-06T10:00:02Z",
+            "message": {
+                "id": "message-thinking-and-text",
+                "model": "claude-actual-one",
+                "content": [{"type": "text", "text": "first answer"}],
+                "usage": {"input_tokens": 10, "output_tokens": 3}
+            }
+        }),
+        serde_json::json!({
+            "type": "assistant",
+            "session_id": "session-component",
+            "timestamp": "2026-10-06T10:00:03Z",
+            "message": {
+                "id": "message-after-tool",
+                "model": "claude-actual-two",
+                "content": [{"type": "text", "text": "tool result"}],
+                "usage": {
+                    "input_tokens": 2,
+                    "output_tokens": 4,
+                    "cache_read_input_tokens": 5,
+                    "cache_creation_input_tokens": 6
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "result",
+            "subtype": "success",
+            "session_id": "session-component",
+            "uuid": "result-uuid-not-a-message-id",
+            "timestamp": "2026-10-06T10:00:04Z",
+            "model": "selected-routing-model",
+            "total_cost_usd": 0.0123,
+            "usage": {"input_tokens": 12, "output_tokens": 7}
+        }),
+    ];
+    let mut parser = ClaudeStreamEventParser::default();
+    let mut completed = None;
+    for line in lines {
+        if let Some(pandamux_providers::ProviderEvent::TurnCompleted { usage, .. }) =
+            parser.parse_line(&line.to_string())
+        {
+            completed = usage;
+        }
+    }
+    let usage = completed.expect("terminal usage");
+    assert_eq!(usage.components.len(), 2);
+    assert_eq!(usage.input_tokens, 12);
+    assert_eq!(usage.output_tokens, 7);
+    assert_eq!(usage.provider_reported_micro_usd, Some(12_300));
+    assert_eq!(
+        usage
+            .provenance
+            .as_ref()
+            .and_then(|value| value.provider_native_turn_id.as_deref()),
+        Some("result-uuid-not-a-message-id")
+    );
+
+    let first = &usage.components[0];
+    assert_eq!(
+        first.provider_native_message_id,
+        "message-thinking-and-text"
+    );
+    assert_eq!(first.model.as_deref(), Some("claude-actual-one"));
+    assert_eq!(first.output_tokens, 3);
+    assert_eq!(first.cache_read_tokens, None);
+    assert_eq!(first.cache_write_tokens, None);
+
+    let second = &usage.components[1];
+    assert_eq!(second.provider_native_message_id, "message-after-tool");
+    assert_eq!(second.model.as_deref(), Some("claude-actual-two"));
+    assert_eq!(second.cache_read_tokens, Some(5));
+    assert_eq!(second.cache_write_tokens, Some(6));
+    assert!(
+        usage
+            .components
+            .iter()
+            .all(|component| component.model.as_deref() != Some("selected-routing-model"))
+    );
 }
 
 #[test]

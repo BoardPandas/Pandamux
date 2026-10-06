@@ -547,6 +547,7 @@ mod tests {
                     turn_id: None,
                     agent_id: None,
                     schedule_id: None,
+                    fact_kind: Default::default(),
                 },
             }]
         };

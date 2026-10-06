@@ -15,8 +15,9 @@ use pandamux_core::{
     OrganizationPolicy, ProjectId, ProviderCapabilities, ProviderInstanceId, ProviderKind,
     ScheduleId, ScheduleRecord, ScheduleTarget, SubscriptionKey, Thread, ThreadEvent,
     ThreadEventKind, ThreadId, ThreadOrigin, TokenCounts, Turn, TurnAttemptStatus, TurnId,
-    TurnStatus, TurnUsage, UsageObservation, UsageObservationId, UsageProvider, UsageSourceKind,
-    UsageSubscription, UsageUnknownField, UserSettings, project_capacity_revisions,
+    TurnStatus, TurnUsage, TurnUsageComponent, UsageFactKind, UsageObservation, UsageObservationId,
+    UsageProvider, UsageSourceKind, UsageSubscription, UsageUnknownField, UserSettings,
+    project_capacity_revisions,
 };
 use pandamux_protocol::{
     CapacityQueryCursor, CapacityQueryParams, CapacityQueryResult, EventEnvelope, UsageExportItem,
@@ -133,11 +134,20 @@ struct ManagedUsageCandidate {
     environment_id: EnvironmentId,
     provider_instance_id: ProviderInstanceId,
     ended_at_ms: Option<u64>,
+    usage_json: String,
     usage: TurnUsage,
     provider_kind: ProviderKind,
     model: String,
     agent_id: Option<AgentId>,
     schedule_id: Option<ScheduleId>,
+}
+
+#[derive(Clone, Debug)]
+struct PendingUsageReconciliationMismatch {
+    managed_observation_id: UsageObservationId,
+    transcript_observation_id: UsageObservationId,
+    provider_instance_id: ProviderInstanceId,
+    source_kind: UsageSourceKind,
 }
 
 /// A thread-safe, single-writer SQLite store wrapper.
@@ -1673,6 +1683,7 @@ impl Store {
         let created_at_ms = checked_i64(store_now_ms(), "usage_observations.created_at_ms")?;
 
         for (index, observation) in observations.iter().enumerate() {
+            let mut pending_reconciliation_mismatches = Vec::new();
             let mapped_subscription = tx
                 .query_row(
                     "SELECT m.subscription_key, s.provider
@@ -1702,76 +1713,113 @@ impl Store {
             }
 
             let reconciliation_key = usage_reconciliation_key(observation)?;
-            if let Some(reconciliation_key) = reconciliation_key.as_deref()
-                && let Some(existing) = load_usage_observation_by_reconciliation(
-                    &tx,
-                    environment_id,
-                    &observation.provider_instance_id,
-                    reconciliation_key,
-                )?
-            {
-                if existing.id == observation.id {
-                    if existing != *observation {
+            if let Some(reconciliation_key) = reconciliation_key.as_deref() {
+                let existing =
+                    load_usage_observations_by_exact_identity(&tx, environment_id, observation)?;
+                if let Some(same_id) = existing
+                    .iter()
+                    .find(|existing| existing.id == observation.id)
+                {
+                    if !usage_measurement_compatible(same_id, observation) {
                         return Err(StoreError::Data(format!(
                             "usage observation id collision for {}",
                             observation.id
                         )));
                     }
-                    result.duplicates =
-                        checked_increment(result.duplicates, "usage duplicate count overflow")?;
-                    continue;
-                }
-                if existing.source_kind == UsageSourceKind::ManagedTurn
-                    && observation.source_kind != UsageSourceKind::ManagedTurn
-                {
-                    result.reconciled = checked_increment(
-                        result.reconciled,
-                        "usage reconciliation count overflow",
-                    )?;
-                    if !usage_measurement_equivalent(&existing, observation) {
-                        result.reconciliation_mismatches = checked_increment(
-                            result.reconciliation_mismatches,
-                            "usage reconciliation mismatch count overflow",
-                        )?;
-                    }
-                    continue;
-                }
-                if observation.source_kind == UsageSourceKind::ManagedTurn
-                    && existing.source_kind != UsageSourceKind::ManagedTurn
-                {
-                    let measurements_match = usage_measurement_equivalent(&existing, observation);
-                    let outbox_seq = promote_usage_observation_to_managed(
+                    if let Some(outbox_seq) = enrich_usage_observation_cost_if_safe(
                         &tx,
                         environment_id,
-                        &existing.id,
+                        same_id,
                         observation,
-                        reconciliation_key,
                         created_at_ms,
-                    )?;
-                    result.reconciled = checked_increment(
-                        result.reconciled,
-                        "usage reconciliation count overflow",
-                    )?;
-                    if !measurements_match {
-                        result.reconciliation_mismatches = checked_increment(
-                            result.reconciliation_mismatches,
-                            "usage reconciliation mismatch count overflow",
+                    )? {
+                        result.reconciled = checked_increment(
+                            result.reconciled,
+                            "usage reconciliation count overflow",
                         )?;
+                        result.last_outbox_seq = result.last_outbox_seq.max(outbox_seq);
+                    } else {
+                        result.duplicates =
+                            checked_increment(result.duplicates, "usage duplicate count overflow")?;
                     }
-                    result.last_outbox_seq = result.last_outbox_seq.max(outbox_seq);
                     continue;
                 }
-                if usage_measurement_equivalent(&existing, observation) {
+
+                if let Some(compatible) = existing
+                    .iter()
+                    .find(|existing| usage_measurement_compatible(existing, observation))
+                {
+                    if compatible.source_kind == UsageSourceKind::ManagedTurn
+                        && observation.source_kind != UsageSourceKind::ManagedTurn
+                    {
+                        if let Some(outbox_seq) = enrich_usage_observation_cost_if_safe(
+                            &tx,
+                            environment_id,
+                            compatible,
+                            observation,
+                            created_at_ms,
+                        )? {
+                            result.last_outbox_seq = result.last_outbox_seq.max(outbox_seq);
+                        }
+                        result.reconciled = checked_increment(
+                            result.reconciled,
+                            "usage reconciliation count overflow",
+                        )?;
+                        continue;
+                    }
+                    if observation.source_kind == UsageSourceKind::ManagedTurn
+                        && compatible.source_kind != UsageSourceKind::ManagedTurn
+                    {
+                        let mut promoted = observation.clone();
+                        if promoted.provider_reported_micro_usd.is_none()
+                            && compatible.provider_reported_micro_usd.is_some()
+                            && !has_separate_managed_cost(&tx, environment_id, &promoted)?
+                        {
+                            promoted.provider_reported_micro_usd =
+                                compatible.provider_reported_micro_usd;
+                        }
+                        let outbox_seq = promote_usage_observation_to_managed(
+                            &tx,
+                            environment_id,
+                            &compatible.id,
+                            &promoted,
+                            reconciliation_key,
+                            created_at_ms,
+                        )?;
+                        result.reconciled = checked_increment(
+                            result.reconciled,
+                            "usage reconciliation count overflow",
+                        )?;
+                        result.last_outbox_seq = result.last_outbox_seq.max(outbox_seq);
+                        continue;
+                    }
+                    if let Some(outbox_seq) = enrich_usage_observation_cost_if_safe(
+                        &tx,
+                        environment_id,
+                        compatible,
+                        observation,
+                        created_at_ms,
+                    )? {
+                        result.last_outbox_seq = result.last_outbox_seq.max(outbox_seq);
+                    }
                     result.reconciled = checked_increment(
                         result.reconciled,
                         "usage reconciliation count overflow",
                     )?;
                     continue;
                 }
-                return Err(StoreError::Data(format!(
-                    "usage reconciliation collision for {}",
-                    observation.id
-                )));
+
+                if !existing.is_empty() {
+                    pending_reconciliation_mismatches.extend(
+                        existing.iter().filter_map(|existing| {
+                            managed_transcript_mismatch(existing, observation)
+                        }),
+                    );
+                    result.reconciliation_mismatches = checked_increment(
+                        result.reconciliation_mismatches,
+                        "usage reconciliation mismatch count overflow",
+                    )?;
+                }
             }
 
             let other_tokens_json = serde_json::to_string(&observation.tokens.other)?;
@@ -1784,11 +1832,12 @@ impl Store {
                     input_tokens, cached_input_tokens, cache_write_tokens, output_tokens,
                     reasoning_tokens, other_tokens_json, unknown_fields_json,
                     provider_reported_micro_usd, source_record_count, thread_id,
-                    turn_id, agent_id, schedule_id, created_at_ms, reconciliation_key
+                    turn_id, agent_id, schedule_id, fact_kind, created_at_ms,
+                    reconciliation_key
                  ) VALUES (
                     ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
                     ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23,
-                    ?24, ?25, ?26
+                    ?24, ?25, ?26, ?27
                  ) ON CONFLICT(environment_id, observation_id) DO NOTHING",
                 params![
                     environment_id.as_str(),
@@ -1818,6 +1867,7 @@ impl Store {
                     observation.turn_id.as_ref().map(TurnId::as_str),
                     observation.agent_id.as_ref().map(|id| id.as_str()),
                     observation.schedule_id.as_ref().map(ScheduleId::as_str),
+                    observation.fact_kind.as_str(),
                     created_at_ms,
                     reconciliation_key,
                 ],
@@ -1830,15 +1880,52 @@ impl Store {
                                 .to_string(),
                         )
                     })?;
-                if existing != *observation {
+                if !usage_measurement_compatible(&existing, observation) {
                     return Err(StoreError::Data(format!(
                         "usage observation id collision for {}",
                         observation.id
                     )));
                 }
-                result.duplicates =
-                    checked_increment(result.duplicates, "usage duplicate count overflow")?;
+                if let Some(outbox_seq) = enrich_usage_observation_cost_if_safe(
+                    &tx,
+                    environment_id,
+                    &existing,
+                    observation,
+                    created_at_ms,
+                )? {
+                    result.reconciled = checked_increment(
+                        result.reconciled,
+                        "usage reconciliation count overflow",
+                    )?;
+                    result.last_outbox_seq = result.last_outbox_seq.max(outbox_seq);
+                } else {
+                    result.duplicates =
+                        checked_increment(result.duplicates, "usage duplicate count overflow")?;
+                }
                 continue;
+            }
+
+            for mismatch in &pending_reconciliation_mismatches {
+                tx.execute(
+                    "INSERT INTO usage_reconciliation_mismatches (
+                        environment_id, managed_observation_id,
+                        transcript_observation_id, provider_instance_id,
+                        source_kind, detected_at_ms
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                     ON CONFLICT(
+                        environment_id,
+                        managed_observation_id,
+                        transcript_observation_id
+                     ) DO NOTHING",
+                    params![
+                        environment_id.as_str(),
+                        mismatch.managed_observation_id.as_str(),
+                        mismatch.transcript_observation_id.as_str(),
+                        mismatch.provider_instance_id.as_str(),
+                        mismatch.source_kind.as_str(),
+                        created_at_ms,
+                    ],
+                )?;
             }
 
             tx.execute(
@@ -2030,12 +2117,37 @@ impl Store {
                     WHERE candidate.turn_id = t.id AND candidate.status = ?2
                     ORDER BY candidate.ordinal DESC LIMIT 1
                  )
-                 LEFT JOIN usage_observations o
-                   ON o.environment_id = t.environment_id
-                  AND o.turn_id = t.id
-                  AND o.source_kind = 'managed_turn'
+                 LEFT JOIN managed_usage_backfill_state b
+                   ON b.environment_id = t.environment_id
+                  AND b.turn_id = t.id
+                  AND b.usage_json = t.usage_json
                  WHERE t.environment_id = ?1
-                   AND t.usage_json IS NOT NULL AND o.observation_id IS NULL
+                   AND t.usage_json IS NOT NULL
+                   AND (
+                        b.turn_id IS NULL OR
+                        (
+                            SELECT COUNT(*)
+                              FROM managed_usage_backfill_facts expected
+                             WHERE expected.environment_id = b.environment_id
+                               AND expected.turn_id = b.turn_id
+                        ) <> b.expected_fact_count OR
+                        EXISTS (
+                            SELECT 1
+                              FROM managed_usage_backfill_facts expected
+                             WHERE expected.environment_id = b.environment_id
+                               AND expected.turn_id = b.turn_id
+                               AND NOT EXISTS (
+                                   SELECT 1
+                                     FROM usage_observations managed
+                                    WHERE managed.environment_id = expected.environment_id
+                                      AND managed.turn_id = expected.turn_id
+                                      AND managed.source_kind = 'managed_turn'
+                                      AND managed.fact_kind = expected.fact_kind
+                                      AND COALESCE(managed.provider_native_turn_id, '') =
+                                          expected.provider_native_turn_id
+                               )
+                        )
+                   )
                  ORDER BY t.started_at_ms, t.id
                  LIMIT ?3",
             )?;
@@ -2079,6 +2191,7 @@ impl Store {
                     ThreadOrigin::Schedule { schedule_id, .. } => Some(schedule_id),
                     _ => None,
                 };
+                let usage_json = row.5;
                 candidates.push(ManagedUsageCandidate {
                     turn_id: TurnId::from(row.0),
                     thread_id: ThreadId::from(row.1),
@@ -2088,7 +2201,8 @@ impl Store {
                         .4
                         .map(|value| checked_u64(value, "managed usage ended_at_ms"))
                         .transpose()?,
-                    usage: serde_json::from_str(&row.5)?,
+                    usage: serde_json::from_str(&usage_json)?,
+                    usage_json,
                     provider_kind,
                     model: row.8,
                     agent_id,
@@ -2115,80 +2229,60 @@ impl Store {
                     checked_increment(result.unmapped, "managed usage unmapped count overflow")?;
                 continue;
             }
-            let provenance = candidate.usage.provenance.as_ref();
-            let provider_reported_micro_usd = candidate
-                .usage
-                .provider_reported_micro_usd
-                .or_else(|| candidate.usage.cost_usd.and_then(cost_usd_to_micro));
-            if candidate.usage.cost_usd.is_some()
-                && candidate.usage.provider_reported_micro_usd.is_none()
-                && provider_reported_micro_usd.is_none()
-            {
-                result.invalid =
-                    checked_increment(result.invalid, "managed usage invalid count overflow")?;
-            }
-            let model = provenance
-                .and_then(|value| value.model.as_deref())
-                .filter(|value| !value.trim().is_empty())
-                .map(str::to_string)
-                .or_else(|| {
-                    (!candidate.model.trim().is_empty()).then_some(candidate.model.clone())
-                });
-            let provider_native_session_id = provenance
-                .and_then(|value| value.provider_native_session_id.clone())
-                .filter(|value| !value.trim().is_empty());
-            let provider_native_turn_id = provenance
-                .and_then(|value| value.provider_native_turn_id.clone())
-                .filter(|value| !value.trim().is_empty());
-            let mut unknown_fields = candidate.usage.unknown_fields.clone();
-            if provider_native_turn_id.is_none() {
-                unknown_fields.insert(UsageUnknownField::Identity);
-            }
-            let observation = UsageObservation {
-                id: UsageObservationId::new(format!(
-                    "usage-managed-{}",
-                    stable_usage_hash(&[
-                        candidate.environment_id.as_str(),
-                        candidate.turn_id.as_str(),
-                    ])
-                )),
-                source_kind: UsageSourceKind::ManagedTurn,
-                parser_version: 1,
-                provider_native_session_id,
-                provider_native_turn_id,
-                occurred_at_ms: provenance
-                    .and_then(|value| value.occurred_at_ms)
-                    .or(candidate.ended_at_ms),
-                provider,
-                provider_instance_id: candidate.provider_instance_id,
-                subscription_key,
-                model,
-                tokens: TokenCounts {
-                    input: candidate.usage.input_tokens,
-                    cached_input: candidate.usage.cache_read_tokens.unwrap_or(0),
-                    cache_write: candidate.usage.cache_write_tokens.unwrap_or(0),
-                    output: candidate.usage.output_tokens,
-                    ..TokenCounts::default()
-                },
-                unknown_fields,
-                provider_reported_micro_usd,
-                source_record_count: 1,
-                thread_id: Some(candidate.thread_id),
-                turn_id: Some(candidate.turn_id),
-                agent_id: candidate.agent_id,
-                schedule_id: candidate.schedule_id,
-            };
-            if observation.validate().is_err() {
+            let Some(observations) =
+                managed_usage_observations(&candidate, provider, subscription_key)
+            else {
                 result.invalid =
                     checked_increment(result.invalid, "managed usage invalid count overflow")?;
                 continue;
-            }
-            let batch = self.record_usage_batch(
-                &candidate.environment_id,
-                std::slice::from_ref(&observation),
-                None,
-            )?;
+            };
+            let expected_fact_count = u64::try_from(observations.len()).map_err(|_| {
+                StoreError::Data("managed usage expected fact count overflow".to_string())
+            })?;
+            let batch = self.record_usage_batch(&candidate.environment_id, &observations, None)?;
             merge_usage_batch(&mut result.batch, &batch)?;
+            let mut conn = self.conn.lock().unwrap();
+            let tx = conn.transaction()?;
+            tx.execute(
+                "INSERT INTO managed_usage_backfill_state (
+                    environment_id, turn_id, usage_json, expected_fact_count,
+                    completed_at_ms
+                 ) VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(environment_id, turn_id) DO UPDATE SET
+                    usage_json = excluded.usage_json,
+                    expected_fact_count = excluded.expected_fact_count,
+                    completed_at_ms = excluded.completed_at_ms",
+                params![
+                    candidate.environment_id.as_str(),
+                    candidate.turn_id.as_str(),
+                    &candidate.usage_json,
+                    checked_i64(expected_fact_count, "managed usage expected fact count")?,
+                    checked_i64(store_now_ms(), "managed usage backfill completion time")?,
+                ],
+            )?;
+            tx.execute(
+                "DELETE FROM managed_usage_backfill_facts
+                  WHERE environment_id = ?1 AND turn_id = ?2",
+                params![
+                    candidate.environment_id.as_str(),
+                    candidate.turn_id.as_str(),
+                ],
+            )?;
+            for observation in &observations {
+                tx.execute(
+                    "INSERT INTO managed_usage_backfill_facts (
+                        environment_id, turn_id, fact_kind,
+                        provider_native_turn_id
+                     ) VALUES (?1, ?2, ?3, ?4)",
+                    params![
+                        candidate.environment_id.as_str(),
+                        candidate.turn_id.as_str(),
+                        observation.fact_kind.as_str(),
+                        observation.provider_native_turn_id.as_deref().unwrap_or(""),
+                    ],
+                )?;
+            }
+            tx.commit()?;
         }
         Ok(result)
     }
@@ -2240,7 +2334,7 @@ impl Store {
                     o.cached_input_tokens, o.cache_write_tokens, o.output_tokens,
                     o.reasoning_tokens, o.other_tokens_json, o.unknown_fields_json,
                     o.provider_reported_micro_usd, o.source_record_count,
-                    o.thread_id, o.turn_id, o.agent_id, o.schedule_id
+                    o.thread_id, o.turn_id, o.agent_id, o.schedule_id, o.fact_kind
              FROM usage_outbox x
              JOIN usage_observations o
                ON o.environment_id = x.environment_id
@@ -2293,7 +2387,7 @@ impl Store {
                     model, input_tokens, cached_input_tokens, cache_write_tokens,
                     output_tokens, reasoning_tokens, other_tokens_json,
                     unknown_fields_json, provider_reported_micro_usd, source_record_count,
-                    thread_id, turn_id, agent_id, schedule_id
+                    thread_id, turn_id, agent_id, schedule_id, fact_kind
              FROM usage_observations WHERE 1 = 1",
         );
         let mut values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -3236,6 +3330,202 @@ fn cost_usd_to_micro(value: f64) -> Option<u64> {
     Some((value * 1_000_000.0).round() as u64)
 }
 
+fn managed_usage_observations(
+    candidate: &ManagedUsageCandidate,
+    provider: UsageProvider,
+    subscription_key: SubscriptionKey,
+) -> Option<Vec<UsageObservation>> {
+    let provenance = candidate.usage.provenance.as_ref();
+    let provider_native_session_id = provenance
+        .and_then(|value| value.provider_native_session_id.clone())
+        .filter(|value| !value.trim().is_empty());
+    let provider_native_result_id = provenance
+        .and_then(|value| value.provider_native_turn_id.clone())
+        .filter(|value| !value.trim().is_empty());
+    let provider_reported_micro_usd = candidate
+        .usage
+        .provider_reported_micro_usd
+        .or_else(|| candidate.usage.cost_usd.and_then(cost_usd_to_micro));
+    if candidate.usage.cost_usd.is_some()
+        && candidate.usage.provider_reported_micro_usd.is_none()
+        && provider_reported_micro_usd.is_none()
+    {
+        return None;
+    }
+
+    if candidate.usage.components.is_empty() {
+        let model = provenance
+            .and_then(|value| value.model.as_deref())
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string)
+            .or_else(|| (!candidate.model.trim().is_empty()).then_some(candidate.model.clone()));
+        let mut unknown_fields = candidate.usage.unknown_fields.clone();
+        if provider_native_result_id.is_none() {
+            unknown_fields.insert(UsageUnknownField::Identity);
+        }
+        let observation = UsageObservation {
+            id: UsageObservationId::new(format!(
+                "usage-managed-{}",
+                stable_usage_hash(&[
+                    candidate.environment_id.as_str(),
+                    candidate.turn_id.as_str(),
+                ])
+            )),
+            source_kind: UsageSourceKind::ManagedTurn,
+            parser_version: 1,
+            provider_native_session_id,
+            provider_native_turn_id: provider_native_result_id,
+            occurred_at_ms: provenance
+                .and_then(|value| value.occurred_at_ms)
+                .or(candidate.ended_at_ms),
+            provider,
+            provider_instance_id: candidate.provider_instance_id.clone(),
+            subscription_key,
+            model,
+            tokens: TokenCounts {
+                input: candidate.usage.input_tokens,
+                cached_input: candidate.usage.cache_read_tokens.unwrap_or(0),
+                cache_write: candidate.usage.cache_write_tokens.unwrap_or(0),
+                output: candidate.usage.output_tokens,
+                ..TokenCounts::default()
+            },
+            unknown_fields,
+            provider_reported_micro_usd,
+            source_record_count: 1,
+            thread_id: Some(candidate.thread_id.clone()),
+            turn_id: Some(candidate.turn_id.clone()),
+            agent_id: candidate.agent_id.clone(),
+            schedule_id: candidate.schedule_id.clone(),
+            fact_kind: UsageFactKind::Aggregate,
+        };
+        return observation.validate().is_ok().then_some(vec![observation]);
+    }
+
+    let mut observations = Vec::new();
+    if let Some(cost) = provider_reported_micro_usd {
+        let mut unknown_fields = BTreeSet::new();
+        if provider_native_result_id.is_none() {
+            unknown_fields.insert(UsageUnknownField::Identity);
+        }
+        let result_identity = provider_native_result_id.as_deref().unwrap_or("");
+        observations.push(UsageObservation {
+            id: UsageObservationId::new(format!(
+                "usage-managed-cost-{}",
+                stable_usage_hash(&[
+                    candidate.environment_id.as_str(),
+                    candidate.turn_id.as_str(),
+                    result_identity,
+                ])
+            )),
+            source_kind: UsageSourceKind::ManagedTurn,
+            parser_version: 2,
+            provider_native_session_id: provider_native_session_id.clone(),
+            provider_native_turn_id: provider_native_result_id,
+            occurred_at_ms: provenance
+                .and_then(|value| value.occurred_at_ms)
+                .or(candidate.ended_at_ms),
+            provider: provider.clone(),
+            provider_instance_id: candidate.provider_instance_id.clone(),
+            subscription_key: subscription_key.clone(),
+            model: None,
+            tokens: TokenCounts::default(),
+            unknown_fields,
+            provider_reported_micro_usd: Some(cost),
+            source_record_count: 1,
+            thread_id: Some(candidate.thread_id.clone()),
+            turn_id: Some(candidate.turn_id.clone()),
+            agent_id: candidate.agent_id.clone(),
+            schedule_id: candidate.schedule_id.clone(),
+            fact_kind: UsageFactKind::TurnCost,
+        });
+    }
+
+    let mut components: BTreeMap<String, &TurnUsageComponent> = BTreeMap::new();
+    for component in &candidate.usage.components {
+        let message_id = component.provider_native_message_id.trim();
+        if message_id.is_empty()
+            || component
+                .model
+                .as_ref()
+                .is_some_and(|model| model.trim().is_empty())
+        {
+            return None;
+        }
+        if let Some(existing) = components.get(message_id) {
+            if existing.model != component.model
+                || existing.input_tokens != component.input_tokens
+                || existing.output_tokens != component.output_tokens
+                || existing.cache_read_tokens != component.cache_read_tokens
+                || existing.cache_write_tokens != component.cache_write_tokens
+            {
+                return None;
+            }
+            continue;
+        }
+        components.insert(message_id.to_string(), component);
+    }
+
+    for (message_id, component) in components {
+        let mut unknown_fields = BTreeSet::new();
+        if component.model.is_none() {
+            unknown_fields.insert(UsageUnknownField::Model);
+        }
+        if component.cache_read_tokens.is_none() {
+            unknown_fields.insert(UsageUnknownField::CacheReadTokens);
+        }
+        if component.cache_write_tokens.is_none() {
+            unknown_fields.insert(UsageUnknownField::CacheWriteTokens);
+        }
+        let observation = UsageObservation {
+            id: UsageObservationId::new(format!(
+                "usage-managed-token-{}",
+                stable_usage_hash(&[
+                    candidate.environment_id.as_str(),
+                    candidate.turn_id.as_str(),
+                    &message_id,
+                ])
+            )),
+            source_kind: UsageSourceKind::ManagedTurn,
+            parser_version: 2,
+            provider_native_session_id: provider_native_session_id.clone(),
+            provider_native_turn_id: Some(message_id),
+            occurred_at_ms: component.occurred_at_ms,
+            provider: provider.clone(),
+            provider_instance_id: candidate.provider_instance_id.clone(),
+            subscription_key: subscription_key.clone(),
+            model: component.model.clone(),
+            tokens: TokenCounts {
+                input: component.input_tokens,
+                cached_input: component.cache_read_tokens.unwrap_or(0),
+                cache_write: component.cache_write_tokens.unwrap_or(0),
+                output: component.output_tokens,
+                ..TokenCounts::default()
+            },
+            unknown_fields,
+            provider_reported_micro_usd: None,
+            source_record_count: 1,
+            thread_id: Some(candidate.thread_id.clone()),
+            turn_id: Some(candidate.turn_id.clone()),
+            agent_id: candidate.agent_id.clone(),
+            schedule_id: candidate.schedule_id.clone(),
+            fact_kind: UsageFactKind::TokenComponent,
+        };
+        if observation.validate().is_err() {
+            return None;
+        }
+        observations.push(observation);
+    }
+
+    if observations.is_empty()
+        || observations
+            .iter()
+            .any(|observation| observation.validate().is_err())
+    {
+        return None;
+    }
+    Some(observations)
+}
+
 fn usage_reconciliation_key(observation: &UsageObservation) -> Result<Option<String>, StoreError> {
     if let Some(turn_id) = observation
         .provider_native_turn_id
@@ -3244,52 +3534,18 @@ fn usage_reconciliation_key(observation: &UsageObservation) -> Result<Option<Str
         .filter(|value| !value.is_empty())
     {
         return Ok(Some(format!(
-            "native:v1:{}",
+            "native:v2:{}",
             stable_usage_hash(&[
-                observation.provider.as_str(),
-                observation.provider_instance_id.as_str(),
                 observation
                     .provider_native_session_id
                     .as_deref()
                     .unwrap_or(""),
                 turn_id,
+                observation.fact_kind.as_str(),
             ])
         )));
     }
-    let Some(session_id) = observation
-        .provider_native_session_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return Ok(None);
-    };
-    let Some(occurred_at_ms) = observation.occurred_at_ms else {
-        return Ok(None);
-    };
-    let other_tokens = serde_json::to_string(&observation.tokens.other)?;
-    let unknown_fields = serde_json::to_string(&observation.unknown_fields)?;
-    Ok(Some(format!(
-        "fingerprint:v1:{}",
-        stable_usage_hash(&[
-            observation.provider.as_str(),
-            observation.provider_instance_id.as_str(),
-            session_id,
-            &occurred_at_ms.to_string(),
-            observation.model.as_deref().unwrap_or(""),
-            &observation.tokens.input.to_string(),
-            &observation.tokens.cached_input.to_string(),
-            &observation.tokens.cache_write.to_string(),
-            &observation.tokens.output.to_string(),
-            &observation.tokens.reasoning.to_string(),
-            &other_tokens,
-            &unknown_fields,
-            &observation
-                .provider_reported_micro_usd
-                .map(|value| value.to_string())
-                .unwrap_or_default(),
-        ])
-    )))
+    Ok(None)
 }
 
 fn stable_usage_hash(parts: &[&str]) -> String {
@@ -3305,17 +3561,147 @@ fn stable_usage_hash(parts: &[&str]) -> String {
         .collect()
 }
 
-fn usage_measurement_equivalent(existing: &UsageObservation, incoming: &UsageObservation) -> bool {
+fn usage_measurement_compatible(existing: &UsageObservation, incoming: &UsageObservation) -> bool {
+    let ignore_legacy_cache_presence = existing.parser_version < 2 || incoming.parser_version < 2;
     existing.provider_native_session_id == incoming.provider_native_session_id
         && existing.provider_native_turn_id == incoming.provider_native_turn_id
-        && existing.occurred_at_ms == incoming.occurred_at_ms
         && existing.provider == incoming.provider
         && existing.provider_instance_id == incoming.provider_instance_id
         && existing.subscription_key == incoming.subscription_key
         && existing.model == incoming.model
         && existing.tokens == incoming.tokens
-        && existing.unknown_fields == incoming.unknown_fields
-        && existing.provider_reported_micro_usd == incoming.provider_reported_micro_usd
+        && usage_unknown_fields_for_reconciliation(
+            &existing.unknown_fields,
+            ignore_legacy_cache_presence,
+        ) == usage_unknown_fields_for_reconciliation(
+            &incoming.unknown_fields,
+            ignore_legacy_cache_presence,
+        )
+        && existing.fact_kind == incoming.fact_kind
+        && (existing.provider_reported_micro_usd == incoming.provider_reported_micro_usd
+            || existing.provider_reported_micro_usd.is_none()
+            || incoming.provider_reported_micro_usd.is_none())
+}
+
+fn managed_transcript_mismatch(
+    existing: &UsageObservation,
+    incoming: &UsageObservation,
+) -> Option<PendingUsageReconciliationMismatch> {
+    let (managed, transcript) = match (&existing.source_kind, &incoming.source_kind) {
+        (
+            UsageSourceKind::ManagedTurn,
+            UsageSourceKind::ClaudeTranscript | UsageSourceKind::CodexTranscript,
+        ) => (existing, incoming),
+        (
+            UsageSourceKind::ClaudeTranscript | UsageSourceKind::CodexTranscript,
+            UsageSourceKind::ManagedTurn,
+        ) => (incoming, existing),
+        _ => return None,
+    };
+    Some(PendingUsageReconciliationMismatch {
+        managed_observation_id: managed.id.clone(),
+        transcript_observation_id: transcript.id.clone(),
+        provider_instance_id: transcript.provider_instance_id.clone(),
+        source_kind: transcript.source_kind.clone(),
+    })
+}
+
+fn usage_unknown_fields_for_reconciliation(
+    fields: &BTreeSet<UsageUnknownField>,
+    ignore_cache_presence: bool,
+) -> BTreeSet<UsageUnknownField> {
+    fields
+        .iter()
+        .copied()
+        .filter(|field| {
+            *field != UsageUnknownField::OccurredAt
+                && !(ignore_cache_presence
+                    && matches!(
+                        field,
+                        UsageUnknownField::CacheReadTokens | UsageUnknownField::CacheWriteTokens
+                    ))
+        })
+        .collect()
+}
+
+fn has_separate_managed_cost(
+    tx: &rusqlite::Transaction<'_>,
+    environment_id: &EnvironmentId,
+    observation: &UsageObservation,
+) -> Result<bool, StoreError> {
+    let Some(turn_id) = observation.turn_id.as_ref() else {
+        return Ok(false);
+    };
+    Ok(tx.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM usage_observations
+             WHERE environment_id = ?1 AND turn_id = ?2
+               AND source_kind = 'managed_turn' AND fact_kind = 'turn_cost'
+         )",
+        params![environment_id.as_str(), turn_id.as_str()],
+        |row| row.get(0),
+    )?)
+}
+
+fn enrich_usage_observation_cost_if_safe(
+    tx: &rusqlite::Transaction<'_>,
+    environment_id: &EnvironmentId,
+    existing: &UsageObservation,
+    incoming: &UsageObservation,
+    enqueued_at_ms: i64,
+) -> Result<Option<u64>, StoreError> {
+    let Some(cost) = incoming.provider_reported_micro_usd else {
+        return Ok(None);
+    };
+    if existing.provider_reported_micro_usd.is_some()
+        || has_separate_managed_cost(tx, environment_id, existing)?
+    {
+        return Ok(None);
+    }
+    let mut enriched = existing.clone();
+    enriched.provider_reported_micro_usd = Some(cost);
+    tx.execute(
+        "UPDATE usage_observations
+            SET provider_reported_micro_usd = ?1
+          WHERE environment_id = ?2 AND observation_id = ?3",
+        params![
+            checked_i64(cost, "provider_reported_micro_usd")?,
+            environment_id.as_str(),
+            existing.id.as_str(),
+        ],
+    )?;
+    let payload_bytes = usage_observation_payload_bytes(&enriched)?;
+    tx.execute(
+        "UPDATE usage_outbox SET payload_bytes = ?1
+         WHERE environment_id = ?2 AND observation_id = ?3",
+        params![payload_bytes, environment_id.as_str(), existing.id.as_str()],
+    )?;
+    tx.execute(
+        "INSERT INTO usage_outbox (
+            environment_id, observation_id, enqueued_at_ms, payload_bytes
+         ) VALUES (?1, ?2, ?3, ?4)",
+        params![
+            environment_id.as_str(),
+            existing.id.as_str(),
+            enqueued_at_ms,
+            payload_bytes,
+        ],
+    )?;
+    let outbox_seq = checked_u64(tx.last_insert_rowid(), "usage_outbox.seq")?;
+    tx.execute(
+        "UPDATE usage_observations
+         SET source_node_store_id = (
+                 SELECT node_store_id FROM usage_store_meta WHERE singleton = 1
+             ),
+             source_outbox_seq = ?1
+         WHERE environment_id = ?2 AND observation_id = ?3",
+        params![
+            checked_i64(outbox_seq, "usage_outbox.seq")?,
+            environment_id.as_str(),
+            existing.id.as_str(),
+        ],
+    )?;
+    Ok(Some(outbox_seq))
 }
 
 fn promote_usage_observation_to_managed(
@@ -3352,8 +3738,9 @@ fn promote_usage_observation_to_managed(
             turn_id = ?20,
             agent_id = ?21,
             schedule_id = ?22,
-            reconciliation_key = ?23
-         WHERE environment_id = ?24 AND observation_id = ?25",
+            fact_kind = ?23,
+            reconciliation_key = ?24
+         WHERE environment_id = ?25 AND observation_id = ?26",
         params![
             managed.source_kind.as_str(),
             i64::from(managed.parser_version),
@@ -3380,6 +3767,7 @@ fn promote_usage_observation_to_managed(
             managed.turn_id.as_ref().map(TurnId::as_str),
             managed.agent_id.as_ref().map(|id| id.as_str()),
             managed.schedule_id.as_ref().map(ScheduleId::as_str),
+            managed.fact_kind.as_str(),
             reconciliation_key,
             environment_id.as_str(),
             existing_id.as_str(),
@@ -3390,7 +3778,9 @@ fn promote_usage_observation_to_managed(
             "managed usage reconciliation target disappeared".to_string(),
         ));
     }
-    let payload_bytes = usage_observation_payload_bytes(managed)?;
+    let mut promoted = managed.clone();
+    promoted.id = existing_id.clone();
+    let payload_bytes = usage_observation_payload_bytes(&promoted)?;
     tx.execute(
         "UPDATE usage_outbox SET payload_bytes = ?1
          WHERE environment_id = ?2 AND observation_id = ?3",
@@ -3511,7 +3901,7 @@ fn load_usage_observation(
                 model, input_tokens, cached_input_tokens, cache_write_tokens,
                 output_tokens, reasoning_tokens, other_tokens_json,
                 unknown_fields_json, provider_reported_micro_usd, source_record_count,
-                thread_id, turn_id, agent_id, schedule_id
+                thread_id, turn_id, agent_id, schedule_id, fact_kind
          FROM usage_observations
          WHERE environment_id = ?1 AND observation_id = ?2",
     )?;
@@ -3521,12 +3911,11 @@ fn load_usage_observation(
         .transpose()
 }
 
-fn load_usage_observation_by_reconciliation(
+fn load_usage_observations_by_exact_identity(
     conn: &Connection,
     environment_id: &EnvironmentId,
-    provider_instance_id: &ProviderInstanceId,
-    reconciliation_key: &str,
-) -> Result<Option<UsageObservation>, StoreError> {
+    observation: &UsageObservation,
+) -> Result<Vec<UsageObservation>, StoreError> {
     let mut stmt = conn.prepare(
         "SELECT observation_id, source_kind, parser_version,
                 provider_native_session_id, provider_native_turn_id,
@@ -3534,19 +3923,28 @@ fn load_usage_observation_by_reconciliation(
                 model, input_tokens, cached_input_tokens, cache_write_tokens,
                 output_tokens, reasoning_tokens, other_tokens_json,
                 unknown_fields_json, provider_reported_micro_usd, source_record_count,
-                thread_id, turn_id, agent_id, schedule_id
+                thread_id, turn_id, agent_id, schedule_id, fact_kind
          FROM usage_observations
-         WHERE environment_id = ?1 AND provider_instance_id = ?2
-           AND reconciliation_key = ?3",
+         WHERE environment_id = ?1
+           AND COALESCE(provider_native_session_id, '') = ?2
+           AND provider_native_turn_id = ?3
+           AND fact_kind = ?4
+         ORDER BY observation_id",
     )?;
     let mut rows = stmt.query(params![
         environment_id.as_str(),
-        provider_instance_id.as_str(),
-        reconciliation_key,
+        observation
+            .provider_native_session_id
+            .as_deref()
+            .unwrap_or(""),
+        observation.provider_native_turn_id,
+        observation.fact_kind.as_str(),
     ])?;
-    rows.next()?
-        .map(|row| decode_usage_observation(row, 0))
-        .transpose()
+    let mut observations = Vec::new();
+    while let Some(row) = rows.next()? {
+        observations.push(decode_usage_observation(row, 0)?);
+    }
+    Ok(observations)
 }
 
 fn decode_usage_observation(
@@ -3603,6 +4001,7 @@ fn decode_usage_observation(
         schedule_id: row
             .get::<_, Option<String>>(offset + 22)?
             .map(ScheduleId::from),
+        fact_kind: UsageFactKind::from(row.get::<_, String>(offset + 23)?),
     };
     observation
         .validate()
@@ -3695,7 +4094,144 @@ fn load_usage_scanner_diagnostics(
             last_safe_error_code: row.12,
         });
     }
+    let mut legacy_debt_stmt = conn.prepare(
+        "SELECT environment_id, provider_instance_id, source_kind,
+                parser_version, detected_at_ms, latest_source_at_ms
+           FROM usage_legacy_reconciliation_debt
+          ORDER BY environment_id, provider_instance_id, source_kind",
+    )?;
+    let legacy_debt_rows = legacy_debt_stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, i64>(4)?,
+            row.get::<_, Option<i64>>(5)?,
+        ))
+    })?;
+    for row in legacy_debt_rows {
+        let row = row?;
+        apply_usage_coverage_debt(
+            &mut diagnostics,
+            params,
+            row.0,
+            row.1,
+            row.2,
+            row.3,
+            row.4,
+            row.5,
+            "legacy_reconciliation_debt",
+        )?;
+    }
+
+    let mut mismatch_stmt = conn.prepare(
+        "SELECT m.environment_id, m.provider_instance_id, m.source_kind,
+                MAX(o.parser_version), MIN(m.detected_at_ms),
+                MAX(o.occurred_at_ms)
+           FROM usage_reconciliation_mismatches m
+           JOIN usage_observations o
+             ON o.environment_id = m.environment_id
+            AND o.observation_id = m.transcript_observation_id
+          GROUP BY m.environment_id, m.provider_instance_id, m.source_kind
+          ORDER BY m.environment_id, m.provider_instance_id, m.source_kind",
+    )?;
+    let mismatch_rows = mismatch_stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, i64>(4)?,
+            row.get::<_, Option<i64>>(5)?,
+        ))
+    })?;
+    for row in mismatch_rows {
+        let row = row?;
+        apply_usage_coverage_debt(
+            &mut diagnostics,
+            params,
+            row.0,
+            row.1,
+            row.2,
+            row.3,
+            row.4,
+            row.5,
+            "managed_transcript_mismatch",
+        )?;
+    }
+    diagnostics.sort_by(|left, right| {
+        (
+            &left.environment_id,
+            &left.provider_instance_id,
+            &left.source_kind,
+        )
+            .cmp(&(
+                &right.environment_id,
+                &right.provider_instance_id,
+                &right.source_kind,
+            ))
+    });
     Ok(diagnostics)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_usage_coverage_debt(
+    diagnostics: &mut Vec<UsageScannerDiagnostic>,
+    params: &UsageQueryParams,
+    environment_id: String,
+    provider_instance_id: String,
+    source_kind: String,
+    parser_version: i64,
+    detected_at_ms: i64,
+    latest_source_at_ms: Option<i64>,
+    safe_error_code: &'static str,
+) -> Result<(), StoreError> {
+    let environment_id = EnvironmentId::from(environment_id);
+    let provider_instance_id = ProviderInstanceId::from(provider_instance_id);
+    let source_kind = UsageSourceKind::from(source_kind);
+    if params
+        .environment_id
+        .as_ref()
+        .is_some_and(|filter| filter != &environment_id)
+        || params
+            .provider_instance_id
+            .as_ref()
+            .is_some_and(|filter| filter != &provider_instance_id)
+        || params
+            .source_kind
+            .as_ref()
+            .is_some_and(|filter| filter != &source_kind)
+    {
+        return Ok(());
+    }
+    if let Some(diagnostic) = diagnostics.iter_mut().find(|diagnostic| {
+        diagnostic.environment_id == environment_id
+            && diagnostic.provider_instance_id == provider_instance_id
+            && diagnostic.source_kind == source_kind
+    }) {
+        diagnostic.coverage_state = UsageSourceCoverageState::Partial;
+        diagnostic.last_safe_error_code = Some(safe_error_code.to_string());
+        return Ok(());
+    }
+    diagnostics.push(UsageScannerDiagnostic {
+        environment_id,
+        provider_instance_id,
+        source_kind,
+        coverage_state: UsageSourceCoverageState::Partial,
+        parser_version: checked_u32(parser_version, "coverage debt parser_version")?,
+        last_scan_started_at_ms: checked_u64(detected_at_ms, "coverage debt detected_at_ms")?,
+        last_success_at_ms: None,
+        latest_source_at_ms: latest_source_at_ms
+            .map(|value| checked_u64(value, "coverage debt latest_source_at_ms"))
+            .transpose()?,
+        source_lag_ms: None,
+        files_scanned: 0,
+        bytes_scanned: 0,
+        quarantined_count: 0,
+        last_safe_error_code: Some(safe_error_code.to_string()),
+    });
+    Ok(())
 }
 
 fn decode_capacity_snapshot(
@@ -3842,7 +4378,7 @@ mod tests {
     use pandamux_core::{
         AttemptBoundary, EnvironmentId, ProviderInstanceId, RoutingDecision, ThreadStatus,
         ThreadWorkspace, TurnAttempt, TurnAttemptId, TurnId, TurnInput, TurnUsage,
-        TurnUsageProvenance,
+        TurnUsageComponent, TurnUsageProvenance,
     };
 
     fn dummy_thread(id: &str) -> Thread {
@@ -4496,6 +5032,7 @@ mod tests {
             turn_id: None,
             agent_id: None,
             schedule_id: None,
+            fact_kind: UsageFactKind::Aggregate,
         }
     }
 
@@ -4601,6 +5138,150 @@ mod tests {
             })
             .expect("save provider execution");
         turn
+    }
+
+    fn usage_component(
+        message_id: &str,
+        model: &str,
+        input_tokens: u64,
+        output_tokens: u64,
+        occurred_at_ms: u64,
+    ) -> TurnUsageComponent {
+        TurnUsageComponent {
+            provider_native_message_id: message_id.to_string(),
+            model: Some(model.to_string()),
+            input_tokens,
+            output_tokens,
+            occurred_at_ms: Some(occurred_at_ms),
+            ..TurnUsageComponent::default()
+        }
+    }
+
+    #[test]
+    fn component_backfill_adds_missing_messages_and_separate_cost_across_restart() {
+        let file = tempfile::NamedTempFile::new().expect("temporary component database");
+        let path = file.path().to_path_buf();
+        {
+            let store = Store::open(&path).expect("open component store");
+            configure_usage_mapping(&store);
+            let mut turn = save_managed_usage_fixture(&store);
+            turn.usage = Some(TurnUsage {
+                input_tokens: 10,
+                output_tokens: 5,
+                provenance: Some(TurnUsageProvenance {
+                    provider_native_session_id: Some("session-components".to_string()),
+                    provider_native_turn_id: Some("result-uuid".to_string()),
+                    occurred_at_ms: Some(1_000),
+                    model: Some("selected-routing-model".to_string()),
+                }),
+                components: vec![usage_component(
+                    "message-one",
+                    "claude-actual-one",
+                    10,
+                    5,
+                    901,
+                )],
+                ..TurnUsage::default()
+            });
+            store.save_turn(&turn).expect("save first component");
+
+            let first = store
+                .backfill_managed_turn_usage(&EnvironmentId::new("env-local"), 100)
+                .expect("backfill first component");
+            assert_eq!(first.batch.inserted, 1);
+
+            let usage = turn.usage.as_mut().expect("component usage");
+            usage.input_tokens = 30;
+            usage.output_tokens = 12;
+            usage.cost_usd = Some(0.001234);
+            usage.provider_reported_micro_usd = Some(1_234);
+            let mut second = usage_component("message-two", "claude-actual-two", 20, 7, 902);
+            second.cache_read_tokens = Some(3);
+            second.cache_write_tokens = Some(2);
+            usage.components.push(second);
+            store
+                .save_turn(&turn)
+                .expect("save completed component set");
+
+            let completed = store
+                .backfill_managed_turn_usage(&EnvironmentId::new("env-local"), 100)
+                .expect("backfill completed component set");
+            assert_eq!(completed.batch.inserted, 2);
+            assert_eq!(completed.batch.duplicates, 1);
+        }
+
+        let store = Store::open(&path).expect("reopen component store");
+        let query = store
+            .query_usage(&UsageQueryParams::default())
+            .expect("query component usage after restart");
+        assert_eq!(query.items.len(), 3);
+        assert_eq!(query.aggregate.tokens.input, 30);
+        assert_eq!(query.aggregate.tokens.output, 12);
+        assert_eq!(query.aggregate.tokens.cached_input, 3);
+        assert_eq!(query.aggregate.tokens.cache_write, 2);
+        assert_eq!(query.aggregate.provider_reported_micro_usd, Some(1_234));
+        assert_eq!(
+            query
+                .items
+                .iter()
+                .filter(|item| item.observation.fact_kind == UsageFactKind::TokenComponent)
+                .count(),
+            2
+        );
+        assert_eq!(
+            query
+                .items
+                .iter()
+                .filter(|item| item.observation.fact_kind == UsageFactKind::TurnCost)
+                .count(),
+            1
+        );
+        assert!(
+            query.items.iter().all(|item| {
+                item.observation.model.as_deref() != Some("selected-routing-model")
+            })
+        );
+        assert_eq!(
+            store
+                .export_usage(&UsageExportParams::default())
+                .expect("export component facts")
+                .items
+                .len(),
+            3
+        );
+        let mut decoy_aggregate = query
+            .items
+            .iter()
+            .find(|item| item.observation.fact_kind == UsageFactKind::TokenComponent)
+            .expect("token component for decoy aggregate")
+            .observation
+            .clone();
+        decoy_aggregate.id = UsageObservationId::new("decoy-legacy-aggregate");
+        decoy_aggregate.fact_kind = UsageFactKind::Aggregate;
+        decoy_aggregate.provider_native_session_id = None;
+        decoy_aggregate.provider_native_turn_id = None;
+        store
+            .record_usage_batch(&EnvironmentId::new("env-local"), &[decoy_aggregate], None)
+            .expect("record decoy legacy aggregate");
+        store
+            .conn
+            .lock()
+            .expect("component store lock")
+            .execute(
+                "DELETE FROM usage_observations
+                  WHERE provider_native_turn_id = 'message-two'",
+                [],
+            )
+            .expect("remove one component fixture");
+        let repaired = store
+            .backfill_managed_turn_usage(&EnvironmentId::new("env-local"), 100)
+            .expect("repair missing completed component");
+        assert_eq!(repaired.batch.inserted, 1);
+        assert_eq!(repaired.batch.duplicates, 2);
+        let replay = store
+            .backfill_managed_turn_usage(&EnvironmentId::new("env-local"), 100)
+            .expect("repeat completed component backfill");
+        assert_eq!(replay.batch, UsageBatchResult::default());
     }
 
     #[test]
@@ -5005,6 +5686,193 @@ mod tests {
             exported.items[1].observation.source_kind,
             UsageSourceKind::ManagedTurn
         );
+    }
+
+    fn exact_component_observation(
+        id: &str,
+        source_kind: UsageSourceKind,
+        message_id: &str,
+        occurred_at_ms: u64,
+    ) -> UsageObservation {
+        let mut observation = usage_observation(id, 10);
+        observation.source_kind = source_kind;
+        observation.provider_native_turn_id = Some(message_id.to_string());
+        observation.occurred_at_ms = Some(occurred_at_ms);
+        observation.fact_kind = UsageFactKind::TokenComponent;
+        observation
+    }
+
+    #[test]
+    fn exact_component_reconciliation_is_order_independent_and_keeps_conflicts() {
+        for transcript_first in [false, true] {
+            let store = Store::in_memory().expect("open reconciliation store");
+            configure_usage_mapping(&store);
+            let environment_id = EnvironmentId::new("env-local");
+            let managed = exact_component_observation(
+                "managed-component",
+                UsageSourceKind::ManagedTurn,
+                "message-shared",
+                1_000,
+            );
+            let mut transcript = exact_component_observation(
+                "transcript-component",
+                UsageSourceKind::ClaudeTranscript,
+                "message-shared",
+                1_125,
+            );
+            transcript.provider_reported_micro_usd = Some(77);
+
+            let ordered = if transcript_first {
+                vec![transcript, managed]
+            } else {
+                vec![managed, transcript]
+            };
+            store
+                .record_usage_batch(&environment_id, &ordered[..1], None)
+                .expect("record first component source");
+            let reconciled = store
+                .record_usage_batch(&environment_id, &ordered[1..], None)
+                .expect("reconcile second component source");
+            assert_eq!(reconciled.reconciled, 1);
+            assert_eq!(reconciled.reconciliation_mismatches, 0);
+
+            let query = store
+                .query_usage(&UsageQueryParams::default())
+                .expect("query reconciled component");
+            assert_eq!(query.items.len(), 1);
+            assert_eq!(
+                query.items[0].observation.source_kind,
+                UsageSourceKind::ManagedTurn
+            );
+            assert_eq!(
+                query.items[0].observation.provider_reported_micro_usd,
+                Some(77)
+            );
+        }
+
+        for transcript_first in [false, true] {
+            let store = Store::in_memory().expect("open mismatch store");
+            configure_usage_mapping(&store);
+            let environment_id = EnvironmentId::new("env-local");
+            for (suffix, mutate) in ["cost", "model", "tokens"].into_iter().enumerate() {
+                let message_id = format!("message-conflict-{mutate}");
+                let mut managed = exact_component_observation(
+                    &format!("managed-{suffix}"),
+                    UsageSourceKind::ManagedTurn,
+                    &message_id,
+                    2_000 + suffix as u64,
+                );
+                let mut transcript = exact_component_observation(
+                    &format!("transcript-{suffix}"),
+                    UsageSourceKind::ClaudeTranscript,
+                    &message_id,
+                    2_100 + suffix as u64,
+                );
+                match mutate {
+                    "cost" => {
+                        managed.provider_reported_micro_usd = Some(10);
+                        transcript.provider_reported_micro_usd = Some(11);
+                    }
+                    "model" => transcript.model = Some("claude-conflicting".to_string()),
+                    "tokens" => transcript.tokens.output += 1,
+                    _ => unreachable!(),
+                }
+
+                let ordered = if transcript_first {
+                    vec![transcript, managed]
+                } else {
+                    vec![managed, transcript]
+                };
+                store
+                    .record_usage_batch(&environment_id, &ordered[..1], None)
+                    .expect("record mismatch baseline");
+                let mismatch = store
+                    .record_usage_batch(&environment_id, &ordered[1..], None)
+                    .expect("retain mismatched component");
+                assert_eq!(mismatch.inserted, 1);
+                assert_eq!(mismatch.reconciliation_mismatches, 1);
+            }
+
+            let clean_diagnostic = UsageScannerDiagnostic {
+                environment_id: environment_id.clone(),
+                provider_instance_id: ProviderInstanceId::new("claude-work"),
+                source_kind: UsageSourceKind::ClaudeTranscript,
+                coverage_state: UsageSourceCoverageState::Complete,
+                parser_version: 2,
+                last_scan_started_at_ms: 3_000,
+                last_success_at_ms: Some(3_001),
+                latest_source_at_ms: Some(2_102),
+                source_lag_ms: Some(899),
+                files_scanned: 1,
+                bytes_scanned: 100,
+                quarantined_count: 0,
+                last_safe_error_code: None,
+            };
+            store
+                .record_usage_scan_batch(&environment_id, &[], None, &[], Some(&clean_diagnostic))
+                .expect("record later clean scanner pass");
+            let query = store
+                .query_usage(&UsageQueryParams::default())
+                .expect("query visible mismatches");
+            assert_eq!(query.items.len(), 6);
+            assert_eq!(query.coverage.scanner_diagnostics.len(), 1);
+            assert_eq!(
+                query.coverage.scanner_diagnostics[0].coverage_state,
+                UsageSourceCoverageState::Partial
+            );
+            assert_eq!(
+                query.coverage.scanner_diagnostics[0]
+                    .last_safe_error_code
+                    .as_deref(),
+                Some("managed_transcript_mismatch")
+            );
+        }
+
+        let store = Store::in_memory().expect("open distinct component store");
+        configure_usage_mapping(&store);
+        let environment_id = EnvironmentId::new("env-local");
+        let first = exact_component_observation(
+            "distinct-one",
+            UsageSourceKind::ClaudeTranscript,
+            "message-distinct-one",
+            3_000,
+        );
+        let second = exact_component_observation(
+            "distinct-two",
+            UsageSourceKind::ClaudeTranscript,
+            "message-distinct-two",
+            3_001,
+        );
+        let distinct = store
+            .record_usage_batch(&environment_id, &[first, second], None)
+            .expect("record distinct equal measurements");
+        assert_eq!(distinct.inserted, 2);
+        assert_eq!(distinct.reconciled, 0);
+        assert_eq!(distinct.reconciliation_mismatches, 0);
+
+        let mut legacy = exact_component_observation(
+            "legacy-parser-component",
+            UsageSourceKind::ClaudeTranscript,
+            "message-legacy-parser",
+            4_000,
+        );
+        legacy.parser_version = 1;
+        legacy.unknown_fields.clear();
+        store
+            .record_usage_batch(&environment_id, std::slice::from_ref(&legacy), None)
+            .expect("record parser-one component");
+        let mut rescanned = legacy;
+        rescanned.parser_version = 2;
+        rescanned
+            .unknown_fields
+            .insert(UsageUnknownField::CacheReadTokens);
+        rescanned
+            .unknown_fields
+            .insert(UsageUnknownField::CacheWriteTokens);
+        let replay = store
+            .record_usage_batch(&environment_id, &[rescanned], None)
+            .expect("accept parser-two cache-presence enrichment");
+        assert_eq!(replay.duplicates, 1);
     }
 
     #[test]

@@ -198,6 +198,27 @@ pub struct TurnUsage {
     pub provider_reported_micro_usd: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provenance: Option<TurnUsageProvenance>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub components: Vec<TurnUsageComponent>,
+}
+
+/// Provider-reported usage for one exact assistant message within a CLI turn.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnUsageComponent {
+    pub provider_native_message_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurred_at_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

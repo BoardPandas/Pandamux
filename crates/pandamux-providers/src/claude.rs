@@ -2,7 +2,7 @@ use pandamux_core::{
     UsageUnknownField,
     event::{ApprovalDecision, ApprovalKind, TurnOutcome},
     provider_config::{ProviderCapabilities, ProviderInstanceConfig, ProviderKind},
-    thread::{AccessMode, TurnInput, TurnUsage, TurnUsageProvenance},
+    thread::{AccessMode, TurnInput, TurnUsage, TurnUsageComponent, TurnUsageProvenance},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
@@ -101,7 +101,10 @@ pub struct SubAgentSpawn {
 pub struct StreamTurnUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
+    pub cache_read_tokens: Option<u64>,
+    pub cache_write_tokens: Option<u64>,
     pub cost_usd: Option<f64>,
+    pub components: Vec<TurnUsageComponent>,
 }
 
 /// Accumulated stream lines parsed for testing and validation.
@@ -112,6 +115,248 @@ pub struct ParsedClaudeStream {
     pub subagents: Vec<SubAgentSpawn>,
     pub usage: Option<StreamTurnUsage>,
     pub assistant_text: String,
+}
+
+#[derive(Debug, Default)]
+struct ClaudeTurnUsageAccumulator {
+    session_id: Option<String>,
+    components: Vec<TurnUsageComponent>,
+    component_indexes: HashMap<String, usize>,
+}
+
+impl ClaudeTurnUsageAccumulator {
+    fn observe(&mut self, value: &serde_json::Value) {
+        if let Some(session_id) = value
+            .get("session_id")
+            .or_else(|| value.get("sessionId"))
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            self.session_id = Some(session_id.to_string());
+        }
+        if value.get("type").and_then(|value| value.as_str()) != Some("assistant") {
+            return;
+        }
+        let Some(component) = parse_assistant_usage_component(value) else {
+            return;
+        };
+        if let Some(index) = self
+            .component_indexes
+            .get(&component.provider_native_message_id)
+            .copied()
+        {
+            merge_assistant_usage_component(&mut self.components[index], component);
+            return;
+        }
+        let index = self.components.len();
+        self.component_indexes
+            .insert(component.provider_native_message_id.clone(), index);
+        self.components.push(component);
+    }
+
+    fn finish(&mut self, result: &serde_json::Value) -> Option<TurnUsage> {
+        self.observe(result);
+        let usage = result.get("usage");
+        let input_tokens = usage
+            .and_then(|usage| usage.get("input_tokens"))
+            .and_then(|value| value.as_u64());
+        let output_tokens = usage
+            .and_then(|usage| usage.get("output_tokens"))
+            .and_then(|value| value.as_u64());
+        let cache_read_tokens = usage
+            .and_then(|usage| {
+                usage
+                    .get("cache_read_input_tokens")
+                    .or_else(|| usage.get("cached_input_tokens"))
+            })
+            .and_then(|value| value.as_u64());
+        let cache_write_tokens = usage
+            .and_then(|usage| {
+                usage
+                    .get("cache_creation_input_tokens")
+                    .or_else(|| usage.get("cache_write_input_tokens"))
+            })
+            .and_then(|value| value.as_u64());
+        let cost = result
+            .get("total_cost_usd")
+            .or_else(|| result.get("cost_usd"))
+            .or_else(|| usage.and_then(|usage| usage.get("cost_usd")));
+        let cost_usd = cost.and_then(|value| value.as_f64());
+        let provider_reported_micro_usd = cost.and_then(parse_provider_reported_micro_usd);
+        let components = std::mem::take(&mut self.components);
+        self.component_indexes.clear();
+
+        if usage.is_none() && components.is_empty() && cost.is_none() {
+            return None;
+        }
+
+        let mut unknown_fields = BTreeSet::new();
+        let fallback_input = checked_component_sum(&components, |component| component.input_tokens);
+        let fallback_output =
+            checked_component_sum(&components, |component| component.output_tokens);
+        let fallback_cache_read =
+            checked_optional_component_sum(&components, |component| component.cache_read_tokens);
+        let fallback_cache_write =
+            checked_optional_component_sum(&components, |component| component.cache_write_tokens);
+        if input_tokens.is_none() && fallback_input.is_none() {
+            unknown_fields.insert(UsageUnknownField::InputTokens);
+        }
+        if output_tokens.is_none() && fallback_output.is_none() {
+            unknown_fields.insert(UsageUnknownField::OutputTokens);
+        }
+
+        Some(TurnUsage {
+            input_tokens: input_tokens.or(fallback_input).unwrap_or_default(),
+            output_tokens: output_tokens.or(fallback_output).unwrap_or_default(),
+            cache_read_tokens: cache_read_tokens.or(fallback_cache_read),
+            cache_write_tokens: cache_write_tokens.or(fallback_cache_write),
+            cost_usd,
+            unknown_fields,
+            provider_reported_micro_usd,
+            provenance: Some(TurnUsageProvenance {
+                provider_native_session_id: result
+                    .get("session_id")
+                    .or_else(|| result.get("sessionId"))
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string)
+                    .or_else(|| self.session_id.clone()),
+                provider_native_turn_id: result
+                    .get("turn_id")
+                    .or_else(|| result.get("turnId"))
+                    .or_else(|| result.get("uuid"))
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string),
+                occurred_at_ms: result
+                    .get("timestamp")
+                    .and_then(parse_provider_timestamp_ms),
+                model: result
+                    .get("model")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string),
+            }),
+            components,
+        })
+    }
+}
+
+fn parse_assistant_usage_component(value: &serde_json::Value) -> Option<TurnUsageComponent> {
+    let message = value.get("message").unwrap_or(value);
+    let usage = message.get("usage")?;
+    let provider_native_message_id = message.get("id")?.as_str()?.trim().to_string();
+    if provider_native_message_id.is_empty() {
+        return None;
+    }
+    Some(TurnUsageComponent {
+        provider_native_message_id,
+        model: message
+            .get("model")
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
+        input_tokens: usage
+            .get("input_tokens")
+            .and_then(|value| value.as_u64())
+            .unwrap_or_default(),
+        output_tokens: usage
+            .get("output_tokens")
+            .and_then(|value| value.as_u64())
+            .unwrap_or_default(),
+        cache_read_tokens: usage
+            .get("cache_read_input_tokens")
+            .or_else(|| usage.get("cached_input_tokens"))
+            .and_then(|value| value.as_u64()),
+        cache_write_tokens: usage
+            .get("cache_creation_input_tokens")
+            .or_else(|| usage.get("cache_write_input_tokens"))
+            .and_then(|value| value.as_u64()),
+        occurred_at_ms: value
+            .get("timestamp")
+            .or_else(|| message.get("created_at"))
+            .and_then(parse_provider_timestamp_ms),
+    })
+}
+
+fn merge_assistant_usage_component(current: &mut TurnUsageComponent, incoming: TurnUsageComponent) {
+    if current.model.is_none() {
+        current.model = incoming.model;
+    }
+    current.input_tokens = current.input_tokens.max(incoming.input_tokens);
+    current.output_tokens = current.output_tokens.max(incoming.output_tokens);
+    current.cache_read_tokens = match (current.cache_read_tokens, incoming.cache_read_tokens) {
+        (Some(left), Some(right)) => Some(left.max(right)),
+        (value @ Some(_), None) | (None, value @ Some(_)) => value,
+        (None, None) => None,
+    };
+    current.cache_write_tokens = match (current.cache_write_tokens, incoming.cache_write_tokens) {
+        (Some(left), Some(right)) => Some(left.max(right)),
+        (value @ Some(_), None) | (None, value @ Some(_)) => value,
+        (None, None) => None,
+    };
+    if current.occurred_at_ms.is_none() {
+        current.occurred_at_ms = incoming.occurred_at_ms;
+    }
+}
+
+fn checked_component_sum(
+    components: &[TurnUsageComponent],
+    value: impl Fn(&TurnUsageComponent) -> u64,
+) -> Option<u64> {
+    (!components.is_empty())
+        .then(|| {
+            components
+                .iter()
+                .try_fold(0_u64, |sum, component| sum.checked_add(value(component)))
+        })
+        .flatten()
+}
+
+fn checked_optional_component_sum(
+    components: &[TurnUsageComponent],
+    value: impl Fn(&TurnUsageComponent) -> Option<u64>,
+) -> Option<u64> {
+    components
+        .iter()
+        .any(|component| value(component).is_some())
+        .then(|| {
+            components.iter().try_fold(0_u64, |sum, component| {
+                sum.checked_add(value(component).unwrap_or_default())
+            })
+        })
+        .flatten()
+}
+
+/// Stateful Claude stream parser. One instance must be retained for the life of
+/// the CLI session so usage components can be finalized at each result event.
+#[derive(Debug, Default)]
+pub struct ClaudeStreamEventParser {
+    usage: ClaudeTurnUsageAccumulator,
+}
+
+impl ClaudeStreamEventParser {
+    pub fn parse_line(&mut self, line: &str) -> Option<ProviderEvent> {
+        let line = line.trim();
+        if line.is_empty() {
+            return None;
+        }
+        let value: serde_json::Value = serde_json::from_str(line).ok()?;
+        self.usage.observe(&value);
+        if value.get("type").and_then(|value| value.as_str()) == Some("result") {
+            let is_error = value.get("is_error").and_then(|value| value.as_bool()) == Some(true)
+                || value
+                    .get("subtype")
+                    .and_then(|value| value.as_str())
+                    .is_some_and(|subtype| subtype.starts_with("error_"));
+            return Some(ProviderEvent::TurnCompleted {
+                outcome: if is_error {
+                    TurnOutcome::Failed
+                } else {
+                    TurnOutcome::Success
+                },
+                usage: self.usage.finish(&value),
+            });
+        }
+        parse_stream_json_value(&value)
+    }
 }
 
 /// Executes a zero-session auth probe using `claude auth status --json`.
@@ -293,6 +538,7 @@ fn parse_control_request_value(val: &serde_json::Value) -> Option<ControlRequest
 /// Parses NDJSON events from Claude Code stream-json output.
 pub fn parse_stream_json_lines(ndjson: &str) -> Result<ParsedClaudeStream, ProviderError> {
     let mut parsed = ParsedClaudeStream::default();
+    let mut usage_accumulator = ClaudeTurnUsageAccumulator::default();
 
     for line in ndjson.lines() {
         let line = line.trim();
@@ -307,6 +553,7 @@ pub fn parse_stream_json_lines(ndjson: &str) -> Result<ParsedClaudeStream, Provi
             })?;
 
         let event_type = val.get("type").and_then(|v| v.as_str()).unwrap_or_default();
+        usage_accumulator.observe(&val);
 
         match event_type {
             "system" => {
@@ -372,23 +619,14 @@ pub fn parse_stream_json_lines(ndjson: &str) -> Result<ParsedClaudeStream, Provi
                 }
             }
             "result" => {
-                if let Some(usage_val) = val.get("usage") {
-                    let input_tokens = usage_val
-                        .get("input_tokens")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or_default();
-                    let output_tokens = usage_val
-                        .get("output_tokens")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or_default();
-                    let cost_usd = usage_val.get("cost_usd").and_then(|v| v.as_f64());
-
-                    parsed.usage = Some(StreamTurnUsage {
-                        input_tokens,
-                        output_tokens,
-                        cost_usd,
-                    });
-                }
+                parsed.usage = usage_accumulator.finish(&val).map(|usage| StreamTurnUsage {
+                    input_tokens: usage.input_tokens,
+                    output_tokens: usage.output_tokens,
+                    cache_read_tokens: usage.cache_read_tokens,
+                    cache_write_tokens: usage.cache_write_tokens,
+                    cost_usd: usage.cost_usd,
+                    components: usage.components,
+                });
             }
             _ => {}
         }
@@ -467,17 +705,15 @@ fn parse_tool_result_value(value: &serde_json::Value) -> Option<ProviderEvent> {
 
 /// Converts a single line of Claude NDJSON output into a ProviderEvent.
 pub fn parse_stream_json_line(line: &str) -> Option<ProviderEvent> {
-    let line = line.trim();
-    if line.is_empty() {
-        return None;
-    }
+    ClaudeStreamEventParser::default().parse_line(line)
+}
 
-    let val: serde_json::Value = serde_json::from_str(line).ok()?;
+fn parse_stream_json_value(val: &serde_json::Value) -> Option<ProviderEvent> {
     let event_type = val.get("type").and_then(|v| v.as_str())?;
 
     match event_type {
         "control_request" => {
-            let request = parse_control_request_value(&val)?;
+            let request = parse_control_request_value(val)?;
 
             let kind = match request.tool_name.as_str() {
                 "Bash" => ApprovalKind::CommandExecution,
@@ -492,8 +728,8 @@ pub fn parse_stream_json_line(line: &str) -> Option<ProviderEvent> {
                 command: request.command,
             })
         }
-        "tool_use" => parse_tool_use_value(&val, None),
-        "tool_result" => parse_tool_result_value(&val),
+        "tool_use" => parse_tool_use_value(val, None),
+        "tool_result" => parse_tool_result_value(val),
         "assistant" => {
             let content = val
                 .pointer("/message/content")
@@ -542,60 +778,7 @@ pub fn parse_stream_json_line(line: &str) -> Option<ProviderEvent> {
             }
             None
         }
-        "result" => {
-            let usage = val.get("usage").map(|u| {
-                let cost = u.get("cost_usd").or_else(|| val.get("total_cost_usd"));
-                let input_tokens = u.get("input_tokens").and_then(|v| v.as_u64());
-                let output_tokens = u.get("output_tokens").and_then(|v| v.as_u64());
-                let mut unknown_fields = BTreeSet::new();
-                if input_tokens.is_none() {
-                    unknown_fields.insert(UsageUnknownField::InputTokens);
-                }
-                if output_tokens.is_none() {
-                    unknown_fields.insert(UsageUnknownField::OutputTokens);
-                }
-                TurnUsage {
-                    input_tokens: input_tokens.unwrap_or_default(),
-                    output_tokens: output_tokens.unwrap_or_default(),
-                    cost_usd: cost.and_then(|v| v.as_f64()),
-                    unknown_fields,
-                    provider_reported_micro_usd: cost.and_then(parse_provider_reported_micro_usd),
-                    provenance: Some(TurnUsageProvenance {
-                        provider_native_session_id: val
-                            .get("session_id")
-                            .or_else(|| val.get("sessionId"))
-                            .and_then(|value| value.as_str())
-                            .map(str::to_string),
-                        provider_native_turn_id: val
-                            .get("turn_id")
-                            .or_else(|| val.get("turnId"))
-                            .or_else(|| val.get("uuid"))
-                            .and_then(|value| value.as_str())
-                            .map(str::to_string),
-                        occurred_at_ms: val.get("timestamp").and_then(parse_provider_timestamp_ms),
-                        model: val
-                            .get("model")
-                            .and_then(|value| value.as_str())
-                            .map(str::to_string),
-                    }),
-                    ..Default::default()
-                }
-            });
-            let is_error = val.get("is_error").and_then(|v| v.as_bool()) == Some(true)
-                || val
-                    .get("subtype")
-                    .and_then(|v| v.as_str())
-                    .is_some_and(|subtype| subtype.starts_with("error_"));
-
-            Some(ProviderEvent::TurnCompleted {
-                outcome: if is_error {
-                    TurnOutcome::Failed
-                } else {
-                    TurnOutcome::Success
-                },
-                usage,
-            })
-        }
+        "result" => None,
         _ => None,
     }
 }
@@ -813,6 +996,7 @@ impl ProviderDriver for ClaudeDriver {
             // Spawn background stdout parser
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stdout).lines();
+                let mut stream_parser = ClaudeStreamEventParser::default();
                 while let Ok(Some(line)) = reader.next_line().await {
                     if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line)
                         && let Some(request) = parse_control_request_value(&value)
@@ -820,7 +1004,7 @@ impl ProviderDriver for ClaudeDriver {
                     {
                         pending.insert(request.request_id, request.input);
                     }
-                    if let Some(event) = parse_stream_json_line(&line)
+                    if let Some(event) = stream_parser.parse_line(&line)
                         && crate::forward_provider_event(&tx, event).await.is_err()
                     {
                         break;
