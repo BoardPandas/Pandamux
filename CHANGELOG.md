@@ -81,6 +81,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Made the Usage surface screen-reader navigable and scale-safe.** The usage
+  observation grid now exposes native table, row, column-header, and cell
+  semantics with row and column counts, while retaining a horizontally
+  scrollable layout at high display scaling. Usage status is published as a
+  status node, and persistent request failures are announced as alerts with an
+  explicit Retry recovery cue.
+
 - **Reconciled the Phase 4 plan and acceptance record through the exact 0.60.3
   native accessibility follow-up.** The record now separates the repaired Usage
   editor focus and direct UI Automation Cancel rows from the still-open visual,

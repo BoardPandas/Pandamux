@@ -1,4 +1,7 @@
-use gpui_kit::base::{Button as AccessibleButton, Disableable as _, StyledExt as _};
+use gpui_kit::base::{
+    Button as AccessibleButton, Disableable as _, StyledExt as _, Table, TableBody, TableCell,
+    TableHead, TableHeader, TableRow,
+};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::scroll::ScrollableElement as _;
@@ -157,15 +160,21 @@ pub fn render_usage_view<V: 'static>(
                     cx,
                 ))
                 .when_some(state.error_message.as_ref(), |this, message| {
+                    let accessible_message = format!(
+                        "Usage and capacity error: {message}. Use Retry to try again."
+                    );
                     this.child(
                         div()
+                            .id("usage-error-alert")
+                            .role(Role::Alert)
+                            .aria_label(accessible_message.clone())
                             .p_3()
                             .rounded(Radii::ROW)
                             .border_1()
                             .border_color(rgba(0xf8717166))
                             .bg(rgba(0xf8717122))
                             .text_color(rgb(0xf87171))
-                            .child(format!("Error: {message}")),
+                            .child(accessible_message),
                     )
                 })
                 .child(render_state_explanation(state, theme))
@@ -209,6 +218,9 @@ fn status_badge(status: UsageViewStatus, theme: &Theme) -> AnyElement {
         | UsageViewStatus::ServerError => ("✕", rgb(0xf87171), rgba(0xf8717122)),
     };
     div()
+        .id("usage-view-status")
+        .role(Role::Status)
+        .aria_label(format!("Usage status: {}", status.label()))
         .px_2()
         .py_1()
         .rounded(Radii::CHIP)
@@ -612,66 +624,87 @@ fn render_usage_table(
         .gap_2()
         .child(section_heading("USAGE DATA TABLE", theme))
         .child(
-            div()
-                .v_flex()
-                .rounded(Radii::ROW)
-                .border_1()
-                .border_color(rgba(0xffffff0d))
-                .child(table_row(
-                    [
-                        "Provider instance",
-                        "Subscription",
-                        "Model",
-                        "Tokens",
-                        "Source",
-                        "Observed",
-                    ],
-                    true,
-                    theme,
-                ))
-                .children(result.items.iter().map(|item| {
-                    let observation = &item.observation;
-                    let instance_name = settings
-                        .providers
-                        .iter()
-                        .find(|provider| provider.id == observation.provider_instance_id)
-                        .map(|provider| provider.display_name.clone())
-                        .unwrap_or_else(|| {
-                            format!("{} instance", title_case_provider(&observation.provider))
-                        });
-                    let subscription_name = catalog
-                        .subscriptions
-                        .iter()
-                        .find(|subscription| subscription.key == observation.subscription_key)
-                        .map(|subscription| subscription.display_name.clone())
-                        .unwrap_or_else(|| "Unnamed subscription".to_string());
-                    let tokens = observation
-                        .tokens
-                        .checked_total()
-                        .map(format_tokens)
-                        .unwrap_or_else(|_| "Unknown".to_string());
-                    table_row(
+            div().w_full().overflow_x_scrollbar().child(
+                Table::new("usage-data-table")
+                    .accessibility_label("Usage observations")
+                    .row_count(result.items.len() + 1)
+                    .column_count(6)
+                    .w_full()
+                    .min_w(px(720.0))
+                    .v_flex()
+                    .rounded(Radii::ROW)
+                    .border_1()
+                    .border_color(rgba(0xffffff0d))
+                    .child(TableHeader::new("usage-data-table-header").child(table_row(
                         [
-                            instance_name,
-                            subscription_name,
-                            observation
-                                .model
-                                .clone()
-                                .unwrap_or_else(|| "Unknown".to_string()),
-                            tokens,
-                            observation.source_kind.as_str().replace('_', " "),
-                            format_age(now_ms, observation.occurred_at_ms),
+                            "Provider instance",
+                            "Subscription",
+                            "Model",
+                            "Tokens",
+                            "Source",
+                            "Observed",
                         ],
-                        false,
+                        1,
+                        true,
                         theme,
-                    )
-                })),
+                    )))
+                    .child(TableBody::new("usage-data-table-body").children(
+                        result.items.iter().enumerate().map(|(index, item)| {
+                            let observation = &item.observation;
+                            let instance_name = settings
+                                .providers
+                                .iter()
+                                .find(|provider| provider.id == observation.provider_instance_id)
+                                .map(|provider| provider.display_name.clone())
+                                .unwrap_or_else(|| {
+                                    format!(
+                                        "{} instance",
+                                        title_case_provider(&observation.provider)
+                                    )
+                                });
+                            let subscription_name = catalog
+                                .subscriptions
+                                .iter()
+                                .find(|subscription| {
+                                    subscription.key == observation.subscription_key
+                                })
+                                .map(|subscription| subscription.display_name.clone())
+                                .unwrap_or_else(|| "Unnamed subscription".to_string());
+                            let tokens = observation
+                                .tokens
+                                .checked_total()
+                                .map(format_tokens)
+                                .unwrap_or_else(|_| "Unknown".to_string());
+                            table_row(
+                                [
+                                    instance_name,
+                                    subscription_name,
+                                    observation
+                                        .model
+                                        .clone()
+                                        .unwrap_or_else(|| "Unknown".to_string()),
+                                    tokens,
+                                    observation.source_kind.as_str().replace('_', " "),
+                                    format_age(now_ms, observation.occurred_at_ms),
+                                ],
+                                index + 2,
+                                false,
+                                theme,
+                            )
+                        }),
+                    )),
+            ),
         )
         .into_any_element()
 }
 
-fn table_row(values: [impl Into<SharedString>; 6], header: bool, theme: &Theme) -> AnyElement {
-    div()
+fn table_row(
+    values: [impl Into<SharedString>; 6],
+    row_index: usize,
+    header: bool,
+    theme: &Theme,
+) -> AnyElement {
+    TableRow::new(format!("usage-data-table-row-{row_index}"), row_index)
         .h_flex()
         .min_h(px(36.0))
         .px_2()
@@ -682,26 +715,47 @@ fn table_row(values: [impl Into<SharedString>; 6], header: bool, theme: &Theme) 
         } else {
             theme.chrome.panel
         })
-        .children(values.into_iter().map(|value| {
-            div()
-                .flex_1()
-                .min_w(px(100.0))
-                .text_size(if header {
-                    Typography::META_SIZE
-                } else {
-                    Typography::SECONDARY_SIZE
-                })
-                .font_weight(if header {
-                    FontWeight::BOLD
-                } else {
-                    FontWeight::NORMAL
-                })
-                .text_color(if header {
-                    theme.chrome.text_t2
-                } else {
-                    theme.chrome.text_t1
-                })
-                .child(value.into())
+        .children(values.into_iter().enumerate().map(|(index, value)| {
+            let column_index = index + 1;
+            let value = value.into();
+            let id = format!("usage-data-table-cell-{row_index}-{column_index}");
+            let text_size = if header {
+                Typography::META_SIZE
+            } else {
+                Typography::SECONDARY_SIZE
+            };
+            let font_weight = if header {
+                FontWeight::BOLD
+            } else {
+                FontWeight::NORMAL
+            };
+            let text_color = if header {
+                theme.chrome.text_t2
+            } else {
+                theme.chrome.text_t1
+            };
+
+            if header {
+                TableHead::new(id, column_index)
+                    .aria_label(value.clone())
+                    .flex_1()
+                    .min_w(px(120.0))
+                    .text_size(text_size)
+                    .font_weight(font_weight)
+                    .text_color(text_color)
+                    .child(value)
+                    .into_any_element()
+            } else {
+                TableCell::new(id, column_index)
+                    .aria_label(value.clone())
+                    .flex_1()
+                    .min_w(px(120.0))
+                    .text_size(text_size)
+                    .font_weight(font_weight)
+                    .text_color(text_color)
+                    .child(value)
+                    .into_any_element()
+            }
         }))
         .into_any_element()
 }
