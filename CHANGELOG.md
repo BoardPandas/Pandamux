@@ -81,6 +81,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Rewrote the Phase 4 onward recovery plan around current evidence and exact
+  acceptance gates.** The plan now records the 0.60.5 through 0.60.8
+  accessibility, bridge, and theme work; makes Claude per-message usage
+  components and a separate terminal cost fact the first correctness blocker;
+  forbids timestamp-based historical merging; and orders the final local,
+  native, reconciliation, durability, IPC, physical, and documentation gates.
+  Phase 5 now begins with legacy-domain and resolved-boundary inventory, Phase 6
+  migrates existing schedules conservatively, and Phase 7 keeps signing,
+  publication, deployment, and served-version proof separate.
+
 - **Made the Usage surface screen-reader navigable and scale-safe.** The usage
   observation grid now exposes native table, row, column-header, and cell
   semantics with row and column counts. Every row also exposes a complete

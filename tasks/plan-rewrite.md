@@ -1,8 +1,8 @@
 # PandaMUX Rewrite: Chat-First Agent Client with Remote Environments, Multi-Repo Fleet Orchestration, Agents, Schedules, Full MCP Settings Control, and Broadside Sharing
 
-Date: 2026-09-25 (Approved 2026-09-26; recovery rewrite 2026-09-28)
-Status: **Phases 0 to 3 and Phase 4A through 4F implementation are recorded; Phase 3 production acceptance and the Phase 4 exit gate remain open**
-Baseline: PandaMUX v0.53.44 at `9511d0e22d44`; the uncommitted Phase 4 usage prototype is preserved for selective salvage
+Date: 2026-09-25 (Approved 2026-09-26; recovery rewrite 2026-09-28; Phase 4 closure rewrite 2026-10-06)
+Status: **Phases 0 to 3 and Phase 4A through 4F implementation are recorded; Phase 4 closure is blocked on usage reconciliation correctness and the remaining native, live, and physical acceptance gates**
+Baseline: The preserved original checkout remains PandaMUX v0.53.44 at `9511d0e22d44`; active recovery work is isolated on `codex/recovery-r0`, with exact 0.60.8 source and native evidence at `054bd3e941e394cd8ffcff62a8dc60faa9b7e1fe`
 
 Relationship to `tasks/plan-repo.md`: that file is the **historical** record of the Electron to native Rust rewrite (Phases 1 to 7, complete). This plan supersedes its product direction (terminal multiplexer) but keeps its engineering posture: backend-owned state, single writer, intent-in/delta-out, deliberate dependency pins, crate isolation, and tag-driven signed releases. Its Section 12 design tokens carry over where they still apply (Section 8). UI history: Iced is removed. An earlier draft of this plan chose Tauri 2 + React; the user replaced that with **GPUI + gpui-kit** (all Rust) on 2026-09-25, and Tauri 2 remains only as the documented fallback if the Phase 0 GPUI spike fails. `plan-repo.md` rejected GPUI for three reasons, each now handled explicitly: GPL contamination (zed#55470, still open; tracked as a license gate in S6 and Risks), "not built for external consumption" (gpui-kit publishes exact-pinned `gpui-pre` snapshots and ships in production in Longbridge Pro on Windows, macOS, and Linux), and weak accessibility. Phase 0 treated accessibility as exploratory; the rewritten Phase 4 and Phase 7 criteria make the defined v1 accessibility matrix release-gating.
 
@@ -110,19 +110,44 @@ Terminology used throughout:
   and bounded Hub usage synchronization. Those results are partial Phase 4
   acceptance, not a production release claim.
 - Exact 0.60.3 commit `2be212f9a290637add9a4f5c662ca3155da98a0c`
-  repairs the Usage editor accessibility bridge. Three fresh-profile native
-  Windows runs published the name field as the focused TextInput, accepted
-  keyboard input, activated Cancel through one UIA Invoke, and returned focus
-  to Edit. One earlier transient focus-publication miss remains recorded for
-  recurrence monitoring.
-- Phase 4 remains open on the rest of the native accessibility and visual
-  matrix, seven-day reconciliation, live restart and failover behavior, and a
-  current-version normal-user named-pipe matrix. The re-scoped physical laptop
-  disconnect and sleep rows remain production-acceptance and release blockers.
+  repaired the Usage editor accessibility bridge. Later 0.60.5 and 0.60.6
+  commits added native table, row, header, cell, count, and complete labeled row
+  summaries. Exact 0.60.6 UI Automation evidence passed the semantic table
+  contract. A real screen-reader walkthrough remains separate and open.
+- Exact 0.60.7 commit `5d1a8d77581b687dd802a385f18d09e9b2bc3a15`
+  repaired queued and in-flight desktop bridge requests that otherwise left a
+  serverless Usage page in Loading forever. Native limited-user evidence passed
+  the persistent Offline alert, Status role, keyboard-focusable Retry, Loading
+  transition, repeated failure, and zero-server-process conditions.
+- Exact 0.60.8 commit `054bd3e941e394cd8ffcff62a8dc60faa9b7e1fe`
+  synchronizes gpui-kit component theme state with the PandaMUX shell. Local
+  formatting, strict Clippy, 415 workspace tests, repository guards,
+  `cargo deny`, and headless checks passed. Clean Windows MSVC artifacts were
+  built for desktop, server, and CLI. The limited-user headless check and the
+  actionable Offline and Retry probe passed. The exact screenshot was visually
+  inspected and confirmed that component buttons and actions are legible on the
+  dark shell. This is current native evidence, not a final Phase 4 candidate.
+- Retained Galahad data exposed a correctness blocker. One Claude CLI turn is
+  stored as both a managed result UUID and a transcript assistant message ID.
+  The managed row uses the selected fallback model and omits cache categories;
+  the transcript row uses the actual model and includes cache-read and
+  cache-write tokens. Aggregation currently counts both. Timestamp proximity is
+  incident evidence only and must never become a fuzzy identity rule.
+- Claude tool turns may contain multiple distinct assistant message IDs, while
+  thinking and text transcript chunks may repeat the same message ID with
+  different timestamps. The safe correction is per-message usage components,
+  exact message-ID reconciliation, and a separate terminal cost fact. A
+  latest-message-only patch would remain wrong for tool-using turns.
+- Phase 4 therefore remains open on the component-level Claude correction, a
+  fresh seven-day reconciliation, the rest of the exact-candidate native
+  matrix, live local and Galahad durability and failover, and a current-version
+  normal-user named-pipe matrix. The re-scoped physical laptop disconnect and
+  sleep rows remain production-acceptance and release blockers.
 - Phase 5 implementation has not started. The next development work is the
-  ordered Phase 4 closure sequence in its verification record, followed by the
-  Phase 5 dependency and boundary gate. Phase 6 depends on accepted Phase 5
-  run-state and agent contracts. Phase 7 remains the only shipping phase.
+  ordered Phase 4 closure sequence in its verification record. Phase 5 begins
+  only with its dependency, legacy-domain, and boundary gate. Phase 6 depends
+  on accepted Phase 5 run-state and agent contracts. Phase 7 remains the only
+  packaging, signing, publication, deployment, and shipping phase.
 
 ## 3. Kept, deleted, new
 
@@ -1178,7 +1203,7 @@ Gate exit:
 
 #### Phase 4 domain contract
 
-1. `UsageObservation` is the only ingestion truth. It has a stable observation id, source kind and parser version, optional provider-native session/turn id, occurrence time, provider, provider instance, subscription key, model, checked token categories, optional provider-reported micro-USD, and optional thread, agent, and schedule attribution.
+1. `UsageObservation` is the only ingestion truth. It has a stable observation id, source kind and parser version, optional provider-native session, message, turn, or result id with an explicit identity kind, occurrence time, provider, provider instance, subscription key, model, checked token categories, optional provider-reported micro-USD, fact role, and optional thread, agent, and schedule attribution. Token components and terminal cost facts remain distinct when the provider reports them at different scopes.
 2. `UsageBucket` is a query projection, never a write DTO. The server derives environment identity from authenticated context and derives managed-run attribution from thread metadata.
 3. `SubscriptionKey` identifies one quota boundary; `ProviderInstanceId` identifies one configured runtime on one environment; `FailoverPoolId` expresses explicit routing policy. Email is only a masked label.
 4. `CapacitySnapshot` represents subscription quota windows. `InstanceAvailability` represents installation, executable compatibility, authentication, process health, concurrency, and local resources. Neither substitutes for the other.
@@ -1245,7 +1270,7 @@ Checkpoint acceptance:
 3. Cursor by platform file identity, not path: device and inode on Unix; volume serial and file index on Windows. Record canonical path only for diagnostics. Detect replace, truncate, rotation, parser-version change, and node-store reset.
 4. Do not follow symlinks or junctions by default. Bound directories, files, bytes, line length, record size, total scan time, and diagnostic retention.
 5. Never advance past an incomplete trailing JSON record. A malformed complete record is quarantined with a safe reason and bounded excerpt hash; subsequent valid records remain discoverable according to a provider-specific resynchronization rule.
-6. Managed PandaMUX turn usage is authoritative. Transcript scans cover external use and backfill. Use provider-native ids where available; otherwise derive a versioned fingerprint sufficient to exclude a managed observation without merging unrelated turns.
+6. Managed PandaMUX message components are primary when they share the exact provider message identity with a transcript fact. Transcript scans cover external use and backfill. A versioned fingerprint may deduplicate repeat reads within one source, but it must not cross-reconcile managed and transcript facts or merge unrelated turns. Missing exact cross-source identity remains visible Partial coverage.
 7. Eliminate fabricated dates and stale hard-coded fallback model ids. Unknown time, model, identity, or token fields remain explicitly unknown and affect coverage reporting.
 8. Expose source coverage, last successful scan, lag, quarantined count, last safe error, and parser version through diagnostics.
 
@@ -1599,65 +1624,356 @@ Checkpoint acceptance:
 
 #### Phase 4 verification and completion record
 
-Run narrow unit and migration tests first, then crate tests, workspace fmt/clippy/tests, resolved-boundary checks, `cargo deny advisories licenses bans sources`, built-artifact smoke, and the local plus Galahad live matrix. Cargo commands remain serial in this repository.
+This section is the authoritative forward plan for Phase 4 closure. The 4A through
+4F records above remain implementation history. A checked implementation record
+does not upgrade native, live, production, release, deployment, or served-version
+status.
 
-The exact-artifact live record is `docs/operations/PHASE4_ACCEPTANCE.md`, updated
-through 2026-10-06. It advances provider, Hub transport, Hub usage, native
-Windows startup, Usage editor focus, and direct accessibility activation
-evidence, but does not close this exit gate.
+Evidence vocabulary:
 
-Current execution order:
+| State | Meaning |
+|-|-|
+| Implemented | Source and migrations exist at a named commit |
+| Locally verified | Named commands passed in the recovery worktree |
+| Native accepted | Exact hash-pinned Windows artifacts passed the named native matrix |
+| Live accepted | Exact artifacts passed the named local and Galahad data and failure matrix |
+| Production accepted | Every mandatory physical and production-topology row passed without a waiver |
+| Released | Authorized artifacts were signed and published |
+| Deployed | An external delivery surface was updated |
+| Served | The artifact or version retrieved from the public surface was independently verified |
 
-1. Finish the remaining 4E native matrix on the exact candidate: full keyboard
-   walkthrough, screen-reader smoke, 200 percent scale, reduced motion, forced
-   colors, non-color status, actionable errors, and data-table equivalence.
-2. Run a bounded seven-day 4B and 4C reconciliation against defensible provider
-   reports. Record Unknown instead of substituting a synthetic comparison where
-   no provider report exists.
-3. Run the live local plus Galahad 4B, 4C, and 4F durability matrix: scanner
-   restart, append and rotation, reconnect, retention gap and bounded backfill,
-   capacity evidence, safe retry, and post-side-effect interruption.
-4. Re-run the current candidate's normal-user Windows named-pipe matrix so the
-   Phase 4 artifact can inherit a current-version IPC claim.
-5. Close Phase 4 development only after items 1 through 4 are archived. Then
-   begin the Phase 5 dependency and boundary gate before adding orchestration
-   dependencies or crates. The physical 30-minute laptop disconnect and sleep
-   rows may run in parallel when the hardware session is available, but remain
-   mandatory before Phase 7 can enable release or publication.
+Current exact 0.60.8 evidence at `054bd3e941e394cd8ffcff62a8dc60faa9b7e1fe`:
 
-Phase 4 exits only when:
+| Artifact or probe | Result |
+|-|-|
+| Desktop | 27,378,688 bytes, SHA-256 `e336b1268aae65f2e3566fe44320c990c67537d5b803490ef908cfea6623a018` |
+| Server | 13,804,544 bytes, SHA-256 `5561f1e33b88ee10dd2fd7d2e09a7a782ad488a42a592745e07b709b18540901` |
+| CLI | 1,323,520 bytes, SHA-256 `73768521459ad71fac25014f7e1959583f02e8e7638679f2c510def612358cde` |
+| Limited-user headless | Passed with task result 0 and `ALL CHECKS PASSED` |
+| Desktop-only Offline and Retry | Passed Alert, Status, focusable Invoke, persistence, Loading transition, repeated Offline, and zero-server checks |
+| Dark-shell visual | Exact 1216 by 808 screenshot visually confirmed legible component actions; SHA-256 `5ff23308e808a32bbd8427487bdabcd1592d2acba82f37179d8cd5b82aef61e6` |
 
-- R0 is closed and archived as a development gate. Any explicitly re-scoped live row
-  remains a production-acceptance and release blocker until its evidence is archived.
-- Usage restarts, rotations, retries, reconnects, and backfills are idempotent, with source coverage visible.
-- Weekly totals reconcile against each provider's defensible reporting source within 2 percent where that source exists; providers without a source show Unknown rather than failing the phase on invented precision.
-- Capacity confidence and freshness appear everywhere capacity affects a decision.
-- Organization policy is enforced before routing, and failover obeys the side-effect boundary.
-- The Usage and health surfaces pass their keyboard, scaling, reduced-motion, and non-color-status matrix.
-- The completion record contains implementation SHAs, exact commands and results, live-environment evidence, artifacts, known limitations, rollback notes, and every deferred or unverified provider claim.
-- Rollback disables scanners, hub sync, capacity routing, and automatic failover independently while preserving raw observations and legacy tables. Read-only usage queries may remain available if their schema is sound.
-- Ships: internal CI artifacts only.
+This evidence proves the 0.60.8 regressions it exercised. It is not inherited by
+a later candidate without rerunning the affected rows, and it does not repair the
+known Claude accounting defect.
+
+##### P4-C0: freeze the closure baseline and preserve evidence
+
+1. Keep the original checkout and R0.1 archives untouched. All implementation
+   remains in the managed recovery worktree with narrow staging.
+2. Record the 0.60.5 through 0.60.8 implementation and native evidence in the
+   plan now, but defer the maintained acceptance-page rewrite until the final
+   accounting candidate stabilizes.
+3. Treat retained Galahad databases as read-only evidence. Clone a database
+   before any migration, rescan, repair, or query that can write.
+4. Keep current accepted evidence, failed evidence, unrun rows, and external
+   gates distinct. A source check or UI Automation probe is a floor, not a
+   screen-reader, visual, live-provider, or physical acceptance ceiling.
+
+Acceptance:
+
+- `git status`, branch, exact source commit, version, artifact hashes, host,
+  runtime user, and cleanup state are archived for every candidate.
+- No retained database, original checkout, Hyper-V checkpoint, or unrelated
+  process is mutated by baseline inspection.
+
+##### P4-C1: correct Claude component identity and usage reconciliation
+
+The observed duplicate is structural, not a one-off deduplication miss. Claude's
+terminal result UUID and assistant message ID name different protocol objects.
+One CLI turn can contain several assistant messages, and one assistant message
+can appear in several transcript chunks. The implementation must preserve those
+facts instead of guessing from time.
+
+1. Add a backward-compatible optional component list to `TurnUsage`. Each
+   component carries provider-native assistant message ID, actual model, input,
+   output, cache-read, cache-write, and optional provider occurrence time. Keep
+   the existing aggregate fields for older serialized turns and providers that
+   expose only turn-level totals.
+2. Replace stateless Claude NDJSON usage handling with a per-CLI-turn accumulator.
+   Deduplicate assistant chunks by exact `message.id`, retain every distinct
+   assistant message, and finalize only when the terminal result arrives or the
+   bounded stream ends with an explicit partial result.
+3. Normalize one managed token observation per unique assistant message. Store
+   terminal `total_cost_usd` as a separate managed cost fact keyed to the
+   PandaMUX turn and result identity. Do not assign the whole turn cost to the
+   latest assistant message.
+4. Preserve actual assistant model and all cache categories. The configured or
+   selected model remains routing evidence only and is not a substitute for the
+   model reported by the assistant message.
+5. Reconcile managed and transcript token components only by exact provider
+   message identity. For the same exact key, timestamp skew and one missing
+   optional cost may be enrichment. Conflicting provider, instance,
+   subscription, model, or token measurements remain separate and mark coverage
+   Partial with a diagnostic.
+6. Add migration 12, or the next unused number if another migration lands first.
+   Preserve migrations 1 through 11 unchanged. Replace the one-managed-row-per-
+   turn assumption with a component identity that permits several token facts
+   plus one cost fact per PandaMUX turn.
+7. Make backfill completion component-aware. The presence of one managed fact
+   must not suppress missing components or the separate cost fact.
+8. Bump the Claude transcript parser version so cloned acceptance stores can be
+   rescanned under the corrected exact-ID rules.
+9. Do not automatically merge existing result-UUID and message-ID history. No
+   shared exact identifier exists. Surface it as legacy reconciliation debt, or
+   apply only an explicit reviewed repair map against a clone.
+
+Required tests:
+
+- The exact live shape reproduces result UUID versus assistant message ID,
+  selected versus actual model, and missing versus present cache categories.
+- Repeated thinking and text chunks with one message ID contribute once even
+  when their timestamps differ.
+- A tool turn with two assistant message IDs yields two token components and
+  one terminal cost fact.
+- Two different message IDs with identical measurements and nearby timestamps
+  never merge.
+- Managed-first and transcript-first ingestion converge to the same queryable
+  token components.
+- Missing cost enriches; conflicting non-null cost, model, or tokens remain a
+  visible mismatch.
+- Component facts survive restart, replay, outbox export, Hub ingest, backfill,
+  and repeated scanner passes without duplication.
+- Existing ambiguous historical pairs remain unchanged unless an explicit
+  reviewed repair map is supplied.
+
+Rollback:
+
+- The component fields are additive and old serialized turns remain readable.
+- Disabling Claude managed usage ingestion leaves transcript facts and source
+  coverage visible. Disabling the scanner leaves managed facts visible.
+- Raw observations, legacy rows, and quarantine records are preserved.
+
+##### P4-C2: cut one locally verified accounting candidate
+
+1. Run focused provider parser, migration, store, query, outbox, Hub ingest, and
+   restart tests first.
+2. Run, serially, `cargo fmt --all -- --check`, strict workspace Clippy with all
+   targets and features, the full workspace test suite, Rust boundary guard,
+   Claude wiring guard, and `cargo deny advisories licenses bans sources`.
+3. Build desktop, server, and CLI from the exact clean commit. Exercise the
+   built desktop headless entry and server and CLI handshake, not only test
+   binaries.
+4. Record dependency warnings separately from pass or fail. A presence-only
+   guard can prove a forbidden edge exists, but absence does not certify the
+   entire resolved graph. Phase 5 replaces the text guard.
+
+Acceptance:
+
+- Every focused and full command has exact output and exit status.
+- The source tree is clean before and after the build.
+- One commit, version, changelog entry, artifact set, and acceptance root agree.
+
+##### P4-C3: complete exact-candidate Windows native acceptance
+
+1. Build MSVC desktop, server, and CLI as the normal limited user from the exact
+   clean candidate. Record Rust toolchain, host, sizes, and SHA-256 hashes.
+2. Run limited-user headless and authenticated server and CLI smoke tests.
+3. Run the desktop-only Offline matrix: persistent announced error, Status,
+   keyboard-focusable Retry, Loading transition, repeated failure, and no
+   accidental server spawn.
+4. Run the complete keyboard path across Usage, every filter, source coverage,
+   capacity, subscriptions, policy, health and login, details, editor actions,
+   errors, retries, and focus return.
+5. Inspect UI Automation names, roles, actions, focus, table counts, headers,
+   rows, cells, and complete row summaries. Then run Narrator separately for
+   status changes, error announcement, table or row reading, field labels, and
+   focus return. UI Automation exposure alone is not Narrator acceptance.
+6. Capture dark and light theme screenshots at 100 percent and perform a visual
+   contrast and hierarchy review.
+7. Repeat at Windows 200 percent display scale with keyboard traversal, editor
+   use, vertical scrolling, horizontal table scrolling, and no clipped action.
+8. Repeat with Windows High Contrast. Every selected, focused, active, error,
+   warning, and status state must survive without relying on background tint.
+   Add native high-contrast handling if framework defaults do not preserve it.
+9. Repeat with Windows animations disabled. Decorative motion may stop, but
+   state changes, focus, loading, and progress remain understandable.
+10. Rerun the full normal-user named-pipe security matrix on the same server and
+    CLI hashes: SID-scoped name, user-only DACL, remote rejection, peer PID and
+    image enforcement, cross-user denial, anti-squatting, and post-probe health.
+
+Acceptance:
+
+- Every row names exact hashes and records Pass, Fail, Partial, Unrun, or
+  Framework-limited. Partial and Framework-limited never count as Pass.
+- Visual screenshots are inspected, not merely created.
+- The supported Windows screen-reader path passes, or the framework limitation
+  remains an explicit Phase 7 release blocker with a user-approved scope change.
+
+##### P4-C4: rerun defensible seven-day reconciliation
+
+1. Clone the retained Galahad database and run migration and rescan only against
+   the clone. Keep before and after hashes and row counts.
+2. Compare scanner input, managed components, normalized observations,
+   quarantine, and query projections. Prove source fitness independently of
+   total conservation so a consistently misread source cannot appear green.
+3. Compare each provider with an independent reporting source only where one
+   exists. A managed-turn cost on the same event is not an independent provider
+   report. Providers without a defensible independent report show Unknown.
+4. Reconcile within 2 percent only for comparable measures and windows. Explain
+   cache categories, provider-reported cost, API-equivalent estimates, timezone,
+   late records, and excluded ambiguous legacy pairs.
+5. Run at least one fresh simple Claude turn and one fresh tool-using Claude turn
+   through managed and transcript ingestion. Both must reconcile by exact
+   message IDs with no double count.
+
+Acceptance:
+
+- No old ambiguous UUID and message-ID pair is silently merged.
+- Every Unknown is visible and does not become zero, healthy, complete, or
+  reconciled.
+- Query totals equal the accepted normalized component set and remain stable
+  after restart and repeated scan.
+
+##### P4-C5: complete live local and Galahad durability and failover
+
+Run this matrix in isolated roots with exact artifacts and timestamped logs:
+
+1. Scanner startup, append, partial trailing record, completion, rename,
+   rotation, truncation, replacement, permission denial, and restart.
+2. Hub disconnect, reconnect, restart, acknowledged high-water resumption,
+   retention gap, and bounded multi-page backfill interrupted between pages.
+3. Fresh, stale, estimated, unknown, conflicting, reset, hard-limit, and
+   unreachable capacity evidence with explanation and freshness at every route.
+4. Real pre-output capacity failure retries once on an explicitly allowed pool.
+5. Real interruption after text, file edit, command, network action, and
+   approval never silently replays. Each path persists checkpoint, partial
+   output, tool ledger, provider evidence, and continuation status.
+6. Restart while a continuation, approval result, or tool result is pending.
+   Duplicate delivery remains at most once.
+7. Toggle scanner, Hub usage sync, capacity-aware routing, and automatic
+   failover independently. Existing observations and attempts remain queryable.
+
+Acceptance:
+
+- Fixtures support diagnosis but do not substitute for the live rows above.
+- The local and Galahad stores agree after reconnect without manual row edits.
+- All failure injection is reversible and leaves isolated roots available for
+  audit until the completion record is accepted.
+
+##### P4-C6: close the physical R0.5 rows
+
+1. During a real remote provider turn, disconnect the laptop for 30 minutes,
+   reconnect, and prove exact event, output, usage, attempt, and terminal offsets
+   before and after the gap.
+2. During a real remote full-screen terminal, put the laptop to sleep for 30
+   minutes, resume, and prove terminal continuity, replay bounds, process
+   ownership, and no duplicated input.
+3. Use coordinator receipt times for cross-machine freshness and same-clock
+   ordering for endpoint process chronology. Endpoint clock skew cannot decide
+   acceptance by itself.
+
+These two rows may remain deferred for development sequencing only. They are
+mandatory before Phase 7 release authorization and cannot be converted to Pass
+by a waiver, short run, or fixture.
+
+##### P4-C7: archive and synchronize documentation
+
+After C1 through C5 stabilize, and after C6 when hardware is available:
+
+1. Update `docs/operations/PHASE4_ACCEPTANCE.md` with every implementation SHA,
+   version, artifact hash, command, result, screenshot, live identifier,
+   limitation, rollback state, and cleanup result.
+2. Update `docs/features/USAGE_OBSERVABILITY.md` to match current table, row,
+   header, cell, status, alert, TextInput, focus, and error semantics.
+3. Update root `README.md`, `CLAUDE.md`, `AGENTS.md`, and `docs/README.md` where
+   they conflict with the GPUI chat-first architecture or documentation
+   authority order. Archive or relabel obsolete Iced, fixed-pipe, and release
+   instructions rather than presenting them as current operations.
+4. Keep exact line citations current after edits. A passing range check does not
+   prove that a shifted citation still points at the intended claim.
+5. Record implementation, local verification, native acceptance, live
+   acceptance, production acceptance, commit, push, CI, signing, publication,
+   deployment, and served version as separate statuses.
+
+Phase 4 development exits only when C1 through C5 and the development portion of
+C7 pass. Phase 4 production acceptance additionally requires C6. Any later code
+change affecting accounting, transport, routing, UI, accessibility, or IPC
+invalidates the corresponding exact-candidate row.
+
+Phase 4 exit contract:
+
+- Usage restarts, rotations, retries, reconnects, and backfills are idempotent,
+  with source coverage and legacy debt visible.
+- Claude multi-message turns preserve exact message identities, actual models,
+  cache categories, and separate terminal cost without double counting.
+- Weekly totals reconcile against a defensible independent source within 2
+  percent where comparable evidence exists; every unavailable comparison is
+  Unknown.
+- Capacity confidence and freshness appear wherever capacity affects a
+  decision.
+- Organization policy is enforced before scoring, and failover obeys the
+  side-effect boundary.
+- Usage and health pass keyboard, screen-reader, scale, forced-colors, reduced-
+  motion, non-color, actionable-error, and visual inspection gates on the exact
+  candidate, subject only to an explicit release-blocking framework limitation.
+- Rollback disables scanners, Hub sync, capacity routing, and automatic
+  failover independently while preserving observations, attempts, audits,
+  quarantine, and legacy tables.
+- Phase 4 ships internal CI artifacts only. It authorizes no push, release,
+  deployment, public instructions repo, Broadside publish, site change, or
+  Winget activation.
+
+Phase 4 closure assumptions:
+
+- Windows is the v1 native desktop target. Linux x64 and ARM64 remain node and
+  CLI targets. macOS remains a portability build and post-v1 product port.
+- Exact 0.60.8 evidence remains valid for those named regression rows, but the
+  accounting repair creates a new final candidate and requires affected rows to
+  be rerun.
+- Missing independent provider reporting is a legitimate Unknown result. It is
+  not replaced by the same managed event, a pricing estimate, or a synthetic
+  zero.
+- The physical R0.5 rows may be scheduled later only because they require the
+  user's laptop and a 30-minute interval. They remain mandatory release gates.
+- The user authorized this plan rewrite and in-scope recovery work. Push,
+  signing, publication, deployment, site updates, Winget, and external
+  repository creation remain distinct authority boundaries in their phases.
+
+Phase 4 closure out of scope:
+
+- Fuzzy timestamp reconciliation, latest-message-only Claude attribution, and
+  automatic repair of ambiguous retained history.
+- Relaxing the 2 percent threshold, organization policy, side-effect boundary,
+  accessibility matrix, or exact-artifact requirement to obtain a pass.
+- Rewriting or renumbering migrations 1 through 11.
+- Cleaning or modifying the preserved original checkout or retained evidence
+  roots.
+- Beginning Phase 5 feature implementation before the Phase 4 development exit
+  is archived.
 
 ### Phase 5: Orchestrator, agents, trusted configuration, memory, and integrations
 
 #### Phase 5 dependency and boundary gate
 
-1. Add `pandamux-orchestrator` as a pure crate with no Tokio, filesystem, network, SQLite, GPUI, provider process, keyring, or embedding dependency. Domain inputs and effects are serializable values; the server interprets effects.
-2. Replace the manifest-text boundary script with a `cargo metadata` graph and resolved-feature check. Assert GPUI isolation, server PTY-only terminal features, GPUI snapshot alignment, orchestrator purity, memory isolation, and no duplicate forbidden native stacks.
-3. Define the actual pin policy: commit the lockfile; exact-pin security-critical, native, protocol, parser, GPUI-snapshot, packaging, and scheduler dependencies; allow compatible ranges only when explicitly justified. Add a pinned `rust-toolchain.toml` or document and enforce the selected toolchain in CI.
-4. Select and directly pin `schemars` plus one YAML parser after license and target checks. Parse markdown frontmatter through a small owned delimiter layer unless a separate crate proves necessary.
-5. Do not add `fastembed`, keyring, a cron stack, or tree-sitter in this checkpoint. Each has its own owner and gate below.
+1. Inventory the existing `Run`, `AgentDefinition`, `MemoryEntry`, and
+   `ScheduleRecord` types, JSON persistence, router methods, tests, and user data.
+   Classify each as canonical, compatibility input, migration source, or retired
+   surface. Phase 5 is not greenfield and must not create parallel truth.
+2. Add `pandamux-orchestrator` as a pure crate with no Tokio, filesystem, network, SQLite, GPUI, provider process, keyring, or embedding dependency. Domain inputs and effects are serializable values; the server interprets effects.
+3. Replace the manifest-text boundary script with a `cargo metadata` graph and resolved-feature check. Assert GPUI isolation, server PTY-only terminal features, GPUI snapshot alignment, orchestrator purity, memory isolation, and no duplicate forbidden native stacks.
+4. Reconcile the declared Rust 1.88 minimum, CI's drifting `stable`, and the
+   toolchain used for native evidence. Define and enforce one toolchain and MSRV
+   policy before selecting dependencies.
+5. Define the actual pin policy: commit the lockfile; exact-pin security-critical, native, protocol, parser, GPUI-snapshot, packaging, and scheduler dependencies; allow compatible ranges only when explicitly justified.
+6. Select and directly pin `schemars` plus one YAML parser after license and target checks. Parse markdown frontmatter through a small owned delimiter layer unless a separate crate proves necessary.
+7. Do not add `fastembed`, keyring, a cron stack, or tree-sitter in this checkpoint. Each has its own owner and gate below.
 
 Acceptance:
 
 - Pure orchestrator tests compile without server, Tokio, SQLite, GPUI, provider, or platform dependencies.
 - The graph check fails fixtures that introduce transitive GPUI into server, a default-feature grid leak, native embeddings into orchestrator, or version-skewed GPUI snapshots.
 - `cargo deny advisories licenses bans sources` passes the resolved graph.
+- Legacy domain fixtures either migrate deterministically or fail with an
+  actionable compatibility error. No existing record is silently reinterpreted
+  as an accepted Phase 5 run, agent, memory entry, or schedule.
+- CI proves both the selected development toolchain and the documented MSRV or
+  records a deliberate single-toolchain policy instead of implying both.
 
 #### Checkpoint 5A: schemas, deterministic policy, DAG, and run state machine
 
 1. Version schemas for `orchestrator.yaml`, `agents/*.md`, knowledge references, prompts, routing rules, and compiled instruction bundles. Unknown schema versions fail closed; errors carry file, field, code, and safe explanation.
-2. Define pure domain records: `Run`, `AgentTask`, `Attempt`, `DependencyEdge`, `BlackboardEntry`, `BudgetReservation`, `ApprovalRequirement`, `CheckpointRef`, `RouteDecision`, and terminal run states. State transitions are explicit, total, replayable, and idempotent.
+2. Define pure domain records: `Run`, `AgentTask`, `Attempt`, `DependencyEdge`, `BlackboardEntry`, `BudgetReservation`, `ApprovalRequirement`, `CheckpointRef`, `RouteDecision`, and terminal run states. State transitions are explicit, total, replayable, and idempotent. Existing similarly named core records are adapted or migrated through one documented boundary, not left as a second run model.
 3. Implement two-step routing: task to PandaMUX agent, then agent to provider/model/environment/instance. Organization and capability filters are hard constraints; deterministic scores and tie-breakers are recorded. An LLM may classify or propose a DAG, but schema parse and policy reconciliation fail closed.
 4. Validate DAGs for missing targets, cross-project permission, duplicate ids, cycles, impossible dependencies, output-contract mismatch, budget overflow, and unavailable required capabilities before dispatch.
 5. Implement Auto and Approve-first as policy inputs to the same state machine. Auto can skip only approvals the current policy explicitly permits; it can never widen access, cross an organization boundary, or approve a human-authored agent edit.
@@ -1774,12 +2090,21 @@ The completion record includes dependency-spike decisions, exact test and live c
 2. The cron/time dependency belongs only in `pandamux-orchestrator`; Tokio timers and wall-clock observation belong in `pandamux-server`.
 3. Prove the library behind a fake clock before enabling a real timer. Do not mix multiple time ecosystems.
 4. Correct the domain before migration: new schedules default to Approve first, and `ContinueExistingThread` includes a required typed thread id whose environment must match the schedule owner.
+5. Inventory existing local schedule records and execution behavior. Current
+   records may default to enabled and Auto, and existing
+   `ContinueExistingThread` values lack a thread ID. Treat them as migration
+   inputs, never as already accepted Phase 6 state.
+6. Use the next unused additive migration after all Phase 4 and Phase 5 work.
+   Imported or ambiguous schedules land disabled and Approve first. Preserve the
+   raw legacy representation and record every quarantine or required repair.
 
 Acceptance:
 
 - A decision record captures candidates, exact versions, licenses, target builds, DST behavior, and rejected options.
 - Pure next-run tests do not depend on wall-clock sleeps or Tokio time.
 - Imported, restored, or default-constructed schedules cannot silently become Auto.
+- Existing enabled records cannot fire under the new scheduler until migration,
+  target repair, policy validation, and an explicit enable decision complete.
 
 #### Checkpoint 6A: pure schedule schema and state machine
 
@@ -1980,7 +2305,7 @@ Already covered: macOS CI from Phase 1; Unix sockets and process groups; keyring
 | Clock, timezone, and sleep/wake on the laptop | Missed, doubled, or late runs | IANA timezones; wall-clock-jump detection; explicit catch-up policy; DST rules (gap fires once later, repeat fires once); fake-clock tests |
 | Hub and node orchestration divergence (version or bundle skew) | Different routing decisions offline | Same pure crate in both; bundle carries `schemaVersion` and SHA; nodes refuse newer schemas; runs record `bundleSha` |
 | Stale capacity on offline nodes | Node routes to an exhausted provider | Age-decayed confidence; local hard-limit evidence overrides; automatic fallback only before output or side effects; otherwise durable interrupted state and explicit continuation |
-| Transcript and managed-turn overlap | Usage is double counted and routing decisions become wrong | Managed events are authoritative; stable native ids or versioned fingerprints reconcile scanner facts; idempotent observation ids and restart/rotation fixtures |
+| Transcript and managed-turn overlap | Usage is double counted and routing decisions become wrong | Preserve per-message managed components and a separate terminal cost fact; cross-source reconciliation requires the same exact provider message id; source-local fingerprints never become fuzzy cross-source identity; idempotent observation ids and restart/rotation fixtures |
 | Path-only scanner cursors | Rotation, replacement, partial writes, or restart loses or duplicates usage | Persist platform file identity and committed offset transactionally; never advance past a partial record; explicit truncate/replace states and bounded blocking worker |
 | Email-based subscription inference | Corporate and personal quota or credentials merge across a security boundary | Generated `SubscriptionKey`, explicit mapping and `FailoverPoolId`; email is masked display metadata only |
 | GPUI/gpui-kit API churn per snapshot | Upgrades break the desktop | Exact pins; paired bumps; `gpui-pre*` version check in the boundary script; GPUI confined to the desktop, logic in `pandamux-client` |
@@ -2034,6 +2359,11 @@ No blocking product question remains for starting Recovery Gate R0. The 2026-09-
 - Subscription identity and failover pools are explicit; matching email never merges or authorizes.
 - Phase 4 adds no runtime dependency and stores normalized facts before projections.
 - The hub pulls bounded usage pages from nodes; raw transcripts stay local.
+- Claude managed usage is normalized per exact assistant message ID, with a
+  separate terminal cost fact. Timestamp proximity and latest-message guessing
+  are forbidden reconciliation keys.
+- Ambiguous historical UUID and message-ID pairs remain visible debt unless a
+  reviewed repair map supplies an exact relationship.
 - Canonical memory and lexical retrieval ship independently of optional vector embeddings.
 - Nodes own schedules; hub fleet schedules are materialized templates, and offline changes remain visibly pending.
 - Nodes queue Broadside publish intents for the hub instead of receiving Broadside credentials by default.
@@ -2041,7 +2371,7 @@ No blocking product question remains for starting Recovery Gate R0. The 2026-09-
 
 ## 12. Knowledge base entries applied
 
-LL-G and BP were refreshed on 2026-09-28 before this recovery rewrite. Tauri, React, pnpm, and CSP entries from the earlier draft do not apply.
+LL-G and BP were refreshed again on 2026-10-06 before the Phase 4 closure rewrite. Tauri, React, pnpm, and CSP entries from the earlier draft do not apply.
 
 - LL-G claude-code `permission-prompt-tool-needs-initialize` (HIGH): Claude sends `initialize`, uses the stdio permission tool, and fixture tests deny a non-benign action with a message.
 - LL-G antigravity-cli `headless-hangs-no-output`, `exit-0-not-complete` (HIGH): PandaMUX drives the ACP server bundle, not `agy`; completion is derived from protocol state rather than process exit.
@@ -2053,6 +2383,12 @@ LL-G and BP were refreshed on 2026-09-28 before this recovery rewrite. Tauri, Re
 - LL-G Linux `systemd-restart-on-abort-bind-race`, post-reboot failed units, and `daemon-stays-dead`: reconcile socket ownership before restart, inspect failed units, and prove opt-in schedule-node persistence.
 - LL-G GitHub Actions `release-workflow-not-gated-on-ci`, `azure-trusted-signing-credentials`, and `tag-trigger-breaks-azure-oidc`: release runs own their gates, credentials use action inputs, and the signed-candidate path proves its trigger and identity contract before publication.
 - LL-G accessibility `aria-modal-needs-inert-not-tab-trap` and `forced-colors-drops-background-state`: confirmation flows own focus/inertness and never encode status through background color alone.
+- LL-G SupportForge `execute-command-cross-session-output`,
+  `session-held-by-unresponsive-api-instance`,
+  `endpoint-clock-skew-invalidates-recovery-chronology`, and
+  `write-file-redacts-password-registry-read`: remote acceptance verifies the
+  hostname, reconnects through the documented stale-session sequence, avoids
+  cross-clock inference, and verifies exact transferred bytes.
 - LL-G data visualization `mixed-scale-divisor`: usage and capacity charts label units and never compare incompatible scales under one visual divisor.
 - LL-G SQLite `upsert-by-name-collision`: generated ids and explicit unique keys own identity; display names never drive an upsert.
 - BP `read-only-first-rule`, `plan-with-lessons-learned`, `presence-check-validator-is-a-floor`, `never-renumber-applied-migrations`, and `laws-of-ux-code-review` (FOUNDATIONAL) directly shape R0, migrations, probes, and UI gates.
@@ -2067,6 +2403,13 @@ Known before starting (carry these into implementation):
 - Preserve the current dirty Phase 4 prototype before recovery. Use exact baselines and path-specific staging; never reset, clean, or absorb unrelated work.
 - Usage ingestion stores idempotent observations, not pre-aggregated buckets. Aggregation, attribution, and pricing are projections so they can be corrected without rewriting source facts.
 - Managed turn events and transcript scanners overlap. Declare source precedence and stable deduplication before enabling both, or totals will look plausible while being wrong.
+- A Claude CLI turn may contain several assistant message IDs, and one message
+  may appear in several transcript chunks. Preserve exact message components and
+  a separate terminal cost fact. Never reconcile by nearby timestamps or the
+  latest assistant message.
+- A provider-selected model is routing evidence, not usage truth. Preserve the
+  actual message model and cache-read and cache-write categories when the
+  provider exposes them.
 - Scanner cursors need platform file identity and a committed byte offset. Paths alone do not survive rotation, and advancing over a partial trailing record permanently loses data.
 - Never use email as subscription identity or failover authority. Use generated keys, explicit cross-host mapping, masked labels, and explicit pools.
 - Unknown is a first-class state for model, price, authentication, health, capacity, version, and platform. Never fabricate a plausible default or translate Unknown into Healthy.
