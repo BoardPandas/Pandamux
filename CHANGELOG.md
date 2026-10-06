@@ -344,6 +344,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **An update banner on launch.** When the automatic check (on launch and every few hours) finds a newer release, PandaMUX shows a banner across the top with **Install** and **Dismiss**. Installing downloads and launches the installer, then closes PandaMUX so the update can finish (your sessions are restored on next launch). Dismissing hides the banner until a newer version appears. This replaces the previous update toast.
 - A CI guard for the `.claude/` wiring (`scripts/check-claude-wiring.mjs`, run by the new Claude Wiring workflow and by the Rust workflow). It fails the build when a rule's `paths:` globs match no files or a hook matcher is written in permissions syntax, both of which otherwise fail silently and are indistinguishable from a rule that simply has not fired yet. Both workflows pin Node 24 LTS via `actions/setup-node@v7` rather than relying on whatever the runner ships. (Internal tooling; no runtime change.)
 
+### Security
+
+- **Updated the SSH transport to the patched `russh` 0.63 line.** The candidate
+  no longer resolves the vulnerable 0.62.2 release identified by nine current
+  GitHub Security Advisories. The workspace minimum Rust version is now 1.89,
+  matching the patched dependency's declared requirement.
+
 ### Fixed
 
 - **Claude usage now reconciles by exact assistant message identity.** Repeated

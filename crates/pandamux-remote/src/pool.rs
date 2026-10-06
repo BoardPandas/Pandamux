@@ -129,15 +129,19 @@ impl client::Handler for ClientHandler {
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &russh::keys::ssh_key::PublicKey,
+        server_key: &russh::keys::PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
-        match russh::keys::check_known_hosts(&self.host, self.port, server_public_key) {
+        // Preserve PandaMUX's exact host-key pinning for both raw SSH keys and
+        // certificates. A certificate does not confer CA trust here: its
+        // embedded public key must still match (or be learned into) known_hosts.
+        let server_public_key = server_key.public_key();
+        match russh::keys::check_known_hosts(&self.host, self.port, &server_public_key) {
             Ok(true) => Ok(true),
             Ok(false) if self.trust_unknown_host => {
                 match russh::keys::known_hosts::learn_known_hosts(
                     &self.host,
                     self.port,
-                    server_public_key,
+                    &server_public_key,
                 ) {
                     Ok(()) => Ok(true),
                     Err(error) => {
