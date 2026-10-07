@@ -28,6 +28,16 @@ the terminal header controls before skipping the semantic Log group. The
 which Windows maps to a UI Automation Document, and still requires exact native
 acceptance.
 
+Exact 0.60.39 commit `8b7b880` supersedes the preceding 0.60.39 candidate
+note. Its complete local gate, native build, host headless and limited-user
+smoke, remote lifecycle, and standard successful-login row passed. Windows
+reported `terminal-output-log` as a focusable UI Automation Document, but
+genuine Narrator visited that Document without speaking its parent-only
+accessible name and then left PandaMUX. The 0.60.40 source candidate retains
+the Terminal/Document parent and publishes the same 4,096-character bounded
+output on an explicit semantic text child. It still requires exact native
+acceptance.
+
 ## Build and development
 
 Use Rust stable. Windows builds require the MSVC build tools. The application has no Node runtime, though Node 24 runs the repository wiring guard.

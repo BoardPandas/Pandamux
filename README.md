@@ -93,10 +93,14 @@ R0 development gate:
   reported the PandaMUX root and did not speak READY. Instrumented follow-ups
   proved that PandaMUX's HWND was foreground, active, and owned native keyboard
   focus, while synchronized Narrator navigation reached all three terminal
-  header controls and then skipped the semantic Log group entirely. The 0.60.39
-  source candidate therefore preserves the bounded output and active-descendant
-  mode but exposes it through AccessKit's dedicated Terminal role, which Windows
-  maps to a UI Automation Document. It still requires exact native acceptance.
+  header controls and then skipped the semantic Log group entirely. Exact
+  0.60.39 commit `8b7b880` exposed the output through AccessKit's dedicated
+  Terminal role and passed the complete local gate, native build, host gates,
+  and standard successful-login interaction. Windows reported the output as a
+  focusable UI Automation Document, but genuine Narrator visited that Document
+  without speaking its parent-only accessible name, then left PandaMUX. The
+  0.60.40 source candidate keeps the Document and adds an explicit bounded text
+  child for Narrator item navigation. It still requires exact native acceptance.
   Real external quota exhaustion, real post-side-effect interruption, and the
   deferred physical laptop checks keep the Phase 4 exit matrix open.
 

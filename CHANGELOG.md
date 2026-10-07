@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Made the terminal Document's bounded text traversable by Narrator.** The
+  visible terminal grid now sits inside an explicit semantic text child whose
+  accessible name uses the same 4,096-character bounded output as the parent
+  Terminal node. Windows Narrator skipped the former Log group and then visited
+  the replacement Document without speaking its parent-only name; the text
+  child gives item navigation a concrete readable target while retaining the
+  stable `terminal-output-log` identity and input/output focus controls.
+
 - **Exposed visible terminal output through the platform terminal document role.**
   The bounded terminal grid now uses AccessKit's dedicated `Terminal` role,
   which Windows publishes as a UI Automation Document. Genuine Narrator

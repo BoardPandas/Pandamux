@@ -204,9 +204,14 @@ Terminology used throughout:
   UI Automation honored its active-descendant output focus, but Narrator did
   not speak READY. Diagnostics proved that native foreground, active, and
   keyboard focus remained correct while synchronized Narrator navigation
-  reached the terminal header controls and skipped the semantic Log group. The
-  0.60.39 source candidate instead uses AccessKit's dedicated Terminal role,
-  which Windows maps to a UI Automation Document. It is not native-accepted.
+  reached the terminal header controls and skipped the semantic Log group.
+  Exact 0.60.39 commit `8b7b880` instead used AccessKit's dedicated Terminal
+  role and passed the complete local gate, native build, host gates, and
+  standard successful-login interaction. Windows reported the output as a
+  focusable UI Automation Document, but genuine Narrator visited that Document
+  without speaking its parent-only accessible name and then left PandaMUX. The
+  0.60.40 source candidate retains the Document and adds an explicit bounded
+  text child for Narrator item navigation. It is not native-accepted.
 - Phase 4 remains open on the P4-C3 login-terminal retest, the remaining live
   P4-C5 failover rows, and the final documentation archive after those rows
   stabilize. The re-scoped physical
@@ -2027,10 +2032,14 @@ Ordinary UI Automation honored the active descendant, but Narrator still did
 not speak READY. Instrumentation proved PandaMUX retained native foreground,
 active, and keyboard focus. Narrator navigation synchronized to that focus,
 reached all three terminal header controls, and skipped the semantic Log group.
-Version 0.60.39 changes that output node to AccessKit's dedicated Terminal
-role, which Windows maps to a UI Automation Document. P4-C3 remains open until
-an exact native Windows artifact passes the expanded successful-login row and
-Narrator speaks the controlled output.
+Exact 0.60.39 commit `8b7b880` changed that output node to AccessKit's
+dedicated Terminal role and passed the complete local gate, native build, host
+gates, and standard successful-login interaction. Windows reported a focusable
+UI Automation Document, but Narrator reached it without speaking the
+parent-only accessible name and then left PandaMUX. Version 0.60.40 retains
+that Document and adds an explicit bounded semantic text child. P4-C3 remains
+open until an exact native Windows artifact passes the expanded
+successful-login row and Narrator speaks the controlled output.
 
 The retained host evidence root is
 `C:\ProgramData\PandaMUX\acceptance\phase4-fee9e02-0.60.22-p4-c3`.

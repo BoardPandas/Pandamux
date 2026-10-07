@@ -721,6 +721,19 @@ pub fn render_terminal_view(
         None
     };
 
+    // A Terminal maps to a Windows UIA Document, but Narrator does not speak a
+    // document's parent-only accessible name during item navigation. Publish
+    // the same bounded text on a concrete child Text control so the document
+    // has a traversable readable target without duplicating visual content.
+    let accessible_output = state.accessible_output();
+    let screen_content = div()
+        .id("terminal-output-text")
+        .role(Role::Label)
+        .accessibility_id("terminal-output-text")
+        .aria_label(accessible_output.clone())
+        .v_flex()
+        .children(row_elements);
+
     let screen_container = div()
         .id("terminal-output-log")
         // AccessKit's dedicated Terminal role maps to a Windows UIA Document.
@@ -730,7 +743,7 @@ pub fn render_terminal_view(
         .role(Role::Terminal)
         .on_a11y_action(AccessibleAction::Focus, on_output_focus)
         .accessibility_id("terminal-output-log")
-        .aria_label(state.accessible_output())
+        .aria_label(accessible_output)
         .aria_description(
             "Read-only visible terminal output. Press F6 or Shift Tab to return to terminal input. F6 also reaches this output from anywhere in PandaMUX while the terminal surface is open.",
         )
@@ -747,7 +760,7 @@ pub fn render_terminal_view(
         .font_family(Typography::MONO_FAMILY)
         .text_size(Typography::BODY_SIZE)
         .overflow_hidden()
-        .children(row_elements)
+        .child(screen_content)
         .when(output_is_focused, |output| output.aria_active_descendant());
 
     div()

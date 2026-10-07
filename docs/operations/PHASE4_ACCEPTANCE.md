@@ -69,9 +69,14 @@ UI Automation honored the active descendant, but genuine Narrator did not speak
 READY. Instrumented follow-ups proved that PandaMUX retained native foreground,
 active, and keyboard focus while synchronized Narrator navigation reached the
 terminal header controls and skipped the semantic Log group. It is rejected.
-The 0.60.39 source candidate changes that node to AccessKit's dedicated
-Terminal role, which Windows maps to a UI Automation Document. It has not
-passed exact native Windows acceptance.
+Exact 0.60.39 commit `8b7b880` changed that node to AccessKit's dedicated
+Terminal role and passed the complete local gate, native build, host gates, and
+standard successful-login interaction. Windows reported a focusable UI
+Automation Document, but genuine Narrator visited that Document without
+speaking its parent-only accessible name and then left PandaMUX. It is rejected.
+The 0.60.40 source candidate retains the Document and publishes the same bounded
+output on an explicit semantic text child. It has not passed exact native
+Windows acceptance.
 Exact
 0.60.17 commit `2f56a27` passed the scanner, Hub
 synchronization, conservative capacity projection, route-explanation, and
@@ -193,13 +198,20 @@ or release occurred.
   active-descendant output focus, but genuine Narrator did not speak READY.
   Native-focus instrumentation and synchronized Narrator navigation isolated
   the remaining defect to the semantic Log group, so the attempt is rejected.
-- Current reopened P4-C3 repair source: workspace version `0.60.39` in the
-  isolated recovery worktree. It preserves the active-descendant output focus
-  and changes the output node to AccessKit's dedicated Terminal role, which
-  Windows maps to a UI Automation Document. Its complete local source gate
-  passed with 437 workspace tests and two intentional real-shell ignores, but
-  it is not native-accepted until committed source is built and exercised on
-  Windows; no native, live, production, or release result is claimed.
+- Sixteenth reopened P4-C3 repair source: clean commit
+  `8b7b8804999f217ef8f03fb501b679463908e990`, version `0.60.39`. Its complete
+  local gate, native build, host headless and limited-user smoke, remote
+  lifecycle, and standard successful-login interaction passed. Windows
+  reported `terminal-output-log` as a focusable UI Automation Document, but
+  Narrator visited it without speaking its parent-only accessible name. The
+  attempt is rejected.
+- Current reopened P4-C3 repair source: workspace version `0.60.40` in the
+  isolated recovery worktree. It retains the Terminal/Document parent and
+  publishes the same 4,096-character bounded output on an explicit semantic
+  text child. Its complete local source gate passed with 437 workspace tests
+  and two intentional real-shell ignores, but it has not passed exact native
+  Windows acceptance; no native, live, production, or release result is
+  claimed.
 - The intermediate 0.60.2 commit `8a52d2a21da1d5d0f69540864a6162d2b30375bc`
   repaired direct UI Automation activation for Save and Cancel. The 0.60.3
   follow-up exposed the editor text fields on semantic nodes tied to their real
@@ -884,11 +896,62 @@ passed. Ordinary UI Automation honored the active descendant, but Narrator
 still did not speak READY. Instrumentation proved PandaMUX retained native
 foreground, active, and keyboard focus. Narrator navigation synchronized to
 that focus, reached all three terminal header controls, and skipped the
-semantic Log group. Version 0.60.39 changes that output node to AccessKit's
-dedicated Terminal role, which Windows maps to a UI Automation Document. P4-C3
-stays open until an exact 0.60.39 or later Windows artifact passes successful
+semantic Log group. Exact 0.60.39 changed that output node to AccessKit's
+dedicated Terminal role and passed the complete local gate, native build, host
+gates, and standard successful-login interaction. Windows reported a focusable
+UI Automation Document, but Narrator visited it without speaking its
+parent-only accessible name and then left PandaMUX. Version 0.60.40 retains
+that Document and adds an explicit bounded semantic text child. P4-C3 stays
+open until an exact 0.60.40 or later Windows artifact passes successful
 launch, discovery, output, input, close, panel
 reopen, and the retained accessibility and scaling matrix.
+
+### Rejected 0.60.39 native repair attempt
+
+Clean commit `8b7b8804999f217ef8f03fb501b679463908e990`, version `0.60.39`,
+passed the complete local gate with 437 workspace tests and two intentional
+real-shell ignores. Its 7,034-byte source bundle has SHA-256
+`cbbac8c344f3ccbb63399cfb17404b71d246ab9448584bc21c867f54acced07c`.
+The exact native Windows build result has SHA-256
+`1bd9016ba37fa6d09bd1226946617a5bcad12b737c7782f91e22195d7a62ba8e`.
+The source was clean before and after its Rust 1.98.1 MSVC build.
+
+| Artifact | Bytes | SHA-256 |
+|-|-:|-|
+| Windows MSVC `pandamux.exe` | 27,969,024 | `468622c9f78f436ed6dbf121ea91435622eaea0ffbb5a7a6eb2dd95086cbe360` |
+| Windows MSVC `pandamux-server.exe` | 14,326,784 | `39562afa56e9d86a6448fe7463a76b81afcbe36f9010d943ce3cc7ddcabfd35f` |
+| Windows MSVC `pandamux-cli.exe` | 1,407,488 | `756b441097570d8f1887c871dd91b7b7ea4539304f3a0cbd74749b91125041d1` |
+
+The host headless, limited-user IPC, and exact release-mode remote terminal
+lifecycle gates passed. Their result hashes are
+`83939f48b503e70da5b65deae31808d88fec7ac4cba425227f64400190f58623`,
+`8f27e0f7def09da4d774d488a36fa49303c6ef3e9b655e9620870c1e8a6718cd`,
+and `36a466ca26aad2f37dde8d7c9480a92b77263e5411a2614edc8bba69b7aa0845`.
+They are retained in the isolated host evidence root
+`C:\ProgramData\PandaMUX\acceptance\phase4-8b7b880-0.60.39-p4-c3-terminal-role-build`.
+
+The first guest standard-row harness result has SHA-256
+`470e527da25fda1e31fde0c70bed354048878292c9888ca81bf343e69e112527`.
+It stopped before UI launch because the transfer omitted the guest-local
+`VCRUNTIME140.dll`; status `0xC0000135` and a direct version probe isolated the
+harness dependency omission. The result was preserved, the unchanged runtime
+DLL was restored beside the binaries, and a fresh Run2 profile was used. Run2
+passed and has SHA-256
+`67c63963796aa6c7b4a2ea693c716683dba92d6d7c4642d6d5466ca244350982`.
+It verified confirmation placement, automatic Surfaces discovery, READY, F6
+focus on `terminal-output-log`, real keyboard ECHO, panel close and reopen
+retention, explicit terminal close, and cleanup. Windows reported the output as
+`ControlType.Document`.
+
+The genuine Narrator result has SHA-256
+`985f50a1121e44d02312504f930956444d5011b0394c94db8e797d0f656ea4b4`.
+The bounded run synchronized Narrator to system focus and copied every spoken
+phrase while traversing 180 items. It reached the terminal group and all three
+header controls. At the next item, the Document produced no terminal phrase;
+Narrator then moved into another application and never spoke READY. Desktop,
+server, fixture, runtime credential, and Narrator cleanup all succeeded. This
+rejects 0.60.39 and isolates the remaining defect to a Document with only a
+parent accessible name and no explicit traversable text child.
 
 ### Rejected 0.60.38 native repair attempt
 
@@ -1576,11 +1639,16 @@ ignores, the Rust boundary guard, the Claude wiring guard, desktop headless
 verification, and diff hygiene before its native build. Exact 0.60.38 passed
 the same gate with 437 workspace tests, including the new terminal-mode
 persistence and reset coverage, before its rejected exact native run. The
-current 0.60.39 source candidate passed formatting, strict all-target and
-all-feature workspace Clippy, 437 workspace tests with zero failures and the
-same two intentional real-shell ignores, the Rust boundary guard, the Claude
-wiring guard, desktop headless verification, and diff hygiene. These local
-results do not substitute for the exact native build or Narrator row.
+exact 0.60.39 candidate passed formatting, strict all-target and all-feature
+workspace Clippy, 437 workspace tests with zero failures and the same two
+intentional real-shell ignores, the Rust boundary guard, the Claude wiring
+guard, desktop headless verification, and diff hygiene before its rejected
+exact native run. The current 0.60.40 source candidate passed formatting,
+strict all-target and all-feature workspace Clippy, 437 workspace tests with
+zero failures and the same two intentional real-shell ignores, the Rust
+boundary guard, the Claude wiring guard, desktop headless verification, and
+diff hygiene. These local results do not substitute for the exact native build
+or Narrator row.
 
 `cargo-deny` 0.20.2 could not parse the old `deny.toml` syntax. The follow-up
 configuration change removed deprecated keys and scoped seven existing
@@ -1599,7 +1667,7 @@ especially for the scoped MPL-2.0 exceptions.
 
 Phase 4 cannot yet be marked exited under `tasks/plan-rewrite.md`:
 
-1. Build an exact 0.60.39 or later native Windows candidate and rerun the
+1. Build an exact 0.60.40 or later native Windows candidate and rerun the
    expanded P4-C3 successful-login row: confirmation placement, automatic
    Terminal discovery and focus from Settings, retained output, keyboard input,
    explicit close, panel close and reopen, remote terminal ownership, 100 and

@@ -348,9 +348,14 @@ successful-login interaction. Ordinary UI Automation honored its
 active-descendant output focus, but Narrator did not speak READY. Diagnostics
 proved that native foreground, active, and keyboard focus remained correct
 while synchronized Narrator navigation reached the terminal header controls
-and skipped the semantic Log group. The 0.60.39 source candidate instead uses
-AccessKit's dedicated Terminal role, which Windows maps to a UI Automation
-Document, and still requires exact native Windows acceptance.
+and skipped the semantic Log group. Exact 0.60.39 commit `8b7b880` instead used
+AccessKit's dedicated Terminal role and passed the complete local gate, native
+build, host gates, and standard successful-login interaction. Windows reported
+the output as a focusable UI Automation Document, but genuine Narrator visited
+that Document without speaking its parent-only accessible name and then left
+PandaMUX. The 0.60.40 source candidate retains the Document and adds an explicit
+bounded text child for Narrator item navigation. It still requires exact native
+Windows acceptance.
 That row, the open real external quota-exhaustion and post-side-effect
 interruption rows, the deferred physical R0.5 laptop disconnect and sleep rows,
 the final archive after those results stabilize, and later release gates still
