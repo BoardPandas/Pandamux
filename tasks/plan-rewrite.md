@@ -180,8 +180,12 @@ Terminology used throughout:
   successful-login interaction. Its explicit controls were visible and
   invokable, but accessibility activation restored window-level focus after
   the output-focus request, so Narrator still could not read the terminal Log.
-  The 0.60.32 source candidate defers terminal focus until button activation
-  completes and is not native-accepted.
+  Exact 0.60.32 commit `952b280` passed native build, smoke, remote lifecycle,
+  and standard successful-login interaction, but direct UI Automation Invoke
+  still left focus on the PandaMUX window because the styled control fell back
+  to synthesized pointer input under Narrator. The 0.60.33 source candidate
+  gives both visible focus controls direct AccessKit Click handlers and is not
+  native-accepted.
 - Phase 4 remains open on the P4-C3 login-terminal retest, the remaining live
   P4-C5 failover rows, and the final documentation archive after those rows
   stabilize. The re-scoped physical
@@ -1975,10 +1979,13 @@ withheld F6 before PandaMUX received it, so 0.60.30 is rejected. Exact 0.60.31
 commit `0394eb3` added explicit accessible `Type here` and `Read output`
 controls and passed native build, smoke, remote lifecycle, and standard
 successful-login interaction, but Narrator invoking `Read output` left UI
-Automation focus on the PandaMUX window. Version 0.60.32 defers the terminal
-focus request until accessibility button activation completes. P4-C3 remains
-open until an exact native Windows artifact passes the expanded
-successful-login row and Narrator speaks the controlled output.
+Automation focus on the PandaMUX window. Exact 0.60.32 commit `952b280`
+deferred that focus request and passed native build, smoke, remote lifecycle,
+and standard successful-login interaction, but direct UI Automation Invoke
+still left focus on the PandaMUX window. Version 0.60.33 gives both focus
+controls direct AccessKit Click handlers instead of relying on synthesized
+pointer input. P4-C3 remains open until an exact native Windows artifact passes
+the expanded successful-login row and Narrator speaks the controlled output.
 
 The retained host evidence root is
 `C:\ProgramData\PandaMUX\acceptance\phase4-fee9e02-0.60.22-p4-c3`.

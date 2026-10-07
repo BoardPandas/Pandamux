@@ -13,11 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its own keyboard focus stop and visible focus border. The Terminal header now
   exposes explicit `Type here` and `Read output` buttons, so assistive
   technology can move focus without depending on application shortcuts being
-  passed through. Their terminal-focus request is deferred until accessibility
-  button activation finishes, preventing the invoking control from restoring
-  window-level focus over the requested terminal target. F6 remains a keyboard
-  fast path between live terminal input and the read-only output log, while
-  Shift Tab returns from the log to input.
+  passed through. Those controls use direct AccessKit Click handlers instead of
+  GPUI's synthesized-pointer fallback, which Narrator can suppress. Their
+  terminal-focus request is deferred until accessibility activation finishes,
+  preventing the invoking control from restoring window-level focus over the
+  requested terminal target. F6 remains a keyboard fast path between live
+  terminal input and the read-only output log, while Shift Tab returns from the
+  log to input.
   An application-level keystroke interceptor handles delivered F6 input before
   focus-path dispatch. Ordinary Tab remains PTY input for shell completion.
   Visible and accessible instructions report the active focus mode and its

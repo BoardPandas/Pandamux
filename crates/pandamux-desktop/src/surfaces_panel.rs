@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
-use gpui_kit::base::StyledExt as _;
+use gpui_kit::base::{Button as AccessibleButton, StyledExt as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::{ActiveTheme as _, ThemeStyled as _};
 use gpui_kit::gpui::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use pandamux_client::projections::{ThreadProjection, format_duration};
@@ -1251,6 +1252,66 @@ pub(crate) fn terminal_focus_target(
     None
 }
 
+fn terminal_focus_button<V: 'static>(
+    id: &'static str,
+    label: &'static str,
+    accessibility_label: String,
+    target: FocusHandle,
+    window: &mut Window,
+    cx: &mut Context<V>,
+) -> AnyElement {
+    // gpui-component's styled Button exposes UIA Invoke through synthesized
+    // pointer input. Narrator can suppress that fallback, so these focus-mode
+    // controls use the base button and a direct AccessKit Click listener.
+    let component_theme = cx.theme();
+    let background: Background = component_theme.transparent.into();
+    let hover_background: Background = if component_theme.mode.is_dark() {
+        component_theme.tokens.accent.opacity(0.5).into()
+    } else {
+        component_theme.tokens.accent.into()
+    };
+    let active_background: Background = component_theme.tokens.button_active.into();
+    let foreground = component_theme.secondary_foreground;
+    let hover_foreground = component_theme.accent_foreground;
+    let radius = component_theme.radius;
+    let focus_handle = window
+        .use_keyed_state(id, cx, |_, cx| cx.focus_handle())
+        .read(cx)
+        .clone();
+    let is_focused = focus_handle.is_focused(window);
+    let pointer_target = target.clone();
+
+    AccessibleButton::new(id)
+        .accessibility_label(accessibility_label)
+        .flex_shrink_0()
+        .cursor_default()
+        .h_8()
+        .px_2p5()
+        .rounded(radius)
+        .bg(background)
+        .text_color(foreground)
+        .text_base()
+        .line_height(relative(1.25))
+        .hover(move |style| style.bg(hover_background).text_color(hover_foreground))
+        .active(move |style| style.bg(active_background).text_color(hover_foreground))
+        .track_focus(&focus_handle)
+        .on_click(move |_event, window, cx| {
+            let target = pointer_target.clone();
+            window.defer(cx, move |window, cx| {
+                window.focus(&target, cx);
+            });
+        })
+        .on_a11y_action(AccessibleAction::Click, move |_data, window, cx| {
+            let target = target.clone();
+            window.defer(cx, move |window, cx| {
+                window.focus(&target, cx);
+            });
+        })
+        .child(label)
+        .when(is_focused, |button| button.focus_ring_style(window, cx))
+        .into_any_element()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_terminal_surface<V: 'static>(
     terminal: Option<&TerminalViewState>,
@@ -1269,8 +1330,6 @@ fn render_terminal_surface<V: 'static>(
         let output_is_focused = output_focus.is_focused(window);
         let input_focus_for_navigation = focus_handle.clone();
         let output_focus_for_navigation = output_focus.clone();
-        let input_focus_for_button = focus_handle.clone();
-        let output_focus_for_button = output_focus.clone();
         div()
             .id("interactive-terminal-surface")
             .size_full()
@@ -1348,43 +1407,22 @@ fn render_terminal_surface<V: 'static>(
                             .h_flex()
                             .items_center()
                             .gap_1()
-                            .child(
-                                Button::new("focus-active-terminal-input")
-                                    .ghost()
-                                    .label("Type here")
-                                    .accessibility_label(format!(
-                                        "Focus terminal input {}",
-                                        term.title
-                                    ))
-                                    .tooltip("Focus terminal input")
-                                    .on_click(move |_event, window, cx| {
-                                        // Accessibility activation may restore focus to the
-                                        // invoking button after this callback returns. Defer the
-                                        // terminal focus request so it wins that ordering.
-                                        let input_focus = input_focus_for_button.clone();
-                                        window.defer(cx, move |window, cx| {
-                                            window.focus(&input_focus, cx);
-                                        });
-                                    }),
-                            )
-                            .child(
-                                Button::new("focus-active-terminal-output")
-                                    .ghost()
-                                    .label("Read output")
-                                    .accessibility_label(format!(
-                                        "Focus terminal output {}",
-                                        term.title
-                                    ))
-                                    .tooltip("Focus terminal output for screen readers")
-                                    .on_click(move |_event, window, cx| {
-                                        // See the input action above: defer past the button's
-                                        // accessibility activation focus restoration.
-                                        let output_focus = output_focus_for_button.clone();
-                                        window.defer(cx, move |window, cx| {
-                                            window.focus(&output_focus, cx);
-                                        });
-                                    }),
-                            )
+                            .child(terminal_focus_button(
+                                "focus-active-terminal-input",
+                                "Type here",
+                                format!("Focus terminal input {}", term.title),
+                                focus_handle.clone(),
+                                window,
+                                cx,
+                            ))
+                            .child(terminal_focus_button(
+                                "focus-active-terminal-output",
+                                "Read output",
+                                format!("Focus terminal output {}", term.title),
+                                output_focus.clone(),
+                                window,
+                                cx,
+                            ))
                             .child(
                                 Button::new("close-active-terminal")
                                     .ghost()

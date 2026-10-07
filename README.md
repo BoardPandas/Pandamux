@@ -68,9 +68,12 @@ R0 development gate:
   Its explicit `Type here` and `Read output` controls were visible and
   invokable, but accessibility activation restored window-level focus after
   the click handler requested the output Log, so Narrator still could not read
-  READY or ECHO. The 0.60.32 source candidate defers the requested terminal
-  focus until button activation completes and still requires exact native
-  Windows acceptance.
+  READY or ECHO. Exact 0.60.32 commit `952b280` passed native build, smoke,
+  remote lifecycle, and standard successful-login interaction, but direct UI
+  Automation Invoke still left focus on the PandaMUX window because the styled
+  control fell back to synthesized pointer input under Narrator. The 0.60.33
+  source candidate routes both visible focus controls through direct AccessKit
+  Click handlers and still requires exact native Windows acceptance.
   Real external quota exhaustion, real post-side-effect interruption, and the
   deferred physical laptop checks keep the Phase 4 exit matrix open.
 
