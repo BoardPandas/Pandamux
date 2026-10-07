@@ -723,14 +723,32 @@ pub fn render_terminal_view(
 
     // A Terminal maps to a Windows UIA Document, but Narrator does not speak a
     // document's parent-only accessible name during item navigation. Publish
-    // the same bounded text on a concrete child Text control so the document
-    // has a traversable readable target without duplicating visual content.
+    // the bounded output as a Label value backed by a TextRun so Windows keeps
+    // a concrete Text child and exposes TextPattern on both the child and the
+    // containing Document without duplicating visual content.
     let accessible_output = state.accessible_output();
     let screen_content = div()
         .id("terminal-output-text")
         .role(Role::Label)
         .accessibility_id("terminal-output-text")
-        .aria_label(accessible_output.clone())
+        // AccessKit derives a Label node's platform name from its value. A
+        // label-only property is not text content and was omitted from the
+        // Windows UIA tree in the rejected 0.60.40 native candidate.
+        .aria_value(accessible_output.clone())
+        .a11y_synthetic_children({
+            let accessible_output = accessible_output.clone();
+            move |builder| {
+                let character_lengths = accessible_output
+                    .chars()
+                    .map(|character| character.len_utf8() as u8)
+                    .collect::<Vec<_>>();
+                let mut text_run = accesskit::Node::new(Role::TextRun);
+                text_run.set_value(accessible_output);
+                text_run.set_character_lengths(character_lengths);
+                let text_run_id = builder.synthetic_node_id("terminal-output-text-run");
+                let _ = builder.push_child(text_run_id, text_run);
+            }
+        })
         .v_flex()
         .children(row_elements);
 
@@ -743,7 +761,7 @@ pub fn render_terminal_view(
         .role(Role::Terminal)
         .on_a11y_action(AccessibleAction::Focus, on_output_focus)
         .accessibility_id("terminal-output-log")
-        .aria_label(accessible_output)
+        .aria_label("Terminal output")
         .aria_description(
             "Read-only visible terminal output. Press F6 or Shift Tab to return to terminal input. F6 also reaches this output from anywhere in PandaMUX while the terminal surface is open.",
         )

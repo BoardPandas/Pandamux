@@ -104,9 +104,12 @@ AccessKit's dedicated Terminal role and passed the complete local gate, native
 build, host gates, and standard successful-login interaction. Windows reported
 the output as a focusable UI Automation Document, but genuine Narrator visited
 that Document without speaking its parent-only accessible name and then left
-PandaMUX. The 0.60.40 source candidate retains the Document and adds an explicit
-bounded text child for Narrator item navigation. It still requires exact native
-Windows acceptance. Exact 0.60.17
+PandaMUX. Exact 0.60.40 commit `d4c9dd8` retained the Document, passed its local
+gate, native build, and host gates, but failed the standard guest row because
+its label-only semantic child was absent from Windows UI Automation. The
+0.60.41 source candidate publishes the child value with a synthetic text run
+so UIA can expose TextPattern content. It still requires exact native Windows
+acceptance. Exact 0.60.17
 partially passed P4-C5 with live scanner and Hub durability, conservative
 capacity and route decisions, and independent rollback controls. The reopened
 login-terminal row, real external quota exhaustion, real post-side-effect

@@ -33,10 +33,12 @@ note. Its complete local gate, native build, host headless and limited-user
 smoke, remote lifecycle, and standard successful-login row passed. Windows
 reported `terminal-output-log` as a focusable UI Automation Document, but
 genuine Narrator visited that Document without speaking its parent-only
-accessible name and then left PandaMUX. The 0.60.40 source candidate retains
-the Terminal/Document parent and publishes the same 4,096-character bounded
-output on an explicit semantic text child. It still requires exact native
-acceptance.
+accessible name and then left PandaMUX. Exact 0.60.40 commit `d4c9dd8` retained
+the Document, but its label-only semantic child was absent from the exact
+Windows UI Automation tree despite passing the local, native-build, and host
+gates. The 0.60.41 source candidate provides that child through an AccessKit
+value backed by a synthetic text run, enabling UIA TextPattern content. It still
+requires exact native acceptance.
 
 ## Build and development
 

@@ -98,9 +98,13 @@ R0 development gate:
   Terminal role and passed the complete local gate, native build, host gates,
   and standard successful-login interaction. Windows reported the output as a
   focusable UI Automation Document, but genuine Narrator visited that Document
-  without speaking its parent-only accessible name, then left PandaMUX. The
-  0.60.40 source candidate keeps the Document and adds an explicit bounded text
-  child for Narrator item navigation. It still requires exact native acceptance.
+  without speaking its parent-only accessible name, then left PandaMUX. Exact
+  0.60.40 commit `d4c9dd8` kept that Document and attempted a semantic Label
+  child; its local gate, native build, and host gates passed, but the standard
+  guest row proved the label-only child was absent from Windows UI Automation.
+  The 0.60.41 source candidate supplies the child value plus a synthetic text
+  run so the Document can expose TextPattern content. It still requires exact
+  native acceptance.
   Real external quota exhaustion, real post-side-effect interruption, and the
   deferred physical laptop checks keep the Phase 4 exit matrix open.
 

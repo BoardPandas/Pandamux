@@ -209,9 +209,12 @@ Terminology used throughout:
   role and passed the complete local gate, native build, host gates, and
   standard successful-login interaction. Windows reported the output as a
   focusable UI Automation Document, but genuine Narrator visited that Document
-  without speaking its parent-only accessible name and then left PandaMUX. The
-  0.60.40 source candidate retains the Document and adds an explicit bounded
-  text child for Narrator item navigation. It is not native-accepted.
+  without speaking its parent-only accessible name and then left PandaMUX.
+  Exact 0.60.40 commit `d4c9dd8` retained the Document, passed the local gate,
+  native build, and host gates, but its label-only semantic child was absent
+  from the exact Windows UI Automation tree. The current workspace 0.60.41
+  source candidate supplies that child value with a synthetic text run so the
+  Document can expose TextPattern content. It is not native-accepted.
 - Phase 4 remains open on the P4-C3 login-terminal retest, the remaining live
   P4-C5 failover rows, and the final documentation archive after those rows
   stabilize. The re-scoped physical
@@ -2036,9 +2039,11 @@ Exact 0.60.39 commit `8b7b880` changed that output node to AccessKit's
 dedicated Terminal role and passed the complete local gate, native build, host
 gates, and standard successful-login interaction. Windows reported a focusable
 UI Automation Document, but Narrator reached it without speaking the
-parent-only accessible name and then left PandaMUX. Version 0.60.40 retains
-that Document and adds an explicit bounded semantic text child. P4-C3 remains
-open until an exact native Windows artifact passes the expanded
+parent-only accessible name and then left PandaMUX. Exact 0.60.40 retained that
+Document but failed because its label-only semantic child was absent from the
+Windows UI Automation tree. Version 0.60.41 provides the Label value plus a
+synthetic text run for TextPattern content. P4-C3 remains open until an exact
+native Windows artifact passes the expanded
 successful-login row and Narrator speaks the controlled output.
 
 The retained host evidence root is
