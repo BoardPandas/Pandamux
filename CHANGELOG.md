@@ -10,15 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Made visible Terminal output predictably reachable by assistive technology.**
   Terminal surfaces publish their bounded visible grid as a semantic log with
-  its own keyboard focus stop and visible focus border. F6 now moves focus
-  between live terminal input and the read-only output log, while Shift Tab
-  returns from the log to input. An application-level keystroke interceptor,
-  scoped to the main PandaMUX window and active Terminal surface, handles F6
-  before focus-path dispatch. It therefore still reaches output when Narrator
-  leaves the native window active without a GPUI child focus. Ordinary Tab
-  remains PTY input for shell completion. Visible and accessible instructions
-  report the active focus mode and its return path without exposing unbounded
-  scrollback.
+  its own keyboard focus stop and visible focus border. The Terminal header now
+  exposes explicit `Type here` and `Read output` buttons, so assistive
+  technology can move focus without depending on application shortcuts being
+  passed through. F6 remains a keyboard fast path between live terminal input
+  and the read-only output log, while Shift Tab returns from the log to input.
+  An application-level keystroke interceptor handles delivered F6 input before
+  focus-path dispatch. Ordinary Tab remains PTY input for shell completion.
+  Visible and accessible instructions report the active focus mode and its
+  return path without exposing unbounded scrollback.
 
 - **Submitted provider login commands with the native PTY Enter sequence.**
   Windows ConPTY login terminals now receive a carriage return, so PowerShell

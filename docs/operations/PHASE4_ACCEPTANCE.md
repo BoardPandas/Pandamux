@@ -31,9 +31,12 @@ where the terminal-scoped F6 handler could not run, so 0.60.28 is rejected.
 Exact 0.60.29 commit `2b3b806` passed native build, smoke, remote lifecycle,
 successful-login interaction, 200 percent scaling, High Contrast, and
 disabled-animation rows, but its root visual handler still had no GPUI focus
-path under Narrator and did not receive F6. The 0.60.30 source candidate
-intercepts F6 at the application level before focus-path dispatch and has not
-passed exact native Windows acceptance. Exact
+path under Narrator and did not receive F6. Exact 0.60.30 commit `9dae237`
+passed native build, smoke, remote lifecycle, and standard successful-login
+interaction, but Narrator still consumed or withheld F6 before PandaMUX
+received it. The 0.60.31 source candidate adds explicit accessible `Type here`
+and `Read output` controls instead of requiring shortcut pass-through and has
+not passed exact native Windows acceptance. Exact
 0.60.17 commit `2f56a27` passed the scanner, Hub
 synchronization, conservative capacity projection, route-explanation, and
 rollback-control portions of P4-C5. Real provider quota exhaustion and real
@@ -96,11 +99,18 @@ or release occurred.
   disabled-animation rows passed. Narrator reproduced the PandaMUX-window
   focus state, and F6 still did not reach the root visual handler because GPUI
   had no child focus path, so the attempt is rejected.
-- Current reopened P4-C3 repair source: workspace version `0.60.30` in the
-  isolated recovery worktree. It intercepts F6 at the application level before
-  focus-path dispatch while an active Terminal surface is open. It has local
-  source verification only until the committed source is built natively on
-  Windows; no native, live, production, or release result is claimed.
+- Seventh reopened P4-C3 repair source: clean commit
+  `9dae2374aae7351626416e5973c224eaa8cfb096`, version `0.60.30`. Its exact
+  native build, headless and limited-user smoke, remote login lifecycle, and
+  standard successful-login interaction passed. Narrator reproduced the
+  PandaMUX-window focus state, and F6 still did not reach the application
+  interceptor, so the attempt is rejected.
+- Current reopened P4-C3 repair source: workspace version `0.60.31` in the
+  isolated recovery worktree. It adds explicit accessible `Type here` and
+  `Read output` controls to the Terminal header so assistive technology does
+  not depend on shortcut pass-through. It has local source verification only
+  until the committed source is built natively on Windows; no native, live,
+  production, or release result is claimed.
 - The intermediate 0.60.2 commit `8a52d2a21da1d5d0f69540864a6162d2b30375bc`
   repaired direct UI Automation activation for Save and Cancel. The 0.60.3
   follow-up exposed the editor text fields on semantic nodes tied to their real
@@ -750,9 +760,13 @@ rejected. Exact 0.60.29 gave the Log an application-owned focus handle and
 moved F6 to the root visual element. Its native build, smoke, remote lifecycle,
 successful-login, 200 percent, High Contrast, and disabled-animation rows
 passed. Narrator reproduced window-only focus, but the visual root still had no
-GPUI focus path and did not receive F6, so 0.60.29 is rejected. Version 0.60.30
-intercepts F6 at the application level before focus-path dispatch. P4-C3 stays
-open until an exact 0.60.30 or later Windows artifact passes successful launch,
+GPUI focus path and did not receive F6, so 0.60.29 is rejected. Exact 0.60.30
+moved F6 to an application-level interceptor. Its native build, smoke, remote
+lifecycle, and standard successful-login interaction passed, but Narrator
+still consumed or withheld F6 before PandaMUX received it, so 0.60.30 is
+rejected. Version 0.60.31 adds explicit accessible `Type here` and `Read
+output` controls instead of requiring shortcut pass-through. P4-C3 stays open
+until an exact 0.60.31 or later Windows artifact passes successful launch,
 discovery, output, input, close, panel reopen, and the retained accessibility
 and scaling matrix.
 
@@ -800,6 +814,47 @@ SHA-256
 `9087b84fb8b2dd84fcf89be91df2ae5132bd68417a6a1a483228d71303683dea`.
 The root visual handler still depended on a GPUI focus dispatch path, so this
 is a product failure rather than accepted Narrator evidence.
+
+### Rejected 0.60.30 native repair attempt
+
+Clean commit `9dae2374aae7351626416e5973c224eaa8cfb096`, version `0.60.30`,
+was built by `COLT-SHINE\B_StL` from an isolated source under
+`C:\ProgramData\PandaMUX\acceptance\phase4-9dae237-0.60.30-p4-c3-repair-build`.
+The source was clean before and after the build. The 5,656-byte transfer bundle
+had SHA-256
+`2afe9abc9f985945daede8dba272d6e5311fef8d6656c3668330ab8e9a4f1f31`.
+
+| Artifact | Bytes | SHA-256 |
+|-|-:|-|
+| Windows MSVC `pandamux.exe` | 27,933,184 | `3a977f9caef5e4794cc42bcee386419a7d78012ef22ba329d19ec322906509db` |
+| Windows MSVC `pandamux-server.exe` | 14,328,832 | `7917fac8fc1365a18a194d7ea66a75dfbb005a5871485d78e8d616da1a30bc7e` |
+| Windows MSVC `pandamux-cli.exe` | 1,407,488 | `21bb2c383126e662c22424b7ccba2ca9ba5f78167bd2e3458936456a3dc52d49` |
+
+The exact build, headless check, limited-user authenticated Hub and CLI smoke,
+and mock-remote login-terminal lifecycle test passed. Their result files have
+SHA-256 values
+`f0906d93ca88a946f769d8194bf5821943be20f27e67f991d20676097201680c`,
+`75786031fd472b1ab42f49898c11dd310745860e7e10ee2c463f41c14355637b`,
+`7bc3014b5f77467e7c54a2102a2183c0e6417f5ffbb94d6400492470c0ce1072`,
+and `0557af652ac4bdf8684c7b96410ec6032de504ff3ed52262da675f2bd50ddcf5`.
+
+The native lab root was
+`C:\ProgramData\PandaMUX\acceptance\phase4-9dae237-0.60.30-p4-c3-repair-lab`.
+The standard successful-login result passed at SHA-256
+`853e0ace4249501349137d4627440cd29311bf27d5554d36896fcfde230f22cc`.
+It verified visible confirmation, automatic Terminal discovery, READY and ECHO
+output, F6 input/output switching, retained output after closing and reopening
+Surfaces, keyboard close, process cleanup, and 96 DPI state.
+
+The genuine Narrator run again reproduced the exact unresolved state: before
+F6, Windows UI Automation reported the `PandaMUX` window rather than a terminal
+child as focused. One real F6 keystroke left focus at that window instead of
+moving it to `terminal-output-log`, even though the handler was registered as
+an application-level keystroke interceptor. The cleaned-up rejected Narrator
+result has SHA-256
+`0288451926a846ef3786295fe59d7deaade31cf7ab2b9f1de54b9edb3d2d8307`.
+The next candidate therefore exposes explicit accessible controls instead of
+assuming assistive technology will pass the shortcut through.
 
 ### Build and limited-user startup
 

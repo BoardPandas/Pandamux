@@ -317,8 +317,12 @@ where the terminal-scoped F6 route could not run, so 0.60.28 is rejected.
 Exact 0.60.29 commit `2b3b806` passed native build, smoke, remote lifecycle,
 successful-login, 200 percent, High Contrast, and disabled-animation rows, but
 its root visual handler still had no GPUI focus path under Narrator and did not
-receive F6. The 0.60.30 source candidate intercepts F6 at the application level
-before focus-path dispatch and still requires exact native Windows acceptance.
+receive F6. Exact 0.60.30 commit `9dae237` passed native build, smoke, remote
+lifecycle, and standard successful-login interaction, but Narrator still
+consumed or withheld F6 before PandaMUX received it. The 0.60.31 source
+candidate adds explicit accessible `Type here` and `Read output` controls
+instead of requiring shortcut pass-through and still requires exact native
+Windows acceptance.
 That row, the open real external quota-exhaustion and post-side-effect
 interruption rows, the deferred physical R0.5 laptop disconnect and sleep rows,
 the final archive after those results stabilize, and later release gates still

@@ -1269,6 +1269,8 @@ fn render_terminal_surface<V: 'static>(
         let output_is_focused = output_focus.is_focused(window);
         let input_focus_for_navigation = focus_handle.clone();
         let output_focus_for_navigation = output_focus.clone();
+        let input_focus_for_button = focus_handle.clone();
+        let output_focus_for_button = output_focus.clone();
         div()
             .id("interactive-terminal-surface")
             .size_full()
@@ -1319,9 +1321,8 @@ fn render_terminal_surface<V: 'static>(
             }))
             .child(
                 div()
-                    .h_flex()
-                    .items_center()
-                    .justify_between()
+                    .v_flex()
+                    .gap_1()
                     .px_2()
                     .py_1()
                     .border_b_1()
@@ -1335,21 +1336,57 @@ fn render_terminal_surface<V: 'static>(
                                 theme.chrome.text_t3
                             })
                             .child(if output_is_focused {
-                                "Terminal output focused. Press F6 or Shift Tab to type."
+                                "Reading terminal output. Choose Type here to return to input."
                             } else if is_focused {
-                                "Terminal focused. Keyboard input is live. Press F6 anywhere in PandaMUX to review output."
+                                "Typing in terminal. Choose Read output for screen readers."
                             } else {
-                                "Click or tab into the terminal to type."
+                                "Choose Type here or Read output. F6 switches modes."
                             }),
                     )
                     .child(
-                        Button::new("close-active-terminal")
-                            .ghost()
-                            .label("Close terminal")
-                            .accessibility_label(format!("Close terminal {}", term.title))
-                            .on_click(cx.listener(move |this, _event, window, cx| {
-                                on_close_terminal(this, window, cx);
-                            })),
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                Button::new("focus-active-terminal-input")
+                                    .ghost()
+                                    .label("Type here")
+                                    .accessibility_label(format!(
+                                        "Focus terminal input {}",
+                                        term.title
+                                    ))
+                                    .tooltip("Focus terminal input")
+                                    .on_click(move |_event, window, cx| {
+                                        window.focus(&input_focus_for_button, cx);
+                                    }),
+                            )
+                            .child(
+                                Button::new("focus-active-terminal-output")
+                                    .ghost()
+                                    .label("Read output")
+                                    .accessibility_label(format!(
+                                        "Focus terminal output {}",
+                                        term.title
+                                    ))
+                                    .tooltip("Focus terminal output for screen readers")
+                                    .on_click(move |_event, window, cx| {
+                                        window.focus(&output_focus_for_button, cx);
+                                    }),
+                            )
+                            .child(
+                                Button::new("close-active-terminal")
+                                    .ghost()
+                                    .label("Close")
+                                    .accessibility_label(format!(
+                                        "Close terminal {}",
+                                        term.title
+                                    ))
+                                    .tooltip("Close terminal")
+                                    .on_click(cx.listener(move |this, _event, window, cx| {
+                                        on_close_terminal(this, window, cx);
+                                    })),
+                            ),
                     ),
             )
             .child(
