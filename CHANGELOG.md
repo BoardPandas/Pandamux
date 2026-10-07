@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Rejected local named-pipe servers whose kernel identity does not match PandaMUX.**
+  Windows desktop and CLI connections now read the server PID from the opened pipe,
+  compare it with the matching runtime record when available, resolve the process image,
+  and require `pandamux-server.exe` before sending authentication or RPC bytes. This
+  completes the client side of the existing SID-scoped DACL, remote-client rejection,
+  first-instance, and server-side client-image controls.
+
 - **Kept keyboard focus visible across the Phase 4 Usage and Settings workflows.**
   Opening the subscription editor now scrolls it into view on a guaranteed follow-up frame,
   and Cancel or Save returns both focus and the viewport to the subscription list. Settings

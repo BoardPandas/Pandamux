@@ -17,6 +17,8 @@ pub mod system;
 pub mod terminal_rpc;
 pub mod thread_rpc;
 pub mod usage_rpc;
+#[cfg(windows)]
+pub mod windows_security;
 pub mod worktree_rpc;
 
 pub use antigravity_rpc::{

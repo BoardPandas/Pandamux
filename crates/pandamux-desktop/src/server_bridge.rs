@@ -227,7 +227,7 @@ pub fn spawn_server_bridge(
                 let pipe_path = runtime_info.pipe_path.clone();
 
                 // 2. Connect over IPC
-                let stream_res = connect_ipc(&pipe_path).await;
+                let stream_res = connect_ipc(&pipe_path, Some(runtime_info.pid)).await;
                 let stream = match stream_res {
                     Ok(s) => {
                         retry_backoff_ms = 250;
@@ -539,11 +539,18 @@ fn get_server_runtime_path() -> Option<PathBuf> {
 }
 
 /// Connects to server IPC (Windows Named Pipe or Unix Domain Socket).
-async fn connect_ipc(pipe_path: &str) -> Result<Box<dyn AsyncReadWrite + Send>, std::io::Error> {
+async fn connect_ipc(
+    pipe_path: &str,
+    _expected_server_pid: Option<u32>,
+) -> Result<Box<dyn AsyncReadWrite + Send>, std::io::Error> {
     #[cfg(windows)]
     {
         use tokio::net::windows::named_pipe::ClientOptions;
         let client = ClientOptions::new().open(pipe_path)?;
+        pandamux_protocol::windows_security::validate_named_pipe_server(
+            &client,
+            _expected_server_pid,
+        )?;
         Ok(Box::new(client))
     }
 
