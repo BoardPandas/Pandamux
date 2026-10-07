@@ -1358,7 +1358,13 @@ fn render_terminal_surface<V: 'static>(
                                     ))
                                     .tooltip("Focus terminal input")
                                     .on_click(move |_event, window, cx| {
-                                        window.focus(&input_focus_for_button, cx);
+                                        // Accessibility activation may restore focus to the
+                                        // invoking button after this callback returns. Defer the
+                                        // terminal focus request so it wins that ordering.
+                                        let input_focus = input_focus_for_button.clone();
+                                        window.defer(cx, move |window, cx| {
+                                            window.focus(&input_focus, cx);
+                                        });
                                     }),
                             )
                             .child(
@@ -1371,7 +1377,12 @@ fn render_terminal_surface<V: 'static>(
                                     ))
                                     .tooltip("Focus terminal output for screen readers")
                                     .on_click(move |_event, window, cx| {
-                                        window.focus(&output_focus_for_button, cx);
+                                        // See the input action above: defer past the button's
+                                        // accessibility activation focus restoration.
+                                        let output_focus = output_focus_for_button.clone();
+                                        window.defer(cx, move |window, cx| {
+                                            window.focus(&output_focus, cx);
+                                        });
                                     }),
                             )
                             .child(

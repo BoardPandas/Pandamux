@@ -63,9 +63,14 @@ R0 development gate:
   had no GPUI focus path under Narrator and did not receive F6. Exact 0.60.30
   commit `9dae237` passed native build, smoke, remote lifecycle, and standard
   successful-login interaction, but Narrator still consumed or withheld F6
-  before PandaMUX received it. The 0.60.31 source candidate adds explicit
-  accessible `Type here` and `Read output` controls instead of requiring
-  shortcut pass-through and still requires exact native Windows acceptance.
+  before PandaMUX received it. Exact 0.60.31 commit `0394eb3` passed native
+  build, smoke, remote lifecycle, and standard successful-login interaction.
+  Its explicit `Type here` and `Read output` controls were visible and
+  invokable, but accessibility activation restored window-level focus after
+  the click handler requested the output Log, so Narrator still could not read
+  READY or ECHO. The 0.60.32 source candidate defers the requested terminal
+  focus until button activation completes and still requires exact native
+  Windows acceptance.
   Real external quota exhaustion, real post-side-effect interruption, and the
   deferred physical laptop checks keep the Phase 4 exit matrix open.
 

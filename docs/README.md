@@ -70,9 +70,13 @@ scaling, High Contrast, and disabled-animation rows, but its root visual
 handler still had no GPUI focus path under Narrator and did not receive F6.
 Exact 0.60.30 commit `9dae237` passed native build, smoke, remote lifecycle, and
 standard successful-login interaction, but Narrator still consumed or withheld
-F6 before PandaMUX received it. The 0.60.31 source candidate adds explicit
-accessible `Type here` and `Read output` controls instead of requiring shortcut
-pass-through and still requires exact native Windows acceptance. Exact 0.60.17
+F6 before PandaMUX received it. Exact 0.60.31 commit `0394eb3` passed native
+build, smoke, remote lifecycle, and standard successful-login interaction. Its
+explicit controls were visible and invokable, but accessibility activation
+restored window-level focus after the output-focus request, so Narrator still
+could not read the terminal Log. The 0.60.32 source candidate defers terminal
+focus until button activation completes and still requires exact native Windows
+acceptance. Exact 0.60.17
 partially passed P4-C5 with live scanner and Hub durability, conservative
 capacity and route decisions, and independent rollback controls. The reopened
 login-terminal row, real external quota exhaustion, real post-side-effect

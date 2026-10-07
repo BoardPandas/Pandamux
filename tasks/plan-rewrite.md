@@ -175,9 +175,13 @@ Terminology used throughout:
   but its root visual handler still had no GPUI focus path under Narrator and
   did not receive F6. Exact 0.60.30 commit `9dae237` passed native build, smoke,
   remote lifecycle, and standard successful-login interaction, but Narrator
-  still consumed or withheld F6 before PandaMUX received it. The 0.60.31 source
-  candidate adds explicit accessible `Type here` and `Read output` controls
-  instead of requiring shortcut pass-through and is not native-accepted.
+  still consumed or withheld F6 before PandaMUX received it. Exact 0.60.31
+  commit `0394eb3` passed native build, smoke, remote lifecycle, and standard
+  successful-login interaction. Its explicit controls were visible and
+  invokable, but accessibility activation restored window-level focus after
+  the output-focus request, so Narrator still could not read the terminal Log.
+  The 0.60.32 source candidate defers terminal focus until button activation
+  completes and is not native-accepted.
 - Phase 4 remains open on the P4-C3 login-terminal retest, the remaining live
   P4-C5 failover rows, and the final documentation archive after those rows
   stabilize. The re-scoped physical
@@ -1967,11 +1971,14 @@ root visual handler still did not receive F6 because no GPUI child focus path
 existed, so 0.60.29 is rejected. Exact 0.60.30 commit `9dae237` moved F6 to an
 application-level interceptor. Its native build, smoke, remote lifecycle, and
 standard successful-login interaction passed, but Narrator still consumed or
-withheld F6 before PandaMUX received it, so 0.60.30 is rejected. Version
-0.60.31 adds explicit accessible `Type here` and `Read output` controls instead
-of requiring shortcut pass-through. P4-C3 remains open until an exact native
-Windows artifact passes the expanded successful-login row and Narrator speaks
-the controlled output.
+withheld F6 before PandaMUX received it, so 0.60.30 is rejected. Exact 0.60.31
+commit `0394eb3` added explicit accessible `Type here` and `Read output`
+controls and passed native build, smoke, remote lifecycle, and standard
+successful-login interaction, but Narrator invoking `Read output` left UI
+Automation focus on the PandaMUX window. Version 0.60.32 defers the terminal
+focus request until accessibility button activation completes. P4-C3 remains
+open until an exact native Windows artifact passes the expanded
+successful-login row and Narrator speaks the controlled output.
 
 The retained host evidence root is
 `C:\ProgramData\PandaMUX\acceptance\phase4-fee9e02-0.60.22-p4-c3`.
