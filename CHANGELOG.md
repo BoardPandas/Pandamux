@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Stopped keyboard activation from crashing the Usage subscription editor.**
+  Opening, saving, or canceling the editor now schedules its follow-up scroll
+  repaint through the window-safe GPUI refresh path, so Enter activation no
+  longer aborts after the render context has ended.
+
 - **Made server inspection commands side-effect free.** `pandamux-server --help`
   and `pandamux-server --version` now print and exit without creating a runtime
   or database. Unknown, incomplete, conflicting, and invalid startup arguments

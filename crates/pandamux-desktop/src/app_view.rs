@@ -1166,7 +1166,7 @@ impl AppView {
         window.defer(cx, move |window, cx| {
             window.focus(&name_focus, cx);
             editor_scroll_anchor.scroll_to(window, cx);
-            window.on_next_frame(|window, _cx| window.request_animation_frame());
+            schedule_post_scroll_refresh(window);
         });
     }
 
@@ -1182,7 +1182,7 @@ impl AppView {
         }
         cx.notify();
         subscriptions_scroll_anchor.scroll_to(window, cx);
-        window.on_next_frame(|window, _cx| window.request_animation_frame());
+        schedule_post_scroll_refresh(window);
     }
 
     pub fn save_usage_subscription_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1252,7 +1252,7 @@ impl AppView {
                         window.focus(&previous_focus, cx);
                     }
                     subscriptions_scroll_anchor.scroll_to(window, cx);
-                    window.on_next_frame(|window, _cx| window.request_animation_frame());
+                    schedule_post_scroll_refresh(window);
                     app.load_usage(cx);
                 }
                 Err(message) => {
@@ -2223,6 +2223,14 @@ impl AppView {
             .child(div().child(server_desc))
             .child(div().child(git_info))
     }
+}
+
+/// `ScrollAnchor::scroll_to` applies its offset in a next-frame callback. Ask
+/// for the follow-up paint with the window-scoped API because these callbacks
+/// run outside GPUI's rendered-entity stack; `request_animation_frame` is only
+/// valid while an entity is rendering and panics when invoked here.
+fn schedule_post_scroll_refresh(window: &Window) {
+    window.on_next_frame(|window, _cx| window.refresh());
 }
 
 #[cfg(test)]
