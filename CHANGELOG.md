@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Connected Phase 4 scroll commands to the rendered viewports.** The Usage
+  editor and Settings Page Up/Page Down paths now share their `ScrollHandle`
+  with the actual scrolling element and visible scrollbar. Programmatic focus
+  scrolling no longer updates a detached content handle while the screen stays
+  at the top.
+
 - **Stopped keyboard activation from crashing the Usage subscription editor.**
   Opening, saving, or canceling the editor now schedules its follow-up scroll
   repaint through the window-safe GPUI refresh path, so Enter activation no

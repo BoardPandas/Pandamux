@@ -153,7 +153,10 @@ pub fn render_usage_view<V: 'static>(
                 .gap_4()
                 .p_4()
                 .track_scroll(scroll_handle)
-                .overflow_y_scrollbar()
+                // Keep the viewport and scrollbar on the same public handle so
+                // editor focus can scroll the newly rendered form into view.
+                .overflow_y_scroll()
+                .vertical_scrollbar(scroll_handle)
                 .child(render_filters(
                     state,
                     catalog,

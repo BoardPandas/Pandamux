@@ -469,7 +469,10 @@ pub fn render_settings_view<V: 'static>(
                 .flex_1()
                 .min_h_0()
                 .track_scroll(scroll_handle)
-                .overflow_y_scrollbar()
+                // Page Up/Down and the visible scrollbar must drive the same
+                // viewport; overflow_y_scrollbar creates a private handle.
+                .overflow_y_scroll()
+                .vertical_scrollbar(scroll_handle)
                 .on_key_down({
                     let scroll_handle = scroll_handle.clone();
                     move |event, window, cx| {
