@@ -9,10 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Kept keyboard focus visible across the Phase 4 Usage and Settings workflows.**
-  Opening the subscription editor now scrolls it into view and Cancel or Save returns
-  both focus and the viewport to the subscription list. Settings categories now scroll
-  within the available window, so provider health, login, policy, and diagnostics actions
-  remain reachable at compact sizes and high display scaling. Filter announcements include
+  Opening the subscription editor now scrolls it into view on a guaranteed follow-up frame,
+  and Cancel or Save returns both focus and the viewport to the subscription list. Settings
+  categories retain scroll state, respond to Page Up and Page Down, and reset at the top when
+  changed, so provider health, login, policy, and diagnostics actions remain reachable at
+  compact sizes and high display scaling. Filter announcements include
   their current values, settings results expose Alert or Status semantics, and active rail
   and Settings destinations use explicit markers plus selected state instead of tint alone.
 

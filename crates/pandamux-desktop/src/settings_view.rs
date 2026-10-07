@@ -363,6 +363,20 @@ fn next_compatible_access_mode(current: AccessMode, members: &[FailoverPoolMembe
     current
 }
 
+fn settings_scroll_offset_for_key(
+    key: &str,
+    current: Pixels,
+    maximum: Pixels,
+    viewport: Pixels,
+) -> Option<Pixels> {
+    let page = (viewport * 0.85).max(px(1.));
+    match key {
+        "pagedown" => Some((current - page).max(-maximum)),
+        "pageup" => Some((current + page).min(px(0.))),
+        _ => None,
+    }
+}
+
 /// Renders the complete Settings view based on active category.
 #[allow(clippy::too_many_arguments)]
 pub fn render_settings_view<V: 'static>(
@@ -370,6 +384,7 @@ pub fn render_settings_view<V: 'static>(
     usage_catalog: &UsageCatalogResult,
     theme: &Theme,
     server_status: String,
+    scroll_handle: &ScrollHandle,
     on_save: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
     on_check_health: impl Fn(&mut V, Option<ProviderInstanceId>, &mut Window, &mut Context<V>)
     + 'static
@@ -450,9 +465,32 @@ pub fn render_settings_view<V: 'static>(
         // Category Content Body
         .child(
             div()
+                .id("settings-content-scroll")
                 .flex_1()
                 .min_h_0()
+                .track_scroll(scroll_handle)
                 .overflow_y_scrollbar()
+                .on_key_down({
+                    let scroll_handle = scroll_handle.clone();
+                    move |event, window, cx| {
+                        if event.keystroke.modifiers.modified() {
+                            return;
+                        }
+                        let current = scroll_handle.offset();
+                        let maximum = scroll_handle.max_offset();
+                        let viewport = scroll_handle.bounds().size;
+                        if let Some(y) = settings_scroll_offset_for_key(
+                            event.keystroke.key.as_str(),
+                            current.y,
+                            maximum.y,
+                            viewport.height,
+                        ) {
+                            scroll_handle.set_offset(point(current.x, y));
+                            window.request_animation_frame();
+                            cx.stop_propagation();
+                        }
+                    }
+                })
                 .child(match state.active_category {
                     SettingsCategory::Providers => render_providers_tab(
                         state,
@@ -3382,6 +3420,26 @@ mod tests {
         assert_eq!(state.active_category, SettingsCategory::Environments);
         assert_eq!(state.active_category.icon(), "🖥️");
         assert_eq!(state.active_category.title(), "Remote Environments & Nodes");
+    }
+
+    #[test]
+    fn settings_page_keys_clamp_scroll_offset() {
+        assert_eq!(
+            settings_scroll_offset_for_key("pagedown", px(0.), px(1_000.), px(400.)),
+            Some(px(-340.))
+        );
+        assert_eq!(
+            settings_scroll_offset_for_key("pagedown", px(-900.), px(1_000.), px(400.)),
+            Some(px(-1_000.))
+        );
+        assert_eq!(
+            settings_scroll_offset_for_key("pageup", px(-200.), px(1_000.), px(400.)),
+            Some(px(0.))
+        );
+        assert_eq!(
+            settings_scroll_offset_for_key("tab", px(-200.), px(1_000.), px(400.)),
+            None
+        );
     }
 
     #[test]
