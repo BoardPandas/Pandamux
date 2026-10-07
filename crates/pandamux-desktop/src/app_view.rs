@@ -109,7 +109,6 @@ pub struct AppView {
     usage_scroll_handle: ScrollHandle,
     settings_scroll_handle: ScrollHandle,
     usage_subscriptions_scroll_anchor: ScrollAnchor,
-    usage_editor_scroll_anchor: ScrollAnchor,
     usage_subscription_name_input: Entity<InputState>,
     usage_account_label_input: Entity<InputState>,
 }
@@ -155,7 +154,6 @@ impl AppView {
         let settings_scroll_handle = ScrollHandle::new();
         let usage_subscriptions_scroll_anchor =
             ScrollAnchor::for_handle(usage_scroll_handle.clone());
-        let usage_editor_scroll_anchor = ScrollAnchor::for_handle(usage_scroll_handle.clone());
 
         let mut app = Self {
             theme: Theme::dark(AccentColor::Teal),
@@ -185,7 +183,6 @@ impl AppView {
             usage_scroll_handle,
             settings_scroll_handle,
             usage_subscriptions_scroll_anchor,
-            usage_editor_scroll_anchor,
             usage_subscription_name_input,
             usage_account_label_input,
         };
@@ -1160,13 +1157,11 @@ impl AppView {
         self.usage_account_label_input
             .update(cx, |input, cx| input.set_value(account_label, window, cx));
         self.usage_editor_target = Some(target);
+        self.usage_scroll_handle.scroll_to_bottom();
         let name_focus = self.usage_subscription_name_input.read(cx).focus_handle(cx);
-        let editor_scroll_anchor = self.usage_editor_scroll_anchor.clone();
         cx.notify();
         window.defer(cx, move |window, cx| {
             window.focus(&name_focus, cx);
-            editor_scroll_anchor.scroll_to(window, cx);
-            schedule_post_scroll_refresh(window);
         });
     }
 
@@ -1864,11 +1859,10 @@ impl Render for AppView {
                             this.create_agent_thread(agent_id, cx);
                         },
                         self.settings_view.active_category,
-                        |this, cat, window, cx| {
+                        |this, cat, _window, cx| {
                             this.settings_view.set_category(cat);
                             this.settings_scroll_handle
                                 .set_offset(point(px(0.), px(0.)));
-                            window.request_animation_frame();
                             cx.notify();
                         },
                         cx,
@@ -1887,7 +1881,6 @@ impl Render for AppView {
                             &self.usage_account_label_input,
                             &self.usage_scroll_handle,
                             &self.usage_subscriptions_scroll_anchor,
-                            &self.usage_editor_scroll_anchor,
                             &theme,
                             wall_clock_ms(),
                             |app, _window, cx| app.load_usage(cx),

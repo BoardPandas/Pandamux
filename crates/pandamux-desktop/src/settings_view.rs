@@ -486,7 +486,7 @@ pub fn render_settings_view<V: 'static>(
                             viewport.height,
                         ) {
                             scroll_handle.set_offset(point(current.x, y));
-                            window.request_animation_frame();
+                            window.refresh();
                             cx.stop_propagation();
                         }
                     }

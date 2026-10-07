@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   repaint through the window-safe GPUI refresh path, so Enter activation no
   longer aborts after the render context has ended.
 
+- **Kept Phase 4 keyboard scrolling on the window-safe repaint path.** Settings
+  Page Up and Page Down no longer request a view-scoped animation frame from an
+  event callback. Opening the Usage subscription editor now scrolls directly to
+  the newly appended editor, while Save and Cancel restore the originating
+  provider row rather than the top of the whole subscription section.
+
 - **Made server inspection commands side-effect free.** `pandamux-server --help`
   and `pandamux-server --version` now print and exit without creating a runtime
   or database. Unknown, incomplete, conflicting, and invalid startup arguments

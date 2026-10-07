@@ -82,7 +82,6 @@ pub fn render_usage_view<V: 'static>(
     account_input: &Entity<InputState>,
     scroll_handle: &ScrollHandle,
     subscriptions_scroll_anchor: &ScrollAnchor,
-    editor_scroll_anchor: &ScrollAnchor,
     theme: &Theme,
     now_ms: u64,
     on_retry: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
@@ -200,7 +199,6 @@ pub fn render_usage_view<V: 'static>(
                     name_input,
                     account_input,
                     subscriptions_scroll_anchor,
-                    editor_scroll_anchor,
                     theme,
                     on_edit,
                     on_save_editor,
@@ -895,7 +893,6 @@ fn render_subscription_editor<V: 'static>(
     name_input: &Entity<InputState>,
     account_input: &Entity<InputState>,
     subscriptions_scroll_anchor: &ScrollAnchor,
-    editor_scroll_anchor: &ScrollAnchor,
     theme: &Theme,
     on_edit: impl Fn(&mut V, UsageEditorTarget, &mut Window, &mut Context<V>) + 'static + Copy,
     on_save_editor: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
@@ -907,7 +904,6 @@ fn render_subscription_editor<V: 'static>(
         .id("usage-subscriptions-section")
         .v_flex()
         .gap_2()
-        .anchor_scroll(Some(subscriptions_scroll_anchor.clone()))
         .child(section_heading("SUBSCRIPTIONS & INSTANCES", theme))
         .child(
             div()
@@ -937,11 +933,17 @@ fn render_subscription_editor<V: 'static>(
                 provider: UsageProvider::from(provider.provider),
                 provider_display_name: provider.display_name.clone(),
             };
+            let is_editor_origin = editor_target
+                .is_some_and(|editor_target| editor_target.provider_instance_id == provider.id);
             div()
+                .id(format!("usage-subscription-row-{}", provider.id.as_str()))
                 .h_flex()
                 .items_center()
                 .justify_between()
                 .p_3()
+                .when(is_editor_origin, |row| {
+                    row.anchor_scroll(Some(subscriptions_scroll_anchor.clone()))
+                })
                 .rounded(Radii::ROW)
                 .bg(theme.chrome.panel)
                 .border_1()
@@ -999,7 +1001,6 @@ fn render_subscription_editor<V: 'static>(
                     .p_3()
                     .v_flex()
                     .gap_2()
-                    .anchor_scroll(Some(editor_scroll_anchor.clone()))
                     .rounded(Radii::ROW)
                     .bg(theme.chrome.panel2)
                     .border_1()
