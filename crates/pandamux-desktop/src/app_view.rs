@@ -35,7 +35,10 @@ use crate::scratchpad::{ScratchpadState, render_scratchpad_window};
 use crate::server_bridge::{ServerBridgeHandle, ServerStatus, spawn_server_bridge};
 use crate::settings_view::{SettingsViewState, render_settings_view};
 use crate::sidebar::{RailTab, render_rail, render_sidebar};
-use crate::surfaces_panel::{SurfaceTab, SurfacesPanelState, render_surfaces_panel};
+use crate::surfaces_panel::{
+    SurfaceTab, SurfacesPanelState, TerminalFocusTarget, render_surfaces_panel,
+    terminal_focus_target,
+};
 use crate::theme::{AccentColor, Radii, Spacing, Theme, Typography};
 use crate::timeline::{VirtualizedTimelineState, render_virtualized_timeline};
 use crate::titlebar::CustomTitlebar;
@@ -115,6 +118,7 @@ pub struct AppView {
     usage_subscription_name_input: Entity<InputState>,
     usage_account_label_input: Entity<InputState>,
     terminal_focus: FocusHandle,
+    terminal_output_focus: FocusHandle,
     terminal_poll_generation: u64,
     focus_terminal_on_render: bool,
 }
@@ -160,6 +164,7 @@ impl AppView {
         let settings_scroll_handle = ScrollHandle::new();
         let usage_table_focus = cx.focus_handle().tab_stop(true);
         let terminal_focus = cx.focus_handle().tab_stop(true);
+        let terminal_output_focus = cx.focus_handle().tab_stop(true);
         let usage_table_scroll_anchor = ScrollAnchor::for_handle(usage_scroll_handle.clone());
         let usage_subscriptions_scroll_anchor =
             ScrollAnchor::for_handle(usage_scroll_handle.clone());
@@ -203,6 +208,7 @@ impl AppView {
             usage_subscription_name_input,
             usage_account_label_input,
             terminal_focus,
+            terminal_output_focus,
             terminal_poll_generation: 0,
             focus_terminal_on_render: false,
         };
@@ -2121,6 +2127,30 @@ impl Render for AppView {
             .v_flex()
             .bg(theme.chrome.bg_base_start)
             .text_color(theme.chrome.text_t1)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                let terminal_is_open = this.surfaces_panel.is_open
+                    && this.surfaces_panel.active_tab == Some(SurfaceTab::Terminal)
+                    && this.surfaces_panel.terminal.is_some();
+                if !terminal_is_open {
+                    return;
+                }
+
+                match terminal_focus_target(
+                    &event.keystroke,
+                    this.terminal_focus.is_focused(window),
+                    this.terminal_output_focus.is_focused(window),
+                ) {
+                    Some(TerminalFocusTarget::Input) => {
+                        window.focus(&this.terminal_focus, cx);
+                        cx.stop_propagation();
+                    }
+                    Some(TerminalFocusTarget::Output) => {
+                        window.focus(&this.terminal_output_focus, cx);
+                        cx.stop_propagation();
+                    }
+                    None => {}
+                }
+            }))
             // 1. Custom 40px Titlebar
             .child(CustomTitlebar::render(
                 &theme,
@@ -2238,6 +2268,7 @@ impl Render for AppView {
                                 app.select_surface_file(file, cx);
                             },
                             &self.terminal_focus,
+                            &self.terminal_output_focus,
                             |app, input, _win, cx| {
                                 app.send_surface_terminal_input(input, cx);
                             },

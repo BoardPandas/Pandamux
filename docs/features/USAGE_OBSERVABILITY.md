@@ -310,9 +310,13 @@ disabled-animation rows, but genuine Narrator Speech Recap did not announce
 READY or ECHO. Exact 0.60.27 then passed successful-login interaction, 200
 percent scaling, High Contrast, and disabled-animation rows, but direct UI
 Automation focus did not reach the Log and the advertised Tab path remained
-PTY input. The 0.60.28 source candidate adds an explicit F6 input/output focus
-toggle while preserving ordinary Tab as PTY input. It still requires exact
-native Windows acceptance. That
+PTY input. Exact 0.60.28 added an explicit F6 input/output focus toggle and
+passed successful-login interaction, 200 percent scaling, High Contrast, and
+disabled-animation rows. Narrator displaced focus to the PandaMUX window,
+where the terminal-scoped F6 route could not run, so 0.60.28 is rejected. The
+0.60.29 source candidate handles F6 at the window level while an active
+Terminal surface is open and still requires exact native Windows acceptance.
+That
 row, the open real external quota-exhaustion and post-side-effect
 interruption rows, the deferred physical R0.5 laptop disconnect and sleep rows,
 the final archive after those results stabilize, and later release gates still

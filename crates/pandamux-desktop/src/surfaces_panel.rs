@@ -227,6 +227,7 @@ pub fn render_surfaces_panel<V: 'static>(
     on_select_tab: impl Fn(&mut V, Option<SurfaceTab>, &mut Window, &mut Context<V>) + 'static + Copy,
     on_select_file: impl Fn(&mut V, String, &mut Window, &mut Context<V>) + 'static + Copy,
     terminal_focus: &FocusHandle,
+    terminal_output_focus: &FocusHandle,
     on_terminal_input: impl Fn(&mut V, String, &mut Window, &mut Context<V>) + 'static + Copy,
     on_close_terminal: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
     window: &mut Window,
@@ -389,6 +390,7 @@ pub fn render_surfaces_panel<V: 'static>(
                         state.terminal.as_ref(),
                         theme,
                         terminal_focus,
+                        terminal_output_focus,
                         on_terminal_input,
                         on_close_terminal,
                         window,
@@ -1207,12 +1209,12 @@ fn render_linked_prs_surface(prs: &[PullRequestSummary], theme: &Theme) -> AnyEl
 
 /// Terminal surface (local or remote).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TerminalFocusTarget {
+pub(crate) enum TerminalFocusTarget {
     Input,
     Output,
 }
 
-fn terminal_focus_target(
+pub(crate) fn terminal_focus_target(
     keystroke: &Keystroke,
     input_focused: bool,
     output_focused: bool,
@@ -1233,6 +1235,7 @@ fn terminal_focus_target(
         if output_focused {
             return Some(TerminalFocusTarget::Input);
         }
+        return Some(TerminalFocusTarget::Output);
     }
 
     let shift_tab = key == "tab"
@@ -1248,10 +1251,12 @@ fn terminal_focus_target(
     None
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_terminal_surface<V: 'static>(
     terminal: Option<&TerminalViewState>,
     theme: &Theme,
     focus_handle: &FocusHandle,
+    output_focus: &FocusHandle,
     on_terminal_input: impl Fn(&mut V, String, &mut Window, &mut Context<V>) + 'static + Copy,
     on_close_terminal: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
     window: &mut Window,
@@ -1261,14 +1266,6 @@ fn render_terminal_surface<V: 'static>(
         let focus_for_pointer = focus_handle.clone();
         let focus_for_keyboard = focus_handle.clone();
         let is_focused = focus_handle.is_focused(window);
-        let output_focus = window
-            .use_keyed_state(
-                format!("terminal-output-log-focus-{}", term.terminal_id),
-                cx,
-                |_, cx| cx.focus_handle(),
-            )
-            .read(cx)
-            .clone();
         let output_is_focused = output_focus.is_focused(window);
         let input_focus_for_navigation = focus_handle.clone();
         let output_focus_for_navigation = output_focus.clone();
@@ -1278,7 +1275,7 @@ fn render_terminal_surface<V: 'static>(
             .v_flex()
             .role(Role::Group)
             .aria_label(format!(
-                "Interactive terminal {}. Click or tab here to type. Press F6 to review visible output.",
+                "Interactive terminal {}. Click or tab here to type. Press F6 anywhere in PandaMUX to review visible output.",
                 term.title
             ))
             .aria_description(term.accessible_output())
@@ -1340,7 +1337,7 @@ fn render_terminal_surface<V: 'static>(
                             .child(if output_is_focused {
                                 "Terminal output focused. Press F6 or Shift Tab to type."
                             } else if is_focused {
-                                "Terminal focused. Keyboard input is live. Press F6 to review output."
+                                "Terminal focused. Keyboard input is live. Press F6 anywhere in PandaMUX to review output."
                             } else {
                                 "Click or tab into the terminal to type."
                             }),
@@ -1363,7 +1360,7 @@ fn render_terminal_surface<V: 'static>(
                     .child(render_terminal_view(
                         term,
                         theme,
-                        &output_focus,
+                        output_focus,
                         output_is_focused,
                     )),
             )
@@ -1549,6 +1546,10 @@ mod tests {
         assert_eq!(
             terminal_focus_target(&f6, false, true),
             Some(TerminalFocusTarget::Input)
+        );
+        assert_eq!(
+            terminal_focus_target(&f6, false, false),
+            Some(TerminalFocusTarget::Output)
         );
 
         let shift_tab = Keystroke::parse("shift-tab").expect("Shift Tab");

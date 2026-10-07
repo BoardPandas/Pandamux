@@ -165,9 +165,13 @@ Terminology used throughout:
   rows, but Narrator Speech Recap did not announce READY or ECHO. Exact 0.60.27
   passed successful-login interaction, 200 percent scaling, High Contrast, and
   disabled-animation rows, but direct UI Automation focus did not reach the
-  Log and the advertised Tab path remained PTY input. The 0.60.28 source
-  candidate adds an explicit F6 input/output focus toggle and is not
-  native-accepted.
+  Log and the advertised Tab path remained PTY input. Exact 0.60.28 commit
+  `c0200a9` added an explicit F6 input/output focus toggle and passed the
+  successful-login interaction, 200 percent scaling, High Contrast, and
+  disabled-animation rows. Narrator displaced focus to the PandaMUX window,
+  where the terminal-scoped shortcut could not run, so 0.60.28 is rejected.
+  The 0.60.29 source candidate handles F6 at the window level while an active
+  Terminal surface is open and is not native-accepted.
 - Phase 4 remains open on the P4-C3 login-terminal retest, the remaining live
   P4-C5 failover rows, and the final documentation archive after those rows
   stabilize. The re-scoped physical
@@ -1940,10 +1944,19 @@ Genuine Narrator Speech Recap did not announce READY or ECHO, so the attempt is
 rejected. Exact 0.60.27 passed successful-login interaction, 200 percent
 scaling, High Contrast, and disabled-animation rows, but direct UI Automation
 focus did not move to the Log and its advertised Tab path remained PTY input.
-Version 0.60.28 adds an explicit F6 input/output focus toggle while preserving
-ordinary Tab as PTY input. P4-C3 remains open until an exact native Windows
-artifact passes the expanded successful-login row and Narrator speaks the
-controlled output.
+Exact 0.60.28 added an explicit F6 input/output focus toggle while preserving
+ordinary Tab as PTY input. Its exact native build, headless and limited-user
+smoke, remote login lifecycle, successful-login interaction, 200 percent
+scaling, High Contrast, and disabled-animation rows passed. Two direct UI
+Automation Invoke attempts on the close button did not close the terminal, but
+real keyboard focus plus Enter closed it and stopped the fixture in every
+accepted row. Narrator then displaced focus to the PandaMUX window. The
+terminal-scoped F6 handler could not run, and neither UI Automation focus nor
+real pointer recovery restored the child focus, so 0.60.28 is rejected.
+Version 0.60.29 gives the output Log an application-owned focus handle and
+handles F6 at the PandaMUX window whenever an active Terminal surface is open.
+P4-C3 remains open until an exact native Windows artifact passes the expanded
+successful-login row and Narrator speaks the controlled output.
 
 The retained host evidence root is
 `C:\ProgramData\PandaMUX\acceptance\phase4-fee9e02-0.60.22-p4-c3`.

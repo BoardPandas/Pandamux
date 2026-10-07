@@ -23,8 +23,14 @@ makes the output Log a dedicated keyboard focus stop. Its exact native build,
 smoke, remote routing, successful-login interaction, 200 percent scaling, High
 Contrast, and disabled-animation rows passed, but direct UI Automation focus
 did not reach the Log and the advertised Tab path remained PTY input. It is
-also rejected. Version 0.60.28 adds an explicit F6 input/output focus toggle
-and has not passed exact native Windows acceptance. Exact
+also rejected. Exact 0.60.28 commit `c0200a9` added an explicit F6 input/output
+focus toggle and passed native build, smoke, remote login lifecycle,
+successful-login interaction, 200 percent scaling, High Contrast, and
+disabled-animation rows. Narrator displaced focus to the PandaMUX window,
+where the terminal-scoped F6 handler could not run, so 0.60.28 is rejected.
+The 0.60.29 source candidate moves the F6 route to the PandaMUX window while an
+active Terminal surface is open and has not passed exact native Windows
+acceptance. Exact
 0.60.17 commit `2f56a27` passed the scanner, Hub
 synchronization, conservative capacity projection, route-explanation, and
 rollback-control portions of P4-C5. Real provider quota exhaustion and real
@@ -72,11 +78,20 @@ or release occurred.
   percent scaling, High Contrast, and disabled-animation rows passed. Direct
   UI Automation focus did not move to the output Log, and the advertised Tab
   path remained PTY input, so the attempt is rejected.
-- Current reopened P4-C3 repair source: workspace version `0.60.28` in the
-  isolated recovery worktree. It adds an explicit F6 input/output focus toggle
-  while preserving ordinary Tab as PTY input. It has local source verification
-  only until the committed source is built natively on Windows; no native,
-  live, production, or release result is claimed.
+- Fifth reopened P4-C3 repair source: clean commit
+  `c0200a9a38fcdccf1cff12fe51f4143562f217ab`, version `0.60.28`. Its exact
+  native build, headless and limited-user smoke, remote login lifecycle,
+  successful-login interaction, 200 percent scaling, High Contrast, and
+  disabled-animation rows passed. Narrator displaced focus to the PandaMUX
+  window, where the terminal-scoped F6 handler could not run. UI Automation
+  focus and real pointer recovery did not restore terminal child focus, so the
+  attempt is rejected.
+- Current reopened P4-C3 repair source: workspace version `0.60.29` in the
+  isolated recovery worktree. It gives the output Log an application-owned
+  focus handle and handles F6 at the PandaMUX window while an active Terminal
+  surface is open. It has local source verification only until the committed
+  source is built natively on Windows; no native, live, production, or release
+  result is claimed.
 - The intermediate 0.60.2 commit `8a52d2a21da1d5d0f69540864a6162d2b30375bc`
   repaired direct UI Automation activation for Save and Cancel. The 0.60.3
   follow-up exposed the editor text fields on semantic nodes tied to their real
@@ -714,10 +729,17 @@ The genuine Narrator run then exposed that calling UI Automation `SetFocus()`
 on the reported focusable Log left focus on the PandaMUX window. Source review
 also confirmed that ordinary Tab was still forwarded to the PTY, so the visible
 instruction to Tab to the Log described an unreachable route. Narrator output
-was not credited and the attempt is rejected. Version 0.60.28 adds an explicit
-F6 toggle between terminal input and the output Log, retains Shift Tab as a
-return path from the Log, and preserves ordinary Tab as PTY input. P4-C3 stays
-open until an exact 0.60.28 or later Windows artifact passes successful launch,
+was not credited and the attempt is rejected. Exact 0.60.28 added an explicit
+F6 toggle between terminal input and the output Log, retained Shift Tab as a
+return path from the Log, and preserved ordinary Tab as PTY input. Its native
+build, smoke, remote login lifecycle, successful-login interaction, 200
+percent scaling, High Contrast, and disabled-animation rows passed. Narrator
+then displaced focus to the PandaMUX window, where the terminal-scoped F6
+handler could not run. UI Automation focus and real pointer recovery did not
+restore the child focus, so Narrator output was not credited and 0.60.28 is
+rejected. Version 0.60.29 gives the Log an application-owned focus handle and
+handles F6 at the window level while the Terminal surface is open. P4-C3 stays
+open until an exact 0.60.29 or later Windows artifact passes successful launch,
 discovery, output, input, close, panel reopen, and the retained accessibility
 and scaling matrix.
 

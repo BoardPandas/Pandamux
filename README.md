@@ -53,8 +53,12 @@ R0 development gate:
   Recap did not announce the READY or ECHO output. Exact 0.60.27 then passed
   the successful-login interaction, 200 percent scaling, High Contrast, and
   disabled-animation rows, but its output Log could not receive focus through
-  UI Automation and the advertised Tab path remained PTY input. The 0.60.28
-  source candidate adds an explicit F6 input/output focus toggle and still
+  UI Automation and the advertised Tab path remained PTY input. Exact 0.60.28
+  added an explicit F6 input/output focus toggle and passed the successful-login,
+  200 percent scaling, High Contrast, and disabled-animation rows. Narrator
+  displaced focus to the PandaMUX window, where the terminal-scoped shortcut
+  could not run, so 0.60.28 is rejected. The 0.60.29 source candidate handles
+  F6 at the window level while an active Terminal surface is open and still
   requires exact native Windows acceptance. Real external quota exhaustion, real
   post-side-effect interruption, and the deferred physical laptop checks keep
   the Phase 4 exit matrix open.

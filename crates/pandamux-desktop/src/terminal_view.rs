@@ -728,7 +728,7 @@ pub fn render_terminal_view(
         .accessibility_id("terminal-output-log")
         .aria_label(state.accessible_output())
         .aria_description(
-            "Read-only visible terminal output. Press F6 or Shift Tab to return to terminal input.",
+            "Read-only visible terminal output. Press F6 or Shift Tab to return to terminal input. F6 also reaches this output from anywhere in PandaMUX while the terminal surface is open.",
         )
         .v_flex()
         .bg(theme.terminal.surface)
