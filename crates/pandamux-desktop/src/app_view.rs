@@ -165,6 +165,41 @@ impl AppView {
         let usage_table_focus = cx.focus_handle().tab_stop(true);
         let terminal_focus = cx.focus_handle().tab_stop(true);
         let terminal_output_focus = cx.focus_handle().tab_stop(true);
+        // Narrator can leave the native window active without a GPUI child focus path.
+        // Intercept before focus-path dispatch so F6 remains reachable in that state.
+        let app_window = window.window_handle();
+        let app_view = cx.weak_entity();
+        cx.intercept_keystrokes(move |event, window, cx| {
+            if window.window_handle() != app_window {
+                return;
+            }
+
+            let _ = app_view.update(cx, |this, cx| {
+                let terminal_is_open = this.surfaces_panel.is_open
+                    && this.surfaces_panel.active_tab == Some(SurfaceTab::Terminal)
+                    && this.surfaces_panel.terminal.is_some();
+                if !terminal_is_open {
+                    return;
+                }
+
+                match terminal_focus_target(
+                    &event.keystroke,
+                    this.terminal_focus.is_focused(window),
+                    this.terminal_output_focus.is_focused(window),
+                ) {
+                    Some(TerminalFocusTarget::Input) => {
+                        window.focus(&this.terminal_focus, cx);
+                        cx.stop_propagation();
+                    }
+                    Some(TerminalFocusTarget::Output) => {
+                        window.focus(&this.terminal_output_focus, cx);
+                        cx.stop_propagation();
+                    }
+                    None => {}
+                }
+            });
+        })
+        .detach();
         let usage_table_scroll_anchor = ScrollAnchor::for_handle(usage_scroll_handle.clone());
         let usage_subscriptions_scroll_anchor =
             ScrollAnchor::for_handle(usage_scroll_handle.clone());
@@ -2127,30 +2162,6 @@ impl Render for AppView {
             .v_flex()
             .bg(theme.chrome.bg_base_start)
             .text_color(theme.chrome.text_t1)
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                let terminal_is_open = this.surfaces_panel.is_open
-                    && this.surfaces_panel.active_tab == Some(SurfaceTab::Terminal)
-                    && this.surfaces_panel.terminal.is_some();
-                if !terminal_is_open {
-                    return;
-                }
-
-                match terminal_focus_target(
-                    &event.keystroke,
-                    this.terminal_focus.is_focused(window),
-                    this.terminal_output_focus.is_focused(window),
-                ) {
-                    Some(TerminalFocusTarget::Input) => {
-                        window.focus(&this.terminal_focus, cx);
-                        cx.stop_propagation();
-                    }
-                    Some(TerminalFocusTarget::Output) => {
-                        window.focus(&this.terminal_output_focus, cx);
-                        cx.stop_propagation();
-                    }
-                    None => {}
-                }
-            }))
             // 1. Custom 40px Titlebar
             .child(CustomTitlebar::render(
                 &theme,

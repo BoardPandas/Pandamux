@@ -12,11 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Terminal surfaces publish their bounded visible grid as a semantic log with
   its own keyboard focus stop and visible focus border. F6 now moves focus
   between live terminal input and the read-only output log, while Shift Tab
-  returns from the log to input. The F6 route is handled at the PandaMUX window
-  while an active Terminal surface is open, so it still reaches output when
-  Narrator reports only window focus. Ordinary Tab remains PTY input for shell
-  completion. Visible and accessible instructions report the active focus mode
-  and its return path without exposing unbounded scrollback.
+  returns from the log to input. An application-level keystroke interceptor,
+  scoped to the main PandaMUX window and active Terminal surface, handles F6
+  before focus-path dispatch. It therefore still reaches output when Narrator
+  leaves the native window active without a GPUI child focus. Ordinary Tab
+  remains PTY input for shell completion. Visible and accessible instructions
+  report the active focus mode and its return path without exposing unbounded
+  scrollback.
 
 - **Submitted provider login commands with the native PTY Enter sequence.**
   Windows ConPTY login terminals now receive a carriage return, so PowerShell

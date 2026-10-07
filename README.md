@@ -57,11 +57,14 @@ R0 development gate:
   added an explicit F6 input/output focus toggle and passed the successful-login,
   200 percent scaling, High Contrast, and disabled-animation rows. Narrator
   displaced focus to the PandaMUX window, where the terminal-scoped shortcut
-  could not run, so 0.60.28 is rejected. The 0.60.29 source candidate handles
-  F6 at the window level while an active Terminal surface is open and still
-  requires exact native Windows acceptance. Real external quota exhaustion, real
-  post-side-effect interruption, and the deferred physical laptop checks keep
-  the Phase 4 exit matrix open.
+  could not run, so 0.60.28 is rejected. Exact 0.60.29 commit `2b3b806`
+  passed native build, smoke, remote lifecycle, successful-login, 200 percent,
+  High Contrast, and disabled-animation rows, but its root visual handler still
+  had no GPUI focus path under Narrator and did not receive F6. The 0.60.30
+  source candidate intercepts F6 at the application level before focus-path
+  dispatch and still requires exact native Windows acceptance. Real external
+  quota exhaustion, real post-side-effect interruption, and the deferred
+  physical laptop checks keep the Phase 4 exit matrix open.
 
 See the [Phase 4 live acceptance record](docs/operations/PHASE4_ACCEPTANCE.md)
 and the completion criteria in [`tasks/plan-rewrite.md`](tasks/plan-rewrite.md).

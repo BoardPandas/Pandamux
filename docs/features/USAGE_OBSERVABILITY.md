@@ -313,11 +313,13 @@ Automation focus did not reach the Log and the advertised Tab path remained
 PTY input. Exact 0.60.28 added an explicit F6 input/output focus toggle and
 passed successful-login interaction, 200 percent scaling, High Contrast, and
 disabled-animation rows. Narrator displaced focus to the PandaMUX window,
-where the terminal-scoped F6 route could not run, so 0.60.28 is rejected. The
-0.60.29 source candidate handles F6 at the window level while an active
-Terminal surface is open and still requires exact native Windows acceptance.
-That
-row, the open real external quota-exhaustion and post-side-effect
+where the terminal-scoped F6 route could not run, so 0.60.28 is rejected.
+Exact 0.60.29 commit `2b3b806` passed native build, smoke, remote lifecycle,
+successful-login, 200 percent, High Contrast, and disabled-animation rows, but
+its root visual handler still had no GPUI focus path under Narrator and did not
+receive F6. The 0.60.30 source candidate intercepts F6 at the application level
+before focus-path dispatch and still requires exact native Windows acceptance.
+That row, the open real external quota-exhaustion and post-side-effect
 interruption rows, the deferred physical R0.5 laptop disconnect and sleep rows,
 the final archive after those results stabilize, and later release gates still
 block Phase 4 exit, production acceptance, and release. Exact results and
