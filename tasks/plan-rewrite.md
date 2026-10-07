@@ -1,8 +1,8 @@
 # PandaMUX Rewrite: Chat-First Agent Client with Remote Environments, Multi-Repo Fleet Orchestration, Agents, Schedules, Full MCP Settings Control, and Broadside Sharing
 
-Date: 2026-09-25 (Approved 2026-09-26; recovery rewrite 2026-09-28; Phase 4 closure rewrite 2026-10-06)
-Status: **Phases 0 to 3 and Phase 4A through 4F implementation are recorded; Phase 4 closure is blocked on usage reconciliation correctness and the remaining native, live, and physical acceptance gates**
-Baseline: The preserved original checkout remains PandaMUX v0.53.44 at `9511d0e22d44`; active recovery work is isolated on `codex/recovery-r0`, with exact 0.60.8 source and native evidence at `054bd3e941e394cd8ffcff62a8dc60faa9b7e1fe`
+Date: 2026-09-25 (Approved 2026-09-26; recovery rewrite 2026-09-28; Phase 4 closure rewrite 2026-10-06; accounting acceptance 2026-10-07)
+Status: **Phases 0 to 3 and Phase 4A through 4F implementation are recorded; P4-C1, P4-C2, and P4-C4 passed on exact 0.60.15, while the remaining native, live durability, documentation, and physical acceptance gates keep Phase 4 open**
+Baseline: The preserved original checkout remains PandaMUX v0.53.44 at `9511d0e22d44`; active recovery work is isolated on `codex/recovery-r0`, with exact 0.60.8 native UI evidence at `054bd3e941e394cd8ffcff62a8dc60faa9b7e1fe` and exact 0.60.15 accounting evidence at `3a77382`
 
 Relationship to `tasks/plan-repo.md`: that file is the **historical** record of the Electron to native Rust rewrite (Phases 1 to 7, complete). This plan supersedes its product direction (terminal multiplexer) but keeps its engineering posture: backend-owned state, single writer, intent-in/delta-out, deliberate dependency pins, crate isolation, and tag-driven signed releases. Its Section 12 design tokens carry over where they still apply (Section 8). UI history: Iced is removed. An earlier draft of this plan chose Tauri 2 + React; the user replaced that with **GPUI + gpui-kit** (all Rust) on 2026-09-25, and Tauri 2 remains only as the documented fallback if the Phase 0 GPUI spike fails. `plan-repo.md` rejected GPUI for three reasons, each now handled explicitly: GPL contamination (zed#55470, still open; tracked as a license gate in S6 and Risks), "not built for external consumption" (gpui-kit publishes exact-pinned `gpui-pre` snapshots and ships in production in Longbridge Pro on Windows, macOS, and Linux), and weak accessibility. Phase 0 treated accessibility as exploratory; the rewritten Phase 4 and Phase 7 criteria make the defined v1 accessibility matrix release-gating.
 
@@ -127,22 +127,23 @@ Terminology used throughout:
   actionable Offline and Retry probe passed. The exact screenshot was visually
   inspected and confirmed that component buttons and actions are legible on the
   dark shell. This is current native evidence, not a final Phase 4 candidate.
-- Retained Galahad data exposed a correctness blocker. One Claude CLI turn is
-  stored as both a managed result UUID and a transcript assistant message ID.
-  The managed row uses the selected fallback model and omits cache categories;
-  the transcript row uses the actual model and includes cache-read and
-  cache-write tokens. Aggregation currently counts both. Timestamp proximity is
-  incident evidence only and must never become a fuzzy identity rule.
-- Claude tool turns may contain multiple distinct assistant message IDs, while
-  thinking and text transcript chunks may repeat the same message ID with
-  different timestamps. The safe correction is per-message usage components,
-  exact message-ID reconciliation, and a separate terminal cost fact. A
-  latest-message-only patch would remain wrong for tool-using turns.
-- Phase 4 therefore remains open on the component-level Claude correction, a
-  fresh seven-day reconciliation, the rest of the exact-candidate native
-  matrix, live local and Galahad durability and failover, and a current-version
-  normal-user named-pipe matrix. The re-scoped physical laptop disconnect and
-  sleep rows remain production-acceptance and release blockers.
+- Exact 0.60.15 commit `3a77382` closes the Claude component correctness
+  blocker. Final `message_delta.usage` events update the matching assistant
+  message ID, including separate root and subagent lanes, so simple and
+  tool-using turns retain terminal model, token, and cache values instead of
+  preliminary stream values.
+- P4-C4 passed against a clone of the retained Galahad evidence. Three fresh
+  Claude message components matched sanitized transcript facts exactly, no new
+  mismatch appeared, 48 accepted observations remained stable across repeated
+  scans and restart, and `usage.query` matched direct SQL. Old result UUID and
+  message-ID ambiguity remains preserved as visible legacy debt. The fixed
+  historical seven-day window has no independent provider statement, so all
+  external provider comparisons are Unknown and the two percent threshold is
+  not applicable.
+- Phase 4 remains open on the rest of the exact-candidate native matrix, live
+  local and Galahad durability and failover, current-version normal-user IPC,
+  and documentation synchronization. The re-scoped physical laptop disconnect
+  and sleep rows remain production-acceptance and release blockers.
 - Phase 5 implementation has not started. The next development work is the
   ordered Phase 4 closure sequence in its verification record. Phase 5 begins
   only with its dependency, legacy-domain, and boundary gate. Phase 6 depends
@@ -1744,6 +1745,14 @@ Rollback:
   coverage visible. Disabling the scanner leaves managed facts visible.
 - Raw observations, legacy rows, and quarantine records are preserved.
 
+Result recorded 2026-10-07: **Pass** on exact commit `3a77382`, version
+`0.60.15`. Migration 12, component-aware storage, parser version 2, exact-ID
+reconciliation, component-aware backfill, and durable debt behavior passed their
+focused tests. A direct Claude partial-message probe demonstrated that
+`message_start` can report 8 output tokens before `message_delta.usage` finalizes
+the same message at 12. The production parser now applies that final delta to the
+same exact message ID. No retained historical pair was repaired or merged.
+
 ##### P4-C2: cut one locally verified accounting candidate
 
 1. Run focused provider parser, migration, store, query, outbox, Hub ingest, and
@@ -1763,6 +1772,17 @@ Acceptance:
 - Every focused and full command has exact output and exit status.
 - The source tree is clean before and after the build.
 - One commit, version, changelog entry, artifact set, and acceptance root agree.
+
+Result recorded 2026-10-07: **Pass** for the accounting candidate at exact
+commit `3a77382`, version `0.60.15`. The provider suite passed 57 tests before
+the commit. Formatting, strict all-target and all-feature Clippy, 423 workspace
+tests with zero failures and two intentional ignores, the Rust boundary guard,
+the Claude wiring guard, and dependency policy all passed after the commit.
+Release desktop, server, and CLI binaries built from the clean commit. The
+desktop headless entry reported `ALL CHECKS PASSED`, and an isolated authenticated
+node completed CLI `hello`, `ping`, and `identify`. Dependency policy retained
+its non-failing unmatched allowance, duplicate-version, and two yanked transitive
+crate warnings.
 
 ##### P4-C3: complete exact-candidate Windows native acceptance
 
@@ -1824,6 +1844,29 @@ Acceptance:
   reconciled.
 - Query totals equal the accepted normalized component set and remain stable
   after restart and repeated scan.
+
+Result recorded 2026-10-07: **Pass with explicit historical Partial and external
+Unknown states** on exact commit `3a77382`, version `0.60.15`. The cloned store
+migrated from 11 to 12 and stabilized at 43 historical observations before live
+turns. A fresh simple turn produced one 16-output-token component. A fresh
+tool-using turn produced 74-output-token and 14-output-token components plus one
+successful Bash ledger entry. All three managed components matched sanitized
+transcript message ID, session, actual model, input, output, cache-read,
+cache-write, and reasoning fields exactly. Zero new mismatch rows appeared.
+After live ingestion, 48 observations, 48 outbox rows, 6 quarantines, 4 retained
+Codex mismatches, and 1 retained Claude legacy-debt row remained stable across
+restart and repeated scan.
+
+The fixed historical window is inclusive from `2026-09-22T22:22:42.754Z` to
+`2026-09-29T22:22:42.754Z`. `usage.query` returned 43 facts totaling 304,517
+input, 594,663 cache-read, 264,912 cache-write, 4,006 output, and 0 reasoning
+tokens, plus 71,948 provider-reported micro-USD from one cost-bearing legacy
+fact. Those values matched direct SQL exactly. No independent provider statement
+was retained for Claude, Codex, or Antigravity, so external reconciliation is
+Unknown for all three and no two percent comparison is claimed. Same-event
+managed cost and API-equivalent estimates were not substituted for independent
+reports. The retained database, WAL, SHM, Claude corpus, Codex corpus, and
+original checkout remained unchanged.
 
 ##### P4-C5: complete live local and Galahad durability and failover
 

@@ -1,18 +1,18 @@
 # Phase 4 Acceptance Record
 
 Date: 2026-09-29
-Updated: 2026-10-06
+Updated: 2026-10-07
 
-Status: **Implementation recorded, live acceptance incomplete.** The exact 0.60.0
-source and artifacts passed native Windows startup, Galahad live turns for Codex,
-Claude, and Antigravity, real Hub-to-node SSH routing, and a bounded Hub usage pull.
-An exact 0.60.3 native Windows follow-up passed the Usage editor focus and direct
-UI Automation Cancel rows after one transient initial focus-publication miss and
-three clean follow-up runs. The remaining Usage visual and screen-reader matrix,
-weekly reconciliation, and live side-effect-aware failover matrix are not yet
-complete. R0.5's two explicitly deferred physical laptop rows remain
-production-acceptance and release blockers. No push, deployment, production
-activation, or release occurred.
+Status: **Accounting accepted, Phase 4 live acceptance incomplete.** Exact 0.60.15
+commit `3a77382` passed the P4-C1 implementation, P4-C2 local candidate, and
+P4-C4 cloned-store reconciliation gates. Fresh simple and tool-using Claude turns
+matched transcript usage by exact message ID, repeated scan and restart remained
+stable, and the historical seven-day query matched direct SQL. Independent
+provider reports were unavailable, so each external comparison is explicitly
+Unknown. Earlier exact candidates retain their named Windows UI and live-provider
+evidence only. The remaining exact-candidate native interaction, durability,
+failover, current IPC, and physical matrices keep Phase 4 open. No push,
+deployment, production activation, or release occurred.
 
 ## Source and preservation boundary
 
@@ -20,6 +20,9 @@ activation, or release occurred.
   `96aad1d16f357f1bc70d46b9889ad403550a4d1a`, version `0.60.0`.
 - Exact native Usage accessibility follow-up source: clean `codex/recovery-r0`
   commit `2be212f9a290637add9a4f5c662ca3155da98a0c`, version `0.60.3`.
+- Exact accounting source: clean `codex/recovery-r0` commit `3a77382`, version
+  `0.60.15`. This documentation-only follow-up uses workspace version `0.60.16`;
+  no 0.60.16 native or live result is claimed.
 - The intermediate 0.60.2 commit `8a52d2a21da1d5d0f69540864a6162d2b30375bc`
   repaired direct UI Automation activation for Save and Cancel. The 0.60.3
   follow-up exposed the editor text fields on semantic nodes tied to their real
@@ -81,6 +84,138 @@ rendered cleanly. The exact guest server and CLI also passed authenticated
 SYSTEM test is not a substitute for the 0.60.0 normal-user named-pipe security
 matrix. The earlier exact 0.54.12 normal-user matrix is recorded in
 `docs/operations/PHASE3_ACCEPTANCE.md`.
+
+## Exact 0.60.15 accounting and reconciliation acceptance
+
+The clean accounting candidate is commit `3a77382`, version `0.60.15`. Its
+isolated Galahad root is
+`/home/brandon/.pandamux/acceptance/phase4-3a77382-0.60.15-p4-c4`.
+The retained source at
+`/home/brandon/.pandamux/acceptance/phase4-96aad1d` was copied before migration
+or scan. The exact candidate artifacts used on Galahad were:
+
+| Artifact | Bytes | SHA-256 |
+|-|-:|-|
+| Linux `pandamux-server` | 18,204,088 | `d4f9b3d04eb5f8218b109c0ec24a0bb15f9b176d485a5e53e0f016f5edfbea91` |
+| Linux `pandamux-cli` | 2,034,000 | `aebaf76070d0f2fe0320ba6f31a78a33d4e526a2dd73b82bdcdfaf21c409108f` |
+
+The same clean commit also produced local release artifacts and passed the
+desktop and control-plane floor:
+
+| Artifact | Bytes | SHA-256 |
+|-|-:|-|
+| Linux desktop `pandamux` | 60,149,672 | `14ee6a5ee522ac816fa3a03e2b8c13cbc0c22f11dcc22575050ca59ec628512a` |
+| Linux `pandamux-server` | 18,800,232 | `c33dffcdda711be81dea814e04720bb9e12c7211f8e160cd5bb90bd88fb437f2` |
+| Linux `pandamux-cli` | 2,174,664 | `68cc5bea36456d7879948dccc456cec99ade3d586d5da01ffa63b2eacb5ea344` |
+
+`pandamux --headless` returned 0 with `ALL CHECKS PASSED`. An isolated exact
+server and CLI completed authenticated `system.hello`, `system.ping`, and
+`system.identify` with protocol 3, node role, version 0.60.15, and the expected
+test environment. Formatting, strict all-target and all-feature Clippy, 423
+workspace tests with zero failures and two intentional real-shell ignores, the
+Rust boundary guard, the Claude wiring guard, and `cargo deny` all passed.
+Dependency policy retained non-failing warnings for duplicate dependency
+versions, one unmatched license allowance, and yanked transitive `chacha20
+0.10.1` and `yoke-derive 0.8.3`.
+
+### Clone, migration, and source fitness
+
+Before migration, the clone matched the retained source database, WAL, SHM,
+Claude corpus, and Codex corpus by SHA-256. It held migration 11, 23 usage
+observations, 23 outbox rows, 3 quarantine rows, and 24 scanner cursors. The
+source roots contained 15 Claude JSONL files totaling 2,527,996 bytes and 19
+Codex JSONL files totaling 4,707,708 bytes. Their stable content digests were
+`ee02fa6bfcc7cef98dfb7fdfea07970ece2337508640777e6c64ad2cdab2ba09`
+and `eeaa3ac29f326609bcf845bfb2a89377c3d8c500c34ba6e02068e527857addb1`.
+
+Only clone-local absolute paths were remapped. The first exact startup applied
+migration 12 and rescanned the copied corpus. It stabilized at 43 observations,
+43 outbox rows, 6 quarantine rows, 58 file cursors, 4 retained exact-ID Codex
+model mismatches, and 1 retained Claude legacy-debt row. A second startup left
+all counts and normalized observation digest
+`85ad392b70959681dbacbac1826fed2f289a76d3fb5d0518da5b6733813ef305`
+unchanged. Product `usage.query` coverage remained Partial for Claude with
+`legacy_reconciliation_debt` and for Codex with
+`managed_transcript_mismatch`. A no-op scanner pass never upgraded those
+persistent debts to Complete in the product projection.
+
+### Fresh exact-ID Claude turns
+
+The simple acceptance turn
+`turn-9facf3ef-bb3b-4d67-96aa-52fef7b6400f` completed with one exact component,
+message `msg_011CfnFf39xkCP2qMfGKvk4N`, actual model `claude-opus-5-5`, 2 input,
+11,698 cache-read, 9,115 cache-write, and 16 output tokens. Its separate terminal
+cost fact was 75,588 provider-reported micro-USD.
+
+The tool acceptance turn
+`turn-a36b0236-cb11-4be1-a671-01107a0439fe` used Bash exactly once for `pwd`.
+The durable ledger recorded success and the isolated project directory. It
+retained two exact components:
+
+| Message ID | Model | Input | Cache read | Cache write | Output |
+|-|-|-:|-:|-:|-:|
+| `msg_011CfnFfEMfF8Mjztzp1o2dx` | `claude-opus-5-5` | 2 | 20,813 | 19,898 | 74 |
+| `msg_011CfnFfR3bTaU9q76NijVpt` | `claude-opus-5-5` | 2 | 40,711 | 3,294 | 14 |
+
+Its separate terminal cost fact was 275,204 provider-reported micro-USD. A
+sanitized extraction from the copied Claude transcript contained exactly those
+three message IDs. Session, message, model, input, output, cache-read,
+cache-write, and reasoning fields matched all three managed components exactly.
+No new mismatch row appeared. This directly verifies that final
+`message_delta.usage` values replace smaller preliminary stream values on the
+same message component.
+
+After live ingestion, repeated scan and restart remained at 48 observations,
+48 outbox rows, 6 quarantine rows, 59 file cursors, 4 retained mismatches, and 1
+retained legacy-debt row. The normalized digest remained
+`906f31c0167bff1453e9788403654d1a878b94edacacbd46e6211eeafdbc2f7b`.
+An authenticated `usage.query` returned all 48 facts in one page. Its aggregate
+of 304,523 input, 667,885 cache-read, 297,219 cache-write, 4,110 output, and 0
+reasoning tokens, plus 422,740 provider-reported micro-USD across 3 cost facts,
+matched direct SQL exactly.
+
+### Historical seven-day result
+
+The retained historical window is the inclusive 604,800,000 millisecond span
+from `2026-09-22T22:22:42.754Z` through the last pre-rerun observation at
+`2026-09-29T22:22:42.754Z`. The UTC boundary avoids host timezone ambiguity.
+The Oct 7 acceptance turns are intentionally outside this historical window.
+
+`usage.query` returned 43 retained facts totaling 304,517 input, 594,663
+cache-read, 264,912 cache-write, 4,006 output, and 0 reasoning tokens. One
+legacy cost-bearing fact contributed 71,948 provider-reported micro-USD. The
+query aggregate matched direct SQL exactly. Old ambiguous result UUID and
+assistant message-ID facts were not merged or repaired. They remain visible in
+the raw query and are excluded from any claim of a reconciled external total.
+
+No independent provider statement was retained for Claude, Codex, or
+Antigravity. The same-event managed cost is not an independent Claude report,
+and an API-equivalent estimate is not provider-reported spend. Claude, Codex,
+and Antigravity external reconciliation therefore each report **Unknown**. The
+two percent comparison threshold is not applicable. Antigravity's absence from
+the normalized window is not translated into zero usage.
+
+### Preservation and cleanup
+
+Final hashes of the retained `node.db`, `node.db-shm`, and empty `node.db-wal`
+were respectively
+`8392e444508c6c598312e97adf1c761dafc8674dcc704c2f7cdca6aa97de806f`,
+`fd4c9fda9cd3f9ae7c962b0ddf37232294d55580e1aa165aa06129b8549389eb`,
+and `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`,
+identical to the pre-clone values. The two corpus digests also remained
+identical, and no process held the retained database open. The original dirty
+checkout remained unchanged.
+
+An unsupported `pandamux-server --version` probe briefly launched the exact
+candidate against Galahad's default hub path because the server ignores unknown
+flags. Immutable inspection proved that `hub.db` was newly created by the probe,
+contained zero usage observations, contained two scanner diagnostics, and passed
+SQLite integrity checking. No prior database was overwritten. The exact file
+was moved recoverably into the isolated acceptance root at
+`accidental-default-probe/hub.db`, with SHA-256
+`e07863853d6b6a9ff27972c1171d3bfff9a66d4ae81307e12aaadf6db462fa29`.
+The default hub path and runtime files were restored to their prior absent state,
+and no acceptance process remained running.
 
 ### Exact 0.60.3 native accessibility repair artifacts
 
@@ -255,8 +390,9 @@ configuration change removed deprecated keys and scoped seven existing
 non-allowlisted transitive licenses to their exact crates and versions. With
 that change, the exact command
 `cargo deny check advisories licenses bans sources --hide-inclusion-graph`
-returned `advisories ok, bans ok, licenses ok, sources ok`. It emitted one
-non-failing yanked-version warning for transitive `chacha20 0.10.1`. The
+returned `advisories ok, bans ok, licenses ok, sources ok`. The current exact
+0.60.15 run emitted non-failing yanked-version warnings for transitive
+`chacha20 0.10.1` and `yoke-derive 0.8.3`. The
 global license allowlist remains narrow and does not admit GPL, AGPL, or LGPL.
 A deliberate configuration tradeoff is `unmaintained = "workspace"`: the current
 checker errors for unmaintained direct workspace dependencies but does not
@@ -269,14 +405,15 @@ Phase 4 cannot yet be marked exited under `tasks/plan-rewrite.md`:
 1. Complete the native Usage keyboard matrix beyond the verified 20-step Tab,
    editor focus, and direct UIA Cancel paths. Archive 200 percent scaling,
    reduced-motion, forced-colors, non-color-status, and screen-reader results,
-   while watching for recurrence of the recorded transient focus miss.
-2. Reconcile seven-day totals within two percent against defensible provider
-   reports where available; show Unknown for providers without such a source.
-3. Run the live local plus Galahad restart, rotation, reconnect, bounded
+   while watching for recurrence of the recorded transient focus miss. Rerun
+   affected rows on the final exact candidate.
+2. Run the live local plus Galahad restart, rotation, reconnect, bounded
    backfill, capacity, safe-retry, and post-side-effect interruption matrix.
-   The current live turn and saturation results do not prove these behaviors.
-4. Re-run the normal-user Windows named-pipe security matrix on the current
+   The exact 0.60.15 accounting turns and restart scans do not prove the full
+   durability or failure-injection matrix.
+3. Re-run the normal-user Windows named-pipe security matrix on the current
    candidate if it is to inherit a current-version production IPC claim.
+4. Synchronize the maintained project documentation after P4-C5 stabilizes.
 5. Complete the explicitly deferred R0.5 30-minute physical laptop disconnect
    and sleep checks before production acceptance or release.
 

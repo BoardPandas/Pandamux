@@ -105,6 +105,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Archived the exact Phase 4 accounting acceptance result.** The acceptance
+  record now ties the 0.60.15 candidate to its clean source commit, artifact
+  hashes, full local verification, cloned Galahad migration and rescans, fresh
+  simple and tool-using Claude turns, exact message-level transcript matches,
+  stable query totals, explicit historical reconciliation debt, and Unknown
+  independent-provider comparisons. The remaining native, durability,
+  failover, and physical gates stay open.
+
 - **Rewrote the Phase 4 onward recovery plan around current evidence and exact
   acceptance gates.** The plan now records the 0.60.5 through 0.60.8
   accessibility, bridge, and theme work; makes Claude per-message usage

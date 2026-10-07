@@ -45,6 +45,12 @@ cache-write categories, and optional provider occurrence time. The terminal resu
 identifies a separate turn-level cost fact, so total turn cost is never assigned to the
 last assistant message.
 
+Claude is launched with partial message events enabled. A `message_start` creates or
+updates the component for that exact message ID, and the later `message_delta.usage`
+event finalizes the same component with the terminal input, output, cache-read, and
+cache-write totals. Root and subagent message lanes are tracked independently, so a
+preliminary stream value cannot replace the final value or attach to another message.
+
 Managed turn facts are normalized before transcript sources during every scan. Managed
 and transcript token components reconcile only when provider session and assistant
 message identity match exactly. Timestamp skew and one missing optional cost may enrich
@@ -259,11 +265,17 @@ provider profile.
 
 ## Current boundary
 
-Checkpoint 4F has local source verification plus exact 0.60.0 native Windows
-startup and partial UI Automation evidence, Galahad live turns for all three
-must-have providers, a Hub-to-node SSH turn, and a bounded Hub usage pull. The
-deferred physical R0.5 laptop disconnect and sleep rows, full native Phase 4E
-interaction and accessibility acceptance, weekly reconciliation, the local plus
-Galahad live failover matrix, and later release gates still block production
-acceptance and release. The exact results and limitations are recorded in
+Exact 0.60.15 accounting acceptance passed on a cloned retained Galahad store.
+Fresh simple and tool-using Claude turns produced three message components whose
+message IDs, actual model, token categories, and cache categories matched the
+sanitized transcript source exactly. Repeated scans and restarts preserved one
+accepted fact per component, the production `usage.query` aggregate matched direct
+SQL, and historical ambiguity remained visible as Partial coverage. Independent
+provider reports were unavailable, so every external seven-day comparison is
+Unknown rather than zero or reconciled.
+
+The deferred physical R0.5 laptop disconnect and sleep rows, the remaining native
+Phase 4 interaction and accessibility matrix, the local plus Galahad durability and
+failover matrix, and later release gates still block Phase 4 exit, production
+acceptance, and release. Exact results and limitations are recorded in
 `docs/operations/PHASE4_ACCEPTANCE.md`.

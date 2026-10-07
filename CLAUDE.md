@@ -15,7 +15,7 @@ For current facts, use this order:
 
 The only version source is `[workspace.package] version` in the root [`Cargo.toml`](Cargo.toml). Crates inherit it with `version.workspace = true`.
 
-Phase 4A through 4F implementation is recorded after the R0 development gate, but the Phase 4 exit matrix remains open. R0.1 preserves the unfinished usage prototype; R0.2 completes production proxy routing; R0.3 enforces exact provider-instance execution; R0.4 secures the local control boundary. R0.5 has exact live evidence for Galahad and native Windows IPC. On 2026-09-29, the user approved deferring the required 30-minute physical laptop disconnect and sleep checks so development could continue. Those rows still block any production-accepted, released, or shipped claim until the matrix passes and its record is archived. The current 0.60.0 provider, Hub SSH, Hub usage, and native Windows startup results are recorded in [`docs/operations/PHASE4_ACCEPTANCE.md`](docs/operations/PHASE4_ACCEPTANCE.md); they do not close the remaining interaction, reconciliation, and live failover rows.
+Phase 4A through 4F implementation is recorded after the R0 development gate, but the Phase 4 exit matrix remains open. R0.1 preserves the unfinished usage prototype; R0.2 completes production proxy routing; R0.3 enforces exact provider-instance execution; R0.4 secures the local control boundary. R0.5 has exact live evidence for Galahad and native Windows IPC. On 2026-09-29, the user approved deferring the required 30-minute physical laptop disconnect and sleep checks so development could continue. Those rows still block any production-accepted, released, or shipped claim until the matrix passes and its record is archived. Exact 0.60.15 commit `3a77382` passes the P4-C1 Claude accounting repair, P4-C2 local candidate, and P4-C4 cloned Galahad reconciliation gates. Earlier 0.60.0 through 0.60.8 evidence remains scoped to its named provider, Hub, IPC, and native UI rows. The exact results are recorded in [`docs/operations/PHASE4_ACCEPTANCE.md`](docs/operations/PHASE4_ACCEPTANCE.md); the remaining native interaction, live durability and failover, current IPC, documentation, and physical rows keep Phase 4 open.
 
 ## Build and development
 
@@ -146,6 +146,11 @@ identity. Timestamp skew and one missing optional cost can converge, while confl
 provider, instance, subscription, model, or token measurements remain separate and keep
 source coverage Partial with a durable diagnostic. Existing ambiguous result UUID and
 message id history is preserved rather than guessed from timestamps.
+
+Claude partial-message streaming is enabled so the terminal `message_delta.usage`
+updates the component first seen at `message_start`. Root and subagent lanes keep their
+active message identities separate. The terminal delta, not the preliminary start
+value, decides each component's final token and cache totals.
 
 Phase 4C keeps node outboxes and Hub ingestion bounded. The Hub owns one asynchronous
 synchronization service, persists its database at `data/hub.db` by default, and commits
