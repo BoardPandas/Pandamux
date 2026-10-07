@@ -140,10 +140,15 @@ Terminology used throughout:
   historical seven-day window has no independent provider statement, so all
   external provider comparisons are Unknown and the two percent threshold is
   not applicable.
-- Phase 4 remains open on the rest of the exact-candidate native matrix, live
-  local and Galahad durability and failover, current-version normal-user IPC,
-  and documentation synchronization. The re-scoped physical laptop disconnect
-  and sleep rows remain production-acceptance and release blockers.
+- Exact 0.60.17 commit `2f56a27` partially passes P4-C5. Live scanner and Hub
+  durability, conservative capacity and route explanations, the diagnostic
+  failover fixtures, and all four rollback controls passed in isolated roots.
+  Real external quota exhaustion and post-side-effect capacity interruption
+  remain open.
+- Phase 4 remains open on the rest of the exact-candidate native matrix, the
+  remaining live P4-C5 failover rows, current-version normal-user IPC, and the
+  final documentation archive. The re-scoped physical laptop disconnect and
+  sleep rows remain production-acceptance and release blockers.
 - Phase 5 implementation has not started. The next development work is the
   ordered Phase 4 closure sequence in its verification record. Phase 5 begins
   only with its dependency, legacy-domain, and boundary gate. Phase 6 depends
@@ -1894,6 +1899,30 @@ Acceptance:
 - All failure injection is reversible and leaves isolated roots available for
   audit until the completion record is accepted.
 
+Result recorded 2026-10-07: **Partial** on exact commit `2f56a27`, version
+`0.60.17`. The live scanner matrix passed startup, append, partial completion,
+rename, rotation, truncation, replacement, permission denial and recovery, and
+restart. Separate Hub processes passed disconnect, reconnect, high-water resume,
+retention-gap detection, bounded interrupted backfill, and process-restart
+completion. Seven final logical facts matched between node and Hub at digest
+`0d9dfd15644e8382525ffa4df4514c18bbef22c091cb2ca3d84ede2ab4e33eac`
+without manual usage-row edits. Real Codex evidence replayed Fresh and Reported,
+Aging and Estimated, Stale and Unknown, and Reset and Unknown. Claude remained
+Unknown, the disconnected Hub exposed the unreachable environment, and
+controlled Store API revisions proved conservative conflict and local-hard-limit
+routing. Scanner, Hub sync, capacity routing, and automatic failover switches
+all restored enabled while retaining observations and attempts.
+
+The focused safe-retry, unsafe-boundary, continuation-restart, and remote-policy
+fixtures all passed, but they do not close live rows 4 through 6. The retained
+Claude credential was expired and Codex workspace discovery returned 401; neither
+failure was quota exhaustion. No real provider limit was forced, and no real
+post-output or post-side-effect capacity interruption was available. Those live
+rows remain required. Exact artifacts, databases, logs, controlled-evidence
+labels, isolation corrections, limitations, and cleanup are recorded in
+`docs/operations/PHASE4_ACCEPTANCE.md`. No push, deployment, production
+activation, or release is claimed.
+
 ##### P4-C6: close the physical R0.5 rows
 
 1. During a real remote provider turn, disconnect the laptop for 30 minutes,
@@ -2454,6 +2483,11 @@ Known before starting (carry these into implementation):
   actual message model and cache-read and cache-write categories when the
   provider exposes them.
 - Scanner cursors need platform file identity and a committed byte offset. Paths alone do not survive rotation, and advancing over a partial trailing record permanently loses data.
+- Phase 4 P4-C5: an explicit database path does not relocate relative provider
+  profiles. Every isolated server start must also pin `PANDAMUX_DATA_DIR`, and
+  acceptance must verify that value in the live process environment before a
+  scanner or provider action. A stale built artifact is not current-source
+  evidence, even when it lives under the active worktree's target directory.
 - Never use email as subscription identity or failover authority. Use generated keys, explicit cross-host mapping, masked labels, and explicit pools.
 - Unknown is a first-class state for model, price, authentication, health, capacity, version, and platform. Never fabricate a plausible default or translate Unknown into Healthy.
 - Keep environment and caller provenance out of request bodies. Stamp it from the authenticated connection context.

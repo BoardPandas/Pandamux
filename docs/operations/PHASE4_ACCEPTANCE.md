@@ -3,16 +3,17 @@
 Date: 2026-09-29
 Updated: 2026-10-07
 
-Status: **Accounting accepted, Phase 4 live acceptance incomplete.** Exact 0.60.15
-commit `3a77382` passed the P4-C1 implementation, P4-C2 local candidate, and
-P4-C4 cloned-store reconciliation gates. Fresh simple and tool-using Claude turns
-matched transcript usage by exact message ID, repeated scan and restart remained
-stable, and the historical seven-day query matched direct SQL. Independent
-provider reports were unavailable, so each external comparison is explicitly
-Unknown. Earlier exact candidates retain their named Windows UI and live-provider
-evidence only. The remaining exact-candidate native interaction, durability,
-failover, current IPC, and physical matrices keep Phase 4 open. No push,
-deployment, production activation, or release occurred.
+Status: **Accounting accepted, P4-C5 partially accepted, Phase 4 live acceptance
+incomplete.** Exact 0.60.15 commit `3a77382` passed the P4-C1 implementation,
+P4-C2 local candidate, and P4-C4 cloned-store reconciliation gates. Exact
+0.60.17 commit `2f56a27` passed the scanner, Hub synchronization, conservative
+capacity projection, route-explanation, and rollback-control portions of P4-C5.
+Real provider quota exhaustion and real interruptions after output or external
+side effects were not available, so their live rows remain open even though the
+focused diagnostic fixtures pass. Earlier exact candidates retain only their
+named Windows UI and live-provider evidence. The remaining exact-candidate
+native interaction, external failover, current IPC, and physical matrices keep
+Phase 4 open. No push, deployment, production activation, or release occurred.
 
 ## Source and preservation boundary
 
@@ -23,6 +24,9 @@ deployment, production activation, or release occurred.
 - Exact accounting source: clean `codex/recovery-r0` commit `3a77382`, version
   `0.60.15`. This documentation-only follow-up uses workspace version `0.60.16`;
   no 0.60.16 native or live result is claimed.
+- Exact P4-C5 durability source: clean `codex/recovery-r0` commit `2f56a27`,
+  version `0.60.17`. The documentation follow-up uses workspace version
+  `0.60.18`; no 0.60.18 executable, native, or live result is claimed.
 - The intermediate 0.60.2 commit `8a52d2a21da1d5d0f69540864a6162d2b30375bc`
   repaired direct UI Automation activation for Save and Cancel. The 0.60.3
   follow-up exposed the editor text fields on semantic nodes tied to their real
@@ -309,6 +313,146 @@ removed after testing; the accepted output and node database remain as the
 record. This proves a bounded live Hub pull and a Hub-routed turn, not
 long-duration reconnect, retention-gap backfill, or weekly reconciliation.
 
+## Exact 0.60.17 P4-C5 durability and control acceptance
+
+P4-C5 is **Partial** on clean commit `2f56a27`, version `0.60.17`. Scanner
+durability, Hub resumption and bounded backfill, capacity projection and route
+explanations, and all four rollback controls passed in isolated roots. The
+fixture-backed failover matrix also passed. Real external quota exhaustion and
+real interruption after output or a side effect were not available, so P4-C5
+rows 4 through 6 remain live-acceptance gaps.
+
+The retained Galahad evidence root is
+`/home/brandon/.pandamux/acceptance/phase4-2f56a27-0.60.17-p4-c5`. It contains
+the final databases, pre-injection and pre-toggle backups, timestamped logs,
+controlled evidence, exact artifact hashes, and a manifest covering 837 files.
+The publication-disabled Linux artifacts were:
+
+| Artifact | Bytes | SHA-256 |
+|-|-:|-|
+| Linux musl `pandamux-server` | 17,674,928 | `35600df4d2b04daaf5c748d868d51daad2d6dc476e44010cf579e985d1350dbc` |
+| Linux musl `pandamux` CLI | 2,022,696 | `37d5f4cd4dd95378427ff8bda69f6ffe484319249c3b248d62ddd85bf91d2ea3` |
+
+### Scanner and Hub durability
+
+The live scanner matrix used synthetic Claude transcript records under the
+isolated scanner profile. It passed startup, unchanged restart, partial trailing
+record, completion, rename, rotation, truncation, replacement, permission
+denial, and permission recovery. Partial input did not advance the committed
+record or create an observation. Rotation, truncation, and replacement produced
+the expected new facts without duplicating earlier facts. Permission denial
+reported `source_permission_denied`, retained all six observations, and returned
+to Complete after access was restored.
+
+Three separate Hub processes then synchronized two facts per bounded pass. Their
+durable high-water marks advanced from 2 to 4 to 6, with follow-up work true,
+true, then false. Each explicit disconnect persisted
+`usage_sync_unreachable`. After node outbox compaction retained only sequence 6,
+a fresh Hub detected the retention gap and stopped after three bounded pages
+with high-water 0, one inserted fact, and a durable backfill cursor. A new Hub
+process resumed that cursor, completed seven further pages, inserted the other
+five facts, and reached Ready at high-water 6. The six-fact node and Hub digest
+matched at
+`bded6d83039f8c665940bd3ebe5b364df06c902271eb945a2896774df9628f56`
+without a manual usage-row edit.
+
+The scanner rollback test added one seventh record while scanning was disabled.
+After restart, both direct SQLite and authenticated `usage.query` remained at
+six facts. Re-enabling scanning and restarting ingested exactly the queued
+record, producing seven facts, four file cursors, and a retained outbox window
+of sequences 6 through 7. The Hub-sync rollback test held its existing six
+facts while synchronization was disabled, then reached seven facts and
+high-water 7 immediately after re-enable. The final node and Hub logical fact
+digest matched at
+`0d9dfd15644e8382525ffa4df4514c18bbef22c091cb2ca3d84ede2ab4e33eac`.
+All final scanner, capacity, and Hub databases returned `ok` from SQLite
+integrity checking.
+
+### Capacity evidence and route decisions
+
+Authenticated `capacity.query` replayed real retained Codex quota evidence at
+fixed evaluation instants. The `codex primary` window projected:
+
+| State | Confidence | Remaining | Reason |
+|-|-|-:|-|
+| Fresh | Reported | 210,000 millionths | Current retained provider evidence |
+| Aging | Estimated | 210,000 millionths | `capacity_confidence_age_decayed` |
+| Stale | Unknown | Unknown | `capacity_snapshot_stale` |
+| Reset | Unknown | Unknown | `capacity_window_reset` |
+
+Claude returned Unknown rather than a fabricated quota. Querying the disconnected
+Hub returned `env-p4-c5-scanner` in `offlineEnvironments` while preserving its
+stale Unknown capacity projection. Four controlled snapshots were inserted only
+into the cloned capacity store through `Store::save_capacity_snapshots`. Their
+source names begin with `p4_c5_controlled_`. Conflicting 300,000 and 700,000
+remaining values selected the safer 300,000 and reported
+`capacity_evidence_conflict`. A local zero-remaining hard limit overrode a Hub
+900,000-remaining report, projected `hard_limited`, and reported both
+`capacity_evidence_conflict` and `local_hard_limit_active`.
+
+With capacity routing enabled, the exact route rejected Codex for
+`capacity_hard_limit`; Claude was independently rejected because authentication
+was unverified, so the request failed closed with `no_eligible_failover_route`.
+With only capacity routing disabled, the next isolated route selected Codex with
+score 1,750 despite the controlled hard-limit snapshot. The switch was restored
+immediately. The provider turn later failed against stale cloned authentication
+and was canceled; it is not provider-success or capacity-failure evidence.
+
+The retained clone also produced one real Claude launch that failed on expired
+OAuth and one real Codex launch that failed on workspace discovery authorization.
+Neither error represented quota exhaustion. No attempt was made to spend toward
+a provider limit merely to force acceptance. Therefore these runs do not close
+the real pre-output retry row or any real post-side-effect interruption row.
+
+### Diagnostic failover and rollback coverage
+
+Five focused `pandamux-server` lifecycle tests passed on 0.60.17. They prove a
+safe pre-output fixture retries once onto an allowed pool member, disabling
+automatic failover persists an explicit interruption, text, file edit, command,
+network action, and approval boundaries never replay automatically, an audited
+continuation remains idempotent after manager restart, and a node honors the
+Hub policy snapshot without a local organization copy. These fixtures preserve
+the expected checkpoint, partial output, tool ledger, capacity evidence, and
+continuation state, but they remain diagnostic support rather than live-provider
+acceptance.
+
+All four rollback settings were exercised independently. Scanner and Hub sync
+behavior were proven across process starts. Capacity routing changed the next
+route and was restored. Automatic failover persisted false and then true while
+all 10 retained attempts and 43 retained capacity-clone observations remained
+queryable; its interruption behavior is covered by the focused fixture above.
+The final persisted scanner, Hub-sync, capacity-routing, and automatic-failover
+flags were all enabled.
+
+### Isolation correction and cleanup
+
+One scanner-toggle restart initially omitted the required
+`PANDAMUX_DATA_DIR`. Relative profile paths therefore resolved against the
+normal Galahad PandaMUX data directory and the scanner read 20 unrelated
+historical records. This was an acceptance-harness error, not accepted product
+evidence. No normal-profile file changed in the measured window. The failed
+scanner and capacity databases were preserved under
+`failed-restart-missing-data-dir`, both working clones were restored from their
+pre-test backups, and the complete scanner, Hub, capacity, and rollback rows
+were rerun with each live process showing its isolated data directory in
+`/proc/<pid>/environ`.
+
+A separate local probe accidentally used a stale pre-0.60.17 binary from the
+release target directory. File birth time proved that it created a new empty
+default `hub.db`; no prior database was overwritten. The process was stopped,
+the database passed integrity checking, and it was moved recoverably into the
+local acceptance tree with SHA-256
+`9d0431a682890469daf636dadd8509e354bbcf9c939774b5dbd12d64278d27f5`.
+The default path was absent afterward. The copied exact 0.60.17 artifact then
+printed help without starting a server.
+
+Both Galahad acceptance daemons stopped gracefully, no process retained the
+P4-C5 root, and the retained source database still hashed to
+`8392e444508c6c598312e97adf1c761dafc8674dcc704c2f7cdca6aa97de806f`.
+The original dirty checkout remained at `9511d0e22d44` with the same nine
+modified and three untracked prototype paths. No production settings, database,
+deployment, activation, or release was changed.
+
 ## Native Usage accessibility probe
 
 An interactive `C4adUser` scheduled task launched the exact Windows desktop
@@ -387,6 +531,14 @@ and the same two intentional real-shell ignores, the Rust boundary guard,
 Claude wiring guard, dependency policy, and desktop headless startup. The exact
 0.60.3 commit additionally passed the native MSVC builds and UIA follow-up above.
 
+Exact 0.60.17 commit `2f56a27` passed formatting, strict workspace and
+all-target Clippy, 427 workspace tests with zero failures and two intentional
+real-shell ignores, the Rust boundary guard, the Claude wiring guard, and
+dependency policy. The five focused failover tests were rerun separately during
+P4-C5 and all passed. The exact musl server and CLI hashes above were reverified
+after transfer and the server completed authenticated version 0.60.17 RPCs on
+Galahad. These checks support, but do not replace, the live rows.
+
 `cargo-deny` 0.20.2 could not parse the old `deny.toml` syntax. The follow-up
 configuration change removed deprecated keys and scoped seven existing
 non-allowlisted transitive licenses to their exact crates and versions. With
@@ -409,13 +561,17 @@ Phase 4 cannot yet be marked exited under `tasks/plan-rewrite.md`:
    reduced-motion, forced-colors, non-color-status, and screen-reader results,
    while watching for recurrence of the recorded transient focus miss. Rerun
    affected rows on the final exact candidate.
-2. Run the live local plus Galahad restart, rotation, reconnect, bounded
-   backfill, capacity, safe-retry, and post-side-effect interruption matrix.
-   The exact 0.60.15 accounting turns and restart scans do not prove the full
-   durability or failure-injection matrix.
+2. Close the remaining live P4-C5 failover rows with a real pre-output capacity
+   failure, real interruptions after text, file edit, command, network action,
+   and approval, plus restart while real continuation or delivery work is
+   pending. Exact 0.60.17 already passes scanner durability, reconnect and
+   bounded backfill, capacity projection and route explanations, rollback
+   controls, and the complete diagnostic fixture matrix.
 3. Re-run the normal-user Windows named-pipe security matrix on the current
    candidate if it is to inherit a current-version production IPC claim.
-4. Synchronize the maintained project documentation after P4-C5 stabilizes.
+4. Complete the P4-C7 archive and maintained-document synchronization after the
+   remaining P4-C5 and P4-C6 live rows stabilize. This record already reflects
+   the current P4-C5 Partial result.
 5. Complete the explicitly deferred R0.5 30-minute physical laptop disconnect
    and sleep checks before production acceptance or release.
 

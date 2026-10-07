@@ -274,8 +274,17 @@ SQL, and historical ambiguity remained visible as Partial coverage. Independent
 provider reports were unavailable, so every external seven-day comparison is
 Unknown rather than zero or reconciled.
 
-The deferred physical R0.5 laptop disconnect and sleep rows, the remaining native
-Phase 4 interaction and accessibility matrix, the local plus Galahad durability and
-failover matrix, and later release gates still block Phase 4 exit, production
-acceptance, and release. Exact results and limitations are recorded in
-`docs/operations/PHASE4_ACCEPTANCE.md`.
+Exact 0.60.17 partially passed P4-C5. Its isolated live scanner matrix covered
+restart, append, partial records, rename, rotation, truncation, replacement,
+permission denial, and recovery. Separate Hub processes covered disconnect,
+high-water resumption, retention-gap detection, bounded interruption, and
+restart completion. Conservative capacity projections, route explanations, and
+all four rollback controls also passed. Fixture-backed failover tests passed,
+but real provider quota exhaustion and real interruptions after output or an
+external side effect were unavailable and remain open.
+
+The deferred physical R0.5 laptop disconnect and sleep rows, the remaining
+native Phase 4 interaction and accessibility matrix, the open external failover
+rows, the current-candidate IPC rerun, and later release gates still block Phase
+4 exit, production acceptance, and release. Exact results and limitations are
+recorded in `docs/operations/PHASE4_ACCEPTANCE.md`.

@@ -110,6 +110,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Archived the exact Phase 4 durability and control result.** The acceptance
+  record now ties the 0.60.17 candidate to its scanner rotation and recovery
+  matrix, bounded Hub restart and retention-gap backfill, real and controlled
+  capacity projections, route explanations, rollback-control proof, exact
+  artifact hashes, isolation corrections, and retained-store preservation. It
+  keeps real quota exhaustion and post-side-effect interruption explicitly open
+  instead of promoting diagnostic fixtures to live acceptance.
+
 - **Archived the exact Phase 4 accounting acceptance result.** The acceptance
   record now ties the 0.60.15 candidate to its clean source commit, artifact
   hashes, full local verification, cloned Galahad migration and rescans, fresh
