@@ -302,8 +302,11 @@ reopened after manual use showed that the omitted successful provider-login
 launch path left its Terminal surface undiscoverable and noninteractive. The
 exact 0.60.24 native repair attempt proved the visible focused Terminal surface
 but exposed a ConPTY submit-sequence defect before the controlled command ran.
-The 0.60.25 source candidate corrects that defect and still requires native
-Windows acceptance. That row, the open real external quota-exhaustion and post-side-effect
+Exact 0.60.25 corrected command submission and showed the controlled READY and
+PROMPT output visually, then failed the accessibility assertion because the
+painted grid was absent from UI Automation. The 0.60.26 source candidate adds a
+bounded semantic output log and focused-terminal description, and still
+requires native Windows acceptance. That row, the open real external quota-exhaustion and post-side-effect
 interruption rows, the deferred physical R0.5 laptop disconnect and sleep rows,
 the final archive after those results stabilize, and later release gates still
 block Phase 4 exit, production acceptance, and release. Exact results and

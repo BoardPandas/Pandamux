@@ -46,8 +46,10 @@ R0 development gate:
   noninteractive. Exact 0.60.24 proved the repaired panel, terminal binding,
   and automatic focus natively, but PowerShell did not execute the injected
   login command because ConPTY received a line feed instead of carriage
-  return. The 0.60.25 source candidate corrects that submit sequence and still
-  requires native Windows acceptance. Real external quota exhaustion, real
+  return. Exact 0.60.25 proved command execution visually, then exposed that
+  painted Terminal output was absent from UI Automation. The 0.60.26 source
+  candidate adds a bounded semantic output log and still requires native
+  Windows acceptance. Real external quota exhaustion, real
   post-side-effect interruption, and the deferred physical laptop checks keep
   the Phase 4 exit matrix open.
 

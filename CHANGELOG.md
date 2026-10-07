@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Exposed visible Terminal output to assistive technology.** Terminal surfaces
+  now publish their bounded visible grid as a semantic log and as the focused
+  terminal's accessible description. Windows UI Automation and Narrator can
+  inspect the same current output that is painted on screen without receiving
+  unbounded scrollback.
+
 - **Submitted provider login commands with the native PTY Enter sequence.**
   Windows ConPTY login terminals now receive a carriage return, so PowerShell
   executes the reviewed command instead of opening a continuation prompt.

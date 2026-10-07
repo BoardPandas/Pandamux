@@ -1227,6 +1227,7 @@ fn render_terminal_surface<V: 'static>(
                 "Interactive terminal {}. Click or tab here to type.",
                 term.title
             ))
+            .aria_description(term.accessible_output())
             .track_focus(focus_handle)
             .border_1()
             .border_color(if is_focused {

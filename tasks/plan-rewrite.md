@@ -158,8 +158,10 @@ Terminology used throughout:
   Exact 0.60.24 commit `581113e` proved the repaired panel, terminal binding,
   and automatic focus on native Windows, but the injected PowerShell command
   remained at a continuation prompt because ConPTY received a line feed instead
-  of carriage return. The 0.60.25 source candidate corrects that submit
-  sequence and is not native-accepted.
+  of carriage return. Exact 0.60.25 commit `8f0ec20` proved native command
+  execution visually, then failed because painted Terminal output was absent
+  from UI Automation. The 0.60.26 source candidate exposes a bounded semantic
+  output log and is not native-accepted.
 - Phase 4 remains open on the P4-C3 login-terminal retest, the remaining live
   P4-C5 failover rows, and the final documentation archive after those rows
   stabilize. The re-scoped physical
@@ -1923,7 +1925,11 @@ input and explicit close, preserves visible errors, and registers remotely
 created login terminal IDs with Hub routing. Native Windows use proved those
 panel, binding, and focus changes, then exposed that line feed did not submit
 the reviewed command in PowerShell over ConPTY. Version 0.60.25 changes the
-Windows submit delimiter to carriage return. P4-C3 remains open until an exact
+Windows submit delimiter to carriage return. Its exact native build, smoke,
+mock-remote ownership, panel, focus, command execution, and visible READY
+output passed, but the painted output was absent from Windows UI Automation.
+Version 0.60.26 exposes a bounded visible grid as a semantic log and as the
+focused Terminal's accessible description. P4-C3 remains open until an exact
 native Windows artifact passes the expanded successful-login row.
 
 The retained host evidence root is

@@ -13,6 +13,46 @@ use pandamux_term::grid::{CellColor, ScreenCells, ScrollAmount, StyledCell, Term
 
 use crate::theme::{Radii, Theme, Typography};
 
+/// Maximum number of visible terminal characters exposed through accessibility.
+///
+/// The painted grid remains the visual source of truth. This cap prevents a
+/// large viewport from producing an unbounded accessibility node while keeping
+/// the most recent visible content, including the active prompt, available to
+/// screen readers.
+pub const ACCESSIBLE_TERMINAL_OUTPUT_CHAR_LIMIT: usize = 4_096;
+
+/// Builds the accessible text for the currently visible terminal grid.
+pub fn accessible_terminal_output(cells: &ScreenCells) -> String {
+    let visible = cells
+        .rows
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|cell| if cell.c == '\0' { ' ' } else { cell.c })
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let visible = visible.trim();
+
+    if visible.is_empty() {
+        return "Terminal output. No visible output.".to_string();
+    }
+
+    let character_count = visible.chars().count();
+    if character_count <= ACCESSIBLE_TERMINAL_OUTPUT_CHAR_LIMIT {
+        return format!("Terminal output. {visible}");
+    }
+
+    let recent = visible
+        .chars()
+        .skip(character_count - ACCESSIBLE_TERMINAL_OUTPUT_CHAR_LIMIT)
+        .collect::<String>();
+    format!("Terminal output. Earlier visible text omitted. {recent}")
+}
+
 /// Resolves an ANSI / indexed terminal color to an RGBA value.
 pub fn resolve_indexed_color(index: u8, _theme: &Theme, _is_bg: bool) -> Rgba {
     match index {
@@ -359,6 +399,11 @@ impl TerminalViewState {
         self.exit_code = exit_code;
     }
 
+    /// Returns a bounded accessible description of the painted terminal grid.
+    pub fn accessible_output(&self) -> String {
+        accessible_terminal_output(&self.cached_cells)
+    }
+
     /// Returns currently selected text in the terminal grid if any.
     pub fn selection_text(&self) -> Option<String> {
         self.grid.lock().ok().and_then(|g| g.selection_text())
@@ -672,6 +717,10 @@ pub fn render_terminal_view(state: &TerminalViewState, theme: &Theme) -> AnyElem
     };
 
     let screen_container = div()
+        .id("terminal-output-log")
+        .role(Role::Log)
+        .accessibility_id("terminal-output-log")
+        .aria_label(state.accessible_output())
         .v_flex()
         .bg(theme.terminal.surface)
         .p_3()
@@ -800,6 +849,27 @@ mod tests {
         );
         let full_text: String = spans.iter().map(|s| s.text.as_str()).collect();
         assert!(full_text.starts_with("Hello PandaMUX"));
+    }
+
+    #[test]
+    fn accessible_terminal_output_exposes_visible_text_and_keeps_recent_content() {
+        let mut state = TerminalViewState::new("term-accessible", ".", 50, 120);
+        let old = "old-visible-line ".repeat(400);
+        let ready = "PANDAMUX_LOGIN_FIXTURE_READY\r\nPANDAMUX_LOGIN_FIXTURE_PROMPT> ";
+        state.feed_bytes(format!("{old}\r\n{ready}").as_bytes(), 7_000, false);
+
+        let output = state.accessible_output();
+        assert!(output.starts_with("Terminal output."));
+        assert!(output.contains("PANDAMUX_LOGIN_FIXTURE_READY"));
+        assert!(output.contains("PANDAMUX_LOGIN_FIXTURE_PROMPT>"));
+        assert!(!output.contains('\0'));
+        assert!(
+            output.chars().count()
+                <= ACCESSIBLE_TERMINAL_OUTPUT_CHAR_LIMIT
+                    + "Terminal output. Earlier visible text omitted. "
+                        .chars()
+                        .count()
+        );
     }
 
     #[test]
