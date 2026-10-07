@@ -327,9 +327,12 @@ output-focus request, so Narrator still could not read the terminal Log. Exact
 0.60.32 commit `952b280` passed native build, smoke, remote lifecycle, and
 standard successful-login interaction, but direct UI Automation Invoke still
 left focus on the PandaMUX window because the styled control fell back to
-synthesized pointer input under Narrator. The 0.60.33 source candidate gives
-both visible focus controls direct AccessKit Click handlers and still requires
-exact native Windows acceptance.
+synthesized pointer input under Narrator. Exact 0.60.33 commit `58452e7`
+passed native build, smoke, remote lifecycle, and standard successful-login
+interaction, but its direct AccessKit handler deferred the focus update and UI
+Automation Invoke still left focus on the PandaMUX window. The 0.60.34 source
+candidate focuses the requested terminal target synchronously during
+accessibility activation and still requires exact native Windows acceptance.
 That row, the open real external quota-exhaustion and post-side-effect
 interruption rows, the deferred physical R0.5 laptop disconnect and sleep rows,
 the final archive after those results stabilize, and later release gates still

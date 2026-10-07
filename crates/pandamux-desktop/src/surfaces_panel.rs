@@ -1262,7 +1262,10 @@ fn terminal_focus_button<V: 'static>(
 ) -> AnyElement {
     // gpui-component's styled Button exposes UIA Invoke through synthesized
     // pointer input. Narrator can suppress that fallback, so these focus-mode
-    // controls use the base button and a direct AccessKit Click listener.
+    // controls use the base button and a direct AccessKit Click listener. The
+    // accessibility path focuses synchronously, matching GPUI's own Focus
+    // action handling; deferring from that callback can strand focus on the
+    // window after UI Automation Invoke returns.
     let component_theme = cx.theme();
     let background: Background = component_theme.transparent.into();
     let hover_background: Background = if component_theme.mode.is_dark() {
@@ -1302,10 +1305,7 @@ fn terminal_focus_button<V: 'static>(
             });
         })
         .on_a11y_action(AccessibleAction::Click, move |_data, window, cx| {
-            let target = target.clone();
-            window.defer(cx, move |window, cx| {
-                window.focus(&target, cx);
-            });
+            window.focus(&target, cx);
         })
         .child(label)
         .when(is_focused, |button| button.focus_ring_style(window, cx))
