@@ -198,9 +198,15 @@ Terminology used throughout:
   interaction, but UI Automation still reported the PandaMUX window. Exact
   0.60.37 commit `f21bc2d` activated PandaMUX and passed the same gates, but its
   Narrator result was unchanged. Diagnostics proved PandaMUX already owned the
-  foreground window and had visibly entered output-reading mode. The 0.60.38
-  source candidate instead reports the output Log through GPUI's supported
-  active-descendant pattern. It is not native-accepted.
+  foreground window and had visibly entered output-reading mode. Exact 0.60.38
+  commit `d328ad8` then passed the complete local gate, native build, host
+  smoke, remote lifecycle, and standard successful-login interaction. Ordinary
+  UI Automation honored its active-descendant output focus, but Narrator did
+  not speak READY. Diagnostics proved that native foreground, active, and
+  keyboard focus remained correct while synchronized Narrator navigation
+  reached the terminal header controls and skipped the semantic Log group. The
+  0.60.39 source candidate instead uses AccessKit's dedicated Terminal role,
+  which Windows maps to a UI Automation Document. It is not native-accepted.
 - Phase 4 remains open on the P4-C3 login-terminal retest, the remaining live
   P4-C5 failover rows, and the final documentation archive after those rows
   stabilize. The re-scoped physical
@@ -2014,10 +2020,17 @@ row, but UI Automation still reported the PandaMUX window. Exact 0.60.37 commit
 `f21bc2d` activated the native window and passed the same gates, but its
 Narrator result was unchanged. Diagnostics proved PandaMUX already owned the
 foreground window and had visibly entered output-reading mode, isolating the
-defect to accessibility focus publication. Version 0.60.38 uses GPUI's
-active-descendant pattern instead of moving real keyboard focus to the output
-child. P4-C3 remains open until an exact native Windows artifact passes the
-expanded successful-login row and Narrator speaks the controlled output.
+defect to accessibility focus publication. Exact 0.60.38 commit `d328ad8`
+used GPUI's active-descendant pattern and passed the complete local gate,
+native build, host smoke, remote lifecycle, and standard successful-login row.
+Ordinary UI Automation honored the active descendant, but Narrator still did
+not speak READY. Instrumentation proved PandaMUX retained native foreground,
+active, and keyboard focus. Narrator navigation synchronized to that focus,
+reached all three terminal header controls, and skipped the semantic Log group.
+Version 0.60.39 changes that output node to AccessKit's dedicated Terminal
+role, which Windows maps to a UI Automation Document. P4-C3 remains open until
+an exact native Windows artifact passes the expanded successful-login row and
+Narrator speaks the controlled output.
 
 The retained host evidence root is
 `C:\ProgramData\PandaMUX\acceptance\phase4-fee9e02-0.60.22-p4-c3`.

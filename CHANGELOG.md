@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Exposed visible terminal output through the platform terminal document role.**
+  The bounded terminal grid now uses AccessKit's dedicated `Terminal` role,
+  which Windows publishes as a UI Automation Document. Genuine Narrator
+  diagnostics proved that its item navigation reached the terminal header
+  controls but skipped the former semantic Log group entirely, even though
+  ordinary UI Automation could focus it. The stable `terminal-output-log`
+  automation ID, explicit focus actions, bounded accessible text, visible read
+  mode, and active-descendant behavior remain intact.
+
 - **Made visible Terminal output predictably reachable by assistive technology.**
   Terminal surfaces publish their bounded visible grid as a semantic log with
   a visible focus border. The Terminal header exposes explicit `Type here` and

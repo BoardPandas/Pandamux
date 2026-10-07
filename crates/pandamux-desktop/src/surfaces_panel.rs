@@ -1282,7 +1282,8 @@ fn terminal_focus_button<V: 'static>(
     // controls use the base button and a direct AccessKit Click listener. The
     // accessibility path updates the application-owned terminal focus mode
     // directly. The terminal container retains real keyboard focus, while the
-    // output Log is published through GPUI's active-descendant pattern.
+    // output terminal document is published through GPUI's active-descendant
+    // pattern.
     let component_theme = cx.theme();
     let background: Background = component_theme.transparent.into();
     let hover_background: Background = if component_theme.mode.is_dark() {

@@ -61,9 +61,17 @@ native build, smoke, remote lifecycle, and standard interaction, but Narrator
 still reported window-level focus. Instrumented diagnostics then proved that
 PandaMUX already owned the foreground window and had internally entered its
 visible output-reading state; native activation was not the missing condition.
-It is rejected. The 0.60.38 source candidate keeps real keyboard focus on the
-terminal container and publishes the output Log through GPUI's supported
-active-descendant pattern. It has not passed exact native Windows acceptance.
+It is rejected. Exact 0.60.38 commit `d328ad8` then kept real keyboard focus on
+the terminal container and published the output Log through GPUI's supported
+active-descendant pattern. Its complete local gate, native build, host smoke,
+remote lifecycle, and standard successful-login interaction passed. Ordinary
+UI Automation honored the active descendant, but genuine Narrator did not speak
+READY. Instrumented follow-ups proved that PandaMUX retained native foreground,
+active, and keyboard focus while synchronized Narrator navigation reached the
+terminal header controls and skipped the semantic Log group. It is rejected.
+The 0.60.39 source candidate changes that node to AccessKit's dedicated
+Terminal role, which Windows maps to a UI Automation Document. It has not
+passed exact native Windows acceptance.
 Exact
 0.60.17 commit `2f56a27` passed the scanner, Hub
 synchronization, conservative capacity projection, route-explanation, and
@@ -178,13 +186,20 @@ or release occurred.
   was already foreground before and after Invoke, while the visible instruction
   and focus border proved the direct handler had changed GPUI into output mode.
   Native activation addressed the wrong layer, so the attempt is rejected.
-- Current reopened P4-C3 repair source: workspace version `0.60.38` in the
-  isolated recovery worktree. It keeps real keyboard focus on the interactive
-  terminal container and reports the semantic output Log as that container's
-  active descendant while read mode is selected. Its complete local source gate
-  passed, but the candidate is not native-accepted until committed source is
-  built and exercised on Windows; no native, live, production, or release
-  result is claimed.
+- Fifteenth reopened P4-C3 repair source: clean commit
+  `d328ad8d6c59ba0375c1715b9ee63f42c4fbf581`, version `0.60.38`. Its complete
+  local gate, native build, host smoke, remote lifecycle, and standard
+  successful-login interaction passed. Ordinary UI Automation honored the
+  active-descendant output focus, but genuine Narrator did not speak READY.
+  Native-focus instrumentation and synchronized Narrator navigation isolated
+  the remaining defect to the semantic Log group, so the attempt is rejected.
+- Current reopened P4-C3 repair source: workspace version `0.60.39` in the
+  isolated recovery worktree. It preserves the active-descendant output focus
+  and changes the output node to AccessKit's dedicated Terminal role, which
+  Windows maps to a UI Automation Document. Its complete local source gate
+  passed with 437 workspace tests and two intentional real-shell ignores, but
+  it is not native-accepted until committed source is built and exercised on
+  Windows; no native, live, production, or release result is claimed.
 - The intermediate 0.60.2 commit `8a52d2a21da1d5d0f69540864a6162d2b30375bc`
   repaired direct UI Automation activation for Save and Cancel. The 0.60.3
   follow-up exposed the editor text fields on semantic nodes tied to their real
@@ -862,11 +877,58 @@ still reported the PandaMUX window. Exact 0.60.37 activated the native window
 and passed the same standard row, but the Narrator result was unchanged.
 Assisted diagnostics proved PandaMUX already owned the foreground window and
 had visibly entered output-reading mode, isolating the defect to accessibility
-focus publication. Version 0.60.38 uses GPUI's active-descendant pattern
-instead of moving real keyboard focus to the output child. P4-C3 stays open
-until an exact 0.60.38 or later Windows artifact passes successful launch,
-discovery, output, input, close, panel
+focus publication. Exact 0.60.38 used GPUI's active-descendant pattern instead
+of moving real keyboard focus to the output child. Its complete local gate,
+native build, host smoke, remote lifecycle, and standard successful-login row
+passed. Ordinary UI Automation honored the active descendant, but Narrator
+still did not speak READY. Instrumentation proved PandaMUX retained native
+foreground, active, and keyboard focus. Narrator navigation synchronized to
+that focus, reached all three terminal header controls, and skipped the
+semantic Log group. Version 0.60.39 changes that output node to AccessKit's
+dedicated Terminal role, which Windows maps to a UI Automation Document. P4-C3
+stays open until an exact 0.60.39 or later Windows artifact passes successful
+launch, discovery, output, input, close, panel
 reopen, and the retained accessibility and scaling matrix.
+
+### Rejected 0.60.38 native repair attempt
+
+Clean commit `d328ad8d6c59ba0375c1715b9ee63f42c4fbf581`, version `0.60.38`,
+passed the complete local gate with 437 workspace tests and two intentional
+real-shell ignores. Its verified source bundle has SHA-256
+`12079d16dacf53bfda4c70f58327ee530ab2b37c872032c3ee5e1ec624d7cd56`.
+The exact native Windows build result has SHA-256
+`5e75e816550ba70b7544c0d05f5b647554e58d6384d6f11bc4dc6cc013e4d031`.
+
+| Artifact | SHA-256 |
+|-|-|
+| Windows MSVC `pandamux.exe` | `849d92f61caf400ea1bd420eb90a311c85e3b9de93333106f709c8c844406846` |
+| Windows MSVC `pandamux-server.exe` | `f1485e068eef69813c4949e0851643743d29cdff519c3cd2881d4a1df80a8965` |
+| Windows MSVC `pandamux-cli.exe` | `156db0615efb31e3ba2539631c7a1fed4ff4be5295b6fd6e439a089ca2597b38` |
+
+The host headless, limited-user smoke, and remote-lifecycle results have
+SHA-256 values
+`7c09ffbe0d06a0a2990f702deef90ad9e1e56581d1c883fa79ea39bee8b8d489`,
+`3227f4cf1dd1453ac478b9fa78c8360b2f5419d262a65e50555361f3b38ce254`,
+and `340aab2dd9a751fddcbe68b81c242efe5bba6a483623ef1801024ec3111755e1`.
+The standard successful-login row passed and its retained result has SHA-256
+`b4e1e186d513e770b58b5a535ed7f094fb99163233fb65e305db963f33653df7`.
+Ordinary UI Automation reported `terminal-output-log` after F6.
+
+The genuine Narrator row failed and its retained result has SHA-256
+`736e4ff6fab2c9c98381157da5d7aa51c5788f46461e6658d460f8f2506e44a0`.
+Speech Recap did not contain READY. A forced-read diagnostic result with
+SHA-256 `37cabb33a3094e7111746c665ba09085322363d0d39c3f42fae720a0034be2d4`
+contained only process and window chatter. Native-focus instrumentation, result
+SHA-256 `1230645193954f9f4c91493df6845cd5904105c478f081d7e4464515d5864acb`,
+proved that the PandaMUX HWND remained foreground, active, and the keyboard
+focus target from 0 through 1000 milliseconds after `Read output` while UI
+Automation still reported the root. Finally, synchronized Narrator navigation,
+result SHA-256 `bfe9bc76719a80ba214f060bc482064ed246a80844f88414ec0b2d90598bfd89`,
+reached the terminal region and its `Focus terminal input`, `Focus terminal
+output`, and `Close terminal` controls, then jumped to another application
+without visiting the semantic Log. This rejects 0.60.38 and identifies the
+platform-role mapping, rather than native window activation or keyboard focus,
+as the next repair boundary.
 
 ### Rejected 0.60.29 native repair attempt
 
@@ -1283,9 +1345,12 @@ delivered F6, and a real pointer click did not change the global UI Automation
 root. Crucially, the post-action screenshot visibly said `Reading terminal
 output` and painted the output focus border. That proves the direct AccessKit
 handler ran and GPUI changed its internal focus state; native foreground
-activation addressed the wrong layer. Version 0.60.38 instead retains real
-keyboard focus on the terminal container and publishes the output Log as its
-active descendant, the framework-supported composite focus pattern.
+activation addressed the wrong layer. Exact 0.60.38 retained real keyboard
+focus on the terminal container and published the output Log as its active
+descendant, the framework-supported composite focus pattern. Ordinary UI
+Automation honored that pattern, but synchronized Narrator navigation skipped
+the Log group. Version 0.60.39 therefore exposes the same bounded output as an
+AccessKit Terminal, which Windows maps to a UI Automation Document.
 
 ### Build and limited-user startup
 
@@ -1508,10 +1573,14 @@ live, production, or release claim.
 Exact 0.60.37 commit `f21bc2d` passed formatting, strict all-target workspace
 Clippy, 436 workspace tests with zero failures and two intentional real-shell
 ignores, the Rust boundary guard, the Claude wiring guard, desktop headless
-verification, and diff hygiene before its native build. The current 0.60.38
-source candidate passed the same gate with 437 workspace tests, including the
-new terminal-mode persistence and reset coverage. These local results do not
-substitute for the exact native build or Narrator row.
+verification, and diff hygiene before its native build. Exact 0.60.38 passed
+the same gate with 437 workspace tests, including the new terminal-mode
+persistence and reset coverage, before its rejected exact native run. The
+current 0.60.39 source candidate passed formatting, strict all-target and
+all-feature workspace Clippy, 437 workspace tests with zero failures and the
+same two intentional real-shell ignores, the Rust boundary guard, the Claude
+wiring guard, desktop headless verification, and diff hygiene. These local
+results do not substitute for the exact native build or Narrator row.
 
 `cargo-deny` 0.20.2 could not parse the old `deny.toml` syntax. The follow-up
 configuration change removed deprecated keys and scoped seven existing
@@ -1530,7 +1599,7 @@ especially for the scoped MPL-2.0 exceptions.
 
 Phase 4 cannot yet be marked exited under `tasks/plan-rewrite.md`:
 
-1. Build an exact 0.60.38 or later native Windows candidate and rerun the
+1. Build an exact 0.60.39 or later native Windows candidate and rerun the
    expanded P4-C3 successful-login row: confirmation placement, automatic
    Terminal discovery and focus from Settings, retained output, keyboard input,
    explicit close, panel close and reopen, remote terminal ownership, 100 and

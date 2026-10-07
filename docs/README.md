@@ -93,9 +93,15 @@ and passed the same native build, smoke, remote lifecycle, and standard row,
 but UI Automation still reported the PandaMUX window. Exact 0.60.37 commit
 `f21bc2d` activated PandaMUX and passed the same gates, but its Narrator result
 was unchanged. Diagnostics proved PandaMUX already owned the foreground window
-and had visibly entered output-reading mode. The 0.60.38 source candidate
-instead reports the output Log through GPUI's supported active-descendant
-pattern and still requires exact native Windows acceptance. Exact 0.60.17
+and had visibly entered output-reading mode. Exact 0.60.38 commit `d328ad8`
+then passed the complete local gate, native build, host smoke, remote lifecycle,
+and standard successful-login interaction. Ordinary UI Automation honored its
+active-descendant output focus, but Narrator did not speak READY. Diagnostics
+proved that native foreground, active, and keyboard focus remained correct
+while synchronized Narrator navigation reached the terminal header controls
+and skipped the semantic Log group. The 0.60.39 source candidate instead uses
+AccessKit's dedicated Terminal role, which Windows maps to a UI Automation
+Document, and still requires exact native Windows acceptance. Exact 0.60.17
 partially passed P4-C5 with live scanner and Hub durability, conservative
 capacity and route decisions, and independent rollback controls. The reopened
 login-terminal row, real external quota exhaustion, real post-side-effect

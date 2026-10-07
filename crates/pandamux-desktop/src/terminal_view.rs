@@ -723,7 +723,11 @@ pub fn render_terminal_view(
 
     let screen_container = div()
         .id("terminal-output-log")
-        .role(Role::Log)
+        // AccessKit's dedicated Terminal role maps to a Windows UIA Document.
+        // Narrator's item navigation skips a generic Log group even when UIA
+        // exposes it and it supports Focus, but includes document controls.
+        // Keep the stable automation ID for existing acceptance tooling.
+        .role(Role::Terminal)
         .on_a11y_action(AccessibleAction::Focus, on_output_focus)
         .accessibility_id("terminal-output-log")
         .aria_label(state.accessible_output())
