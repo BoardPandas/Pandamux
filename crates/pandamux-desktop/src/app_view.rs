@@ -108,6 +108,8 @@ pub struct AppView {
     usage_editor_previous_focus: Option<WeakFocusHandle>,
     usage_scroll_handle: ScrollHandle,
     settings_scroll_handle: ScrollHandle,
+    usage_table_focus: FocusHandle,
+    usage_table_scroll_anchor: ScrollAnchor,
     usage_subscriptions_scroll_anchor: ScrollAnchor,
     usage_subscription_name_input: Entity<InputState>,
     usage_account_label_input: Entity<InputState>,
@@ -152,8 +154,16 @@ impl AppView {
             cx.new(|cx| InputState::new(window, cx).placeholder("na***@example.com"));
         let usage_scroll_handle = ScrollHandle::new();
         let settings_scroll_handle = ScrollHandle::new();
+        let usage_table_focus = cx.focus_handle().tab_stop(true);
+        let usage_table_scroll_anchor = ScrollAnchor::for_handle(usage_scroll_handle.clone());
         let usage_subscriptions_scroll_anchor =
             ScrollAnchor::for_handle(usage_scroll_handle.clone());
+        let table_scroll_anchor = usage_table_scroll_anchor.clone();
+        cx.on_focus(&usage_table_focus, window, move |_this, window, cx| {
+            table_scroll_anchor.scroll_to(window, cx);
+            schedule_post_scroll_refresh(window);
+        })
+        .detach();
 
         let mut app = Self {
             theme: Theme::dark(AccentColor::Teal),
@@ -182,6 +192,8 @@ impl AppView {
             usage_editor_previous_focus: None,
             usage_scroll_handle,
             settings_scroll_handle,
+            usage_table_focus,
+            usage_table_scroll_anchor,
             usage_subscriptions_scroll_anchor,
             usage_subscription_name_input,
             usage_account_label_input,
@@ -1880,6 +1892,8 @@ impl Render for AppView {
                             &self.usage_subscription_name_input,
                             &self.usage_account_label_input,
                             &self.usage_scroll_handle,
+                            &self.usage_table_focus,
+                            &self.usage_table_scroll_anchor,
                             &self.usage_subscriptions_scroll_anchor,
                             &theme,
                             wall_clock_ms(),

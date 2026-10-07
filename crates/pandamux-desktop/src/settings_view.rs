@@ -448,6 +448,18 @@ pub fn render_settings_view<V: 'static>(
                     .id("settings-status-banner")
                     .role(role)
                     .aria_label(accessible_message)
+                    .a11y_synthetic_children({
+                        let is_err = *is_err;
+                        move |builder| {
+                            let node = builder.parent_node();
+                            node.set_live(if is_err {
+                                accesskit::Live::Assertive
+                            } else {
+                                accesskit::Live::Polite
+                            });
+                            node.set_live_atomic();
+                        }
+                    })
                     .h_flex()
                     .items_center()
                     .justify_between()
@@ -610,6 +622,40 @@ fn render_settings_header<V: 'static>(
         .into_any_element()
 }
 
+struct ProviderHealthAccessibility<'a> {
+    display_name: &'a str,
+    status: &'a str,
+    version: &'a str,
+    authentication: &'a str,
+    freshness: &'a str,
+    last_success: &'a str,
+    reason: &'a str,
+    account_badge: Option<&'a str>,
+}
+
+impl ProviderHealthAccessibility<'_> {
+    fn label(&self) -> String {
+        let mut label = format!(
+            "{} provider health. Status: {}. Version: {}. Authentication: {}. Freshness: {}. Last successful snapshot: {}. Reason: {}.",
+            self.display_name,
+            self.status,
+            self.version,
+            self.authentication,
+            self.freshness,
+            self.last_success,
+            self.reason,
+        );
+        if let Some(account_badge) = self.account_badge {
+            label.push_str(&format!(" Account: {account_badge}."));
+        }
+        label
+    }
+}
+
+fn provider_health_is_error(status: Option<&str>) -> bool {
+    matches!(status, Some("degraded" | "unavailable"))
+}
+
 /// Renders the Providers & Tier Mapping settings panel.
 #[allow(clippy::too_many_arguments)]
 fn render_providers_tab<V: 'static>(
@@ -703,27 +749,30 @@ fn render_providers_tab<V: 'static>(
                         .health_reports
                         .iter()
                         .find(|report| report.instance_id == instance_id);
-                    let (status_text, status_color, bg_pill) =
+                    let (status_name, status_marker, status_color, bg_pill) =
                         match health_report.map(|report| report.status.as_str()) {
-                            Some("healthy") => ("● Healthy", rgb(0x7fd88f), rgba(0x7fd88f22)),
+                            Some("healthy") => {
+                                ("Healthy", "●", rgb(0x7fd88f), rgba(0x7fd88f22))
+                            }
                             Some("unauthenticated") => {
-                                ("▲ Unauthenticated", rgb(0xd8b45e), rgba(0xd8b45e22))
+                                ("Unauthenticated", "▲", rgb(0xd8b45e), rgba(0xd8b45e22))
                             }
                             Some("degraded") => {
-                                ("▲ Degraded", rgb(0xd8b45e), rgba(0xd8b45e22))
+                                ("Degraded", "▲", rgb(0xd8b45e), rgba(0xd8b45e22))
                             }
                             Some("unavailable") => {
-                                ("✕ Unavailable", rgb(0xf87171), rgba(0xf8717122))
+                                ("Unavailable", "✕", rgb(0xf87171), rgba(0xf8717122))
                             }
                             Some("disabled") => {
-                                ("○ Disabled", rgb(0x888899), rgba(0x88889922))
+                                ("Disabled", "○", rgb(0x888899), rgba(0x88889922))
                             }
                             Some("configured") => {
-                                ("○ Configured", rgb(0x94a3b8), rgba(0x94a3b822))
+                                ("Configured", "○", rgb(0x94a3b8), rgba(0x94a3b822))
                             }
-                            Some(_) => ("? Unknown", rgb(0x94a3b8), rgba(0x94a3b822)),
-                            None => ("○ Not checked", rgb(0x888899), rgba(0x88889922)),
+                            Some(_) => ("Unknown", "?", rgb(0x94a3b8), rgba(0x94a3b822)),
+                            None => ("Not checked", "○", rgb(0x888899), rgba(0x88889922)),
                         };
+                    let status_text = format!("{status_marker} {status_name}");
                     let version = health_report
                         .and_then(|report| report.version.as_deref())
                         .unwrap_or("Not reported");
@@ -768,8 +817,37 @@ fn render_providers_tab<V: 'static>(
                         },
                     );
                     let is_enabled = inst.enabled;
+                    let health_is_error = provider_health_is_error(
+                        health_report.map(|report| report.status.as_str()),
+                    );
+                    let provider_health_label = ProviderHealthAccessibility {
+                        display_name: &inst.display_name,
+                        status: status_name,
+                        version,
+                        authentication: &authentication,
+                        freshness: &freshness,
+                        last_success: &last_success,
+                        reason,
+                        account_badge: health_report
+                            .and_then(|report| report.account_badge.as_deref()),
+                    }
+                    .label();
 
                     div()
+                        .id(format!("provider-health-card-{}", inst.id.as_str()))
+                        .role(if health_is_error {
+                            Role::Alert
+                        } else {
+                            Role::Group
+                        })
+                        .aria_label(provider_health_label)
+                        .when(health_is_error, |card| {
+                            card.a11y_synthetic_children(|builder| {
+                                let node = builder.parent_node();
+                                node.set_live(accesskit::Live::Assertive);
+                                node.set_live_atomic();
+                            })
+                        })
                         .p_3()
                         .rounded(Radii::ROW)
                         .bg(theme.chrome.panel)
@@ -3442,6 +3520,29 @@ mod tests {
         assert_eq!(
             settings_scroll_offset_for_key("tab", px(-200.), px(1_000.), px(400.)),
             None
+        );
+    }
+
+    #[test]
+    fn provider_health_accessibility_exposes_failures_and_evidence() {
+        assert!(provider_health_is_error(Some("degraded")));
+        assert!(provider_health_is_error(Some("unavailable")));
+        assert!(!provider_health_is_error(Some("healthy")));
+        assert!(!provider_health_is_error(None));
+
+        assert_eq!(
+            ProviderHealthAccessibility {
+                display_name: "Claude Code",
+                status: "Unavailable",
+                version: "1.2.3",
+                authentication: "unknown (low)",
+                freshness: "Stale; checked 2 minutes ago",
+                last_success: "3 minutes ago",
+                reason: "Executable was not found",
+                account_badge: Some("na***@example.com"),
+            }
+            .label(),
+            "Claude Code provider health. Status: Unavailable. Version: 1.2.3. Authentication: unknown (low). Freshness: Stale; checked 2 minutes ago. Last successful snapshot: 3 minutes ago. Reason: Executable was not found. Account: na***@example.com."
         );
     }
 

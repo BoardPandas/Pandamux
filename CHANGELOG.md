@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Made Phase 4 status, error, and table semantics speakable.** Usage and
+  Settings status changes now publish atomic AccessKit live regions, failed
+  provider-health evidence is an assertive named alert, and the Usage table is
+  a keyboard-focusable, scroll-anchored stop whose name announces its row count
+  and column shape for Narrator even when no observations match.
+
 - **Connected Phase 4 scroll commands to the rendered viewports.** The Usage
   editor and Settings Page Up/Page Down paths now share their `ScrollHandle`
   with the actual scrolling element and visible scrollbar. Programmatic focus

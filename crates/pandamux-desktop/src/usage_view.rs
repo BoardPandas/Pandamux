@@ -81,6 +81,8 @@ pub fn render_usage_view<V: 'static>(
     name_input: &Entity<InputState>,
     account_input: &Entity<InputState>,
     scroll_handle: &ScrollHandle,
+    table_focus: &FocusHandle,
+    table_scroll_anchor: &ScrollAnchor,
     subscriptions_scroll_anchor: &ScrollAnchor,
     theme: &Theme,
     now_ms: u64,
@@ -175,6 +177,11 @@ pub fn render_usage_view<V: 'static>(
                             .id("usage-error-alert")
                             .role(Role::Alert)
                             .aria_label(accessible_message.clone())
+                            .a11y_synthetic_children(|builder| {
+                                let node = builder.parent_node();
+                                node.set_live(accesskit::Live::Assertive);
+                                node.set_live_atomic();
+                            })
                             .p_3()
                             .rounded(Radii::ROW)
                             .border_1()
@@ -188,7 +195,15 @@ pub fn render_usage_view<V: 'static>(
                 .when_some(state.usage.as_ref(), |this, result| {
                     this.child(render_totals(result, theme, now_ms))
                         .child(render_coverage_details(result, settings, theme, now_ms))
-                        .child(render_usage_table(result, catalog, settings, theme, now_ms))
+                        .child(render_usage_table(
+                            result,
+                            catalog,
+                            settings,
+                            table_focus,
+                            table_scroll_anchor,
+                            theme,
+                            now_ms,
+                        ))
                 })
                 .when_some(state.capacity.as_ref(), |this, result| {
                     this.child(render_capacity_cards(
@@ -229,6 +244,17 @@ fn status_badge(status: UsageViewStatus, theme: &Theme) -> AnyElement {
         .id("usage-view-status")
         .role(Role::Status)
         .aria_label(format!("Usage status: {}", status.label()))
+        .a11y_synthetic_children(move |builder| {
+            let node = builder.parent_node();
+            let live = match status {
+                UsageViewStatus::Offline
+                | UsageViewStatus::MalformedSource
+                | UsageViewStatus::ServerError => accesskit::Live::Assertive,
+                _ => accesskit::Live::Polite,
+            };
+            node.set_live(live);
+            node.set_live_atomic();
+        })
         .px_2()
         .py_1()
         .rounded(Radii::CHIP)
@@ -632,6 +658,8 @@ fn render_usage_table(
     result: &pandamux_protocol::UsageQueryResult,
     catalog: &UsageCatalogResult,
     settings: &UserSettings,
+    table_focus: &FocusHandle,
+    table_scroll_anchor: &ScrollAnchor,
     theme: &Theme,
     now_ms: u64,
 ) -> AnyElement {
@@ -642,9 +670,12 @@ fn render_usage_table(
         .child(
             div().w_full().overflow_x_scrollbar().child(
                 Table::new("usage-data-table")
-                    .accessibility_label("Usage observations")
+                    .accessibility_label(usage_table_accessibility_label(result.items.len()))
                     .row_count(result.items.len() + 1)
                     .column_count(6)
+                    .track_focus(table_focus)
+                    .anchor_scroll(Some(table_scroll_anchor.clone()))
+                    .focus(|style| style.border_color(theme.accent.color()))
                     .w_full()
                     .min_w(px(720.0))
                     .v_flex()
@@ -712,6 +743,17 @@ fn render_usage_table(
             ),
         )
         .into_any_element()
+}
+
+fn usage_table_accessibility_label(observation_count: usize) -> String {
+    let observations = if observation_count == 1 {
+        "1 observation".to_string()
+    } else {
+        format!("{observation_count} observations")
+    };
+    format!(
+        "Usage observations table. {observations}. Columns: Provider instance; Subscription; Model; Tokens; Source; Observed."
+    )
 }
 
 fn table_row(
@@ -1265,6 +1307,18 @@ mod tests {
         assert_eq!(
             table_row_accessibility_label(&values, false),
             "Usage observation. Provider instance: Claude Code; Subscription: Work; Model: sonnet; Tokens: 1,234; Source: managed turn; Observed: 2 minutes ago."
+        );
+    }
+
+    #[test]
+    fn usage_table_name_exposes_shape_even_when_empty() {
+        assert_eq!(
+            usage_table_accessibility_label(0),
+            "Usage observations table. 0 observations. Columns: Provider instance; Subscription; Model; Tokens; Source; Observed."
+        );
+        assert_eq!(
+            usage_table_accessibility_label(1),
+            "Usage observations table. 1 observation. Columns: Provider instance; Subscription; Model; Tokens; Source; Observed."
         );
     }
 }
