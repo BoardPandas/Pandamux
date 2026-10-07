@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use gpui_kit::base::StyledExt as _;
+use gpui_kit::base::{Selectable as _, StyledExt as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::gpui::*;
 use pandamux_client::projections::ThreadProjection;
@@ -127,7 +127,12 @@ pub fn render_rail<V: 'static>(
                 .child(
                     Button::new("rail-tab-threads")
                         .ghost()
-                        .label("💬")
+                        .label(if active_tab == RailTab::Threads {
+                            "● 💬"
+                        } else {
+                            "💬"
+                        })
+                        .selected(active_tab == RailTab::Threads)
                         .accessibility_label("Threads")
                         .tooltip("Threads")
                         .on_click(cx.listener(move |this, _event, window, cx| {
@@ -147,7 +152,12 @@ pub fn render_rail<V: 'static>(
                 .child(
                     Button::new("rail-tab-agents")
                         .ghost()
-                        .label("🤖")
+                        .label(if active_tab == RailTab::Agents {
+                            "● 🤖"
+                        } else {
+                            "🤖"
+                        })
+                        .selected(active_tab == RailTab::Agents)
                         .accessibility_label("Agents")
                         .tooltip("Agents")
                         .on_click(cx.listener(move |this, _event, window, cx| {
@@ -167,7 +177,12 @@ pub fn render_rail<V: 'static>(
                 .child(
                     Button::new("rail-tab-usage")
                         .ghost()
-                        .label("◫")
+                        .label(if active_tab == RailTab::Usage {
+                            "● ◫"
+                        } else {
+                            "◫"
+                        })
+                        .selected(active_tab == RailTab::Usage)
                         .accessibility_label("Usage and capacity")
                         .tooltip("Usage and capacity")
                         .on_click(cx.listener(move |this, _event, window, cx| {
@@ -187,7 +202,12 @@ pub fn render_rail<V: 'static>(
                 .child(
                     Button::new("rail-tab-terminal")
                         .ghost()
-                        .label("📟")
+                        .label(if active_tab == RailTab::Terminal {
+                            "● 📟"
+                        } else {
+                            "📟"
+                        })
+                        .selected(active_tab == RailTab::Terminal)
                         .accessibility_label("Terminal")
                         .tooltip("Terminal")
                         .on_click(cx.listener(move |this, _event, window, cx| {
@@ -208,7 +228,12 @@ pub fn render_rail<V: 'static>(
                 .child(
                     Button::new("rail-tab-settings")
                         .ghost()
-                        .label("⚙️")
+                        .label(if active_tab == RailTab::Settings {
+                            "● ⚙️"
+                        } else {
+                            "⚙️"
+                        })
+                        .selected(active_tab == RailTab::Settings)
                         .accessibility_label("Settings")
                         .tooltip("Settings")
                         .on_click(cx.listener(move |this, _event, window, cx| {
@@ -1141,7 +1166,13 @@ fn render_settings_sidebar<V: 'static>(
                         .child(
                             Button::new(format!("settings-tab-{}", cat.title()))
                                 .ghost()
-                                .label(title)
+                                .label(if is_active {
+                                    format!("{title} (Active)")
+                                } else {
+                                    title.to_string()
+                                })
+                                .accessibility_label(title)
+                                .selected(is_active)
                                 .on_click(cx.listener(move |this, _event, window, cx| {
                                     on_select_category(this, cat, window, cx);
                                 })),

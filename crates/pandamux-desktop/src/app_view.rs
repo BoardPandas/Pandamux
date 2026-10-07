@@ -106,6 +106,9 @@ pub struct AppView {
     usage_request_generation: u64,
     usage_editor_target: Option<UsageEditorTarget>,
     usage_editor_previous_focus: Option<WeakFocusHandle>,
+    usage_scroll_handle: ScrollHandle,
+    usage_subscriptions_scroll_anchor: ScrollAnchor,
+    usage_editor_scroll_anchor: ScrollAnchor,
     usage_subscription_name_input: Entity<InputState>,
     usage_account_label_input: Entity<InputState>,
 }
@@ -147,6 +150,10 @@ impl AppView {
             cx.new(|cx| InputState::new(window, cx).placeholder("Work subscription"));
         let usage_account_label_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("na***@example.com"));
+        let usage_scroll_handle = ScrollHandle::new();
+        let usage_subscriptions_scroll_anchor =
+            ScrollAnchor::for_handle(usage_scroll_handle.clone());
+        let usage_editor_scroll_anchor = ScrollAnchor::for_handle(usage_scroll_handle.clone());
 
         let mut app = Self {
             theme: Theme::dark(AccentColor::Teal),
@@ -173,6 +180,9 @@ impl AppView {
             usage_request_generation: 0,
             usage_editor_target: None,
             usage_editor_previous_focus: None,
+            usage_scroll_handle,
+            usage_subscriptions_scroll_anchor,
+            usage_editor_scroll_anchor,
             usage_subscription_name_input,
             usage_account_label_input,
         };
@@ -1148,14 +1158,17 @@ impl AppView {
             .update(cx, |input, cx| input.set_value(account_label, window, cx));
         self.usage_editor_target = Some(target);
         let name_focus = self.usage_subscription_name_input.read(cx).focus_handle(cx);
+        let editor_scroll_anchor = self.usage_editor_scroll_anchor.clone();
         cx.notify();
         window.defer(cx, move |window, cx| {
             window.focus(&name_focus, cx);
+            editor_scroll_anchor.scroll_to(window, cx);
         });
     }
 
     pub fn cancel_usage_subscription_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.usage_editor_target = None;
+        let subscriptions_scroll_anchor = self.usage_subscriptions_scroll_anchor.clone();
         if let Some(previous_focus) = self
             .usage_editor_previous_focus
             .take()
@@ -1164,6 +1177,7 @@ impl AppView {
             window.focus(&previous_focus, cx);
         }
         cx.notify();
+        subscriptions_scroll_anchor.scroll_to(window, cx);
     }
 
     pub fn save_usage_subscription_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1224,6 +1238,7 @@ impl AppView {
                 Ok(catalog) => {
                     app.usage_catalog = catalog;
                     app.usage_editor_target = None;
+                    let subscriptions_scroll_anchor = app.usage_subscriptions_scroll_anchor.clone();
                     if let Some(previous_focus) = app
                         .usage_editor_previous_focus
                         .take()
@@ -1231,6 +1246,7 @@ impl AppView {
                     {
                         window.focus(&previous_focus, cx);
                     }
+                    subscriptions_scroll_anchor.scroll_to(window, cx);
                     app.load_usage(cx);
                 }
                 Err(message) => {
@@ -1859,6 +1875,9 @@ impl Render for AppView {
                             self.usage_editor_target.as_ref(),
                             &self.usage_subscription_name_input,
                             &self.usage_account_label_input,
+                            &self.usage_scroll_handle,
+                            &self.usage_subscriptions_scroll_anchor,
+                            &self.usage_editor_scroll_anchor,
                             &theme,
                             wall_clock_ms(),
                             |app, _window, cx| app.load_usage(cx),

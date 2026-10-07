@@ -1,5 +1,6 @@
 use gpui_kit::base::{Disableable as _, StyledExt as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::gpui::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use pandamux_client::{format_age, format_micro_usd};
@@ -421,8 +422,17 @@ pub fn render_settings_view<V: 'static>(
             } else {
                 rgba(0x43d9c944)
             };
+            let role = if *is_err { Role::Alert } else { Role::Status };
+            let accessible_message = if *is_err {
+                format!("Settings error: {msg}")
+            } else {
+                format!("Settings status: {msg}")
+            };
             this.child(
                 div()
+                    .id("settings-status-banner")
+                    .role(role)
+                    .aria_label(accessible_message)
                     .h_flex()
                     .items_center()
                     .justify_between()
@@ -438,35 +448,42 @@ pub fn render_settings_view<V: 'static>(
             )
         })
         // Category Content Body
-        .child(match state.active_category {
-            SettingsCategory::Providers => render_providers_tab(
-                state,
-                theme,
-                on_check_health,
-                on_preview_login,
-                on_launch_login,
-                on_cancel_login,
-                on_modify,
-                cx,
-            )
-            .into_any_element(),
-            SettingsCategory::Organizations => {
-                render_organizations_tab(state, usage_catalog, theme, on_modify, cx)
-                    .into_any_element()
-            }
-            SettingsCategory::Environments => {
-                render_environments_tab(state, theme, cx).into_any_element()
-            }
-            SettingsCategory::Terminal => {
-                render_terminal_tab(state, theme, on_modify, cx).into_any_element()
-            }
-            SettingsCategory::General => {
-                render_general_tab(state, theme, on_modify, cx).into_any_element()
-            }
-            SettingsCategory::Advanced => {
-                render_advanced_tab(state, theme, server_status, on_modify, cx).into_any_element()
-            }
-        })
+        .child(
+            div()
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scrollbar()
+                .child(match state.active_category {
+                    SettingsCategory::Providers => render_providers_tab(
+                        state,
+                        theme,
+                        on_check_health,
+                        on_preview_login,
+                        on_launch_login,
+                        on_cancel_login,
+                        on_modify,
+                        cx,
+                    )
+                    .into_any_element(),
+                    SettingsCategory::Organizations => {
+                        render_organizations_tab(state, usage_catalog, theme, on_modify, cx)
+                            .into_any_element()
+                    }
+                    SettingsCategory::Environments => {
+                        render_environments_tab(state, theme, cx).into_any_element()
+                    }
+                    SettingsCategory::Terminal => {
+                        render_terminal_tab(state, theme, on_modify, cx).into_any_element()
+                    }
+                    SettingsCategory::General => {
+                        render_general_tab(state, theme, on_modify, cx).into_any_element()
+                    }
+                    SettingsCategory::Advanced => {
+                        render_advanced_tab(state, theme, server_status, on_modify, cx)
+                            .into_any_element()
+                    }
+                }),
+        )
         .into_any_element()
 }
 

@@ -80,6 +80,9 @@ pub fn render_usage_view<V: 'static>(
     editor_target: Option<&UsageEditorTarget>,
     name_input: &Entity<InputState>,
     account_input: &Entity<InputState>,
+    scroll_handle: &ScrollHandle,
+    subscriptions_scroll_anchor: &ScrollAnchor,
+    editor_scroll_anchor: &ScrollAnchor,
     theme: &Theme,
     now_ms: u64,
     on_retry: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
@@ -145,10 +148,12 @@ pub fn render_usage_view<V: 'static>(
         )
         .child(
             div()
+                .id("usage-view-scroll")
                 .flex_1()
                 .v_flex()
                 .gap_4()
                 .p_4()
+                .track_scroll(scroll_handle)
                 .overflow_y_scrollbar()
                 .child(render_filters(
                     state,
@@ -194,6 +199,8 @@ pub fn render_usage_view<V: 'static>(
                     editor_target,
                     name_input,
                     account_input,
+                    subscriptions_scroll_anchor,
+                    editor_scroll_anchor,
                     theme,
                     on_edit,
                     on_save_editor,
@@ -311,17 +318,25 @@ fn render_filters<V: 'static>(
                 .gap_2()
                 .children(UsageFilterIntent::ALL.into_iter().map(|intent| {
                     let label = filter_label(intent, state, catalog, settings);
+                    let accessibility_label = filter_accessibility_label(intent, &label);
                     Button::new(format!("usage-filter-{intent:?}"))
                         .ghost()
                         .label(label)
-                        .accessibility_label(intent.accessible_name())
-                        .tooltip(intent.accessible_name())
+                        .accessibility_label(accessibility_label.clone())
+                        .tooltip(accessibility_label)
                         .on_click(cx.listener(move |this, _event, window, cx| {
                             on_filter(this, intent, window, cx);
                         }))
                 })),
         )
         .into_any_element()
+}
+
+fn filter_accessibility_label(intent: UsageFilterIntent, visible_label: &str) -> String {
+    format!(
+        "{}; current value: {visible_label}",
+        intent.accessible_name()
+    )
 }
 
 fn filter_label(
@@ -879,6 +894,8 @@ fn render_subscription_editor<V: 'static>(
     editor_target: Option<&UsageEditorTarget>,
     name_input: &Entity<InputState>,
     account_input: &Entity<InputState>,
+    subscriptions_scroll_anchor: &ScrollAnchor,
+    editor_scroll_anchor: &ScrollAnchor,
     theme: &Theme,
     on_edit: impl Fn(&mut V, UsageEditorTarget, &mut Window, &mut Context<V>) + 'static + Copy,
     on_save_editor: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
@@ -887,8 +904,10 @@ fn render_subscription_editor<V: 'static>(
     cx: &mut Context<V>,
 ) -> AnyElement {
     div()
+        .id("usage-subscriptions-section")
         .v_flex()
         .gap_2()
+        .anchor_scroll(Some(subscriptions_scroll_anchor.clone()))
         .child(section_heading("SUBSCRIPTIONS & INSTANCES", theme))
         .child(
             div()
@@ -976,9 +995,11 @@ fn render_subscription_editor<V: 'static>(
         .when_some(editor_target, |this, target| {
             this.child(
                 div()
+                    .id("usage-subscription-editor")
                     .p_3()
                     .v_flex()
                     .gap_2()
+                    .anchor_scroll(Some(editor_scroll_anchor.clone()))
                     .rounded(Radii::ROW)
                     .bg(theme.chrome.panel2)
                     .border_1()
@@ -1174,6 +1195,14 @@ mod tests {
         assert!(names.iter().all(|name| !name.is_empty()));
         let unique = names.into_iter().collect::<std::collections::BTreeSet<_>>();
         assert_eq!(unique.len(), UsageFilterIntent::ALL.len());
+    }
+
+    #[test]
+    fn usage_filter_accessible_names_include_the_current_value() {
+        assert_eq!(
+            filter_accessibility_label(UsageFilterIntent::Provider, "Provider: Claude"),
+            "Filter usage by provider; current value: Provider: Claude"
+        );
     }
 
     #[test]
