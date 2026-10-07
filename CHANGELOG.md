@@ -133,6 +133,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Archived the exact Phase 4 native Windows acceptance result.** The
+  acceptance record now ties the 0.60.22 candidate to its limited-user startup,
+  Offline and Retry behavior, complete 100 and 200 percent interaction paths,
+  empty and populated semantic table evidence, dark and light visual review,
+  High Contrast, disabled animations, genuine Narrator output, and normal-user
+  named-pipe security evidence. Remaining external failover and physical laptop
+  rows stay explicit instead of being inferred from native UI or fixture results.
+
 - **Archived the exact Phase 4 durability and control result.** The acceptance
   record now ties the 0.60.17 candidate to its scanner rotation and recovery
   matrix, bounded Hub restart and retention-gap backfill, real and controlled

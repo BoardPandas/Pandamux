@@ -1,7 +1,7 @@
 # PandaMUX Rewrite: Chat-First Agent Client with Remote Environments, Multi-Repo Fleet Orchestration, Agents, Schedules, Full MCP Settings Control, and Broadside Sharing
 
-Date: 2026-09-25 (Approved 2026-09-26; recovery rewrite 2026-09-28; Phase 4 closure rewrite 2026-10-06; accounting acceptance 2026-10-07)
-Status: **Phases 0 to 3 and Phase 4A through 4F implementation are recorded; P4-C1, P4-C2, and P4-C4 passed on exact 0.60.15, while the remaining native, live durability, documentation, and physical acceptance gates keep Phase 4 open**
+Date: 2026-09-25 (Approved 2026-09-26; recovery rewrite 2026-09-28; Phase 4 closure rewrite 2026-10-06; accounting and native acceptance 2026-10-07)
+Status: **Phases 0 to 3 and Phase 4A through 4F implementation are recorded; P4-C1, P4-C2, and P4-C4 passed on exact 0.60.15, P4-C3 passed on exact 0.60.22, and P4-C5 remains Partial, so external failover, final documentation, and physical acceptance gates keep Phase 4 open**
 Baseline: The preserved original checkout remains PandaMUX v0.53.44 at `9511d0e22d44`; active recovery work is isolated on `codex/recovery-r0`, with exact 0.60.8 native UI evidence at `054bd3e941e394cd8ffcff62a8dc60faa9b7e1fe` and exact 0.60.15 accounting evidence at `3a77382`
 
 Relationship to `tasks/plan-repo.md`: that file is the **historical** record of the Electron to native Rust rewrite (Phases 1 to 7, complete). This plan supersedes its product direction (terminal multiplexer) but keeps its engineering posture: backend-owned state, single writer, intent-in/delta-out, deliberate dependency pins, crate isolation, and tag-driven signed releases. Its Section 12 design tokens carry over where they still apply (Section 8). UI history: Iced is removed. An earlier draft of this plan chose Tauri 2 + React; the user replaced that with **GPUI + gpui-kit** (all Rust) on 2026-09-25, and Tauri 2 remains only as the documented fallback if the Phase 0 GPUI spike fails. `plan-repo.md` rejected GPUI for three reasons, each now handled explicitly: GPL contamination (zed#55470, still open; tracked as a license gate in S6 and Risks), "not built for external consumption" (gpui-kit publishes exact-pinned `gpui-pre` snapshots and ships in production in Longbridge Pro on Windows, macOS, and Linux), and weak accessibility. Phase 0 treated accessibility as exploratory; the rewritten Phase 4 and Phase 7 criteria make the defined v1 accessibility matrix release-gating.
@@ -145,10 +145,17 @@ Terminology used throughout:
   failover fixtures, and all four rollback controls passed in isolated roots.
   Real external quota exhaustion and post-side-effect capacity interruption
   remain open.
-- Phase 4 remains open on the rest of the exact-candidate native matrix, the
-  remaining live P4-C5 failover rows, current-version normal-user IPC, and the
-  final documentation archive. The re-scoped physical laptop disconnect and
-  sleep rows remain production-acceptance and release blockers.
+- Exact 0.60.22 commit `fee9e02` passes P4-C3. The limited-user build and smoke,
+  actionable Offline path, complete 100 and 200 percent keyboard and scroll
+  matrices, dark and light visual review, High Contrast, disabled animations,
+  genuine Narrator walkthrough, and current normal-user named-pipe security
+  matrix all passed on the same hashes. The VM was restored to its named
+  checkpoint with network, guest services, and video settings returned to the
+  recorded baseline.
+- Phase 4 remains open on the remaining live P4-C5 failover rows and the final
+  documentation archive after those rows stabilize. The re-scoped physical
+  laptop disconnect and sleep rows remain production-acceptance and release
+  blockers.
 - Phase 5 implementation has not started. The next development work is the
   ordered Phase 4 closure sequence in its verification record. Phase 5 begins
   only with its dependency, legacy-domain, and boundary gate. Phase 6 depends
@@ -1824,6 +1831,95 @@ Acceptance:
 - Visual screenshots are inspected, not merely created.
 - The supported Windows screen-reader path passes, or the framework limitation
   remains an explicit Phase 7 release blocker with a user-approved scope change.
+
+Result recorded 2026-10-07: **Pass** on exact commit
+`fee9e02275dceafd87c25a36af0732cd38c47076`, version `0.60.22`.
+The clean limited-user MSVC build produced desktop, server, and CLI artifacts
+with SHA-256 values
+`d3ff7f61aa665f8caa46e09a68f157791ef6d43d7445d4f926b0a6747e1f4440`,
+`3679477bd511722555a365348ac10ed315cdf3c77e3e65db37c49e2934bc66ab`,
+and `850211de884bc917feed8da24617d52574364c57a22eb55f914c110cf0fbbabe`.
+The source was clean before and after the build. Limited-user headless startup,
+authenticated `hello`, `ping`, and `identify`, server shutdown, and runtime
+credential removal all passed.
+
+The desktop-only Offline matrix passed with no server process. It retained the
+full actionable error, exposed `Usage status: Offline`, kept Retry keyboard
+focusable, showed the Loading transition after Retry, returned to the same
+explicit failure, and left no desktop process. The complete 96 DPI keyboard
+matrix reached Retry, all eight filters, the focusable Usage data table, every
+subscription editor control, provider health, login preview and cancel,
+organization policy, and focus return. Its table name was `Usage observations
+table. 0 observations. Columns: Provider instance; Subscription; Model; Tokens;
+Source; Observed.` Dark and light captures, the editor, provider evidence, and
+policy bottom were visually inspected and passed.
+
+A later contract audit correctly rejected the empty table as proof of the
+required populated row and cell semantics. A fresh limited-user follow-up used
+the unchanged 0.60.22 binaries and a controlled one-row copy of the isolated
+acceptance profile. The zero-row source database stayed byte-identical at
+SHA-256
+`429fda04c1eb95fe11920116e8807f61ace2e43f09f2c5c08f613bd258d824d2`.
+Windows UI Automation then exposed a keyboard-focusable one-observation table,
+the named header row and all six headers, one named data row, six ordered child
+DataItems for its cells, and the complete row summary for Claude Code,
+Acceptance Claude, `claude-sonnet-4-5`, 1,234 tokens, managed turn, and the
+observed age. The focused populated table was visually inspected and passed.
+The controlled fixture proves native table semantics only, not live ingestion.
+
+The 192 DPI matrix verified an actual 200 percent application scale at
+2560 by 1440. Keyboard traversal, editor use, six vertical wheel steps,
+horizontal table movement of 156 pixels, two additional vertical wheel steps,
+provider actions, policy controls, and Save visibility passed without a clipped
+required action. All seven final screenshots were visually inspected. Genuine
+Windows Narrator at 200 percent placed the full Usage status and table name in
+Speech Recap, read the table shape and columns, announced both editor labels,
+returned focus to the Claude Edit button after Cancel, announced Settings
+completion, and exposed complete named provider-failure reasons. The final
+Narrator matrix recorded `mechanicalPassed=true` with no framework limitation.
+
+Windows High Contrast Black preserved selected, focused, active, warning,
+error, and status meaning without tint alone, then restored the original flags.
+With Windows UI effects disabled, focus, Retry, Loading, persistent failure,
+and status meaning remained understandable, then the original flags were
+restored. The standard, High Contrast, and disabled-animation screenshots were
+visually inspected.
+
+The current normal-user named-pipe matrix passed its SID-scoped name,
+user-only DACL, unapproved client-image rejection, SYSTEM cross-user denial,
+runtime PID and image checks, first-instance anti-squatting, and post-probe
+health rows. An independent `SF-C4AD-VM` peer reached TCP 445 but received
+Access Denied when opening the host pipe, while the legitimate client still
+pinged afterward. The local matrix intentionally records its embedded remote
+field as Unrun; the separate independent-peer result closes that row, and the
+combined P4-C3 summary records Pass.
+
+The retained host evidence root is
+`C:\ProgramData\PandaMUX\acceptance\phase4-fee9e02-0.60.22-p4-c3`.
+Its original `p4-c3-acceptance-summary.json` has SHA-256
+`88cb877059ba08bc2cba1e2cc9903ab1e87bf20897b3cd7d34b11ae0a29c9ed2`.
+The 8,252-byte populated-row addendum has SHA-256
+`ed36c4221827d5377035dab393bd6ff4923dbef183b77087e1b9799a8933ebb6`.
+Together they support the P4-C3 Pass result.
+Rejected harness attempts remain preserved. They include a guest runtime-DLL
+staging miss, a deterministic-login-stub omission that reproduced on old and
+new binaries, a focus helper that restored rather than showed a maximized
+window, and the first populated-row classifier expecting localized type `cell`
+instead of the native DataItem `item` mapping under its row. None was promoted
+to product evidence.
+
+All temporary host and guest scheduled tasks were exported and unregistered.
+PandaMUX and Narrator processes were zero, guest autologon credentials were
+cleared, and `SF-C4ad-c4f68c3c` was restored to checkpoint
+`pre-rvr-3.271.0.1-4d42541b-20260929`. Final verification recorded the VM Off,
+its network adapter disconnected with no switch, Guest Service Interface
+disabled, default 1920 by 1200 video, all eight checkpoints intact, and the
+host High Contrast and UI-effects settings restored. The later populated-row
+follow-up did not start or edit the VM; both of its tasks were exported and
+removed, exact processes were zero, its runtime credential was absent, and the
+zero-row source profile remained unchanged. The documentation-only follow-up
+uses version `0.60.23`; it makes no 0.60.23 native result, push, deployment,
+activation, or release claim.
 
 ##### P4-C4: rerun defensible seven-day reconciliation
 

@@ -27,19 +27,23 @@ R0 development gate:
 - Phase 4E adds the top-level Usage and capacity surface, pure client reducers for every
   data and failure state, named subscription and provider presentation, canonical
   organization-policy editing and enforcement, truthful health controls, and the
-  source-level accessibility gate. Native Windows UI Automation exposed named,
-  focusable Usage controls and a 20-step Tab path, but editor accessibility
-  focus, scaling, forced colors, reduced motion, and screen-reader acceptance
-  remain open.
+  source-level accessibility gate. Exact 0.60.22 native Windows evidence passes
+  the complete 100 and 200 percent keyboard paths, semantic table and editor
+  focus, empty and populated table semantics, dark and light review, High
+  Contrast, disabled animations, actionable Offline behavior, and genuine
+  Narrator status, error, table, field-label, and focus-return checks.
 - Phase 4F adds explicit capability-compatible failover pools, deterministic hard-filter-
   first routing, durable per-attempt side-effect boundaries, one automatic retry only
   before output, and audited fresh-session continuation after unsafe capacity exhaustion.
   Authenticated remote turns carry a Hub-owned policy and pool snapshot that the node
   validates again before selecting a route. Independent rollback switches preserve
-  observations while disabling scanning, Hub
-  synchronization, capacity-aware routing, or automatic failover. Exact 0.60.0
-  artifacts passed native Windows startup and real Galahad Codex, Claude,
-  Antigravity, and Hub SSH turns; the full Phase 4 exit matrix remains open.
+  observations while disabling scanning, Hub synchronization, capacity-aware
+  routing, or automatic failover. Exact 0.60.15 passed accounting and cloned-store
+  reconciliation, exact 0.60.17 partially passed the P4-C5 durability and control
+  matrix, and exact 0.60.22 passed P4-C3 native Windows acceptance including the
+  current normal-user IPC matrix. Real external quota exhaustion, real
+  post-side-effect interruption, and the deferred physical laptop checks keep
+  the Phase 4 exit matrix open.
 
 See the [Phase 4 live acceptance record](docs/operations/PHASE4_ACCEPTANCE.md)
 and the completion criteria in [`tasks/plan-rewrite.md`](tasks/plan-rewrite.md).

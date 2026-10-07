@@ -3,17 +3,19 @@
 Date: 2026-09-29
 Updated: 2026-10-07
 
-Status: **Accounting accepted, P4-C5 partially accepted, Phase 4 live acceptance
-incomplete.** Exact 0.60.15 commit `3a77382` passed the P4-C1 implementation,
-P4-C2 local candidate, and P4-C4 cloned-store reconciliation gates. Exact
-0.60.17 commit `2f56a27` passed the scanner, Hub synchronization, conservative
-capacity projection, route-explanation, and rollback-control portions of P4-C5.
-Real provider quota exhaustion and real interruptions after output or external
-side effects were not available, so their live rows remain open even though the
-focused diagnostic fixtures pass. Earlier exact candidates retain only their
-named Windows UI and live-provider evidence. The remaining exact-candidate
-native interaction, external failover, current IPC, and physical matrices keep
-Phase 4 open. No push, deployment, production activation, or release occurred.
+Status: **Accounting and P4-C3 native Windows acceptance passed, P4-C5 remains
+Partial, and Phase 4 live acceptance is incomplete.** Exact 0.60.15 commit
+`3a77382` passed the P4-C1 implementation, P4-C2 local candidate, and P4-C4
+cloned-store reconciliation gates. Exact 0.60.22 commit `fee9e02` passed P4-C3
+with the complete limited-user interaction, accessibility, visual, and current
+normal-user IPC matrix. Exact 0.60.17 commit `2f56a27` passed the scanner, Hub
+synchronization, conservative capacity projection, route-explanation, and
+rollback-control portions of P4-C5. Real provider quota exhaustion and real
+interruptions after output or external side effects were not available, so
+their live rows remain open even though the focused diagnostic fixtures pass.
+The final documentation archive after those rows stabilize and the deferred
+physical matrix also remain open. No push, deployment, production activation,
+or release occurred.
 
 ## Source and preservation boundary
 
@@ -27,6 +29,10 @@ Phase 4 open. No push, deployment, production activation, or release occurred.
 - Exact P4-C5 durability source: clean `codex/recovery-r0` commit `2f56a27`,
   version `0.60.17`. The documentation follow-up uses workspace version
   `0.60.18`; no 0.60.18 executable, native, or live result is claimed.
+- Exact P4-C3 native Windows source: clean `codex/recovery-r0` commit
+  `fee9e02275dceafd87c25a36af0732cd38c47076`, version `0.60.22`. This
+  documentation-only follow-up uses workspace version `0.60.23`; no 0.60.23
+  executable, native, live, production, or release result is claimed.
 - The intermediate 0.60.2 commit `8a52d2a21da1d5d0f69540864a6162d2b30375bc`
   repaired direct UI Automation activation for Save and Cancel. The 0.60.3
   follow-up exposed the editor text fields on semantic nodes tied to their real
@@ -509,10 +515,210 @@ focus and direct Cancel rows with repeat evidence. The initial transient miss
 remains recorded and should be watched during the remaining screen-reader and
 full-matrix runs rather than being treated as nonexistent.
 
-This is native control exposure, keyboard focus, and invocation evidence. It
-does not establish announcement of usage values or table text to a screen
-reader, 200 percent scaling, reduced motion, forced colors, or visual non-color
-state. Those rows remain open.
+This 0.60.3 result is native control exposure, keyboard focus, and invocation
+evidence only. It does not establish announcement of usage values or table text
+to a screen reader, 200 percent scaling, reduced motion, forced colors, or
+visual non-color state. Those rows remained open for 0.60.3 and were later
+closed by the exact 0.60.22 matrix below.
+
+## Exact 0.60.22 P4-C3 native Windows acceptance
+
+P4-C3 is **Pass** on clean commit
+`fee9e02275dceafd87c25a36af0732cd38c47076`, version `0.60.22`. All required
+rows ran against the same desktop, server, and CLI hashes. The retained host
+evidence root is
+`C:\ProgramData\PandaMUX\acceptance\phase4-fee9e02-0.60.22-p4-c3`.
+Its original `p4-c3-acceptance-summary.json` is 14,897 bytes and has SHA-256
+`88cb877059ba08bc2cba1e2cc9903ab1e87bf20897b3cd7d34b11ae0a29c9ed2`.
+A later contract audit found that its native table evidence covered the empty
+state and headers but not a populated row or cells. The exact-candidate
+follow-up closes that clause in the 8,252-byte
+`populated-row-followup\p4-c3-populated-row-addendum.json`, SHA-256
+`ed36c4221827d5377035dab393bd6ff4923dbef183b77087e1b9799a8933ebb6`.
+The original summary and this addendum together support the P4-C3 Pass result.
+
+### Build and limited-user startup
+
+`COLT-SHINE\B_StL` built the clean source with Rust 1.98.1 and Cargo 1.98.1
+for `x86_64-pc-windows-msvc`. The source was clean before and after the build,
+and the verified source bundle had SHA-256
+`5708d7235154a63ec458832517c4619f13b25c4c1d9ea217e4b1eb85bde275c6`.
+
+| Artifact | Bytes | SHA-256 |
+|-|-:|-|
+| Windows MSVC `pandamux.exe` | 27,581,440 | `d3ff7f61aa665f8caa46e09a68f157791ef6d43d7445d4f926b0a6747e1f4440` |
+| Windows MSVC `pandamux-server.exe` | 14,316,544 | `3679477bd511722555a365348ac10ed315cdf3c77e3e65db37c49e2934bc66ab` |
+| Windows MSVC `pandamux-cli.exe` | 1,407,488 | `850211de884bc917feed8da24617d52574364c57a22eb55f914c110cf0fbbabe` |
+| App-local guest `VCRUNTIME140.dll` | 178,616 | `d1f4225df2cd877dbf130d5668a021dce3f94118455ff5ec952061c30afc9ce7` |
+
+The exact desktop headless check returned 0 as the limited user. A temporary
+exact server then created the expected SID-scoped pipe and reported version
+0.60.22. Exact CLI `version`, authenticated `hello`, `ping`, and `identify`
+all returned 0; `identify` reported the Windows Hub role. The server stopped
+and its runtime credential was removed. The result file
+`limited-user-smoke.json` has SHA-256
+`1d0d19f0896a9f98b674d1028fd03097f8b34f3f7710a65b8e1b494c2264b6bd`.
+
+### Offline, keyboard, semantic, and visual matrix
+
+The desktop-only 96 DPI Offline run used a bin directory containing no server.
+It exposed a persistent named alert with the full server-discovery reason,
+`Usage status: Offline`, and keyboard-focusable Retry. Invoking Retry exposed
+`Usage status: Loading`, returned to the same explicit failure, and spawned no
+server process. The screenshot was visually inspected, the desktop stopped,
+and `offline-matrix.json` passed at SHA-256
+`bb8648048041715519e6b1c28503dde24b75e4642a48ac6bc8459de447e54a99`.
+
+The final 100 percent matrix ran at 96 DPI in the isolated `P4C3Kb100` guest
+profile. Its keyboard sequence reached Retry, all eight filters, the Usage data
+table, and `Edit subscription for Claude Code`. The table accepted focus and
+published this complete accessible name:
+
+`Usage observations table. 0 observations. Columns: Provider instance;
+Subscription; Model; Tokens; Source; Observed.`
+
+The editor traversed `Subscription name`, `Masked account label`, Save, and
+Cancel. Cancel closed it and returned focus to the originating Edit control.
+Provider health, separate login preview and cancellation, policy controls, the
+bottom sharing actions, and Save visibility also passed. Five final dark and
+light screenshots were inspected for hierarchy, contrast, focus, labels, and
+non-color status. `uia-keyboard-100pct.json` passed at SHA-256
+`d551c6f29b5851003762feb43e78db4f4980a72cf2bcc2dd6c735f3ba1da1616`.
+The retained guest archive has SHA-256
+`107594581e3c191856dec1acf26f46585680dbf7c6c9d5f689b31792050ea9e8`.
+
+Because that profile intentionally contained zero observations, a later audit
+refused to infer populated-row semantics from the header-only result. A fresh
+limited-user run copied the isolated zero-row acceptance profile into a new
+profile and inserted one clearly labeled controlled fixture only into the copy.
+The source database remained byte-identical at SHA-256
+`429fda04c1eb95fe11920116e8807f61ace2e43f09f2c5c08f613bd258d824d2`,
+with integrity OK and zero observations before and after preparation. The new
+copy passed integrity checking with one 1,234-token observation. This fixture
+is native accessibility evidence only; it is not live ingestion evidence.
+
+The unchanged 0.60.22 artifacts then exposed `ControlType.Table` with the name
+`Usage observations table. 1 observation. Columns: Provider instance;
+Subscription; Model; Tokens; Source; Observed.` The table received keyboard
+focus. UI Automation exposed the named header row, all six column headers, one
+`ControlType.DataItem` row, and six ordered `ControlType.DataItem` children.
+Windows localizes the GPUI `TableCell` nodes as `item`, so the accepted cell
+classification uses their populated-row ancestry and column order. Their text
+was `Claude Code`, `Acceptance Claude`, `claude-sonnet-4-5`, `1,234`, `managed
+turn`, and `2m ago`. The row's complete accessible name matched all six fields.
+The focused screenshot was visually inspected for focus, legibility, clipping,
+and explicit non-color status and has SHA-256
+`4e58d8d8bc41c0030f1f043e557e579f7619e07c23f80f72353c637818b50b82`.
+The passing UIA result has SHA-256
+`d0933c29810615961a02dca39404f85d914f103c1540969059038e9b1ab0fa0a`.
+
+The final 200 percent matrix verified system, application, and configured DPI
+at 192 on a 2560 by 1440 desktop. It repeated keyboard traversal and editor use,
+applied six vertical wheel steps, observed 156 pixels of horizontal table
+movement, then applied two more vertical steps. Provider actions, login,
+organization policy, bottom controls, and Save stayed reachable with no clipped
+required action. Seven final screenshots were visually inspected in dark and
+light themes. `uia-200pct-matrix.json` passed at SHA-256
+`cdc8ed82b0ad9e2147a052217dd58bd86378ae4a3ca5aa4449516aba80cdaee5`.
+The retained guest archive has SHA-256
+`93a7f101628066a64be07115ca4c3865c3a9e2317ee0c7ff98f9001833c18092`.
+
+### Narrator, High Contrast, and disabled animations
+
+Genuine Windows Narrator ran separately at 200 percent. Speech Recap visibly
+contained the Usage status, the complete zero-row table name and all six column
+names, `Subscription name`, `Masked account label`, Save, Cancel, and the
+returned `Edit subscription for Claude Code` focus. After Check Health it also
+contained `Settings status: Provider health checks complete. No interactive
+login was started.` and the complete named failure reasons for configured
+providers. UI Automation supplied structure and focus assertions, while Speech
+Recap supplied the separate screen-reader evidence. The final
+`narrator-matrix.json` recorded `mechanicalPassed=true`, stopped the exact
+runtime, removed its credential, and has SHA-256
+`ff134b1973f526deb18bb1e2c42662cac5069e5765d380589fe761926c1fe439`.
+The retained Narrator archive has SHA-256
+`bf7b82ee050bb1065f861f304d58e12d9102fe891859803acb38d5f1e19f9229`.
+
+Windows High Contrast Black changed from disabled to enabled for the isolated
+run. The explicit Offline text, full alert, Retry boundary, selected navigation,
+focus, and status remained visible without relying on a background tint. The
+original scheme and comparable flags were restored with no restoration error.
+`high-contrast-matrix.json` passed at SHA-256
+`93ce020abde0c15ec90982cdffe8791f73db8fb9a82efd34f9d65d733210c5d1`.
+
+The animations-disabled run set Windows UI effects and client-area animation
+off. Retry retained focus, Loading remained observable, the repeated Offline
+state remained explicit, and no server spawned. The exact original flags were
+restored with no restoration error. `animations-disabled-matrix.json` passed at
+SHA-256
+`de07de56dee7c80a9e79d3779ea0c05f43e8a7080ee0a2052dc26a67991ac487`.
+Both alternate-mode screenshots were visually inspected.
+
+### Current normal-user named-pipe security
+
+The 0.60.22 server and CLI passed the normal-user local controls under
+`COLT-SHINE\B_StL`: the pipe name contained the exact user SID, legitimate
+authenticated ping worked, an unapproved PowerShell client was disconnected
+and logged, SYSTEM received Access Denied, a second server instance was
+rejected, fake PowerShell server image and mismatched runtime PID were rejected,
+and the legitimate post-probe ping worked. A separate anti-squatting repeat
+recorded exit code 1 after 1,076 milliseconds while both legitimate pings
+succeeded.
+
+The independent `SF-C4AD-VM` peer reached host TCP 445 over the temporary
+Default Switch but received Access Denied when opening the host pipe. The host
+server remained healthy and answered another legitimate ping before cleanup.
+The local matrix intentionally leaves its embedded remote field Unrun and sets
+only `passedLocalControls=true`; the separate remote result closes that row.
+Their SHA-256 values are:
+
+| Evidence | SHA-256 |
+|-|-|
+| `named-pipe-matrix.json` | `891339f8211641edc3e713a3957ed9270a6cacd2142d826bc6d3e6df271aa1d9` |
+| `named-pipe-antisquat-repeat3.json` | `ca1f5aab26ba9c9d3efc9886de4e79c181c0575c3e76db89219d7966a1ed2150` |
+| `named-pipe-remote-rejection.json` | `a254997ea8f64031aa4d8a48c5a621a025c2da3046b0329d9178429b4c108019` |
+
+### Rejected harness attempts and cleanup
+
+Rejected attempts remain in the evidence root. The first guest launch lacked
+the app-local MSVC runtime DLL. A deterministic login-stub path was absent in an
+old and new binary comparison, so the identical login failure was classified as
+a harness issue, not a regression. A 200 percent focus helper used Restore and
+shrunk the maximized window; replacing it with Show and rerunning the unchanged
+candidate passed. None of these attempts counts toward acceptance.
+
+The first populated-row follow-up harness also remains preserved. It expected
+the localized control type `cell`, even though Windows UIA exposes GPUI
+`TableCell` nodes as `ControlType.DataItem` with localized type `item` under the
+correctly named row. That attempt exposed the complete product row and cleaned
+up, but its classifier returned 1. A fresh profile and corrected ancestry-based
+classifier returned 0 without changing the candidate. The rejected attempt is
+archived inside the populated-row addendum and does not count toward acceptance.
+
+Every temporary host and guest `PandaMUX-P4C3-*` scheduled task was exported and
+unregistered. Guest PandaMUX and Narrator process counts were zero, temporary
+autologon values were cleared, and the host had no exact-candidate process or
+runtime credential. `SF-C4ad-c4f68c3c` was turned off and restored to checkpoint
+`pre-rvr-3.271.0.1-4d42541b-20260929`. Independent final verification recorded:
+
+- VM state `Off` and status `Operating normally`;
+- one disconnected network adapter with `SwitchName=null`;
+- Guest Service Interface disabled;
+- video `Default`, 1920 by 1200;
+- all eight pre-existing checkpoints intact, including the restored checkpoint;
+- zero host `PandaMUX-P4C3-*` tasks and exact-candidate processes; and
+- host High Contrast disabled with UI effects enabled.
+
+`lab-state-after-restoration.json` has SHA-256
+`0b6db3561b2320441d9c89abd895fe1a0341dc3abc515c8cae6d87190627eee3`.
+Both populated-row follow-up tasks were exported and unregistered. Final checks
+found zero exact desktop or server processes, no run 2 runtime credential, High
+Contrast disabled, and UI effects enabled. The isolated zero-row source and two
+seeded profile copies remain retained for audit. The follow-up did not start or
+edit the restored Hyper-V guest.
+The original checkout and retained Galahad acceptance database were not edited.
+No push, CI, signing, packaging, deployment, production activation, or release
+occurred.
 
 ## Static verification and remaining gates
 
@@ -539,6 +745,16 @@ P4-C5 and all passed. The exact musl server and CLI hashes above were reverified
 after transfer and the server completed authenticated version 0.60.17 RPCs on
 Galahad. These checks support, but do not replace, the live rows.
 
+Exact 0.60.22 commit `fee9e02` passed formatting, strict all-target workspace
+Clippy, the complete serial workspace test suite with zero failures and two
+intentional real-shell ignores, the Rust boundary guard, and the Claude wiring
+guard. The clean native build and every P4-C3 row above ran after that local
+verification. The documentation-only 0.60.23 follow-up separately passed
+formatting, strict all-target workspace Clippy, 429 workspace tests with zero
+failures and the same two intentional real-shell ignores, the Rust boundary
+guard, and the Claude wiring guard. It makes no 0.60.23 executable, native,
+live, production, or release claim.
+
 `cargo-deny` 0.20.2 could not parse the old `deny.toml` syntax. The follow-up
 configuration change removed deprecated keys and scoped seven existing
 non-allowlisted transitive licenses to their exact crates and versions. With
@@ -556,23 +772,16 @@ especially for the scoped MPL-2.0 exceptions.
 
 Phase 4 cannot yet be marked exited under `tasks/plan-rewrite.md`:
 
-1. Complete the native Usage keyboard matrix beyond the verified 20-step Tab,
-   editor focus, and direct UIA Cancel paths. Archive 200 percent scaling,
-   reduced-motion, forced-colors, non-color-status, and screen-reader results,
-   while watching for recurrence of the recorded transient focus miss. Rerun
-   affected rows on the final exact candidate.
-2. Close the remaining live P4-C5 failover rows with a real pre-output capacity
+1. Close the remaining live P4-C5 failover rows with a real pre-output capacity
    failure, real interruptions after text, file edit, command, network action,
    and approval, plus restart while real continuation or delivery work is
    pending. Exact 0.60.17 already passes scanner durability, reconnect and
    bounded backfill, capacity projection and route explanations, rollback
    controls, and the complete diagnostic fixture matrix.
-3. Re-run the normal-user Windows named-pipe security matrix on the current
-   candidate if it is to inherit a current-version production IPC claim.
-4. Complete the P4-C7 archive and maintained-document synchronization after the
+2. Complete the P4-C7 archive and maintained-document synchronization after the
    remaining P4-C5 and P4-C6 live rows stabilize. This record already reflects
-   the current P4-C5 Partial result.
-5. Complete the explicitly deferred R0.5 30-minute physical laptop disconnect
+   the current P4-C3 Pass and P4-C5 Partial results.
+3. Complete the explicitly deferred R0.5 30-minute physical laptop disconnect
    and sleep checks before production acceptance or release.
 
 The acceptance VM is still a shared lab. Its existing network attachment and

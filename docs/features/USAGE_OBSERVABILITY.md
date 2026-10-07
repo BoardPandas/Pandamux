@@ -228,23 +228,36 @@ legacy tables remain intact when any switch is off.
 
 ## Accessibility boundary
 
-New icon-only controls have accessible names and tooltips. Buttons and inputs retain
-keyboard semantics, the subscription editor moves focus to its first field and restores
-the prior focus after save or cancel, status always includes text or symbols beyond
-color, and the Usage page wraps controls inside a vertical scroll surface. It uses no
-new animation, and errors remain visible until a retry or successful reload.
+Icon-only controls have accessible names and tooltips. Buttons and inputs retain
+keyboard semantics, the subscription editor moves focus to its first field and
+restores the prior focus after save or cancel, and status always includes text or
+symbols beyond color. Usage and Settings status changes publish atomic AccessKit
+live regions. Provider failures remain visible as named alerts, and the Usage
+observations table is a keyboard-focusable semantic table whose accessible name
+contains its row count and column shape.
 
-The current GPUI primitives used here do not expose a live-region or semantic table API,
-so automated tests cannot prove error announcement or screen-reader table navigation.
-The later exact 0.60.0 Windows UI Automation probe opened Usage, found named,
-focusable navigation, filter, and subscription controls after AccessKit activation,
-and completed a 20-step Tab path. The subscription editor received typed input,
-and keyboard Cancel closed it and restored focus to its originating button.
-UI Automation did not report focus on the Edit control, and its Invoke action
-on Cancel only moved focus. The probe did not test
-announcement of values or tables, 200 percent scaling, reduced motion, forced
-colors, or a screen reader. These remain acceptance gaps. See
-`docs/operations/PHASE4_ACCEPTANCE.md`.
+Exact 0.60.22 Windows acceptance passed the complete 100 percent keyboard path
+through Retry, all eight filters, the data table, subscription editing, provider
+health, login preview and cancel, organization policy, and focus return. The same
+candidate passed at 200 percent display scale with editor use, vertical scrolling,
+horizontal table scrolling, and no clipped required action. Dark and light captures
+were visually inspected. High Contrast Black preserved selected, focused, active,
+warning, error, and status meaning without tint alone, while disabled Windows UI
+effects preserved focus and the observable Loading transition.
+
+The original native table profile covered the zero-row name and six headers. A
+retained exact-candidate addendum uses a controlled isolated one-row copy to
+separately prove the populated row, all six ordered UIA DataItem cells, the full
+row text equivalent, keyboard focus, and unclipped visual layout. Windows UIA
+localizes GPUI `TableCell` nodes as `item` under their named DataItem row. The
+fixture proves native semantics only and is not treated as live ingestion evidence.
+
+Genuine Windows Narrator Speech Recap contained the Usage status change, the full
+zero-row table name and all six columns, both editor field labels, returned Edit
+focus, the Settings completion status, and complete provider failure reasons.
+UI Automation evidence and Narrator evidence remain separate in the retained record.
+See `docs/operations/PHASE4_ACCEPTANCE.md` for exact hashes, screenshots, rejected
+harness attempts, and cleanup.
 
 ## Diagnostics and privacy
 
@@ -283,8 +296,10 @@ all four rollback controls also passed. Fixture-backed failover tests passed,
 but real provider quota exhaustion and real interruptions after output or an
 external side effect were unavailable and remain open.
 
-The deferred physical R0.5 laptop disconnect and sleep rows, the remaining
-native Phase 4 interaction and accessibility matrix, the open external failover
-rows, the current-candidate IPC rerun, and later release gates still block Phase
-4 exit, production acceptance, and release. Exact results and limitations are
-recorded in `docs/operations/PHASE4_ACCEPTANCE.md`.
+Exact 0.60.22 passed P4-C3 on the complete native Windows interaction,
+accessibility, visual, and normal-user named-pipe security matrix. The open real
+external quota-exhaustion and post-side-effect interruption rows, the deferred
+physical R0.5 laptop disconnect and sleep rows, the final archive after those
+results stabilize, and later release gates still block Phase 4 exit, production
+acceptance, and release. Exact results and limitations are recorded in
+`docs/operations/PHASE4_ACCEPTANCE.md`.
