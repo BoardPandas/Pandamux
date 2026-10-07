@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Reconciled Claude managed usage with its exact transcript message totals.**
+  PandaMUX now requests Claude's final partial-message usage events and folds each
+  terminal message delta into the matching provider message ID. Simple and tool-using
+  turns therefore preserve their complete input, output, and cache measurements instead
+  of retaining the smaller preliminary stream values and reporting false conflicts.
+
 - **Rejected local named-pipe servers whose kernel identity does not match PandaMUX.**
   Windows desktop and CLI connections now read the server PID from the opened pipe,
   compare it with the matching runtime record when available, resolve the process image,

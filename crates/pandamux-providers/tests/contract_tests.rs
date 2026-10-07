@@ -111,6 +111,7 @@ fn test_claude_control_denial_and_launch_args() {
     assert!(args.contains(&"--disallowedTools".into()));
     assert!(args.contains(&"--permission-mode".into()));
     assert!(args.contains(&"--session-id".into()));
+    assert!(args.contains(&"--include-partial-messages".into()));
 
     let bypass_args = build_claude_launch_args(None, &[], &[], Some("bypassPermissions"), None);
     assert!(
@@ -340,6 +341,161 @@ fn test_claude_stream_accumulates_exact_message_components() {
             .components
             .iter()
             .all(|component| component.model.as_deref() != Some("selected-routing-model"))
+    );
+}
+
+#[test]
+fn test_claude_partial_message_usage_finalizes_tool_turn_components() {
+    let lines = [
+        serde_json::json!({
+            "type": "system",
+            "session_id": "session-partial"
+        }),
+        serde_json::json!({
+            "type": "stream_event",
+            "parent_tool_use_id": null,
+            "event": {
+                "type": "message_start",
+                "message": {
+                    "id": "message-before-tool",
+                    "model": "claude-actual",
+                    "usage": {
+                        "input_tokens": 2,
+                        "output_tokens": 8,
+                        "cache_read_input_tokens": 11,
+                        "cache_creation_input_tokens": 12
+                    }
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "assistant",
+            "session_id": "session-partial",
+            "timestamp": "2026-10-07T04:18:50Z",
+            "message": {
+                "id": "message-before-tool",
+                "model": "claude-actual",
+                "usage": {
+                    "input_tokens": 2,
+                    "output_tokens": 16,
+                    "cache_read_input_tokens": 11,
+                    "cache_creation_input_tokens": 12
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "stream_event",
+            "parent_tool_use_id": null,
+            "event": {
+                "type": "message_delta",
+                "usage": {
+                    "input_tokens": 2,
+                    "output_tokens": 74,
+                    "cache_read_input_tokens": 11,
+                    "cache_creation_input_tokens": 12
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "stream_event",
+            "parent_tool_use_id": null,
+            "event": {"type": "message_stop"}
+        }),
+        serde_json::json!({
+            "type": "stream_event",
+            "parent_tool_use_id": null,
+            "event": {
+                "type": "message_start",
+                "message": {
+                    "id": "message-after-tool",
+                    "model": "claude-actual",
+                    "usage": {
+                        "input_tokens": 3,
+                        "output_tokens": 6,
+                        "cache_read_input_tokens": 21,
+                        "cache_creation_input_tokens": 22
+                    }
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "assistant",
+            "session_id": "session-partial",
+            "timestamp": "2026-10-07T04:18:55Z",
+            "message": {
+                "id": "message-after-tool",
+                "model": "claude-actual",
+                "usage": {
+                    "input_tokens": 3,
+                    "output_tokens": 6,
+                    "cache_read_input_tokens": 21,
+                    "cache_creation_input_tokens": 22
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "stream_event",
+            "parent_tool_use_id": null,
+            "event": {
+                "type": "message_delta",
+                "usage": {
+                    "input_tokens": 3,
+                    "output_tokens": 272,
+                    "cache_read_input_tokens": 21,
+                    "cache_creation_input_tokens": 22
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "stream_event",
+            "parent_tool_use_id": null,
+            "event": {"type": "message_stop"}
+        }),
+        serde_json::json!({
+            "type": "result",
+            "subtype": "success",
+            "session_id": "session-partial",
+            "uuid": "result-not-a-message-id",
+            "total_cost_usd": 0.123,
+            "usage": {
+                "input_tokens": 5,
+                "output_tokens": 346,
+                "cache_read_input_tokens": 32,
+                "cache_creation_input_tokens": 34
+            }
+        }),
+    ];
+    let mut parser = ClaudeStreamEventParser::default();
+    let mut completed = None;
+    for line in lines {
+        if let Some(pandamux_providers::ProviderEvent::TurnCompleted { usage, .. }) =
+            parser.parse_line(&line.to_string())
+        {
+            completed = usage;
+        }
+    }
+
+    let usage = completed.expect("terminal usage");
+    assert_eq!(usage.output_tokens, 346);
+    assert_eq!(usage.components.len(), 2);
+    assert_eq!(
+        usage.components[0].provider_native_message_id,
+        "message-before-tool"
+    );
+    assert_eq!(usage.components[0].output_tokens, 74);
+    assert_eq!(usage.components[0].occurred_at_ms, Some(1_791_346_730_000));
+    assert_eq!(
+        usage.components[1].provider_native_message_id,
+        "message-after-tool"
+    );
+    assert_eq!(usage.components[1].output_tokens, 272);
+    assert_eq!(
+        usage
+            .components
+            .iter()
+            .map(|component| component.output_tokens)
+            .sum::<u64>(),
+        usage.output_tokens
     );
 }
 

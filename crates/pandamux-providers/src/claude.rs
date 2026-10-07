@@ -122,6 +122,7 @@ struct ClaudeTurnUsageAccumulator {
     session_id: Option<String>,
     components: Vec<TurnUsageComponent>,
     component_indexes: HashMap<String, usize>,
+    active_partial_messages: HashMap<String, String>,
 }
 
 impl ClaudeTurnUsageAccumulator {
@@ -135,12 +136,20 @@ impl ClaudeTurnUsageAccumulator {
         {
             self.session_id = Some(session_id.to_string());
         }
+        if value.get("type").and_then(|value| value.as_str()) == Some("stream_event") {
+            self.observe_partial_message(value);
+            return;
+        }
         if value.get("type").and_then(|value| value.as_str()) != Some("assistant") {
             return;
         }
         let Some(component) = parse_assistant_usage_component(value) else {
             return;
         };
+        self.upsert_component(component);
+    }
+
+    fn upsert_component(&mut self, component: TurnUsageComponent) {
         if let Some(index) = self
             .component_indexes
             .get(&component.provider_native_message_id)
@@ -153,6 +162,46 @@ impl ClaudeTurnUsageAccumulator {
         self.component_indexes
             .insert(component.provider_native_message_id.clone(), index);
         self.components.push(component);
+    }
+
+    fn observe_partial_message(&mut self, value: &serde_json::Value) {
+        let Some(event) = value.get("event") else {
+            return;
+        };
+        let lane = value
+            .get("parent_tool_use_id")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .to_string();
+        match event.get("type").and_then(|value| value.as_str()) {
+            Some("message_start") => {
+                let Some(component) = event
+                    .get("message")
+                    .and_then(parse_assistant_message_usage_component)
+                else {
+                    return;
+                };
+                self.active_partial_messages
+                    .insert(lane, component.provider_native_message_id.clone());
+                self.upsert_component(component);
+            }
+            Some("message_delta") => {
+                let Some(message_id) = self.active_partial_messages.get(&lane) else {
+                    return;
+                };
+                let Some(index) = self.component_indexes.get(message_id).copied() else {
+                    return;
+                };
+                let Some(usage) = event.get("usage") else {
+                    return;
+                };
+                merge_final_partial_usage(&mut self.components[index], usage);
+            }
+            Some("message_stop") => {
+                self.active_partial_messages.remove(&lane);
+            }
+            _ => {}
+        }
     }
 
     fn finish(&mut self, result: &serde_json::Value) -> Option<TurnUsage> {
@@ -186,6 +235,7 @@ impl ClaudeTurnUsageAccumulator {
         let provider_reported_micro_usd = cost.and_then(parse_provider_reported_micro_usd);
         let components = std::mem::take(&mut self.components);
         self.component_indexes.clear();
+        self.active_partial_messages.clear();
 
         if usage.is_none() && components.is_empty() && cost.is_none() {
             return None;
@@ -242,6 +292,17 @@ impl ClaudeTurnUsageAccumulator {
 
 fn parse_assistant_usage_component(value: &serde_json::Value) -> Option<TurnUsageComponent> {
     let message = value.get("message").unwrap_or(value);
+    let mut component = parse_assistant_message_usage_component(message)?;
+    component.occurred_at_ms = value
+        .get("timestamp")
+        .or_else(|| message.get("created_at"))
+        .and_then(parse_provider_timestamp_ms);
+    Some(component)
+}
+
+fn parse_assistant_message_usage_component(
+    message: &serde_json::Value,
+) -> Option<TurnUsageComponent> {
     let usage = message.get("usage")?;
     let provider_native_message_id = message.get("id")?.as_str()?.trim().to_string();
     if provider_native_message_id.is_empty() {
@@ -269,11 +330,43 @@ fn parse_assistant_usage_component(value: &serde_json::Value) -> Option<TurnUsag
             .get("cache_creation_input_tokens")
             .or_else(|| usage.get("cache_write_input_tokens"))
             .and_then(|value| value.as_u64()),
-        occurred_at_ms: value
-            .get("timestamp")
-            .or_else(|| message.get("created_at"))
+        occurred_at_ms: message
+            .get("created_at")
             .and_then(parse_provider_timestamp_ms),
     })
+}
+
+fn merge_final_partial_usage(current: &mut TurnUsageComponent, usage: &serde_json::Value) {
+    if let Some(input_tokens) = usage.get("input_tokens").and_then(|value| value.as_u64()) {
+        current.input_tokens = current.input_tokens.max(input_tokens);
+    }
+    if let Some(output_tokens) = usage.get("output_tokens").and_then(|value| value.as_u64()) {
+        current.output_tokens = current.output_tokens.max(output_tokens);
+    }
+    if let Some(cache_read_tokens) = usage
+        .get("cache_read_input_tokens")
+        .or_else(|| usage.get("cached_input_tokens"))
+        .and_then(|value| value.as_u64())
+    {
+        current.cache_read_tokens = Some(
+            current
+                .cache_read_tokens
+                .unwrap_or_default()
+                .max(cache_read_tokens),
+        );
+    }
+    if let Some(cache_write_tokens) = usage
+        .get("cache_creation_input_tokens")
+        .or_else(|| usage.get("cache_write_input_tokens"))
+        .and_then(|value| value.as_u64())
+    {
+        current.cache_write_tokens = Some(
+            current
+                .cache_write_tokens
+                .unwrap_or_default()
+                .max(cache_write_tokens),
+        );
+    }
 }
 
 fn merge_assistant_usage_component(current: &mut TurnUsageComponent, incoming: TurnUsageComponent) {
@@ -410,6 +503,7 @@ pub fn build_claude_launch_args(
         "stream-json".to_string(),
         "--output-format".to_string(),
         "stream-json".to_string(),
+        "--include-partial-messages".to_string(),
         "--permission-prompt-tool".to_string(),
         "stdio".to_string(),
     ];
