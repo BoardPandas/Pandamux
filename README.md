@@ -47,9 +47,12 @@ R0 development gate:
   and automatic focus natively, but PowerShell did not execute the injected
   login command because ConPTY received a line feed instead of carriage
   return. Exact 0.60.25 proved command execution visually, then exposed that
-  painted Terminal output was absent from UI Automation. The 0.60.26 source
-  candidate adds a bounded semantic output log and still requires native
-  Windows acceptance. Real external quota exhaustion, real
+  painted Terminal output was absent from UI Automation. Exact 0.60.26 added
+  a bounded semantic output log and passed the successful-login interaction,
+  High Contrast, and disabled-animation rows, but genuine Narrator Speech
+  Recap did not announce the READY or ECHO output. The 0.60.27 source candidate
+  makes that read-only log a dedicated keyboard focus stop and still requires
+  exact native Windows acceptance. Real external quota exhaustion, real
   post-side-effect interruption, and the deferred physical laptop checks keep
   the Phase 4 exit matrix open.
 

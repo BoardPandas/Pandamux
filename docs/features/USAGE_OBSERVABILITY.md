@@ -304,9 +304,12 @@ exact 0.60.24 native repair attempt proved the visible focused Terminal surface
 but exposed a ConPTY submit-sequence defect before the controlled command ran.
 Exact 0.60.25 corrected command submission and showed the controlled READY and
 PROMPT output visually, then failed the accessibility assertion because the
-painted grid was absent from UI Automation. The 0.60.26 source candidate adds a
-bounded semantic output log and focused-terminal description, and still
-requires native Windows acceptance. That row, the open real external quota-exhaustion and post-side-effect
+painted grid was absent from UI Automation. Exact 0.60.26 added a bounded
+semantic output Log and passed the interaction, High Contrast, and
+disabled-animation rows, but genuine Narrator Speech Recap did not announce
+READY or ECHO. The 0.60.27 source candidate makes the read-only Log a dedicated
+keyboard focus stop and still requires exact native Windows acceptance. That
+row, the open real external quota-exhaustion and post-side-effect
 interruption rows, the deferred physical R0.5 laptop disconnect and sleep rows,
 the final archive after those results stabilize, and later release gates still
 block Phase 4 exit, production acceptance, and release. Exact results and

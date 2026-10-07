@@ -8,11 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
-- **Exposed visible Terminal output to assistive technology.** Terminal surfaces
-  now publish their bounded visible grid as a semantic log and as the focused
-  terminal's accessible description. Windows UI Automation and Narrator can
-  inspect the same current output that is painted on screen without receiving
-  unbounded scrollback.
+- **Made visible Terminal output directly reachable by assistive technology.**
+  Terminal surfaces publish their bounded visible grid as a semantic log with
+  its own keyboard focus stop and visible focus border. Keys are forwarded to
+  the PTY only while the interactive terminal itself has focus, so screen-reader
+  users can move to the read-only output log without sending navigation keys to
+  the provider session. The focused terminal retains a concise instruction and
+  accessible description, while the log exposes the same current output that is
+  painted on screen without unbounded scrollback.
 
 - **Submitted provider login commands with the native PTY Enter sequence.**
   Windows ConPTY login terminals now receive a carriage return, so PowerShell

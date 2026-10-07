@@ -160,8 +160,11 @@ Terminology used throughout:
   remained at a continuation prompt because ConPTY received a line feed instead
   of carriage return. Exact 0.60.25 commit `8f0ec20` proved native command
   execution visually, then failed because painted Terminal output was absent
-  from UI Automation. The 0.60.26 source candidate exposes a bounded semantic
-  output log and is not native-accepted.
+  from UI Automation. Exact 0.60.26 commit `b696aad` exposed a bounded semantic
+  output Log and passed the interaction, High Contrast, and disabled-animation
+  rows, but Narrator Speech Recap did not announce READY or ECHO. The 0.60.27
+  source candidate makes that Log a dedicated keyboard focus stop and is not
+  native-accepted.
 - Phase 4 remains open on the P4-C3 login-terminal retest, the remaining live
   P4-C5 failover rows, and the final documentation archive after those rows
   stabilize. The re-scoped physical
@@ -1928,9 +1931,13 @@ the reviewed command in PowerShell over ConPTY. Version 0.60.25 changes the
 Windows submit delimiter to carriage return. Its exact native build, smoke,
 mock-remote ownership, panel, focus, command execution, and visible READY
 output passed, but the painted output was absent from Windows UI Automation.
-Version 0.60.26 exposes a bounded visible grid as a semantic log and as the
-focused Terminal's accessible description. P4-C3 remains open until an exact
-native Windows artifact passes the expanded successful-login row.
+Exact 0.60.26 exposed a bounded visible grid as a semantic Log and passed the
+successful-login interaction, High Contrast, and disabled-animation rows.
+Genuine Narrator Speech Recap did not announce READY or ECHO, so the attempt is
+rejected. Version 0.60.27 makes the read-only output Log a dedicated keyboard
+focus stop and prevents log-focused navigation keys from reaching the PTY.
+P4-C3 remains open until an exact native Windows artifact passes the expanded
+successful-login row and Narrator speaks the controlled output.
 
 The retained host evidence root is
 `C:\ProgramData\PandaMUX\acceptance\phase4-fee9e02-0.60.22-p4-c3`.

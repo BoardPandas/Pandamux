@@ -15,8 +15,12 @@ commit `581113e` proved the repaired panel, terminal binding, and automatic
 focus natively, but PowerShell did not execute the injected login command
 because ConPTY received a line feed instead of carriage return. Exact 0.60.25
 proved command execution visually, then failed because painted Terminal output
-was absent from UI Automation. Version 0.60.26 exposes bounded visible output
-to assistive technology and has not passed native Windows acceptance. Exact
+was absent from UI Automation. Exact 0.60.26 commit `b696aad` exposed bounded
+visible output as a semantic Log and passed the successful-login interaction,
+High Contrast, and disabled-animation rows. Its genuine Narrator Speech Recap
+did not announce READY or ECHO, so it is rejected for P4-C3. Version 0.60.27
+makes the output Log a dedicated keyboard focus stop and has not passed exact
+native Windows acceptance. Exact
 0.60.17 commit `2f56a27` passed the scanner, Hub
 synchronization, conservative capacity projection, route-explanation, and
 rollback-control portions of P4-C5. Real provider quota exhaustion and real
@@ -53,10 +57,16 @@ or release occurred.
   binding, focus, command execution, and visible READY output passed. The
   painted output was absent from UI Automation, so the attempt is rejected for
   P4-C3 acceptance.
-- Current reopened P4-C3 repair source: workspace version `0.60.26` in the
-  isolated recovery worktree. Its bounded semantic Terminal output has local
-  source verification only until the committed source is built natively on
-  Windows; no native, live, production, or release result is claimed.
+- Third reopened P4-C3 repair source: clean commit
+  `b696aad3823df70b741bffcf9241c3ebfa2b4619`, version `0.60.26`. Its exact
+  native build, smoke, remote routing, successful-login interaction, High
+  Contrast, and disabled-animation rows passed. Narrator Speech Recap did not
+  announce the controlled READY or ECHO output, so the attempt is rejected.
+- Current reopened P4-C3 repair source: workspace version `0.60.27` in the
+  isolated recovery worktree. Its keyboard-focusable semantic Terminal output
+  Log has local source verification only until the committed source is built
+  natively on Windows; no native, live, production, or release result is
+  claimed.
 - The intermediate 0.60.2 commit `8a52d2a21da1d5d0f69540864a6162d2b30375bc`
   repaired direct UI Automation activation for Save and Cancel. The 0.60.3
   follow-up exposed the editor text fields on semantic nodes tied to their real
@@ -663,10 +673,14 @@ panel retention, explicit close, and the condition matrix were not credited.
 The 10,028-byte rejected result has SHA-256
 `9f536b19336c1dfab45f662df99e8d7cad6408405ea1c667d97892f360998fbd`.
 
-Version 0.60.26 exposes the bounded visible grid as a semantic log and as the
-focused Terminal's accessible description. P4-C3 stays open until an exact
-0.60.26 or later Windows artifact proves successful launch, discovery, output,
-input, close, panel reopen, and the retained accessibility and scaling matrix.
+Version 0.60.26 exposed the bounded visible grid as a semantic Log and as the
+focused Terminal's accessible description. It passed the interaction, High
+Contrast, and disabled-animation rows, but Narrator Speech Recap did not speak
+the controlled READY or ECHO output. Version 0.60.27 makes the read-only Log a
+dedicated keyboard focus stop and prevents its navigation keys from reaching
+the PTY. P4-C3 stays open until an exact 0.60.27 or later Windows artifact
+passes successful launch, discovery, output, input, close, panel reopen, and
+the retained accessibility and scaling matrix.
 
 ### Build and limited-user startup
 

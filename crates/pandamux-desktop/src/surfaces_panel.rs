@@ -1217,14 +1217,24 @@ fn render_terminal_surface<V: 'static>(
 ) -> AnyElement {
     if let Some(term) = terminal {
         let focus_for_pointer = focus_handle.clone();
+        let focus_for_keyboard = focus_handle.clone();
         let is_focused = focus_handle.is_focused(window);
+        let output_focus = window
+            .use_keyed_state(
+                format!("terminal-output-log-focus-{}", term.terminal_id),
+                cx,
+                |_, cx| cx.focus_handle(),
+            )
+            .read(cx)
+            .clone();
+        let output_is_focused = output_focus.is_focused(window);
         div()
             .id("interactive-terminal-surface")
             .size_full()
             .v_flex()
             .role(Role::Group)
             .aria_label(format!(
-                "Interactive terminal {}. Click or tab here to type.",
+                "Interactive terminal {}. Click or tab here to type. Tab to the terminal output log to review visible output.",
                 term.title
             ))
             .aria_description(term.accessible_output())
@@ -1240,6 +1250,9 @@ fn render_terminal_surface<V: 'static>(
                 window.focus(&focus_for_pointer, cx);
             })
             .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                if !focus_for_keyboard.is_focused(window) {
+                    return;
+                }
                 if let Some(input) =
                     terminal_input_for_keystroke(&event.keystroke, event.prefer_character_input)
                 {
@@ -1285,7 +1298,12 @@ fn render_terminal_surface<V: 'static>(
                     .flex_1()
                     .min_h_0()
                     .overflow_scrollbar()
-                    .child(render_terminal_view(term, theme)),
+                    .child(render_terminal_view(
+                        term,
+                        theme,
+                        &output_focus,
+                        output_is_focused,
+                    )),
             )
             .into_any_element()
     } else {

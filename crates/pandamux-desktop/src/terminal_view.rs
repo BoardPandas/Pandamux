@@ -512,7 +512,12 @@ fn control_character(value: &str) -> Option<u8> {
 }
 
 /// Renders the complete terminal surface view including header toolbar, screen grid, and scrollbar.
-pub fn render_terminal_view(state: &TerminalViewState, theme: &Theme) -> AnyElement {
+pub fn render_terminal_view(
+    state: &TerminalViewState,
+    theme: &Theme,
+    output_focus: &FocusHandle,
+    output_is_focused: bool,
+) -> AnyElement {
     let status_badge = if state.is_running {
         div()
             .h_flex()
@@ -719,12 +724,20 @@ pub fn render_terminal_view(state: &TerminalViewState, theme: &Theme) -> AnyElem
     let screen_container = div()
         .id("terminal-output-log")
         .role(Role::Log)
+        .track_focus(output_focus)
         .accessibility_id("terminal-output-log")
         .aria_label(state.accessible_output())
+        .aria_description("Read-only visible terminal output. Shift Tab returns to terminal input.")
         .v_flex()
         .bg(theme.terminal.surface)
         .p_3()
         .rounded(Radii::ROW)
+        .border_1()
+        .border_color(if output_is_focused {
+            theme.accent.color()
+        } else {
+            rgba(0xffffff14)
+        })
         .font_family(Typography::MONO_FAMILY)
         .text_size(Typography::BODY_SIZE)
         .overflow_hidden()
