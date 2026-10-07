@@ -192,10 +192,13 @@ Terminology used throughout:
   window-level focus after the synchronous accessibility callback. Exact
   0.60.35 commit `b54f8e3` passed native build, smoke, remote lifecycle, and
   standard successful-login interaction, but its delayed same-handle retry was
-  elided by GPUI while UI Automation focus remained on the PandaMUX window. The
-  0.60.36 source candidate first focuses the invoked control, then moves to the
-  requested terminal target after platform Invoke dispatch completes. It is
-  not native-accepted.
+  elided by GPUI while UI Automation focus remained on the PandaMUX window.
+  Exact 0.60.36 commit `6fd5d02` made that move a distinct GPUI focus
+  transition and passed native build, smoke, remote lifecycle, and standard
+  interaction, but UI Automation still reported the PandaMUX window because
+  Narrator retained foreground ownership. The 0.60.37 source candidate
+  explicitly activates the native PandaMUX window before moving to the
+  requested terminal target. It is not native-accepted.
 - Phase 4 remains open on the P4-C3 login-terminal retest, the remaining live
   P4-C5 failover rows, and the final documentation archive after those rows
   stabilize. The re-scoped physical
@@ -2003,10 +2006,13 @@ window-level focus after that callback under Narrator. Exact 0.60.35 commit
 `b54f8e3` repeated the requested focus after platform Invoke dispatch and again
 passed the standard row, but GPUI elided the delayed same-handle request while
 UI Automation focus remained on the PandaMUX window. Version 0.60.36 first
-focuses the invoked control so its delayed move to the output Log is a distinct
-focus transition. P4-C3 remains open until an exact native Windows artifact
-passes the expanded successful-login row and Narrator speaks the controlled
-output.
+focused the invoked control so its delayed move to the output Log was a
+distinct focus transition. Exact 0.60.36 commit `6fd5d02` passed the standard
+row, but the inactive PandaMUX window still could not publish a child as global
+UI Automation focus while Narrator retained foreground ownership. Version
+0.60.37 explicitly activates the native window before the delayed child-focus
+move. P4-C3 remains open until an exact native Windows artifact passes the
+expanded successful-login row and Narrator speaks the controlled output.
 
 The retained host evidence root is
 `C:\ProgramData\PandaMUX\acceptance\phase4-fee9e02-0.60.22-p4-c3`.

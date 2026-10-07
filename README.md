@@ -81,9 +81,12 @@ R0 development gate:
   Exact 0.60.35 commit `b54f8e3` repeated the requested focus after platform
   Invoke dispatch and passed the standard row, but GPUI elided the delayed
   same-handle request while UI Automation focus remained on the PandaMUX
-  window. The 0.60.36 source candidate first focuses the invoked control, then
-  moves to the requested terminal target and still requires exact native
-  Windows acceptance.
+  window. Exact 0.60.36 commit `6fd5d02` made that move a distinct GPUI focus
+  transition and passed the same native build, smoke, remote lifecycle, and
+  standard row, but child focus still could not escape Narrator's foreground
+  ownership. The 0.60.37 source candidate explicitly activates the native
+  PandaMUX window before moving to the requested terminal target and still
+  requires exact native Windows acceptance.
   Real external quota exhaustion, real post-side-effect interruption, and the
   deferred physical laptop checks keep the Phase 4 exit matrix open.
 

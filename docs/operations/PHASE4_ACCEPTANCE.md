@@ -52,10 +52,13 @@ accessibility callback. It is rejected. Exact 0.60.35 commit `b54f8e3` passed
 native build, smoke, remote lifecycle, and standard successful-login
 interaction, but its delayed retry requested the output handle that GPUI
 already considered focused. GPUI elided that retry while Windows UI Automation
-still reported the PandaMUX window, so 0.60.35 is rejected. The 0.60.36 source
-candidate first focuses the invoked control, then moves to the requested
-terminal target after platform Invoke dispatch completes. It has not passed
-exact native Windows acceptance. Exact
+still reported the PandaMUX window, so 0.60.35 is rejected. Exact 0.60.36
+commit `6fd5d02` made the delayed move a distinct GPUI focus transition and
+passed native build, smoke, remote lifecycle, and standard interaction, but UI
+Automation still reported the PandaMUX window because Narrator retained
+foreground ownership. It is rejected. The 0.60.37 source candidate explicitly
+activates the native PandaMUX window before moving to the requested terminal
+target and has not passed exact native Windows acceptance. Exact
 0.60.17 commit `2f56a27` passed the scanner, Hub
 synchronization, conservative capacity projection, route-explanation, and
 rollback-control portions of P4-C5. Real provider quota exhaustion and real
@@ -155,12 +158,19 @@ or release occurred.
   successful-login interaction passed. The delayed accessibility retry was a
   no-op because GPUI still considered the output handle focused after Narrator
   restored platform focus to the PandaMUX window. The attempt is rejected.
-- Current reopened P4-C3 repair source: workspace version `0.60.36` in the
-  isolated recovery worktree. Its AccessKit Click handler first focuses the
-  invoked control so the delayed move to the requested terminal target cannot
-  be elided as a same-handle request. It has local source verification only
-  until the committed source is built natively on Windows; no native, live,
-  production, or release result is claimed.
+- Thirteenth reopened P4-C3 repair source: clean commit
+  `6fd5d027945312a7ba066e9fc42e5bd37dc05fe5`, version `0.60.36`. Its exact
+  native build, headless and limited-user smoke, remote lifecycle, and standard
+  successful-login interaction passed. Its AccessKit Click handler made the
+  delayed target move a distinct GPUI focus transition, but the inactive
+  PandaMUX window still could not publish the child as global UI Automation
+  focus while Narrator retained foreground ownership. The attempt is rejected.
+- Current reopened P4-C3 repair source: workspace version `0.60.37` in the
+  isolated recovery worktree. Its AccessKit Click handler explicitly activates
+  the native PandaMUX window, focuses the invoked control, then moves to the
+  requested terminal target. Local source verification passed, but the candidate
+  is not native-accepted until committed source is built and exercised on
+  Windows; no native, live, production, or release result is claimed.
 - The intermediate 0.60.2 commit `8a52d2a21da1d5d0f69540864a6162d2b30375bc`
   repaired direct UI Automation activation for Save and Cancel. The 0.60.3
   follow-up exposed the editor text fields on semantic nodes tied to their real
@@ -832,9 +842,13 @@ Exact 0.60.35 repeated the requested focus 100 milliseconds after platform
 Invoke dispatch and again passed the standard row. Narrator still left UI
 Automation focus on the PandaMUX window because GPUI already considered the
 output handle focused and elided the same-handle retry. Version 0.60.36 first
-focuses the invoked control, making the delayed move to the output Log a real
-GPUI focus transition. P4-C3 stays open until an exact 0.60.36 or later Windows
-artifact passes successful launch, discovery, output, input, close, panel
+focused the invoked control, making the delayed move to the output Log a real
+GPUI focus transition. Exact 0.60.36 passed the standard row, but the inactive
+PandaMUX window still could not publish a child as global UI Automation focus
+while Narrator retained foreground ownership. Version 0.60.37 explicitly
+activates the native window before the delayed child-focus move. P4-C3 stays
+open until an exact 0.60.37 or later Windows artifact passes successful launch,
+discovery, output, input, close, panel
 reopen, and the retained accessibility and scaling matrix.
 
 ### Rejected 0.60.29 native repair attempt
@@ -1155,6 +1169,52 @@ consider the output handle focused, so the delayed request for that same handle
 returned early even though Windows had restored external focus to the window.
 Version 0.60.36 first focuses the invoked control, then performs the delayed
 move to the requested terminal target as a distinct GPUI focus transition.
+
+### Rejected 0.60.36 native repair attempt
+
+Clean commit `6fd5d027945312a7ba066e9fc42e5bd37dc05fe5`, version `0.60.36`,
+was built by `COLT-SHINE\B_StL` from an isolated source under
+`C:\ProgramData\PandaMUX\acceptance\phase4-6fd5d02-0.60.36-p4-c3-repair-build`.
+The source was clean before and after the build and exact native routing test.
+The 5,410-byte incremental transfer bundle required exact 0.60.35 commit
+`b54f8e39c4e3b60e328b9a4b58df70d0558bd776` and had SHA-256
+`8f79843e7d5e1c5379ab59d17efc0e85a74bfb584e471c1f187bb64f33287893`.
+
+| Artifact | Bytes | SHA-256 |
+|-|-:|-|
+| Windows MSVC `pandamux.exe` | 27,960,320 | `d1a4668dfe82e7400fdfb3659cb45b6cefd85c73b09a829b9d5065003d51c233` |
+| Windows MSVC `pandamux-server.exe` | 14,326,784 | `56a7fb8b160088243a206bd181ff82182e1ddc44bbdba61c73e630bb18bdeced` |
+| Windows MSVC `pandamux-cli.exe` | 1,407,488 | `530b1abab938e407ade4703b213f4fbcef3a96dfd882b9375a0eb99d6c3edb10` |
+
+The exact build, fresh-profile headless check, limited-user authenticated Hub
+and CLI smoke, and mock-remote login-terminal lifecycle test passed. Their
+result files have SHA-256 values
+`24e6b90bb2db9ec8eea0aaf1695ce80f101f5728b189054962bab60e1382f8be`,
+`6c742bffdb00f85c476aea136647af2b6d3dd26c014593bbf46e52310ff889b2`,
+`ef4cefa15a2f38eed1d81775af4972b76b173368ae9d5ce4925814ef69b2570f`,
+and `be87ab7c174859b042d3c257a946ad3bdb849c685bc0929c072af9acfeef7025`.
+
+The native lab root was
+`C:\ProgramData\PandaMUX\acceptance\phase4-6fd5d02-0.60.36-p4-c3-repair-lab`.
+The standard 100 percent successful-login row passed at SHA-256
+`582071c5ddd898b74f2e77c733e9d82c3fdbd7e48f8ec4d7f5a46ca1ca88865c`.
+It verified exact artifact identity, visible confirmation, automatic Terminal
+discovery, visible and invokable focus controls, F6 in both directions, READY
+and ECHO output, retained output after closing and reopening Surfaces, keyboard
+close, fixture shutdown, and complete cleanup.
+
+The primary genuine Narrator run reached the window-level focus precondition
+and found the visible, invokable `Read output` control. Invoking it still left
+UI Automation focus on `PandaMUX`, so the harness stopped before sending any
+Narrator read command and no Speech Recap output was credited. The exact error
+was `Read output did not recover the terminal output Log from Narrator window
+focus; focused: PandaMUX`. The cleaned-up rejected result has SHA-256
+`4bf74e330dc9318934a349874e03ffe2ac4dcb9ff759ed64d531ecacd899a7fb`.
+The run stopped Narrator, the desktop, server, and fixture and removed the
+runtime credential. Source review found that making the child-focus request a
+distinct GPUI transition was insufficient while Narrator retained foreground
+ownership of the native window. Version 0.60.37 explicitly activates the
+PandaMUX window before the delayed move to the output Log.
 
 ### Build and limited-user startup
 

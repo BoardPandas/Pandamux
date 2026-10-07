@@ -1263,12 +1263,14 @@ fn terminal_focus_button<V: 'static>(
     // gpui-component's styled Button exposes UIA Invoke through synthesized
     // pointer input. Narrator can suppress that fallback, so these focus-mode
     // controls use the base button and a direct AccessKit Click listener. The
-    // accessibility path first focuses the invoked control, then moves to the
-    // requested terminal target after the Windows accessibility adapter has
-    // finished dispatching Invoke. The intermediate control focus is required:
-    // if GPUI already considers the target focused, a delayed request for the
-    // same handle is elided even when Narrator has moved platform focus back to
-    // the window.
+    // accessibility path restores the native PandaMUX window, first focuses
+    // the invoked control, then moves to the requested terminal target after
+    // the Windows accessibility adapter has finished dispatching Invoke. The
+    // native activation is required because Narrator owns foreground focus
+    // while invoking the control; GPUI child focus alone cannot make that
+    // inactive window's child become UI Automation's focused element. The
+    // intermediate control focus also prevents the delayed target request from
+    // being elided when GPUI still considers that target focused.
     let component_theme = cx.theme();
     let background: Background = component_theme.transparent.into();
     let hover_background: Background = if component_theme.mode.is_dark() {
@@ -1309,6 +1311,7 @@ fn terminal_focus_button<V: 'static>(
             });
         })
         .on_a11y_action(AccessibleAction::Click, move |_data, window, cx| {
+            window.activate_window();
             window.focus(&accessibility_recovery_focus, cx);
             let delayed_target = target.clone();
             window
