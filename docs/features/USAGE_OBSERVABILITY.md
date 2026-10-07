@@ -307,8 +307,12 @@ PROMPT output visually, then failed the accessibility assertion because the
 painted grid was absent from UI Automation. Exact 0.60.26 added a bounded
 semantic output Log and passed the interaction, High Contrast, and
 disabled-animation rows, but genuine Narrator Speech Recap did not announce
-READY or ECHO. The 0.60.27 source candidate makes the read-only Log a dedicated
-keyboard focus stop and still requires exact native Windows acceptance. That
+READY or ECHO. Exact 0.60.27 then passed successful-login interaction, 200
+percent scaling, High Contrast, and disabled-animation rows, but direct UI
+Automation focus did not reach the Log and the advertised Tab path remained
+PTY input. The 0.60.28 source candidate adds an explicit F6 input/output focus
+toggle while preserving ordinary Tab as PTY input. It still requires exact
+native Windows acceptance. That
 row, the open real external quota-exhaustion and post-side-effect
 interruption rows, the deferred physical R0.5 laptop disconnect and sleep rows,
 the final archive after those results stabilize, and later release gates still

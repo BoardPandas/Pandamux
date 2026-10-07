@@ -162,8 +162,11 @@ Terminology used throughout:
   execution visually, then failed because painted Terminal output was absent
   from UI Automation. Exact 0.60.26 commit `b696aad` exposed a bounded semantic
   output Log and passed the interaction, High Contrast, and disabled-animation
-  rows, but Narrator Speech Recap did not announce READY or ECHO. The 0.60.27
-  source candidate makes that Log a dedicated keyboard focus stop and is not
+  rows, but Narrator Speech Recap did not announce READY or ECHO. Exact 0.60.27
+  passed successful-login interaction, 200 percent scaling, High Contrast, and
+  disabled-animation rows, but direct UI Automation focus did not reach the
+  Log and the advertised Tab path remained PTY input. The 0.60.28 source
+  candidate adds an explicit F6 input/output focus toggle and is not
   native-accepted.
 - Phase 4 remains open on the P4-C3 login-terminal retest, the remaining live
   P4-C5 failover rows, and the final documentation archive after those rows
@@ -1934,10 +1937,13 @@ output passed, but the painted output was absent from Windows UI Automation.
 Exact 0.60.26 exposed a bounded visible grid as a semantic Log and passed the
 successful-login interaction, High Contrast, and disabled-animation rows.
 Genuine Narrator Speech Recap did not announce READY or ECHO, so the attempt is
-rejected. Version 0.60.27 makes the read-only output Log a dedicated keyboard
-focus stop and prevents log-focused navigation keys from reaching the PTY.
-P4-C3 remains open until an exact native Windows artifact passes the expanded
-successful-login row and Narrator speaks the controlled output.
+rejected. Exact 0.60.27 passed successful-login interaction, 200 percent
+scaling, High Contrast, and disabled-animation rows, but direct UI Automation
+focus did not move to the Log and its advertised Tab path remained PTY input.
+Version 0.60.28 adds an explicit F6 input/output focus toggle while preserving
+ordinary Tab as PTY input. P4-C3 remains open until an exact native Windows
+artifact passes the expanded successful-login row and Narrator speaks the
+controlled output.
 
 The retained host evidence root is
 `C:\ProgramData\PandaMUX\acceptance\phase4-fee9e02-0.60.22-p4-c3`.

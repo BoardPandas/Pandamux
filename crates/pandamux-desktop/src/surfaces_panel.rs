@@ -1206,6 +1206,48 @@ fn render_linked_prs_surface(prs: &[PullRequestSummary], theme: &Theme) -> AnyEl
 }
 
 /// Terminal surface (local or remote).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TerminalFocusTarget {
+    Input,
+    Output,
+}
+
+fn terminal_focus_target(
+    keystroke: &Keystroke,
+    input_focused: bool,
+    output_focused: bool,
+) -> Option<TerminalFocusTarget> {
+    let modifiers = keystroke.modifiers;
+    let key = keystroke.key.to_ascii_lowercase();
+    let bare_f6 = key == "f6"
+        && !modifiers.control
+        && !modifiers.alt
+        && !modifiers.platform
+        && !modifiers.shift
+        && !modifiers.function;
+
+    if bare_f6 {
+        if input_focused {
+            return Some(TerminalFocusTarget::Output);
+        }
+        if output_focused {
+            return Some(TerminalFocusTarget::Input);
+        }
+    }
+
+    let shift_tab = key == "tab"
+        && modifiers.shift
+        && !modifiers.control
+        && !modifiers.alt
+        && !modifiers.platform
+        && !modifiers.function;
+    if shift_tab && output_focused {
+        return Some(TerminalFocusTarget::Input);
+    }
+
+    None
+}
+
 fn render_terminal_surface<V: 'static>(
     terminal: Option<&TerminalViewState>,
     theme: &Theme,
@@ -1228,13 +1270,15 @@ fn render_terminal_surface<V: 'static>(
             .read(cx)
             .clone();
         let output_is_focused = output_focus.is_focused(window);
+        let input_focus_for_navigation = focus_handle.clone();
+        let output_focus_for_navigation = output_focus.clone();
         div()
             .id("interactive-terminal-surface")
             .size_full()
             .v_flex()
             .role(Role::Group)
             .aria_label(format!(
-                "Interactive terminal {}. Click or tab here to type. Tab to the terminal output log to review visible output.",
+                "Interactive terminal {}. Click or tab here to type. Press F6 to review visible output.",
                 term.title
             ))
             .aria_description(term.accessible_output())
@@ -1250,7 +1294,23 @@ fn render_terminal_surface<V: 'static>(
                 window.focus(&focus_for_pointer, cx);
             })
             .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
-                if !focus_for_keyboard.is_focused(window) {
+                let input_focused = focus_for_keyboard.is_focused(window);
+                let output_focused = output_focus_for_navigation.is_focused(window);
+                match terminal_focus_target(&event.keystroke, input_focused, output_focused) {
+                    Some(TerminalFocusTarget::Input) => {
+                        window.focus(&input_focus_for_navigation, cx);
+                        cx.stop_propagation();
+                        return;
+                    }
+                    Some(TerminalFocusTarget::Output) => {
+                        window.focus(&output_focus_for_navigation, cx);
+                        cx.stop_propagation();
+                        return;
+                    }
+                    None => {}
+                }
+
+                if !input_focused {
                     return;
                 }
                 if let Some(input) =
@@ -1272,13 +1332,15 @@ fn render_terminal_surface<V: 'static>(
                     .child(
                         div()
                             .text_size(Typography::META_SIZE)
-                            .text_color(if is_focused {
+                            .text_color(if is_focused || output_is_focused {
                                 theme.accent.color()
                             } else {
                                 theme.chrome.text_t3
                             })
-                            .child(if is_focused {
-                                "Terminal focused. Keyboard input is live."
+                            .child(if output_is_focused {
+                                "Terminal output focused. Press F6 or Shift Tab to type."
+                            } else if is_focused {
+                                "Terminal focused. Keyboard input is live. Press F6 to review output."
                             } else {
                                 "Click or tab into the terminal to type."
                             }),
@@ -1475,5 +1537,37 @@ mod tests {
         assert!(state.terminal.is_none());
         assert!(state.terminal_for_thread("t2").is_none());
         assert!(state.terminal_for_thread("t1").is_some());
+    }
+
+    #[test]
+    fn terminal_focus_shortcuts_switch_between_input_and_output() {
+        let f6 = Keystroke::parse("f6").expect("F6 key");
+        assert_eq!(
+            terminal_focus_target(&f6, true, false),
+            Some(TerminalFocusTarget::Output)
+        );
+        assert_eq!(
+            terminal_focus_target(&f6, false, true),
+            Some(TerminalFocusTarget::Input)
+        );
+
+        let shift_tab = Keystroke::parse("shift-tab").expect("Shift Tab");
+        assert_eq!(
+            terminal_focus_target(&shift_tab, false, true),
+            Some(TerminalFocusTarget::Input)
+        );
+    }
+
+    #[test]
+    fn terminal_focus_shortcuts_preserve_pty_keys() {
+        let tab = Keystroke::parse("tab").expect("Tab key");
+        assert_eq!(terminal_focus_target(&tab, true, false), None);
+        assert_eq!(
+            terminal_input_for_keystroke(&tab, false).as_deref(),
+            Some("\t")
+        );
+
+        let control_f6 = Keystroke::parse("ctrl-f6").expect("Control F6");
+        assert_eq!(terminal_focus_target(&control_f6, true, false), None);
     }
 }

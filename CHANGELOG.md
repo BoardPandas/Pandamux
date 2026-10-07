@@ -8,14 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
-- **Made visible Terminal output directly reachable by assistive technology.**
+- **Made visible Terminal output predictably reachable by assistive technology.**
   Terminal surfaces publish their bounded visible grid as a semantic log with
-  its own keyboard focus stop and visible focus border. Keys are forwarded to
-  the PTY only while the interactive terminal itself has focus, so screen-reader
-  users can move to the read-only output log without sending navigation keys to
-  the provider session. The focused terminal retains a concise instruction and
-  accessible description, while the log exposes the same current output that is
-  painted on screen without unbounded scrollback.
+  its own keyboard focus stop and visible focus border. F6 now moves focus
+  between live terminal input and the read-only output log, while Shift Tab
+  returns from the log to input. Ordinary Tab remains PTY input for shell
+  completion. Visible and accessible instructions report the active focus mode
+  and its return path without exposing unbounded scrollback.
 
 - **Submitted provider login commands with the native PTY Enter sequence.**
   Windows ConPTY login terminals now receive a carriage return, so PowerShell

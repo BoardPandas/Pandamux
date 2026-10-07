@@ -50,9 +50,12 @@ R0 development gate:
   painted Terminal output was absent from UI Automation. Exact 0.60.26 added
   a bounded semantic output log and passed the successful-login interaction,
   High Contrast, and disabled-animation rows, but genuine Narrator Speech
-  Recap did not announce the READY or ECHO output. The 0.60.27 source candidate
-  makes that read-only log a dedicated keyboard focus stop and still requires
-  exact native Windows acceptance. Real external quota exhaustion, real
+  Recap did not announce the READY or ECHO output. Exact 0.60.27 then passed
+  the successful-login interaction, 200 percent scaling, High Contrast, and
+  disabled-animation rows, but its output Log could not receive focus through
+  UI Automation and the advertised Tab path remained PTY input. The 0.60.28
+  source candidate adds an explicit F6 input/output focus toggle and still
+  requires exact native Windows acceptance. Real external quota exhaustion, real
   post-side-effect interruption, and the deferred physical laptop checks keep
   the Phase 4 exit matrix open.
 

@@ -19,8 +19,12 @@ was absent from UI Automation. Exact 0.60.26 commit `b696aad` exposed bounded
 visible output as a semantic Log and passed the successful-login interaction,
 High Contrast, and disabled-animation rows. Its genuine Narrator Speech Recap
 did not announce READY or ECHO, so it is rejected for P4-C3. Version 0.60.27
-makes the output Log a dedicated keyboard focus stop and has not passed exact
-native Windows acceptance. Exact
+makes the output Log a dedicated keyboard focus stop. Its exact native build,
+smoke, remote routing, successful-login interaction, 200 percent scaling, High
+Contrast, and disabled-animation rows passed, but direct UI Automation focus
+did not reach the Log and the advertised Tab path remained PTY input. It is
+also rejected. Version 0.60.28 adds an explicit F6 input/output focus toggle
+and has not passed exact native Windows acceptance. Exact
 0.60.17 commit `2f56a27` passed the scanner, Hub
 synchronization, conservative capacity projection, route-explanation, and
 rollback-control portions of P4-C5. Real provider quota exhaustion and real
@@ -62,11 +66,17 @@ or release occurred.
   native build, smoke, remote routing, successful-login interaction, High
   Contrast, and disabled-animation rows passed. Narrator Speech Recap did not
   announce the controlled READY or ECHO output, so the attempt is rejected.
-- Current reopened P4-C3 repair source: workspace version `0.60.27` in the
-  isolated recovery worktree. Its keyboard-focusable semantic Terminal output
-  Log has local source verification only until the committed source is built
-  natively on Windows; no native, live, production, or release result is
-  claimed.
+- Fourth reopened P4-C3 repair source: clean commit
+  `5e00715e1b3b9e343d192cee254348e3d9a3b7c5`, version `0.60.27`. Its exact
+  native build, smoke, remote routing, successful-login interaction, 200
+  percent scaling, High Contrast, and disabled-animation rows passed. Direct
+  UI Automation focus did not move to the output Log, and the advertised Tab
+  path remained PTY input, so the attempt is rejected.
+- Current reopened P4-C3 repair source: workspace version `0.60.28` in the
+  isolated recovery worktree. It adds an explicit F6 input/output focus toggle
+  while preserving ordinary Tab as PTY input. It has local source verification
+  only until the committed source is built natively on Windows; no native,
+  live, production, or release result is claimed.
 - The intermediate 0.60.2 commit `8a52d2a21da1d5d0f69540864a6162d2b30375bc`
   repaired direct UI Automation activation for Save and Cancel. The 0.60.3
   follow-up exposed the editor text fields on semantic nodes tied to their real
@@ -676,11 +686,40 @@ The 10,028-byte rejected result has SHA-256
 Version 0.60.26 exposed the bounded visible grid as a semantic Log and as the
 focused Terminal's accessible description. It passed the interaction, High
 Contrast, and disabled-animation rows, but Narrator Speech Recap did not speak
-the controlled READY or ECHO output. Version 0.60.27 makes the read-only Log a
-dedicated keyboard focus stop and prevents its navigation keys from reaching
-the PTY. P4-C3 stays open until an exact 0.60.27 or later Windows artifact
-passes successful launch, discovery, output, input, close, panel reopen, and
-the retained accessibility and scaling matrix.
+the controlled READY or ECHO output.
+
+### Rejected 0.60.27 native repair attempt
+
+Clean commit `5e00715e1b3b9e343d192cee254348e3d9a3b7c5`, version `0.60.27`,
+was built by `COLT-SHINE\B_StL` in the isolated root
+`C:\ProgramData\PandaMUX\acceptance\phase4-5e00715-0.60.27-p4-c3-repair-run2`.
+The source was clean before and after the build. The 4,796-byte transfer bundle
+had SHA-256
+`f2d2fa76a3a3864a8cb5bcf09485416438b6562f17dfbc8e26a87bc70f3861cc`.
+
+| Artifact | Bytes | SHA-256 |
+|-|-:|-|
+| Windows MSVC `pandamux.exe` | 27,907,584 | `06c44736ac0bdc5d8551fa4d150a1007bf5019fcc45a823d25f68ccb849d1cc2` |
+| Windows MSVC `pandamux-server.exe` | 14,326,784 | `596f547452ae2f2c072fd86414e2538cb68545b9ac2448b35a28a98d3a190015` |
+| Windows MSVC `pandamux-cli.exe` | 1,407,488 | `37d2208562d30435d6f4fd02ff3d378b98613225d12b4fca902076d1a57b48f3` |
+
+The exact clean build, headless check, limited-user Hub and CLI smoke, and
+mock-remote login-terminal lifecycle test passed. Native lab runs at 100 and
+200 percent scaling passed successful launch, visible confirmation, automatic
+Terminal discovery, READY and ECHO output, input, panel reopen, retained
+output, and explicit close. Separate High Contrast and disabled-animation rows
+also passed and were restored after inspection.
+
+The genuine Narrator run then exposed that calling UI Automation `SetFocus()`
+on the reported focusable Log left focus on the PandaMUX window. Source review
+also confirmed that ordinary Tab was still forwarded to the PTY, so the visible
+instruction to Tab to the Log described an unreachable route. Narrator output
+was not credited and the attempt is rejected. Version 0.60.28 adds an explicit
+F6 toggle between terminal input and the output Log, retains Shift Tab as a
+return path from the Log, and preserves ordinary Tab as PTY input. P4-C3 stays
+open until an exact 0.60.28 or later Windows artifact passes successful launch,
+discovery, output, input, close, panel reopen, and the retained accessibility
+and scaling matrix.
 
 ### Build and limited-user startup
 

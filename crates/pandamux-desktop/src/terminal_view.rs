@@ -727,7 +727,9 @@ pub fn render_terminal_view(
         .track_focus(output_focus)
         .accessibility_id("terminal-output-log")
         .aria_label(state.accessible_output())
-        .aria_description("Read-only visible terminal output. Shift Tab returns to terminal input.")
+        .aria_description(
+            "Read-only visible terminal output. Press F6 or Shift Tab to return to terminal input.",
+        )
         .v_flex()
         .bg(theme.terminal.surface)
         .p_3()
