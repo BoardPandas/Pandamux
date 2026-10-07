@@ -75,9 +75,11 @@ R0 development gate:
   commit `58452e7` passed native build, smoke, remote lifecycle, and standard
   successful-login interaction, but its direct AccessKit handler deferred the
   focus update and UI Automation Invoke still left focus on the PandaMUX window.
-  The 0.60.34 source candidate focuses the requested terminal target
-  synchronously during accessibility activation and still requires exact native
-  Windows acceptance.
+  Exact 0.60.34 commit `1f1df21` passed native build, smoke, remote lifecycle,
+  and standard successful-login interaction, but Windows UI Automation still
+  restored window-level focus after the synchronous accessibility callback.
+  The 0.60.35 source candidate repeats the requested focus once after platform
+  Invoke dispatch completes and still requires exact native Windows acceptance.
   Real external quota exhaustion, real post-side-effect interruption, and the
   deferred physical laptop checks keep the Phase 4 exit matrix open.
 

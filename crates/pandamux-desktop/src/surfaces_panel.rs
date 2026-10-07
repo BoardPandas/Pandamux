@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 
 use gpui_kit::base::{Button as AccessibleButton, StyledExt as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -1264,8 +1264,9 @@ fn terminal_focus_button<V: 'static>(
     // pointer input. Narrator can suppress that fallback, so these focus-mode
     // controls use the base button and a direct AccessKit Click listener. The
     // accessibility path focuses synchronously, matching GPUI's own Focus
-    // action handling; deferring from that callback can strand focus on the
-    // window after UI Automation Invoke returns.
+    // action handling, then repeats once after the Windows accessibility
+    // adapter has finished dispatching Invoke. Narrator can otherwise restore
+    // window-level focus after either an immediate or same-update focus request.
     let component_theme = cx.theme();
     let background: Background = component_theme.transparent.into();
     let hover_background: Background = if component_theme.mode.is_dark() {
@@ -1306,6 +1307,16 @@ fn terminal_focus_button<V: 'static>(
         })
         .on_a11y_action(AccessibleAction::Click, move |_data, window, cx| {
             window.focus(&target, cx);
+            let delayed_target = target.clone();
+            window
+                .spawn(cx, async move |cx| {
+                    smol::Timer::after(Duration::from_millis(100)).await;
+                    cx.update(move |window, cx| {
+                        window.focus(&delayed_target, cx);
+                    })
+                    .ok();
+                })
+                .detach();
         })
         .child(label)
         .when(is_focused, |button| button.focus_ring_style(window, cx))

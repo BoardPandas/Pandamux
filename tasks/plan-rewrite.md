@@ -186,9 +186,12 @@ Terminology used throughout:
   to synthesized pointer input under Narrator. Exact 0.60.33 commit `58452e7`
   passed native build, smoke, remote lifecycle, and standard successful-login
   interaction, but its direct AccessKit handler deferred the focus update and
-  UI Automation Invoke still left focus on the PandaMUX window. The 0.60.34
-  source candidate focuses the requested terminal target synchronously during
-  accessibility activation and is not native-accepted.
+  UI Automation Invoke still left focus on the PandaMUX window. Exact 0.60.34
+  commit `1f1df21` passed native build, smoke, remote lifecycle, and standard
+  successful-login interaction, but Windows UI Automation still restored
+  window-level focus after the synchronous accessibility callback. The 0.60.35
+  source candidate repeats the requested focus once after platform Invoke
+  dispatch completes and is not native-accepted.
 - Phase 4 remains open on the P4-C3 login-terminal retest, the remaining live
   P4-C5 failover rows, and the final documentation archive after those rows
   stabilize. The re-scoped physical
@@ -1989,10 +1992,13 @@ still left focus on the PandaMUX window. Exact 0.60.33 commit `58452e7` gave
 both focus controls direct AccessKit Click handlers and passed native build,
 smoke, remote lifecycle, and standard successful-login interaction. Its direct
 accessibility handler still deferred the focus update, and UI Automation Invoke
-left focus on the PandaMUX window. Version 0.60.34 focuses the requested target
-synchronously during accessibility activation. P4-C3 remains open until an
-exact native Windows artifact passes the expanded successful-login row and
-Narrator speaks the controlled output.
+left focus on the PandaMUX window. Exact 0.60.34 commit `1f1df21` focused the
+requested target synchronously and passed native build, smoke, remote lifecycle,
+and standard successful-login interaction. Windows UI Automation still restored
+window-level focus after that callback under Narrator. Version 0.60.35 repeats
+the requested focus once after platform Invoke dispatch completes. P4-C3
+remains open until an exact native Windows artifact passes the expanded
+successful-login row and Narrator speaks the controlled output.
 
 The retained host evidence root is
 `C:\ProgramData\PandaMUX\acceptance\phase4-fee9e02-0.60.22-p4-c3`.
