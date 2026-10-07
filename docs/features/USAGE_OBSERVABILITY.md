@@ -333,9 +333,12 @@ interaction, but its direct AccessKit handler deferred the focus update and UI
 Automation Invoke still left focus on the PandaMUX window. Exact 0.60.34
 commit `1f1df21` passed native build, smoke, remote lifecycle, and standard
 successful-login interaction, but Windows UI Automation still restored
-window-level focus after the synchronous accessibility callback. The 0.60.35
-source candidate repeats the requested focus once after platform Invoke
-dispatch completes and still requires exact native Windows acceptance.
+window-level focus after the synchronous accessibility callback. Exact 0.60.35
+commit `b54f8e3` repeated the requested focus after platform Invoke dispatch
+and passed the standard row, but GPUI elided the delayed same-handle request
+while UI Automation focus remained on the PandaMUX window. The 0.60.36 source
+candidate first focuses the invoked control, then moves to the requested
+terminal target and still requires exact native Windows acceptance.
 That row, the open real external quota-exhaustion and post-side-effect
 interruption rows, the deferred physical R0.5 laptop disconnect and sleep rows,
 the final archive after those results stabilize, and later release gates still

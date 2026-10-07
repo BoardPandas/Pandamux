@@ -78,8 +78,12 @@ R0 development gate:
   Exact 0.60.34 commit `1f1df21` passed native build, smoke, remote lifecycle,
   and standard successful-login interaction, but Windows UI Automation still
   restored window-level focus after the synchronous accessibility callback.
-  The 0.60.35 source candidate repeats the requested focus once after platform
-  Invoke dispatch completes and still requires exact native Windows acceptance.
+  Exact 0.60.35 commit `b54f8e3` repeated the requested focus after platform
+  Invoke dispatch and passed the standard row, but GPUI elided the delayed
+  same-handle request while UI Automation focus remained on the PandaMUX
+  window. The 0.60.36 source candidate first focuses the invoked control, then
+  moves to the requested terminal target and still requires exact native
+  Windows acceptance.
   Real external quota exhaustion, real post-side-effect interruption, and the
   deferred physical laptop checks keep the Phase 4 exit matrix open.
 

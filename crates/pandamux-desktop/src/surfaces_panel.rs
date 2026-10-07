@@ -1263,10 +1263,12 @@ fn terminal_focus_button<V: 'static>(
     // gpui-component's styled Button exposes UIA Invoke through synthesized
     // pointer input. Narrator can suppress that fallback, so these focus-mode
     // controls use the base button and a direct AccessKit Click listener. The
-    // accessibility path focuses synchronously, matching GPUI's own Focus
-    // action handling, then repeats once after the Windows accessibility
-    // adapter has finished dispatching Invoke. Narrator can otherwise restore
-    // window-level focus after either an immediate or same-update focus request.
+    // accessibility path first focuses the invoked control, then moves to the
+    // requested terminal target after the Windows accessibility adapter has
+    // finished dispatching Invoke. The intermediate control focus is required:
+    // if GPUI already considers the target focused, a delayed request for the
+    // same handle is elided even when Narrator has moved platform focus back to
+    // the window.
     let component_theme = cx.theme();
     let background: Background = component_theme.transparent.into();
     let hover_background: Background = if component_theme.mode.is_dark() {
@@ -1284,6 +1286,7 @@ fn terminal_focus_button<V: 'static>(
         .clone();
     let is_focused = focus_handle.is_focused(window);
     let pointer_target = target.clone();
+    let accessibility_recovery_focus = focus_handle.clone();
 
     AccessibleButton::new(id)
         .accessibility_label(accessibility_label)
@@ -1306,7 +1309,7 @@ fn terminal_focus_button<V: 'static>(
             });
         })
         .on_a11y_action(AccessibleAction::Click, move |_data, window, cx| {
-            window.focus(&target, cx);
+            window.focus(&accessibility_recovery_focus, cx);
             let delayed_target = target.clone();
             window
                 .spawn(cx, async move |cx| {
