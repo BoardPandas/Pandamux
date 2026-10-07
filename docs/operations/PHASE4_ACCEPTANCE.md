@@ -215,7 +215,9 @@ was moved recoverably into the isolated acceptance root at
 `accidental-default-probe/hub.db`, with SHA-256
 `e07863853d6b6a9ff27972c1171d3bfff9a66d4ae81307e12aaadf6db462fa29`.
 The default hub path and runtime files were restored to their prior absent state,
-and no acceptance process remained running.
+and no acceptance process remained running. Version 0.60.17 adds side-effect-free
+server help and version actions and rejects unknown, incomplete, conflicting, or
+invalid startup arguments so the same probe cannot launch a default Hub again.
 
 ### Exact 0.60.3 native accessibility repair artifacts
 

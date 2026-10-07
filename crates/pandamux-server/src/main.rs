@@ -6,73 +6,51 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum StartupAction {
+    Run(ServerRunArgs),
+    BrowserHelper(String),
+    Help,
+    Version,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ServerRunArgs {
+    proxy_mode: bool,
+    role: ServerRole,
+    runtime_dir: Option<PathBuf>,
+    db_path: Option<PathBuf>,
+    environment_id: String,
+    launcher_owned: bool,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args
-        .first()
-        .is_some_and(|arg| arg == "antigravity-browser-helper")
+    let run_args = match parse_startup_action(&args)
+        .map_err(|message| io::Error::new(io::ErrorKind::InvalidInput, message))?
     {
-        return run_antigravity_browser_helper(args.get(1));
-    }
-    let proxy_mode = args.iter().any(|arg| arg == "proxy");
-    let node_mode = args.iter().any(|arg| arg == "daemon")
-        || args
-            .windows(2)
-            .any(|pair| pair[0] == "--role" && pair[1] == "node");
-    let launcher_owned = args.iter().any(|arg| arg == "--launcher-owned");
-
-    let mut role = if node_mode {
-        ServerRole::Node
-    } else {
-        ServerRole::Hub
-    };
-    let mut runtime_dir = default_runtime_dir(node_mode || proxy_mode);
-    let mut db_path = None;
-    let mut environment_id = "env-local".to_string();
-
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--role" => {
-                if let Some(value) = args.get(index + 1) {
-                    role = if value == "node" {
-                        ServerRole::Node
-                    } else {
-                        ServerRole::Hub
-                    };
-                    index += 2;
-                } else {
-                    index += 1;
-                }
-            }
-            "--runtime-dir" => {
-                if let Some(dir) = args.get(index + 1) {
-                    runtime_dir = PathBuf::from(dir);
-                    index += 2;
-                } else {
-                    index += 1;
-                }
-            }
-            "--db" => {
-                if let Some(db) = args.get(index + 1) {
-                    db_path = Some(PathBuf::from(db));
-                    index += 2;
-                } else {
-                    index += 1;
-                }
-            }
-            "--environment-id" => {
-                if let Some(id) = args.get(index + 1) {
-                    environment_id = id.clone();
-                    index += 2;
-                } else {
-                    index += 1;
-                }
-            }
-            _ => index += 1,
+        StartupAction::Help => {
+            print_help();
+            return Ok(());
         }
-    }
+        StartupAction::Version => {
+            println!("pandamux-server v{}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        StartupAction::BrowserHelper(url) => {
+            return run_antigravity_browser_helper(&url);
+        }
+        StartupAction::Run(run_args) => run_args,
+    };
+    let proxy_mode = run_args.proxy_mode;
+    let role = run_args.role;
+    let launcher_owned = run_args.launcher_owned;
+    let runtime_dir = run_args
+        .runtime_dir
+        .unwrap_or_else(|| default_runtime_dir(role == ServerRole::Node || proxy_mode));
+    let mut db_path = run_args.db_path;
+    let environment_id = run_args.environment_id;
 
     if proxy_mode {
         return run_proxy_bridge(&runtime_dir).await;
@@ -160,15 +138,117 @@ async fn shutdown_signal() -> io::Result<()> {
     }
 }
 
-fn run_antigravity_browser_helper(url: Option<&String>) -> Result<(), Box<dyn std::error::Error>> {
+fn parse_startup_action(args: &[String]) -> Result<StartupAction, String> {
+    if let [action] = args {
+        match action.as_str() {
+            "-h" | "--help" | "help" => return Ok(StartupAction::Help),
+            "-V" | "--version" | "version" => return Ok(StartupAction::Version),
+            _ => {}
+        }
+    }
+    if args
+        .first()
+        .is_some_and(|arg| arg == "antigravity-browser-helper")
+    {
+        if args.len() != 2 {
+            return Err("antigravity-browser-helper requires exactly one URL".to_string());
+        }
+        return Ok(StartupAction::BrowserHelper(args[1].clone()));
+    }
+
+    let mut mode = None;
+    let mut explicit_role = None;
+    let mut runtime_dir = None;
+    let mut db_path = None;
+    let mut environment_id = "env-local".to_string();
+    let mut launcher_owned = false;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "-h" | "--help" => return Ok(StartupAction::Help),
+            "-V" | "--version" => return Ok(StartupAction::Version),
+            "daemon" | "proxy" => {
+                if mode.replace(args[index].as_str()).is_some() {
+                    return Err("server mode may be specified only once".to_string());
+                }
+                index += 1;
+            }
+            "--role" => {
+                let value = required_value(args, index, "--role")?;
+                explicit_role = Some(match value {
+                    "node" => ServerRole::Node,
+                    "hub" => ServerRole::Hub,
+                    _ => return Err("--role must be 'hub' or 'node'".to_string()),
+                });
+                index += 2;
+            }
+            "--runtime-dir" => {
+                runtime_dir = Some(PathBuf::from(required_value(args, index, "--runtime-dir")?));
+                index += 2;
+            }
+            "--db" => {
+                db_path = Some(PathBuf::from(required_value(args, index, "--db")?));
+                index += 2;
+            }
+            "--environment-id" => {
+                environment_id = required_value(args, index, "--environment-id")?.to_string();
+                if environment_id.trim().is_empty() {
+                    return Err("--environment-id must not be empty".to_string());
+                }
+                index += 2;
+            }
+            "--launcher-owned" => {
+                launcher_owned = true;
+                index += 1;
+            }
+            unknown => return Err(format!("unknown pandamux-server argument: {unknown}")),
+        }
+    }
+
+    let proxy_mode = mode == Some("proxy");
+    if mode == Some("daemon") && explicit_role == Some(ServerRole::Hub) {
+        return Err("daemon mode requires role 'node'".to_string());
+    }
+    if proxy_mode
+        && (explicit_role.is_some()
+            || db_path.is_some()
+            || environment_id != "env-local"
+            || launcher_owned)
+    {
+        return Err("proxy mode accepts only --runtime-dir".to_string());
+    }
+    let role = explicit_role.unwrap_or(if mode == Some("daemon") {
+        ServerRole::Node
+    } else {
+        ServerRole::Hub
+    });
+    Ok(StartupAction::Run(ServerRunArgs {
+        proxy_mode,
+        role,
+        runtime_dir,
+        db_path,
+        environment_id,
+        launcher_owned,
+    }))
+}
+
+fn required_value<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'a str, String> {
+    args.get(index + 1)
+        .map(String::as_str)
+        .filter(|value| !value.starts_with('-'))
+        .ok_or_else(|| format!("{flag} requires a value"))
+}
+
+fn print_help() {
+    println!(
+        "PandaMUX Server {}\n\nUsage:\n  pandamux-server [--role <hub|node>] [--runtime-dir <DIR>] [--db <PATH>] [--environment-id <ID>] [--launcher-owned]\n  pandamux-server daemon [OPTIONS]\n  pandamux-server proxy [--runtime-dir <DIR>]\n  pandamux-server antigravity-browser-helper <URL>\n  pandamux-server --help\n  pandamux-server --version",
+        env!("CARGO_PKG_VERSION")
+    );
+}
+
+fn run_antigravity_browser_helper(url: &str) -> Result<(), Box<dyn std::error::Error>> {
     use std::io::Write;
 
-    let url = url.ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Antigravity browser helper requires one URL",
-        )
-    })?;
     if url.len() > 16_384 || url.contains(['\r', '\n', '\0']) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -437,8 +517,111 @@ fn cleanup_socket_path(path: &str) {
     }
 }
 
+#[cfg(test)]
+mod argument_tests {
+    use super::*;
+
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn help_and_version_never_enter_server_run_mode() {
+        assert_eq!(
+            parse_startup_action(&args(&["--help"])).expect("parse help"),
+            StartupAction::Help
+        );
+        assert_eq!(
+            parse_startup_action(&args(&["--version"])).expect("parse version"),
+            StartupAction::Version
+        );
+        assert_eq!(
+            parse_startup_action(&args(&["daemon", "--help"])).expect("parse daemon help"),
+            StartupAction::Help
+        );
+        let StartupAction::Run(run) = parse_startup_action(&args(&["--environment-id", "version"]))
+            .expect("version is a valid option value")
+        else {
+            panic!("option value became a startup action");
+        };
+        assert_eq!(run.environment_id, "version");
+    }
+
+    #[test]
+    fn daemon_options_are_typed_and_complete() {
+        assert_eq!(
+            parse_startup_action(&args(&[
+                "daemon",
+                "--launcher-owned",
+                "--environment-id",
+                "env-test",
+                "--runtime-dir",
+                "/tmp/pandamux-run",
+                "--db",
+                "/tmp/pandamux.db",
+            ]))
+            .expect("parse daemon"),
+            StartupAction::Run(ServerRunArgs {
+                proxy_mode: false,
+                role: ServerRole::Node,
+                runtime_dir: Some(PathBuf::from("/tmp/pandamux-run")),
+                db_path: Some(PathBuf::from("/tmp/pandamux.db")),
+                environment_id: "env-test".to_string(),
+                launcher_owned: true,
+            })
+        );
+    }
+
+    #[test]
+    fn proxy_and_browser_helper_modes_are_explicit() {
+        assert_eq!(
+            parse_startup_action(&args(&["proxy", "--runtime-dir", "/tmp/pandamux-run"]))
+                .expect("parse proxy"),
+            StartupAction::Run(ServerRunArgs {
+                proxy_mode: true,
+                role: ServerRole::Hub,
+                runtime_dir: Some(PathBuf::from("/tmp/pandamux-run")),
+                db_path: None,
+                environment_id: "env-local".to_string(),
+                launcher_owned: false,
+            })
+        );
+        assert_eq!(
+            parse_startup_action(&args(&[
+                "antigravity-browser-helper",
+                "https://example.test/callback"
+            ]))
+            .expect("parse browser helper"),
+            StartupAction::BrowserHelper("https://example.test/callback".to_string())
+        );
+    }
+
+    #[test]
+    fn invalid_or_incomplete_arguments_fail_closed() {
+        for invalid in [
+            args(&["--versoin"]),
+            args(&["--role", "worker"]),
+            args(&["--runtime-dir"]),
+            args(&["daemon", "proxy"]),
+            args(&["daemon", "--role", "hub"]),
+            args(&["proxy", "--db", "/tmp/proxy.db"]),
+            args(&["antigravity-browser-helper"]),
+            args(&[
+                "antigravity-browser-helper",
+                "https://example.test",
+                "extra",
+            ]),
+        ] {
+            assert!(
+                parse_startup_action(&invalid).is_err(),
+                "accepted {invalid:?}"
+            );
+        }
+    }
+}
+
 #[cfg(all(test, not(windows)))]
-mod tests {
+mod unix_tests {
     use std::os::unix::fs::{PermissionsExt, symlink};
 
     use super::*;

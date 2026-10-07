@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Made server inspection commands side-effect free.** `pandamux-server --help`
+  and `pandamux-server --version` now print and exit without creating a runtime
+  or database. Unknown, incomplete, conflicting, and invalid startup arguments
+  fail closed instead of being ignored and launching the default Hub.
+
 - **Reconciled Claude managed usage with its exact transcript message totals.**
   PandaMUX now requests Claude's final partial-message usage events and folds each
   terminal message delta into the matching provider message ID. Simple and tool-using
