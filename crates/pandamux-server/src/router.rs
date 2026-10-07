@@ -1176,6 +1176,14 @@ impl Router {
                     {
                         map.insert(term_res.terminal_id, target_env.clone());
                     }
+                    if method == "provider.login.launch"
+                        && let Some(val) = &resp.result
+                        && let Ok(login_res) =
+                            serde_json::from_value::<ProviderLoginLaunchResult>(val.clone())
+                        && let Ok(mut map) = self.remote_terminals.lock()
+                    {
+                        map.insert(login_res.terminal_id, target_env.clone());
+                    }
                     if method == "terminal.close"
                         && let Some(tid_str) = params
                             .get("terminalId")
@@ -5176,12 +5184,14 @@ mod tests {
         let input_count = Arc::new(AtomicUsize::new(0));
         let resize_count = Arc::new(AtomicUsize::new(0));
         let close_count = Arc::new(AtomicUsize::new(0));
+        let login_launch_count = Arc::new(AtomicUsize::new(0));
 
         let oc = Arc::clone(&open_count);
         let ac = Arc::clone(&attach_count);
         let ic = Arc::clone(&input_count);
         let rc = Arc::clone(&resize_count);
         let cc = Arc::clone(&close_count);
+        let lc = Arc::clone(&login_launch_count);
 
         let mock_transport = Arc::new(crate::environment_router::MockEnvironmentTransport::new(
             move |req| match req.method.as_str() {
@@ -5199,6 +5209,12 @@ mod tests {
                 }
                 "terminal.attach" => {
                     ac.fetch_add(1, Ordering::SeqCst);
+                    let terminal_id = req
+                        .params
+                        .as_ref()
+                        .and_then(|p| p.get("terminalId"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("term-remote-1");
                     let since = req
                         .params
                         .as_ref()
@@ -5208,7 +5224,7 @@ mod tests {
                     Ok(RpcResponse::success(
                         req.id.clone().unwrap_or(2.into()),
                         json!({
-                            "terminalId": "term-remote-1",
+                            "terminalId": terminal_id,
                             "rows": 30,
                             "cols": 120,
                             "offset": since + 45,
@@ -5236,6 +5252,19 @@ mod tests {
                     Ok(RpcResponse::success(
                         req.id.clone().unwrap_or(5.into()),
                         json!({ "success": true }),
+                    ))
+                }
+                "provider.login.launch" => {
+                    lc.fetch_add(1, Ordering::SeqCst);
+                    Ok(RpcResponse::success(
+                        req.id.clone().unwrap_or(6.into()),
+                        json!({
+                            "environmentId": "env_remote_node",
+                            "providerInstanceId": "claude-remote",
+                            "terminalId": "term-remote-login",
+                            "displayCommand": "claude auth login",
+                            "retryable": true
+                        }),
                     ))
                 }
                 _ => Err(RpcError::method_not_found(&req.method)),
@@ -5327,6 +5356,55 @@ mod tests {
         assert!(close_res.is_success());
         assert_eq!(close_count.load(Ordering::SeqCst), 1);
         assert!(!hub_router.remote_terminals().contains_key("term-remote-1"));
+
+        // 6. A provider login creates a terminal too; register it for later
+        // attach/input/close routing just like terminal.open.
+        let login_req = RpcRequest::new(
+            6,
+            "provider.login.launch",
+            Some(json!({
+                "previewId": "login-preview-remote",
+                "providerInstanceId": "claude-remote",
+                "environmentId": "env_remote_node"
+            })),
+        );
+        let login_res = hub_router.handle_request(login_req).await.unwrap();
+        assert!(login_res.is_success());
+        assert_eq!(login_launch_count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            hub_router.remote_terminals().get("term-remote-login"),
+            Some(&remote_env)
+        );
+
+        let attach_login_req = RpcRequest::new(
+            7,
+            "terminal.attach",
+            Some(json!({
+                "terminalId": "term-remote-login",
+                "sinceOffset": 0
+            })),
+        );
+        let attach_login_res = hub_router.handle_request(attach_login_req).await.unwrap();
+        assert!(attach_login_res.is_success());
+        assert_eq!(
+            attach_login_res.result.unwrap()["terminalId"],
+            "term-remote-login"
+        );
+        assert_eq!(attach_count.load(Ordering::SeqCst), 2);
+
+        let close_login_req = RpcRequest::new(
+            8,
+            "terminal.close",
+            Some(json!({ "terminalId": "term-remote-login" })),
+        );
+        let close_login_res = hub_router.handle_request(close_login_req).await.unwrap();
+        assert!(close_login_res.is_success());
+        assert_eq!(close_count.load(Ordering::SeqCst), 2);
+        assert!(
+            !hub_router
+                .remote_terminals()
+                .contains_key("term-remote-login")
+        );
     }
 
     #[tokio::test]

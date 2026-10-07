@@ -2,13 +2,14 @@ use std::collections::HashMap;
 
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::gpui::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use pandamux_client::projections::{ThreadProjection, format_duration};
 use pandamux_protocol::FsEntry;
 use serde::{Deserialize, Serialize};
 
-use crate::terminal_view::{TerminalViewState, render_terminal_view};
+use crate::terminal_view::{TerminalViewState, render_terminal_view, terminal_input_for_keystroke};
 use crate::theme::{Radii, Theme, Typography};
 
 /// Available surface tabs in the right-side surfaces panel.
@@ -175,6 +176,18 @@ impl SurfacesPanelState {
         self.terminal.as_mut()
     }
 
+    pub fn clear_terminal(&mut self, terminal_id: &str) {
+        if self
+            .terminal
+            .as_ref()
+            .is_some_and(|terminal| terminal.terminal_id == terminal_id)
+        {
+            self.terminal = None;
+        }
+        self.terminals_by_thread
+            .retain(|_, terminal| terminal.terminal_id != terminal_id);
+    }
+
     pub fn toggle_open(&mut self) {
         self.is_open = !self.is_open;
     }
@@ -213,6 +226,10 @@ pub fn render_surfaces_panel<V: 'static>(
     on_toggle_open: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
     on_select_tab: impl Fn(&mut V, Option<SurfaceTab>, &mut Window, &mut Context<V>) + 'static + Copy,
     on_select_file: impl Fn(&mut V, String, &mut Window, &mut Context<V>) + 'static + Copy,
+    terminal_focus: &FocusHandle,
+    on_terminal_input: impl Fn(&mut V, String, &mut Window, &mut Context<V>) + 'static + Copy,
+    on_close_terminal: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
+    window: &mut Window,
     cx: &mut Context<V>,
 ) -> AnyElement {
     if !state.is_open {
@@ -368,9 +385,15 @@ pub fn render_surfaces_panel<V: 'static>(
                     Some(SurfaceTab::LinkedPullRequests) => {
                         render_linked_prs_surface(&state.linked_prs, theme)
                     }
-                    Some(SurfaceTab::Terminal) => {
-                        render_terminal_surface(state.terminal.as_ref(), theme)
-                    }
+                    Some(SurfaceTab::Terminal) => render_terminal_surface(
+                        state.terminal.as_ref(),
+                        theme,
+                        terminal_focus,
+                        on_terminal_input,
+                        on_close_terminal,
+                        window,
+                        cx,
+                    ),
                     Some(SurfaceTab::FloorPlan) => render_floor_plan_surface(theme),
                     Some(SurfaceTab::Artifacts) => render_artifacts_surface(theme),
                 }),
@@ -1183,9 +1206,87 @@ fn render_linked_prs_surface(prs: &[PullRequestSummary], theme: &Theme) -> AnyEl
 }
 
 /// Terminal surface (local or remote).
-fn render_terminal_surface(terminal: Option<&TerminalViewState>, theme: &Theme) -> AnyElement {
+fn render_terminal_surface<V: 'static>(
+    terminal: Option<&TerminalViewState>,
+    theme: &Theme,
+    focus_handle: &FocusHandle,
+    on_terminal_input: impl Fn(&mut V, String, &mut Window, &mut Context<V>) + 'static + Copy,
+    on_close_terminal: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
+    window: &mut Window,
+    cx: &mut Context<V>,
+) -> AnyElement {
     if let Some(term) = terminal {
-        render_terminal_view(term, theme)
+        let focus_for_pointer = focus_handle.clone();
+        let is_focused = focus_handle.is_focused(window);
+        div()
+            .id("interactive-terminal-surface")
+            .size_full()
+            .v_flex()
+            .role(Role::Group)
+            .aria_label(format!(
+                "Interactive terminal {}. Click or tab here to type.",
+                term.title
+            ))
+            .track_focus(focus_handle)
+            .border_1()
+            .border_color(if is_focused {
+                theme.accent.color()
+            } else {
+                rgba(0xffffff14)
+            })
+            .rounded(Radii::ROW)
+            .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+                window.focus(&focus_for_pointer, cx);
+            })
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                if let Some(input) =
+                    terminal_input_for_keystroke(&event.keystroke, event.prefer_character_input)
+                {
+                    on_terminal_input(this, input, window, cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .justify_between()
+                    .px_2()
+                    .py_1()
+                    .border_b_1()
+                    .border_color(rgba(0xffffff14))
+                    .child(
+                        div()
+                            .text_size(Typography::META_SIZE)
+                            .text_color(if is_focused {
+                                theme.accent.color()
+                            } else {
+                                theme.chrome.text_t3
+                            })
+                            .child(if is_focused {
+                                "Terminal focused. Keyboard input is live."
+                            } else {
+                                "Click or tab into the terminal to type."
+                            }),
+                    )
+                    .child(
+                        Button::new("close-active-terminal")
+                            .ghost()
+                            .label("Close terminal")
+                            .accessibility_label(format!("Close terminal {}", term.title))
+                            .on_click(cx.listener(move |this, _event, window, cx| {
+                                on_close_terminal(this, window, cx);
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_scrollbar()
+                    .child(render_terminal_view(term, theme)),
+            )
+            .into_any_element()
     } else {
         div()
             .p_4()
@@ -1350,5 +1451,10 @@ mod tests {
             state.terminal.as_ref().unwrap().terminal_id,
             "term-thread-2"
         );
+
+        state.clear_terminal("term-thread-2");
+        assert!(state.terminal.is_none());
+        assert!(state.terminal_for_thread("t2").is_none());
+        assert!(state.terminal_for_thread("t1").is_some());
     }
 }

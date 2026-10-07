@@ -167,6 +167,7 @@ pub struct TerminalViewState {
     pub exit_code: Option<u32>,
     pub environment_id: Option<EnvironmentId>,
     pub last_truncated: bool,
+    pub error: Option<String>,
     pub cached_cells: ScreenCells,
     grid: Arc<Mutex<TerminalGrid>>,
 }
@@ -196,7 +197,9 @@ impl TerminalViewState {
         let grid = TerminalGrid::new(GridSize::new(c as usize, r as usize));
         let cached_cells = grid.visible_cells();
 
-        let title = if let Some(ref env) = environment_id {
+        let title = if let Some(ref env) = environment_id
+            && environment_is_remote(env)
+        {
             format!("Terminal ({tid} @ {})", env.as_str())
         } else {
             format!("Terminal ({tid})")
@@ -214,6 +217,7 @@ impl TerminalViewState {
             exit_code: None,
             environment_id,
             last_truncated: false,
+            error: None,
             cached_cells,
             grid: Arc::new(Mutex::new(grid)),
         }
@@ -221,7 +225,9 @@ impl TerminalViewState {
 
     /// Indicates whether this terminal is running on a remote environment.
     pub fn is_remote(&self) -> bool {
-        self.environment_id.is_some()
+        self.environment_id
+            .as_ref()
+            .is_some_and(environment_is_remote)
     }
 
     /// Returns the environment identifier if this is a remote terminal session.
@@ -256,9 +262,16 @@ impl TerminalViewState {
         self.rows = result.rows.max(1);
         self.cols = result.cols.max(1);
         self.is_attached = true;
+        self.error = None;
         let needs_nudge = result.truncated;
         self.feed_bytes(result.data.as_bytes(), result.offset, result.truncated);
         needs_nudge
+    }
+
+    /// Marks the terminal unavailable while preserving its last rendered output.
+    pub fn set_error(&mut self, message: impl Into<String>) {
+        self.is_attached = false;
+        self.error = Some(message.into());
     }
 
     /// Builds a pair of temporary resize parameters to nudge the remote PTY on truncation.
@@ -368,6 +381,91 @@ impl TerminalViewState {
     }
 }
 
+fn environment_is_remote(environment_id: &EnvironmentId) -> bool {
+    !matches!(environment_id.as_str(), "env-local" | "env_local")
+}
+
+/// Converts a GPUI key event into bytes understood by a terminal PTY.
+///
+/// Platform and function modifiers are left to the application or operating
+/// system. AltGr-style events prefer the composed character supplied by GPUI.
+pub fn terminal_input_for_keystroke(
+    keystroke: &Keystroke,
+    prefer_character_input: bool,
+) -> Option<String> {
+    let modifiers = keystroke.modifiers;
+    let key = keystroke.key.to_ascii_lowercase();
+
+    let named = match key.as_str() {
+        "enter" | "return" => Some("\r"),
+        "backspace" => Some("\x7f"),
+        "tab" if modifiers.shift => Some("\x1b[Z"),
+        "tab" => Some("\t"),
+        "escape" | "esc" => Some("\x1b"),
+        "up" | "arrowup" => Some("\x1b[A"),
+        "down" | "arrowdown" => Some("\x1b[B"),
+        "right" | "arrowright" => Some("\x1b[C"),
+        "left" | "arrowleft" => Some("\x1b[D"),
+        "home" => Some("\x1b[H"),
+        "end" => Some("\x1b[F"),
+        "insert" => Some("\x1b[2~"),
+        "delete" => Some("\x1b[3~"),
+        "pageup" => Some("\x1b[5~"),
+        "pagedown" => Some("\x1b[6~"),
+        _ => None,
+    };
+    if let Some(sequence) = named {
+        return Some(sequence.to_string());
+    }
+
+    if modifiers.platform || modifiers.function {
+        return None;
+    }
+
+    if modifiers.control && !prefer_character_input && !modifiers.alt {
+        return control_character(keystroke.key.as_str())
+            .map(char::from)
+            .map(String::from);
+    }
+
+    let character = keystroke
+        .key_char
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            if keystroke.key.chars().count() == 1 {
+                Some(keystroke.key.as_str())
+            } else {
+                None
+            }
+        })?;
+
+    if modifiers.alt && !prefer_character_input {
+        Some(format!("\x1b{character}"))
+    } else {
+        Some(character.to_string())
+    }
+}
+
+fn control_character(value: &str) -> Option<u8> {
+    let mut characters = value.chars();
+    let first = characters.next()?;
+    if characters.next().is_some() {
+        return None;
+    }
+    match first.to_ascii_lowercase() {
+        character @ 'a'..='z' => Some((character as u8 - b'a') + 1),
+        '@' | ' ' => Some(0x00),
+        '[' => Some(0x1b),
+        '\\' => Some(0x1c),
+        ']' => Some(0x1d),
+        '^' => Some(0x1e),
+        '_' => Some(0x1f),
+        '?' => Some(0x7f),
+        _ => None,
+    }
+}
+
 /// Renders the complete terminal surface view including header toolbar, screen grid, and scrollbar.
 pub fn render_terminal_view(state: &TerminalViewState, theme: &Theme) -> AnyElement {
     let status_badge = if state.is_running {
@@ -407,7 +505,7 @@ pub fn render_terminal_view(state: &TerminalViewState, theme: &Theme) -> AnyElem
             )
     };
 
-    let env_badge = if let Some(ref env) = state.environment_id {
+    let env_badge = if let Some(env) = state.environment_id.as_ref().filter(|_| state.is_remote()) {
         div()
             .h_flex()
             .items_center()
@@ -587,6 +685,20 @@ pub fn render_terminal_view(state: &TerminalViewState, theme: &Theme) -> AnyElem
         .v_flex()
         .gap_2()
         .p_2()
+        .when_some(state.error.as_ref(), |this, error| {
+            this.child(
+                div()
+                    .id("terminal-error")
+                    .role(Role::Alert)
+                    .aria_label(format!("Terminal error: {error}"))
+                    .p_2()
+                    .rounded(Radii::ROW)
+                    .border_1()
+                    .border_color(rgb(0xf87171))
+                    .text_color(rgb(0xf87171))
+                    .child(error.clone()),
+            )
+        })
         .child(header)
         .when_some(history_indicator, |this, hi| this.child(hi))
         .child(screen_container)
@@ -607,7 +719,67 @@ mod tests {
         assert_eq!(state.cols, 80);
         assert!(state.is_running);
         assert_eq!(state.attached_offset, 0);
+        assert!(state.error.is_none());
         assert_eq!(state.cached_cells.rows.len(), 24);
+    }
+
+    #[test]
+    fn terminal_keystrokes_map_to_pty_input() {
+        let plain = Keystroke::parse("a").expect("plain key");
+        assert_eq!(
+            terminal_input_for_keystroke(&plain, false).as_deref(),
+            Some("a")
+        );
+
+        let enter = Keystroke::parse("enter").expect("enter key");
+        assert_eq!(
+            terminal_input_for_keystroke(&enter, false).as_deref(),
+            Some("\r")
+        );
+
+        let control_c = Keystroke::parse("ctrl-c").expect("control key");
+        assert_eq!(
+            terminal_input_for_keystroke(&control_c, false).as_deref(),
+            Some("\u{3}")
+        );
+
+        let shift_tab = Keystroke::parse("shift-tab").expect("shift tab");
+        assert_eq!(
+            terminal_input_for_keystroke(&shift_tab, false).as_deref(),
+            Some("\u{1b}[Z")
+        );
+
+        let platform = Keystroke::parse("cmd-k").expect("platform key");
+        assert_eq!(terminal_input_for_keystroke(&platform, false), None);
+
+        let control_question = Keystroke::parse("ctrl-?").expect("control question mark");
+        assert_eq!(
+            terminal_input_for_keystroke(&control_question, false).as_deref(),
+            Some("\u{7f}")
+        );
+    }
+
+    #[test]
+    fn terminal_error_preserves_recovery_state() {
+        let mut state = TerminalViewState::new("term-error", ".", 24, 80);
+        state.feed_bytes(b"retained output", 15, false);
+        state.set_error("attach failed");
+
+        assert!(!state.is_attached);
+        assert_eq!(state.error.as_deref(), Some("attach failed"));
+        assert_eq!(state.attached_offset, 15);
+
+        let result = TerminalAttachResult {
+            terminal_id: "term-error".to_string(),
+            rows: 24,
+            cols: 80,
+            offset: 20,
+            data: "again".to_string(),
+            truncated: false,
+        };
+        state.apply_attach_result(&result);
+        assert!(state.is_attached);
+        assert!(state.error.is_none());
     }
 
     #[test]
@@ -666,6 +838,21 @@ mod tests {
         assert!(state.is_remote());
         assert_eq!(state.environment_id(), Some(&env));
         assert!(state.title.contains("env_galahad"));
+    }
+
+    #[test]
+    fn test_terminal_view_local_environment_is_not_labeled_remote() {
+        for local_id in ["env-local", "env_local"] {
+            let state = TerminalViewState::new_with_env(
+                "term-local",
+                "/workspace",
+                30,
+                100,
+                Some(EnvironmentId::new(local_id)),
+            );
+            assert!(!state.is_remote());
+            assert_eq!(state.title, "Terminal (term-local)");
+        }
     }
 
     #[test]

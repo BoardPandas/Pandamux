@@ -28,7 +28,7 @@ R0 development gate:
   data and failure state, named subscription and provider presentation, canonical
   organization-policy editing and enforcement, truthful health controls, and the
   source-level accessibility gate. Exact 0.60.22 native Windows evidence passes
-  the complete 100 and 200 percent keyboard paths, semantic table and editor
+  the executed 100 and 200 percent keyboard paths, semantic table and editor
   focus, empty and populated table semantics, dark and light review, High
   Contrast, disabled animations, actionable Offline behavior, and genuine
   Narrator status, error, table, field-label, and focus-return checks.
@@ -40,8 +40,11 @@ R0 development gate:
   observations while disabling scanning, Hub synchronization, capacity-aware
   routing, or automatic failover. Exact 0.60.15 passed accounting and cloned-store
   reconciliation, exact 0.60.17 partially passed the P4-C5 durability and control
-  matrix, and exact 0.60.22 passed P4-C3 native Windows acceptance including the
-  current normal-user IPC matrix. Real external quota exhaustion, real
+  matrix. Exact 0.60.22 also passed the current normal-user IPC matrix, but
+  P4-C3 is reopened because its successful provider-login launch path was not
+  exercised and later left the Terminal surface undiscoverable and
+  noninteractive. The 0.60.24 source candidate repairs that path but has no
+  native Windows result yet. Real external quota exhaustion, real
   post-side-effect interruption, and the deferred physical laptop checks keep
   the Phase 4 exit matrix open.
 

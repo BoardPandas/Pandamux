@@ -3,12 +3,16 @@
 Date: 2026-09-29
 Updated: 2026-10-07
 
-Status: **Accounting and P4-C3 native Windows acceptance passed, P4-C5 remains
-Partial, and Phase 4 live acceptance is incomplete.** Exact 0.60.15 commit
-`3a77382` passed the P4-C1 implementation, P4-C2 local candidate, and P4-C4
-cloned-store reconciliation gates. Exact 0.60.22 commit `fee9e02` passed P4-C3
-with the complete limited-user interaction, accessibility, visual, and current
-normal-user IPC matrix. Exact 0.60.17 commit `2f56a27` passed the scanner, Hub
+Status: **Accounting passed, P4-C3 native Windows acceptance is reopened,
+P4-C5 remains Partial, and Phase 4 live acceptance is incomplete.** Exact
+0.60.15 commit `3a77382` passed the P4-C1 implementation, P4-C2 local candidate,
+and P4-C4 cloned-store reconciliation gates. Exact 0.60.22 commit `fee9e02`
+passed every P4-C3 row that was executed, including limited-user interaction,
+accessibility, visual, and current normal-user IPC checks. P4-C3 was reopened
+after the omitted successful provider-login launch path left its Terminal
+surface undiscoverable and noninteractive during manual use. Version 0.60.24 is
+the source repair candidate and has not passed native Windows acceptance. Exact
+0.60.17 commit `2f56a27` passed the scanner, Hub
 synchronization, conservative capacity projection, route-explanation, and
 rollback-control portions of P4-C5. Real provider quota exhaustion and real
 interruptions after output or external side effects were not available, so
@@ -33,6 +37,10 @@ or release occurred.
   `fee9e02275dceafd87c25a36af0732cd38c47076`, version `0.60.22`. This
   documentation-only follow-up uses workspace version `0.60.23`; no 0.60.23
   executable, native, live, production, or release result is claimed.
+- Reopened P4-C3 repair source: workspace version `0.60.24` in the isolated
+  recovery worktree. The commit containing this record has local source
+  verification only until it is built natively on Windows; no native, live,
+  production, or release result is claimed.
 - The intermediate 0.60.2 commit `8a52d2a21da1d5d0f69540864a6162d2b30375bc`
   repaired direct UI Automation activation for Save and Cancel. The 0.60.3
   follow-up exposed the editor text fields on semantic nodes tied to their real
@@ -521,11 +529,13 @@ to a screen reader, 200 percent scaling, reduced motion, forced colors, or
 visual non-color state. Those rows remained open for 0.60.3 and were later
 closed by the exact 0.60.22 matrix below.
 
-## Exact 0.60.22 P4-C3 native Windows acceptance
+## Exact 0.60.22 P4-C3 native Windows acceptance, reopened
 
-P4-C3 is **Pass** on clean commit
-`fee9e02275dceafd87c25a36af0732cd38c47076`, version `0.60.22`. All required
-rows ran against the same desktop, server, and CLI hashes. The retained host
+P4-C3 is **Reopened**. Clean commit
+`fee9e02275dceafd87c25a36af0732cd38c47076`, version `0.60.22`, passed all rows
+that the original matrix ran against the same desktop, server, and CLI hashes.
+The matrix covered login preview and cancellation but omitted successful login
+launch, terminal discovery, output, input, and close. The retained host
 evidence root is
 `C:\ProgramData\PandaMUX\acceptance\phase4-fee9e02-0.60.22-p4-c3`.
 Its original `p4-c3-acceptance-summary.json` is 14,897 bytes and has SHA-256
@@ -535,7 +545,34 @@ state and headers but not a populated row or cells. The exact-candidate
 follow-up closes that clause in the 8,252-byte
 `populated-row-followup\p4-c3-populated-row-addendum.json`, SHA-256
 `ed36c4221827d5377035dab393bd6ff4923dbef183b77087e1b9799a8933ebb6`.
-The original summary and this addendum together support the P4-C3 Pass result.
+The original summary and this addendum support their recorded rows, but they no
+longer support an overall P4-C3 Pass.
+
+### Post-acceptance successful-login failure
+
+On 2026-10-07, manual use of the retained 0.60.22 candidate confirmed a
+provider login preview and selected `Open login terminal`. The server returned
+success and the desktop banner reported that the terminal opened. No terminal
+was visible from Settings, and selecting the title-bar Surfaces control produced
+no visible result. Source inspection established four connected defects:
+
+- Settings intentionally omitted the Surfaces panel while the control still
+  toggled its hidden state.
+- The desktop discarded `ProviderLoginLaunchResult.terminal_id` instead of
+  binding it to a Terminal surface.
+- The Terminal surface had no live attach loop or keyboard-input path to its
+  server-owned PTY.
+- A login terminal created on a remote node was not registered in the Hub's
+  terminal-owner map, so follow-up terminal requests would route locally.
+
+Version 0.60.24 is the source repair candidate. It keeps Surfaces available in
+Settings, moves the confirmation card near the top of Provider settings,
+automatically opens and focuses the returned Terminal surface, attaches bounded
+ring-buffer output, forwards keyboard input, exposes an explicit close action,
+keeps errors visible, and registers forwarded login terminal IDs. Local Rust
+checks do not replace the reopened native row. P4-C3 stays open until the exact
+0.60.24 or later Windows artifact proves successful launch, discovery, output,
+input, close, panel reopen, and the retained accessibility and scaling matrix.
 
 ### Build and limited-user startup
 
@@ -772,16 +809,21 @@ especially for the scoped MPL-2.0 exceptions.
 
 Phase 4 cannot yet be marked exited under `tasks/plan-rewrite.md`:
 
-1. Close the remaining live P4-C5 failover rows with a real pre-output capacity
+1. Build an exact 0.60.24 or later native Windows candidate and rerun the
+   expanded P4-C3 successful-login row: confirmation placement, automatic
+   Terminal discovery and focus from Settings, retained output, keyboard input,
+   explicit close, panel close and reopen, remote terminal ownership, 100 and
+   200 percent scaling, High Contrast, disabled animations, and Narrator.
+2. Close the remaining live P4-C5 failover rows with a real pre-output capacity
    failure, real interruptions after text, file edit, command, network action,
    and approval, plus restart while real continuation or delivery work is
    pending. Exact 0.60.17 already passes scanner durability, reconnect and
    bounded backfill, capacity projection and route explanations, rollback
    controls, and the complete diagnostic fixture matrix.
-2. Complete the P4-C7 archive and maintained-document synchronization after the
+3. Complete the P4-C7 archive and maintained-document synchronization after the
    remaining P4-C5 and P4-C6 live rows stabilize. This record already reflects
-   the current P4-C3 Pass and P4-C5 Partial results.
-3. Complete the explicitly deferred R0.5 30-minute physical laptop disconnect
+   the current P4-C3 Reopened and P4-C5 Partial results.
+4. Complete the explicitly deferred R0.5 30-minute physical laptop disconnect
    and sleep checks before production acceptance or release.
 
 The acceptance VM is still a shared lab. Its existing network attachment and

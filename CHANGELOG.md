@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Made successful provider login terminals visible and interactive.** Confirming
+  a reviewed login now opens and focuses the Terminal surface without leaving
+  Settings, streams retained PTY output, forwards keyboard input, exposes an
+  explicit close action, and keeps attach errors visible for recovery. The
+  confirmation card now appears near the top of Provider settings instead of
+  below the full provider list.
+
+- **Routed remote provider login terminal sessions back to their owning node.**
+  The Hub now records terminal IDs returned by a forwarded
+  `provider.login.launch`, so later attach, input, resize, and close requests do
+  not fall through to the local terminal manager.
+
 - **Made Phase 4 status, error, and table semantics speakable.** Usage and
   Settings status changes now publish atomic AccessKit live regions, failed
   provider-health evidence is an assertive named alert, and the Usage table is

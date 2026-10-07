@@ -1,7 +1,7 @@
 # PandaMUX Rewrite: Chat-First Agent Client with Remote Environments, Multi-Repo Fleet Orchestration, Agents, Schedules, Full MCP Settings Control, and Broadside Sharing
 
 Date: 2026-09-25 (Approved 2026-09-26; recovery rewrite 2026-09-28; Phase 4 closure rewrite 2026-10-06; accounting and native acceptance 2026-10-07)
-Status: **Phases 0 to 3 and Phase 4A through 4F implementation are recorded; P4-C1, P4-C2, and P4-C4 passed on exact 0.60.15, P4-C3 passed on exact 0.60.22, and P4-C5 remains Partial, so external failover, final documentation, and physical acceptance gates keep Phase 4 open**
+Status: **Phases 0 to 3 and Phase 4A through 4F implementation are recorded; P4-C1, P4-C2, and P4-C4 passed on exact 0.60.15, P4-C3 is reopened after an omitted successful-login terminal path failed on exact 0.60.22, and P4-C5 remains Partial, so native login-terminal retest, external failover, final documentation, and physical acceptance gates keep Phase 4 open**
 Baseline: The preserved original checkout remains PandaMUX v0.53.44 at `9511d0e22d44`; active recovery work is isolated on `codex/recovery-r0`, with exact 0.60.8 native UI evidence at `054bd3e941e394cd8ffcff62a8dc60faa9b7e1fe` and exact 0.60.15 accounting evidence at `3a77382`
 
 Relationship to `tasks/plan-repo.md`: that file is the **historical** record of the Electron to native Rust rewrite (Phases 1 to 7, complete). This plan supersedes its product direction (terminal multiplexer) but keeps its engineering posture: backend-owned state, single writer, intent-in/delta-out, deliberate dependency pins, crate isolation, and tag-driven signed releases. Its Section 12 design tokens carry over where they still apply (Section 8). UI history: Iced is removed. An earlier draft of this plan chose Tauri 2 + React; the user replaced that with **GPUI + gpui-kit** (all Rust) on 2026-09-25, and Tauri 2 remains only as the documented fallback if the Phase 0 GPUI spike fails. `plan-repo.md` rejected GPUI for three reasons, each now handled explicitly: GPL contamination (zed#55470, still open; tracked as a license gate in S6 and Risks), "not built for external consumption" (gpui-kit publishes exact-pinned `gpui-pre` snapshots and ships in production in Longbridge Pro on Windows, macOS, and Linux), and weak accessibility. Phase 0 treated accessibility as exploratory; the rewritten Phase 4 and Phase 7 criteria make the defined v1 accessibility matrix release-gating.
@@ -145,15 +145,20 @@ Terminology used throughout:
   failover fixtures, and all four rollback controls passed in isolated roots.
   Real external quota exhaustion and post-side-effect capacity interruption
   remain open.
-- Exact 0.60.22 commit `fee9e02` passes P4-C3. The limited-user build and smoke,
-  actionable Offline path, complete 100 and 200 percent keyboard and scroll
+- Exact 0.60.22 commit `fee9e02` passed every P4-C3 row that was
+  executed. The limited-user build and smoke, actionable Offline path,
+  recorded 100 and 200 percent keyboard and scroll
   matrices, dark and light visual review, High Contrast, disabled animations,
   genuine Narrator walkthrough, and current normal-user named-pipe security
   matrix all passed on the same hashes. The VM was restored to its named
   checkpoint with network, guest services, and video settings returned to the
-  recorded baseline.
-- Phase 4 remains open on the remaining live P4-C5 failover rows and the final
-  documentation archive after those rows stabilize. The re-scoped physical
+  recorded baseline. P4-C3 was reopened on 2026-10-07 after manual use of the
+  successful provider-login launch path exposed an undiscoverable,
+  noninteractive Terminal surface that preview and cancel did not cover. The
+  0.60.24 source candidate repairs that path but is not native-accepted.
+- Phase 4 remains open on the P4-C3 login-terminal retest, the remaining live
+  P4-C5 failover rows, and the final documentation archive after those rows
+  stabilize. The re-scoped physical
   laptop disconnect and sleep rows remain production-acceptance and release
   blockers.
 - Phase 5 implementation has not started. The next development work is the
@@ -1806,7 +1811,13 @@ crate warnings.
    accidental server spawn.
 4. Run the complete keyboard path across Usage, every filter, source coverage,
    capacity, subscriptions, policy, health and login, details, editor actions,
-   errors, retries, and focus return.
+   errors, retries, and focus return. For provider login, preview and cancel are
+   insufficient: use a controlled login fixture to confirm launch, prove that
+   Settings keeps the Surfaces panel visible, verify the Terminal surface opens
+   and receives focus automatically, observe retained output, send keyboard
+   input, close the session, and reopen the Surfaces panel without losing the
+   terminal. Repeat the terminal ownership and interaction assertions for a
+   remotely forwarded login with a mock or isolated node.
 5. Inspect UI Automation names, roles, actions, focus, table counts, headers,
    rows, cells, and complete row summaries. Then run Narrator separately for
    status changes, error announcement, table or row reading, field labels, and
@@ -1832,8 +1843,8 @@ Acceptance:
 - The supported Windows screen-reader path passes, or the framework limitation
   remains an explicit Phase 7 release blocker with a user-approved scope change.
 
-Result recorded 2026-10-07: **Pass** on exact commit
-`fee9e02275dceafd87c25a36af0732cd38c47076`, version `0.60.22`.
+Historical result recorded 2026-10-07: **Pass for the rows that ran** on exact
+commit `fee9e02275dceafd87c25a36af0732cd38c47076`, version `0.60.22`.
 The clean limited-user MSVC build produced desktop, server, and CLI artifacts
 with SHA-256 values
 `d3ff7f61aa665f8caa46e09a68f157791ef6d43d7445d4f926b0a6747e1f4440`,
@@ -1892,7 +1903,21 @@ health rows. An independent `SF-C4AD-VM` peer reached TCP 445 but received
 Access Denied when opening the host pipe, while the legitimate client still
 pinged afterward. The local matrix intentionally records its embedded remote
 field as Unrun; the separate independent-peer result closes that row, and the
-combined P4-C3 summary records Pass.
+original combined P4-C3 summary recorded Pass.
+
+Reopened 2026-10-07: manual execution of the successful login-launch path on
+the retained exact 0.60.22 candidate returned a terminal ID and displayed a
+success banner, but Settings did not render the Surfaces panel. The title-bar
+Surfaces control only toggled hidden state, the desktop discarded the returned
+terminal ID, and the Terminal surface did not attach output or forward input.
+The previous matrix covered login preview and cancel, so its executed evidence
+remains valid but cannot support an overall P4-C3 Pass. Version 0.60.24 is the
+source repair candidate. It moves confirmation near the top of Provider
+settings, keeps Surfaces available from Settings, automatically opens and
+focuses the returned login terminal, wires bounded output polling plus keyboard
+input and explicit close, preserves visible errors, and registers remotely
+created login terminal IDs with Hub routing. P4-C3 remains open until an exact
+native Windows artifact passes the expanded successful-login row.
 
 The retained host evidence root is
 `C:\ProgramData\PandaMUX\acceptance\phase4-fee9e02-0.60.22-p4-c3`.
@@ -1900,7 +1925,8 @@ Its original `p4-c3-acceptance-summary.json` has SHA-256
 `88cb877059ba08bc2cba1e2cc9903ab1e87bf20897b3cd7d34b11ae0a29c9ed2`.
 The 8,252-byte populated-row addendum has SHA-256
 `ed36c4221827d5377035dab393bd6ff4923dbef183b77087e1b9799a8933ebb6`.
-Together they support the P4-C3 Pass result.
+Together they support the rows recorded by the original matrix, but the omitted
+successful-login row keeps P4-C3 reopened.
 Rejected harness attempts remain preserved. They include a guest runtime-DLL
 staging miss, a deterministic-login-stub omission that reproduced on old and
 new binaries, a focus helper that restored rather than showed a maximized

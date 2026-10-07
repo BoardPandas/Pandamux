@@ -236,7 +236,7 @@ live regions. Provider failures remain visible as named alerts, and the Usage
 observations table is a keyboard-focusable semantic table whose accessible name
 contains its row count and column shape.
 
-Exact 0.60.22 Windows acceptance passed the complete 100 percent keyboard path
+Exact 0.60.22 Windows acceptance passed the executed 100 percent keyboard path
 through Retry, all eight filters, the data table, subscription editing, provider
 health, login preview and cancel, organization policy, and focus return. The same
 candidate passed at 200 percent display scale with editor use, vertical scrolling,
@@ -296,10 +296,13 @@ all four rollback controls also passed. Fixture-backed failover tests passed,
 but real provider quota exhaustion and real interruptions after output or an
 external side effect were unavailable and remain open.
 
-Exact 0.60.22 passed P4-C3 on the complete native Windows interaction,
-accessibility, visual, and normal-user named-pipe security matrix. The open real
-external quota-exhaustion and post-side-effect interruption rows, the deferred
-physical R0.5 laptop disconnect and sleep rows, the final archive after those
-results stabilize, and later release gates still block Phase 4 exit, production
-acceptance, and release. Exact results and limitations are recorded in
-`docs/operations/PHASE4_ACCEPTANCE.md`.
+Exact 0.60.22 passed every P4-C3 row that was executed, including native Windows
+accessibility, visual, and normal-user named-pipe security checks. P4-C3 was
+reopened after manual use showed that the omitted successful provider-login
+launch path left its Terminal surface undiscoverable and noninteractive. The
+0.60.24 source candidate repairs that path but has no native Windows acceptance
+yet. That row, the open real external quota-exhaustion and post-side-effect
+interruption rows, the deferred physical R0.5 laptop disconnect and sleep rows,
+the final archive after those results stabilize, and later release gates still
+block Phase 4 exit, production acceptance, and release. Exact results and
+limitations are recorded in `docs/operations/PHASE4_ACCEPTANCE.md`.

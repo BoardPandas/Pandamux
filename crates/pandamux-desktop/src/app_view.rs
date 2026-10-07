@@ -17,9 +17,10 @@ use pandamux_protocol::{
     GitCreatePrParams, GitCreatePrResult, GitPushParams, GitPushResult, GitStatusParams,
     GitStatusResult, ProviderHealthParams, ProviderHealthResult, ProviderLoginLaunchParams,
     ProviderLoginLaunchResult, ProviderLoginPreview, ProviderLoginPreviewParams, SettingsGetResult,
-    SettingsSetParams, SettingsSetResult, ThreadCancelTurnParams, ThreadContinueParams,
-    ThreadContinueResult, ThreadCreateParams, ThreadRespondApprovalParams, ThreadSendTurnParams,
-    UsageCatalogResult, UsageQueryResult, UsageSubscriptionSetParams,
+    SettingsSetParams, SettingsSetResult, TerminalAttachParams, TerminalAttachResult,
+    TerminalCloseParams, TerminalInputParams, TerminalOpenResult, ThreadCancelTurnParams,
+    ThreadContinueParams, ThreadContinueResult, ThreadCreateParams, ThreadRespondApprovalParams,
+    ThreadSendTurnParams, UsageCatalogResult, UsageQueryResult, UsageSubscriptionSetParams,
 };
 
 use crate::command_palette::{
@@ -113,6 +114,9 @@ pub struct AppView {
     usage_subscriptions_scroll_anchor: ScrollAnchor,
     usage_subscription_name_input: Entity<InputState>,
     usage_account_label_input: Entity<InputState>,
+    terminal_focus: FocusHandle,
+    terminal_poll_generation: u64,
+    focus_terminal_on_render: bool,
 }
 
 impl AppView {
@@ -155,6 +159,7 @@ impl AppView {
         let usage_scroll_handle = ScrollHandle::new();
         let settings_scroll_handle = ScrollHandle::new();
         let usage_table_focus = cx.focus_handle().tab_stop(true);
+        let terminal_focus = cx.focus_handle().tab_stop(true);
         let usage_table_scroll_anchor = ScrollAnchor::for_handle(usage_scroll_handle.clone());
         let usage_subscriptions_scroll_anchor =
             ScrollAnchor::for_handle(usage_scroll_handle.clone());
@@ -197,6 +202,9 @@ impl AppView {
             usage_subscriptions_scroll_anchor,
             usage_subscription_name_input,
             usage_account_label_input,
+            terminal_focus,
+            terminal_poll_generation: 0,
+            focus_terminal_on_render: false,
         };
 
         app.load_settings(cx);
@@ -771,7 +779,20 @@ impl AppView {
 
     /// Toggles the visibility of the right-side surfaces panel.
     pub fn toggle_surfaces_panel(&mut self, cx: &mut Context<Self>) {
-        self.surfaces_panel.toggle_open();
+        if self.active_rail_tab == RailTab::Usage {
+            self.active_rail_tab = RailTab::Threads;
+            self.surfaces_panel.is_open = true;
+        } else {
+            self.surfaces_panel.toggle_open();
+        }
+        if self.surfaces_panel.is_open
+            && self.surfaces_panel.active_tab == Some(SurfaceTab::Terminal)
+        {
+            self.focus_terminal_on_render = true;
+            self.start_surface_terminal_poll(cx);
+        } else if !self.surfaces_panel.is_open {
+            self.terminal_poll_generation = self.terminal_poll_generation.wrapping_add(1);
+        }
         cx.notify();
     }
 
@@ -788,36 +809,286 @@ impl AppView {
         if tab == Some(SurfaceTab::Files) {
             self.load_surface_files(cx);
         } else if tab == Some(SurfaceTab::Terminal) {
+            self.focus_terminal_on_render = true;
             self.ensure_surface_terminal(cx);
+        } else {
+            self.terminal_poll_generation = self.terminal_poll_generation.wrapping_add(1);
         }
         cx.notify();
     }
 
     /// Ensures a terminal session view state exists when the Terminal surface is opened.
     pub fn ensure_surface_terminal(&mut self, cx: &mut Context<Self>) {
-        if self.surfaces_panel.terminal.is_none() {
-            let (cwd, env_id) = self
-                .active_thread_id
-                .as_ref()
-                .and_then(|tid| self.thread_projections.get(tid))
-                .map(|p| {
-                    (
-                        p.thread.workspace.effective_path().to_string(),
-                        Some(p.thread.environment_id.clone()),
-                    )
-                })
-                .unwrap_or_else(|| (".".to_string(), None));
-            let term_id = format!("term-{}", &uuid::Uuid::new_v4().to_string()[..8]);
-            let term = crate::terminal_view::TerminalViewState::new_with_env(
-                term_id, cwd, 30, 120, env_id,
-            );
-            if let Some(ref tid) = self.active_thread_id {
-                self.surfaces_panel
-                    .set_terminal_for_thread(tid.as_str(), term.clone());
-            }
-            self.surfaces_panel.set_terminal(term);
-            cx.notify();
+        if self.surfaces_panel.terminal.is_some() {
+            self.start_surface_terminal_poll(cx);
+            return;
         }
+
+        let (cwd, env_id) = self
+            .active_thread_id
+            .as_ref()
+            .and_then(|tid| self.thread_projections.get(tid))
+            .map(|projection| {
+                (
+                    projection.thread.workspace.effective_path().to_string(),
+                    Some(projection.thread.environment_id.clone()),
+                )
+            })
+            .unwrap_or_else(|| (".".to_string(), None));
+        let terminal_id = format!("term-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let mut terminal = crate::terminal_view::TerminalViewState::new_with_env(
+            terminal_id.clone(),
+            cwd,
+            30,
+            120,
+            env_id,
+        );
+        terminal.is_attached = false;
+        terminal.is_running = false;
+        let open_params = terminal.build_open_params();
+        if let Some(ref thread_id) = self.active_thread_id {
+            self.surfaces_panel
+                .set_terminal_for_thread(thread_id.as_str(), terminal.clone());
+        }
+        self.surfaces_panel.set_terminal(terminal);
+
+        let Some(bridge) = &self.bridge else {
+            if let Some(terminal) = self.surfaces_panel.terminal_mut() {
+                terminal.set_error("Server bridge is unavailable");
+            }
+            cx.notify();
+            return;
+        };
+        let rx = bridge.send_request("terminal.open", serde_json::to_value(open_params).ok());
+        cx.spawn(async move |this, cx| {
+            let result = decode_rpc_result::<TerminalOpenResult>(rx.await);
+            let _ = this.update(cx, |app, cx| {
+                let is_current = app
+                    .surfaces_panel
+                    .terminal
+                    .as_ref()
+                    .is_some_and(|terminal| terminal.terminal_id == terminal_id);
+                if !is_current {
+                    return;
+                }
+                match result {
+                    Ok(opened) => {
+                        if let Some(terminal) = app.surfaces_panel.terminal_mut() {
+                            terminal.cwd = opened.cwd;
+                            terminal.resize(opened.rows, opened.cols);
+                            terminal.is_attached = true;
+                            terminal.is_running = true;
+                            terminal.error = None;
+                        }
+                        app.start_surface_terminal_poll(cx);
+                    }
+                    Err(message) => {
+                        if let Some(terminal) = app.surfaces_panel.terminal_mut() {
+                            terminal.set_error(format!("Could not open terminal: {message}"));
+                        }
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn start_surface_terminal_poll(&mut self, cx: &mut Context<Self>) {
+        let Some(terminal) = self.surfaces_panel.terminal.as_ref() else {
+            return;
+        };
+        let terminal_id = terminal.terminal_id.clone();
+        let Some(command_tx) = self
+            .bridge
+            .as_ref()
+            .and_then(|bridge| bridge.request_sender())
+        else {
+            if let Some(terminal) = self.surfaces_panel.terminal_mut() {
+                terminal.set_error("Server bridge is unavailable");
+            }
+            cx.notify();
+            return;
+        };
+
+        self.terminal_poll_generation = self.terminal_poll_generation.wrapping_add(1);
+        let generation = self.terminal_poll_generation;
+        let command_tx = Some(command_tx);
+        cx.spawn(async move |this, cx| {
+            let mut delay = std::time::Duration::from_millis(50);
+            loop {
+                smol::Timer::after(delay).await;
+                let params = match this.update(cx, |app, _cx| {
+                    if app.terminal_poll_generation != generation
+                        || !app.surfaces_panel.is_open
+                        || app.surfaces_panel.active_tab != Some(SurfaceTab::Terminal)
+                    {
+                        return None;
+                    }
+                    app.surfaces_panel
+                        .terminal
+                        .as_ref()
+                        .filter(|terminal| terminal.terminal_id == terminal_id)
+                        .map(|terminal| TerminalAttachParams {
+                            terminal_id: terminal.terminal_id.clone(),
+                            since_offset: Some(terminal.attached_offset),
+                        })
+                }) {
+                    Ok(Some(params)) => params,
+                    _ => break,
+                };
+
+                let rx = crate::server_bridge::send_request_channel(
+                    &command_tx,
+                    "terminal.attach",
+                    serde_json::to_value(params).ok(),
+                );
+                let result = decode_rpc_result::<TerminalAttachResult>(rx.await);
+                let received_output = result.as_ref().is_ok_and(|result| !result.data.is_empty());
+                let update = this.update(cx, |app, cx| {
+                    let is_current = app.terminal_poll_generation == generation
+                        && app
+                            .surfaces_panel
+                            .terminal
+                            .as_ref()
+                            .is_some_and(|terminal| terminal.terminal_id == terminal_id);
+                    if !is_current {
+                        return (false, None);
+                    }
+
+                    let resize_nudge = match result {
+                        Ok(result) => app.surfaces_panel.terminal_mut().and_then(|terminal| {
+                            if terminal.apply_attach_result(&result) {
+                                Some(terminal.create_resize_nudge())
+                            } else {
+                                None
+                            }
+                        }),
+                        Err(message) => {
+                            if let Some(terminal) = app.surfaces_panel.terminal_mut() {
+                                terminal
+                                    .set_error(format!("Could not refresh terminal: {message}"));
+                            }
+                            None
+                        }
+                    };
+                    cx.notify();
+                    let keep_polling = app.surfaces_panel.is_open
+                        && app.surfaces_panel.active_tab == Some(SurfaceTab::Terminal);
+                    (keep_polling, resize_nudge)
+                });
+                let Ok((keep_polling, resize_nudge)) = update else {
+                    break;
+                };
+                if let Some((shrink, restore)) = resize_nudge {
+                    for resize in [shrink, restore] {
+                        let response = crate::server_bridge::send_request_channel(
+                            &command_tx,
+                            "terminal.resize",
+                            serde_json::to_value(resize).ok(),
+                        );
+                        drop(response);
+                    }
+                }
+                if !keep_polling {
+                    break;
+                }
+
+                delay = if received_output {
+                    std::time::Duration::from_millis(50)
+                } else {
+                    (delay * 2).min(std::time::Duration::from_secs(1))
+                };
+            }
+        })
+        .detach();
+    }
+
+    pub fn send_surface_terminal_input(&mut self, data: String, cx: &mut Context<Self>) {
+        let Some(params) =
+            self.surfaces_panel
+                .terminal
+                .as_ref()
+                .map(|terminal| TerminalInputParams {
+                    terminal_id: terminal.terminal_id.clone(),
+                    data,
+                })
+        else {
+            return;
+        };
+        let terminal_id = params.terminal_id.clone();
+        let Some(bridge) = &self.bridge else {
+            if let Some(terminal) = self.surfaces_panel.terminal_mut() {
+                terminal.set_error("Server bridge is unavailable");
+            }
+            cx.notify();
+            return;
+        };
+        let rx = bridge.send_request("terminal.input", serde_json::to_value(params).ok());
+        cx.spawn(async move |this, cx| {
+            let result = decode_rpc_result::<serde_json::Value>(rx.await);
+            let _ = this.update(cx, |app, cx| {
+                if let Err(message) = result
+                    && let Some(terminal) = app
+                        .surfaces_panel
+                        .terminal_mut()
+                        .filter(|terminal| terminal.terminal_id == terminal_id)
+                {
+                    terminal.set_error(format!("Could not send terminal input: {message}"));
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub fn close_surface_terminal(&mut self, cx: &mut Context<Self>) {
+        let Some(terminal_id) = self
+            .surfaces_panel
+            .terminal
+            .as_ref()
+            .map(|terminal| terminal.terminal_id.clone())
+        else {
+            return;
+        };
+        let Some(bridge) = &self.bridge else {
+            if let Some(terminal) = self.surfaces_panel.terminal_mut() {
+                terminal.set_error("Server bridge is unavailable");
+            }
+            cx.notify();
+            return;
+        };
+        self.terminal_poll_generation = self.terminal_poll_generation.wrapping_add(1);
+        let rx = bridge.send_request(
+            "terminal.close",
+            serde_json::to_value(TerminalCloseParams {
+                terminal_id: terminal_id.clone(),
+            })
+            .ok(),
+        );
+        cx.spawn(async move |this, cx| {
+            let result = decode_rpc_result::<serde_json::Value>(rx.await);
+            let _ = this.update(cx, |app, cx| {
+                match result {
+                    Ok(_) => {
+                        app.surfaces_panel.clear_terminal(&terminal_id);
+                        app.surfaces_panel.set_active_tab(None, None);
+                    }
+                    Err(message) => {
+                        if let Some(terminal) = app
+                            .surfaces_panel
+                            .terminal_mut()
+                            .filter(|terminal| terminal.terminal_id == terminal_id)
+                        {
+                            terminal.set_error(format!("Could not close terminal: {message}"));
+                        }
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Selects a file in the Files surface and reads its content under root confinement.
@@ -1380,6 +1651,8 @@ impl AppView {
         };
         self.settings_view.is_login_busy = true;
         self.settings_view.login_preview = None;
+        self.settings_scroll_handle
+            .set_offset(point(px(0.), px(0.)));
         let rx = bridge.send_request(
             "provider.login.preview",
             serde_json::to_value(ProviderLoginPreviewParams {
@@ -1436,13 +1709,38 @@ impl AppView {
             let _ = this.update(cx, |app, cx| {
                 app.settings_view.is_login_busy = false;
                 match result {
-                    Ok(_) => {
+                    Ok(result) => {
+                        let provider_name = app
+                            .settings_view
+                            .settings
+                            .providers
+                            .iter()
+                            .find(|provider| provider.id == result.provider_instance_id)
+                            .map(|provider| provider.display_name.clone())
+                            .unwrap_or_else(|| "Provider".to_string());
+                        let terminal_id = result.terminal_id.clone();
+                        let mut terminal = crate::terminal_view::TerminalViewState::new_with_env(
+                            result.terminal_id,
+                            "Provider authentication",
+                            30,
+                            120,
+                            Some(result.environment_id),
+                        );
+                        terminal.title = format!("{provider_name} login");
+                        terminal.is_attached = false;
+                        app.surfaces_panel.set_terminal(terminal);
+                        app.surfaces_panel.is_open = true;
+                        app.surfaces_panel
+                            .set_active_tab(None, Some(SurfaceTab::Terminal));
+                        app.focus_terminal_on_render = true;
                         app.settings_view.login_preview = None;
                         app.settings_view.status_banner = Some((
-                            "Login terminal opened. Complete authentication there, then retry health."
-                                .to_string(),
+                            format!(
+                                "Login terminal {terminal_id} opened in Surfaces. Complete authentication there, then retry health."
+                            ),
                             false,
                         ));
+                        app.start_surface_terminal_poll(cx);
                     }
                     Err(message) => {
                         app.settings_view.status_banner = Some((message, true));
@@ -1779,6 +2077,17 @@ impl AppView {
 
 impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.focus_terminal_on_render
+            && self.surfaces_panel.is_open
+            && self.surfaces_panel.active_tab == Some(SurfaceTab::Terminal)
+        {
+            self.focus_terminal_on_render = false;
+            let terminal_focus = self.terminal_focus.clone();
+            window.defer(cx, move |window, cx| {
+                window.focus(&terminal_focus, cx);
+            });
+        }
+
         let active_title = if self.active_rail_tab == RailTab::Usage {
             Some("Usage & Capacity")
         } else if self.active_rail_tab == RailTab::Settings {
@@ -1912,28 +2221,33 @@ impl Render for AppView {
                         _ => self.render_main_surface(&theme, cx).into_any_element(),
                     })
                     // 2d. Right-side Surfaces Panel
-                    .when(
-                        !matches!(self.active_rail_tab, RailTab::Settings | RailTab::Usage),
-                        |this| {
-                            this.child(render_surfaces_panel(
-                                &self.surfaces_panel,
-                                self.active_thread_id
-                                    .as_ref()
-                                    .and_then(|tid| self.thread_projections.get(tid)),
-                                &theme,
-                                |app, _win, cx| {
-                                    app.toggle_surfaces_panel(cx);
-                                },
-                                |app, tab, _win, cx| {
-                                    app.set_surface_tab(tab, cx);
-                                },
-                                |app, file, _win, cx| {
-                                    app.select_surface_file(file, cx);
-                                },
-                                cx,
-                            ))
-                        },
-                    ),
+                    .when(self.active_rail_tab != RailTab::Usage, |this| {
+                        this.child(render_surfaces_panel(
+                            &self.surfaces_panel,
+                            self.active_thread_id
+                                .as_ref()
+                                .and_then(|tid| self.thread_projections.get(tid)),
+                            &theme,
+                            |app, _win, cx| {
+                                app.toggle_surfaces_panel(cx);
+                            },
+                            |app, tab, _win, cx| {
+                                app.set_surface_tab(tab, cx);
+                            },
+                            |app, file, _win, cx| {
+                                app.select_surface_file(file, cx);
+                            },
+                            &self.terminal_focus,
+                            |app, input, _win, cx| {
+                                app.send_surface_terminal_input(input, cx);
+                            },
+                            |app, _win, cx| {
+                                app.close_surface_terminal(cx);
+                            },
+                            window,
+                            cx,
+                        ))
+                    }),
             )
             // 3. 26px Status Bar
             .child(self.render_statusbar(&theme))

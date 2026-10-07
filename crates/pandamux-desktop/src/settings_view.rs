@@ -726,6 +726,56 @@ fn render_providers_tab<V: 'static>(
                         .child("Health probes may run bounded non-interactive status/version commands. They never start an interactive login or provider session; login requires a separate preview and confirmation."),
                 ),
         )
+        .when_some(state.login_preview.as_ref(), |this, preview| {
+            this.child(
+                div()
+                    .id("provider-login-confirmation")
+                    .role(Role::Group)
+                    .aria_label(format!(
+                        "Confirm provider login. Profile: {}. Command: {}",
+                        preview.profile, preview.display_command
+                    ))
+                    .p_3()
+                    .v_flex()
+                    .gap_2()
+                    .rounded(Radii::ROW)
+                    .bg(theme.chrome.panel2)
+                    .border_1()
+                    .border_color(theme.accent.color())
+                    .child(
+                        div()
+                            .font_weight(FontWeight::BOLD)
+                            .child("Confirm provider login"),
+                    )
+                    .child(format!("Profile: {}", preview.profile))
+                    .child(format!("Command: {}", preview.display_command))
+                    .child("Opening the terminal is the first side effect. Health checks never perform this action.")
+                    .child(
+                        div()
+                            .h_flex()
+                            .gap_2()
+                            .child(
+                                Button::new("confirm-provider-login")
+                                    .primary()
+                                    .label("Open login terminal")
+                                    .disabled(state.is_login_busy)
+                                    .accessibility_label("Open the reviewed provider login command in a terminal")
+                                    .on_click(cx.listener(move |this, _event, window, cx| {
+                                        on_launch_login(this, window, cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("cancel-provider-login")
+                                    .ghost()
+                                    .label("Cancel")
+                                    .accessibility_label("Cancel provider login")
+                                    .on_click(cx.listener(move |this, _event, window, cx| {
+                                        on_cancel_login(this, window, cx);
+                                    })),
+                            ),
+                    ),
+            )
+        })
         // 2. Provider Instances List
         .child(
             div()
@@ -1008,48 +1058,6 @@ fn render_providers_tab<V: 'static>(
                         )
                 })),
         )
-        .when_some(state.login_preview.as_ref(), |this, preview| {
-            this.child(
-                div()
-                    .p_3()
-                    .v_flex()
-                    .gap_2()
-                    .rounded(Radii::ROW)
-                    .bg(theme.chrome.panel2)
-                    .border_1()
-                    .border_color(theme.accent.color())
-                    .child(
-                        div()
-                            .font_weight(FontWeight::BOLD)
-                            .child("Confirm provider login"),
-                    )
-                    .child(format!("Profile: {}", preview.profile))
-                    .child(format!("Command: {}", preview.display_command))
-                    .child("Opening the terminal is the first side effect. Health checks never perform this action.")
-                    .child(
-                        div()
-                            .h_flex()
-                            .gap_2()
-                            .child(
-                                Button::new("confirm-provider-login")
-                                    .primary()
-                                    .label("Open login terminal")
-                                    .disabled(state.is_login_busy)
-                                    .on_click(cx.listener(move |this, _event, window, cx| {
-                                        on_launch_login(this, window, cx);
-                                    })),
-                            )
-                            .child(
-                                Button::new("cancel-provider-login")
-                                    .ghost()
-                                    .label("Cancel")
-                                    .on_click(cx.listener(move |this, _event, window, cx| {
-                                        on_cancel_login(this, window, cx);
-                                    })),
-                            ),
-                    ),
-            )
-        })
         // 3. Tier Mapping Card
         .child(
             div()
