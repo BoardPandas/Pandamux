@@ -43,8 +43,11 @@ R0 development gate:
   matrix. Exact 0.60.22 also passed the current normal-user IPC matrix, but
   P4-C3 is reopened because its successful provider-login launch path was not
   exercised and later left the Terminal surface undiscoverable and
-  noninteractive. The 0.60.24 source candidate repairs that path but has no
-  native Windows result yet. Real external quota exhaustion, real
+  noninteractive. Exact 0.60.24 proved the repaired panel, terminal binding,
+  and automatic focus natively, but PowerShell did not execute the injected
+  login command because ConPTY received a line feed instead of carriage
+  return. The 0.60.25 source candidate corrects that submit sequence and still
+  requires native Windows acceptance. Real external quota exhaustion, real
   post-side-effect interruption, and the deferred physical laptop checks keep
   the Phase 4 exit matrix open.
 

@@ -155,7 +155,11 @@ Terminology used throughout:
   recorded baseline. P4-C3 was reopened on 2026-10-07 after manual use of the
   successful provider-login launch path exposed an undiscoverable,
   noninteractive Terminal surface that preview and cancel did not cover. The
-  0.60.24 source candidate repairs that path but is not native-accepted.
+  Exact 0.60.24 commit `581113e` proved the repaired panel, terminal binding,
+  and automatic focus on native Windows, but the injected PowerShell command
+  remained at a continuation prompt because ConPTY received a line feed instead
+  of carriage return. The 0.60.25 source candidate corrects that submit
+  sequence and is not native-accepted.
 - Phase 4 remains open on the P4-C3 login-terminal retest, the remaining live
   P4-C5 failover rows, and the final documentation archive after those rows
   stabilize. The re-scoped physical
@@ -1911,12 +1915,15 @@ success banner, but Settings did not render the Surfaces panel. The title-bar
 Surfaces control only toggled hidden state, the desktop discarded the returned
 terminal ID, and the Terminal surface did not attach output or forward input.
 The previous matrix covered login preview and cancel, so its executed evidence
-remains valid but cannot support an overall P4-C3 Pass. Version 0.60.24 is the
-source repair candidate. It moves confirmation near the top of Provider
+remains valid but cannot support an overall P4-C3 Pass. Version 0.60.24 was the
+first source repair candidate. It moves confirmation near the top of Provider
 settings, keeps Surfaces available from Settings, automatically opens and
 focuses the returned login terminal, wires bounded output polling plus keyboard
 input and explicit close, preserves visible errors, and registers remotely
-created login terminal IDs with Hub routing. P4-C3 remains open until an exact
+created login terminal IDs with Hub routing. Native Windows use proved those
+panel, binding, and focus changes, then exposed that line feed did not submit
+the reviewed command in PowerShell over ConPTY. Version 0.60.25 changes the
+Windows submit delimiter to carriage return. P4-C3 remains open until an exact
 native Windows artifact passes the expanded successful-login row.
 
 The retained host evidence root is

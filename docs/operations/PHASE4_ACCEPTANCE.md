@@ -10,8 +10,11 @@ and P4-C4 cloned-store reconciliation gates. Exact 0.60.22 commit `fee9e02`
 passed every P4-C3 row that was executed, including limited-user interaction,
 accessibility, visual, and current normal-user IPC checks. P4-C3 was reopened
 after the omitted successful provider-login launch path left its Terminal
-surface undiscoverable and noninteractive during manual use. Version 0.60.24 is
-the source repair candidate and has not passed native Windows acceptance. Exact
+surface undiscoverable and noninteractive during manual use. Exact 0.60.24
+commit `581113e` proved the repaired panel, terminal binding, and automatic
+focus natively, but PowerShell did not execute the injected login command
+because ConPTY received a line feed instead of carriage return. Version 0.60.25
+corrects that submit sequence and has not passed native Windows acceptance. Exact
 0.60.17 commit `2f56a27` passed the scanner, Hub
 synchronization, conservative capacity projection, route-explanation, and
 rollback-control portions of P4-C5. Real provider quota exhaustion and real
@@ -37,10 +40,15 @@ or release occurred.
   `fee9e02275dceafd87c25a36af0732cd38c47076`, version `0.60.22`. This
   documentation-only follow-up uses workspace version `0.60.23`; no 0.60.23
   executable, native, live, production, or release result is claimed.
-- Reopened P4-C3 repair source: workspace version `0.60.24` in the isolated
-  recovery worktree. The commit containing this record has local source
-  verification only until it is built natively on Windows; no native, live,
-  production, or release result is claimed.
+- First reopened P4-C3 repair source: clean commit
+  `581113eb6daadd87827b8c730ff81f69a4bf9ab9`, version `0.60.24`. Its exact
+  native Windows build and smoke passed, and its focused Terminal surface was
+  visible from Settings. The controlled login command did not execute, so the
+  attempt is rejected for P4-C3 acceptance.
+- Current reopened P4-C3 repair source: workspace version `0.60.25` in the
+  isolated recovery worktree. The commit containing this record has local
+  source verification only until it is built natively on Windows; no native,
+  live, production, or release result is claimed.
 - The intermediate 0.60.2 commit `8a52d2a21da1d5d0f69540864a6162d2b30375bc`
   repaired direct UI Automation activation for Save and Cancel. The 0.60.3
   follow-up exposed the editor text fields on semantic nodes tied to their real
@@ -565,14 +573,53 @@ no visible result. Source inspection established four connected defects:
 - A login terminal created on a remote node was not registered in the Hub's
   terminal-owner map, so follow-up terminal requests would route locally.
 
-Version 0.60.24 is the source repair candidate. It keeps Surfaces available in
+Version 0.60.24 was the first source repair candidate. It keeps Surfaces available in
 Settings, moves the confirmation card near the top of Provider settings,
 automatically opens and focuses the returned Terminal surface, attaches bounded
 ring-buffer output, forwards keyboard input, exposes an explicit close action,
 keeps errors visible, and registers forwarded login terminal IDs. Local Rust
-checks do not replace the reopened native row. P4-C3 stays open until the exact
-0.60.24 or later Windows artifact proves successful launch, discovery, output,
-input, close, panel reopen, and the retained accessibility and scaling matrix.
+checks do not replace the reopened native row.
+
+### Rejected 0.60.24 native repair attempt
+
+Clean commit `581113eb6daadd87827b8c730ff81f69a4bf9ab9`, version `0.60.24`,
+was built by `COLT-SHINE\B_StL` in the isolated root
+`C:\ProgramData\PandaMUX\acceptance\phase4-581113e-0.60.24-p4-c3-repair`.
+The source was clean before and after the build, and the 26,182-byte transfer
+bundle had SHA-256
+`b5a45a4d284efce1e6a7b2622c24f0ce4e533326229b7ab646c528047e5aae33`.
+
+| Artifact | Bytes | SHA-256 |
+|-|-:|-|
+| Windows MSVC `pandamux.exe` | 27,908,608 | `484c91f24151b6c496a06c266a9b58237f12c12fff54ffc85f7d3e2d9afda6f3` |
+| Windows MSVC `pandamux-server.exe` | 14,327,808 | `6725d6b9ee2373c8c52944faa0d54f4b8dabc18415ef62074e1fa4e1f241d380` |
+| Windows MSVC `pandamux-cli.exe` | 1,407,488 | `c6993fbebabe7ec45603eb543bff243cd9b38649016d55a07b6497395dd6d27a` |
+
+The clean limited-user headless check and authenticated Hub and CLI smoke
+passed. The latter reported version 0.60.24, the expected SID-scoped pipe, Hub
+role, Windows platform, and successful `hello`, `ping`, and `identify`, then
+stopped the server and removed its runtime credential. The 1,904-byte
+`build-result.json` has SHA-256
+`9ce04733cbb2acef0b1354ac98b5c9ff77028c1e7176c308f3b74f508f0d7ab0`;
+the 1,817-byte `limited-user-smoke.json` has SHA-256
+`b2d08e4c59456ca39b0bbd6780641ac928f917c74f4cafa9d617532ef10725f5`.
+
+The second controlled UI attempt exposed a visible confirmation without
+scrolling, kept Settings visible, opened the Terminal surface in Surfaces, and
+reported the interactive Terminal group as keyboard-focused. The inspected
+125,009-byte screenshot, SHA-256
+`8e211f1df9e446da722bd07c148700c3095863bcd08c9f7b49f6e223f46235af`,
+also showed the reviewed PowerShell command at a continuation prompt. The
+controlled fixture never printed its ready marker, so input, panel retention,
+and close were not credited. The 9,879-byte rejected result has SHA-256
+`78af875beb190aef1b08f595991995908fe50bb95b686cab89b010573a04a2a0`.
+The first attempt searched only the old short UIA action name and is retained
+as a harness rejection.
+
+Version 0.60.25 submits the Windows login command with carriage return, matching
+the interactive terminal Enter path. P4-C3 stays open until an exact 0.60.25 or
+later Windows artifact proves successful launch, discovery, output, input,
+close, panel reopen, and the retained accessibility and scaling matrix.
 
 ### Build and limited-user startup
 
@@ -809,7 +856,7 @@ especially for the scoped MPL-2.0 exceptions.
 
 Phase 4 cannot yet be marked exited under `tasks/plan-rewrite.md`:
 
-1. Build an exact 0.60.24 or later native Windows candidate and rerun the
+1. Build an exact 0.60.25 or later native Windows candidate and rerun the
    expanded P4-C3 successful-login row: confirmation placement, automatic
    Terminal discovery and focus from Settings, retained output, keyboard input,
    explicit close, panel close and reopen, remote terminal ownership, 100 and

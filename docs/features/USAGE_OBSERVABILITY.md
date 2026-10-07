@@ -300,8 +300,10 @@ Exact 0.60.22 passed every P4-C3 row that was executed, including native Windows
 accessibility, visual, and normal-user named-pipe security checks. P4-C3 was
 reopened after manual use showed that the omitted successful provider-login
 launch path left its Terminal surface undiscoverable and noninteractive. The
-0.60.24 source candidate repairs that path but has no native Windows acceptance
-yet. That row, the open real external quota-exhaustion and post-side-effect
+exact 0.60.24 native repair attempt proved the visible focused Terminal surface
+but exposed a ConPTY submit-sequence defect before the controlled command ran.
+The 0.60.25 source candidate corrects that defect and still requires native
+Windows acceptance. That row, the open real external quota-exhaustion and post-side-effect
 interruption rows, the deferred physical R0.5 laptop disconnect and sleep rows,
 the final archive after those results stabilize, and later release gates still
 block Phase 4 exit, production acceptance, and release. Exact results and

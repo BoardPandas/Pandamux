@@ -203,6 +203,11 @@ fn login_shell() -> Result<Option<String>, RpcError> {
     }
 }
 
+fn login_terminal_input(display_command: &str, windows: bool) -> String {
+    let submit = if windows { '\r' } else { '\n' };
+    format!("{display_command}{submit}")
+}
+
 fn provider_health_report_from_snapshot(
     environment_id: &EnvironmentId,
     config: pandamux_core::provider_config::ProviderInstanceConfig,
@@ -2067,7 +2072,7 @@ impl Router {
             })?;
         if let Err(error) = self.terminal.input(TerminalInputParams {
             terminal_id: opened.terminal_id.clone(),
-            data: format!("{}\n", record.preview.display_command),
+            data: login_terminal_input(&record.preview.display_command, cfg!(windows)),
         }) {
             let _ = self.terminal.close(TerminalCloseParams {
                 terminal_id: opened.terminal_id.clone(),
@@ -3456,6 +3461,18 @@ impl Router {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_login_command_uses_the_native_terminal_submit_character() {
+        assert_eq!(
+            login_terminal_input("claude auth login", true),
+            "claude auth login\r"
+        );
+        assert_eq!(
+            login_terminal_input("claude auth login", false),
+            "claude auth login\n"
+        );
+    }
 
     fn mock_router(store: Store) -> Router {
         let settings = UserSettings {

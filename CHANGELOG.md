@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Submitted provider login commands with the native PTY Enter sequence.**
+  Windows ConPTY login terminals now receive a carriage return, so PowerShell
+  executes the reviewed command instead of opening a continuation prompt.
+
 - **Made successful provider login terminals visible and interactive.** Confirming
   a reviewed login now opens and focuses the Terminal surface without leaving
   Settings, streams retained PTY output, forwards keyboard input, exposes an
