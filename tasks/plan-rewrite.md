@@ -195,10 +195,12 @@ Terminology used throughout:
   elided by GPUI while UI Automation focus remained on the PandaMUX window.
   Exact 0.60.36 commit `6fd5d02` made that move a distinct GPUI focus
   transition and passed native build, smoke, remote lifecycle, and standard
-  interaction, but UI Automation still reported the PandaMUX window because
-  Narrator retained foreground ownership. The 0.60.37 source candidate
-  explicitly activates the native PandaMUX window before moving to the
-  requested terminal target. It is not native-accepted.
+  interaction, but UI Automation still reported the PandaMUX window. Exact
+  0.60.37 commit `f21bc2d` activated PandaMUX and passed the same gates, but its
+  Narrator result was unchanged. Diagnostics proved PandaMUX already owned the
+  foreground window and had visibly entered output-reading mode. The 0.60.38
+  source candidate instead reports the output Log through GPUI's supported
+  active-descendant pattern. It is not native-accepted.
 - Phase 4 remains open on the P4-C3 login-terminal retest, the remaining live
   P4-C5 failover rows, and the final documentation archive after those rows
   stabilize. The re-scoped physical
@@ -2008,10 +2010,13 @@ passed the standard row, but GPUI elided the delayed same-handle request while
 UI Automation focus remained on the PandaMUX window. Version 0.60.36 first
 focused the invoked control so its delayed move to the output Log was a
 distinct focus transition. Exact 0.60.36 commit `6fd5d02` passed the standard
-row, but the inactive PandaMUX window still could not publish a child as global
-UI Automation focus while Narrator retained foreground ownership. Version
-0.60.37 explicitly activates the native window before the delayed child-focus
-move. P4-C3 remains open until an exact native Windows artifact passes the
+row, but UI Automation still reported the PandaMUX window. Exact 0.60.37 commit
+`f21bc2d` activated the native window and passed the same gates, but its
+Narrator result was unchanged. Diagnostics proved PandaMUX already owned the
+foreground window and had visibly entered output-reading mode, isolating the
+defect to accessibility focus publication. Version 0.60.38 uses GPUI's
+active-descendant pattern instead of moving real keyboard focus to the output
+child. P4-C3 remains open until an exact native Windows artifact passes the
 expanded successful-login row and Narrator speaks the controlled output.
 
 The retained host evidence root is

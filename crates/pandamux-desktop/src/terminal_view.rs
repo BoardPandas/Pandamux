@@ -515,8 +515,8 @@ fn control_character(value: &str) -> Option<u8> {
 pub fn render_terminal_view(
     state: &TerminalViewState,
     theme: &Theme,
-    output_focus: &FocusHandle,
     output_is_focused: bool,
+    on_output_focus: impl FnMut(Option<&accesskit::ActionData>, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
     let status_badge = if state.is_running {
         div()
@@ -724,7 +724,7 @@ pub fn render_terminal_view(
     let screen_container = div()
         .id("terminal-output-log")
         .role(Role::Log)
-        .track_focus(output_focus)
+        .on_a11y_action(AccessibleAction::Focus, on_output_focus)
         .accessibility_id("terminal-output-log")
         .aria_label(state.accessible_output())
         .aria_description(
@@ -743,7 +743,8 @@ pub fn render_terminal_view(
         .font_family(Typography::MONO_FAMILY)
         .text_size(Typography::BODY_SIZE)
         .overflow_hidden()
-        .children(row_elements);
+        .children(row_elements)
+        .when(output_is_focused, |output| output.aria_active_descendant());
 
     div()
         .v_flex()

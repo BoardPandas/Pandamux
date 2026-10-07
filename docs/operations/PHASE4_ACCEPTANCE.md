@@ -55,10 +55,16 @@ already considered focused. GPUI elided that retry while Windows UI Automation
 still reported the PandaMUX window, so 0.60.35 is rejected. Exact 0.60.36
 commit `6fd5d02` made the delayed move a distinct GPUI focus transition and
 passed native build, smoke, remote lifecycle, and standard interaction, but UI
-Automation still reported the PandaMUX window because Narrator retained
-foreground ownership. It is rejected. The 0.60.37 source candidate explicitly
-activates the native PandaMUX window before moving to the requested terminal
-target and has not passed exact native Windows acceptance. Exact
+Automation still reported the PandaMUX window. It is rejected. Exact 0.60.37
+commit `f21bc2d` explicitly activated the native PandaMUX window and passed
+native build, smoke, remote lifecycle, and standard interaction, but Narrator
+still reported window-level focus. Instrumented diagnostics then proved that
+PandaMUX already owned the foreground window and had internally entered its
+visible output-reading state; native activation was not the missing condition.
+It is rejected. The 0.60.38 source candidate keeps real keyboard focus on the
+terminal container and publishes the output Log through GPUI's supported
+active-descendant pattern. It has not passed exact native Windows acceptance.
+Exact
 0.60.17 commit `2f56a27` passed the scanner, Hub
 synchronization, conservative capacity projection, route-explanation, and
 rollback-control portions of P4-C5. Real provider quota exhaustion and real
@@ -162,15 +168,23 @@ or release occurred.
   `6fd5d027945312a7ba066e9fc42e5bd37dc05fe5`, version `0.60.36`. Its exact
   native build, headless and limited-user smoke, remote lifecycle, and standard
   successful-login interaction passed. Its AccessKit Click handler made the
-  delayed target move a distinct GPUI focus transition, but the inactive
-  PandaMUX window still could not publish the child as global UI Automation
-  focus while Narrator retained foreground ownership. The attempt is rejected.
-- Current reopened P4-C3 repair source: workspace version `0.60.37` in the
-  isolated recovery worktree. Its AccessKit Click handler explicitly activates
-  the native PandaMUX window, focuses the invoked control, then moves to the
-  requested terminal target. Local source verification passed, but the candidate
-  is not native-accepted until committed source is built and exercised on
-  Windows; no native, live, production, or release result is claimed.
+  delayed target move a distinct GPUI focus transition, but UI Automation still
+  reported the PandaMUX window. The attempt is rejected.
+- Fourteenth reopened P4-C3 repair source: clean commit
+  `f21bc2da89ce25975cf422f16906170729c28778`, version `0.60.37`. Its exact
+  native build, headless and limited-user smoke, remote lifecycle, and standard
+  successful-login interaction passed. Narrator still reported the PandaMUX
+  window after invoking `Read output`. Assisted diagnostics proved the window
+  was already foreground before and after Invoke, while the visible instruction
+  and focus border proved the direct handler had changed GPUI into output mode.
+  Native activation addressed the wrong layer, so the attempt is rejected.
+- Current reopened P4-C3 repair source: workspace version `0.60.38` in the
+  isolated recovery worktree. It keeps real keyboard focus on the interactive
+  terminal container and reports the semantic output Log as that container's
+  active descendant while read mode is selected. Its complete local source gate
+  passed, but the candidate is not native-accepted until committed source is
+  built and exercised on Windows; no native, live, production, or release
+  result is claimed.
 - The intermediate 0.60.2 commit `8a52d2a21da1d5d0f69540864a6162d2b30375bc`
   repaired direct UI Automation activation for Save and Cancel. The 0.60.3
   follow-up exposed the editor text fields on semantic nodes tied to their real
@@ -843,11 +857,14 @@ Invoke dispatch and again passed the standard row. Narrator still left UI
 Automation focus on the PandaMUX window because GPUI already considered the
 output handle focused and elided the same-handle retry. Version 0.60.36 first
 focused the invoked control, making the delayed move to the output Log a real
-GPUI focus transition. Exact 0.60.36 passed the standard row, but the inactive
-PandaMUX window still could not publish a child as global UI Automation focus
-while Narrator retained foreground ownership. Version 0.60.37 explicitly
-activates the native window before the delayed child-focus move. P4-C3 stays
-open until an exact 0.60.37 or later Windows artifact passes successful launch,
+GPUI focus transition. Exact 0.60.36 passed the standard row, but UI Automation
+still reported the PandaMUX window. Exact 0.60.37 activated the native window
+and passed the same standard row, but the Narrator result was unchanged.
+Assisted diagnostics proved PandaMUX already owned the foreground window and
+had visibly entered output-reading mode, isolating the defect to accessibility
+focus publication. Version 0.60.38 uses GPUI's active-descendant pattern
+instead of moving real keyboard focus to the output child. P4-C3 stays open
+until an exact 0.60.38 or later Windows artifact passes successful launch,
 discovery, output, input, close, panel
 reopen, and the retained accessibility and scaling matrix.
 
@@ -1211,10 +1228,64 @@ was `Read output did not recover the terminal output Log from Narrator window
 focus; focused: PandaMUX`. The cleaned-up rejected result has SHA-256
 `4bf74e330dc9318934a349874e03ffe2ac4dcb9ff759ed64d531ecacd899a7fb`.
 The run stopped Narrator, the desktop, server, and fixture and removed the
-runtime credential. Source review found that making the child-focus request a
-distinct GPUI transition was insufficient while Narrator retained foreground
-ownership of the native window. Version 0.60.37 explicitly activates the
-PandaMUX window before the delayed move to the output Log.
+runtime credential. At that point native foreground ownership was still only a
+hypothesis, so version 0.60.37 explicitly activated PandaMUX before the delayed
+move. The later 0.60.37 diagnostics below disproved that hypothesis.
+
+### Rejected 0.60.37 native repair attempt
+
+Clean commit `f21bc2da89ce25975cf422f16906170729c28778`, version `0.60.37`,
+was built by `COLT-SHINE\B_StL` from isolated source under
+`C:\ProgramData\PandaMUX\acceptance\phase4-f21bc2d-0.60.37-p4-c3-repair-build-run2`.
+The source was clean before and after the build and exact native routing test.
+The 5,017-byte incremental transfer bundle required exact 0.60.36 commit
+`6fd5d027945312a7ba066e9fc42e5bd37dc05fe5` and had SHA-256
+`c25b99cf8173202c2556a40e1f19995f3774356990446990dacab5d48eebc30f`.
+An earlier preserved preparation root failed before Cargo because the bundle
+advertised its candidate as `HEAD` while the inherited wrapper fetched a branch
+ref. Run 2 fetched `HEAD`, then still checked out and verified the full exact
+commit before building.
+
+| Artifact | Bytes | SHA-256 |
+|-|-:|-|
+| Windows MSVC `pandamux.exe` | 27,960,832 | `817120f4a26761f59d80c436b71124a40a2aad2c72e8cc292646385983e01e4f` |
+| Windows MSVC `pandamux-server.exe` | 14,324,736 | `a43a5af97d8fdfd8c717767c3f28515e7d4789fbcf2991f315e797b766935c13` |
+| Windows MSVC `pandamux-cli.exe` | 1,407,488 | `a308529b6579cd13f498fa82a1e30291567f19c5ee40cd22a8ecb4956a37a2d4` |
+
+The exact build, fresh-profile headless check, limited-user authenticated Hub
+and CLI smoke, and mock-remote login-terminal lifecycle test passed. Their
+result files have SHA-256 values
+`a0a2646b01629a6dd582e9ded57a70add6a58f83b388cb7282e22bbb9f97c46e`,
+`80b70bf4ce18fa79c3effcdb0ca87152c46493a686e28820d1e115ba9b4254c7`,
+`5a564c303b12b1f9e3bde54997bb6d45d837e81d52a35fd8eaa8ed30df047165`,
+and `c1de568f4bc06c10406935a7e91c672912a2fdc5d0d39bbccbf73370de2c7dcb`.
+
+The native lab root was
+`C:\ProgramData\PandaMUX\acceptance\phase4-f21bc2d-0.60.37-p4-c3-repair-lab`.
+The standard 100 percent successful-login row passed at SHA-256
+`a22bc032fd4ac6d28ff22f35a8df9d0e32b3f41f4e0fd736941308a6003d489d`.
+It verified exact artifact identity, confirmation placement, automatic
+Terminal discovery, visible and invokable focus controls, F6 in both
+directions, READY and ECHO output, retained output after closing and reopening
+Surfaces, keyboard close, fixture shutdown, and complete cleanup.
+
+The genuine Narrator row invoked the visible `Read output` control but UI
+Automation still reported `PandaMUX`, so no Narrator read command or Speech
+Recap capture was credited. The cleaned-up rejected result has SHA-256
+`98f9ecc46421dd7cee472f9420956408525df2497f2e43d25b66350a204297cb`.
+Two explicitly non-acceptance diagnostic runs then isolated the failure. Their
+results have SHA-256 values
+`22f41ab7d4eda6f8bb8d5866b2626fa1d1a0e467628ba5ffd44c98f60853122e`
+and `a01723466cd9de5cb08551fd8541721cae84eb51816fe33281171446223ff9a3`.
+Before and after Invoke, PandaMUX's HWND was already foreground and matched the
+desktop process. External `SetForegroundWindow`, direct UI Automation Focus,
+delivered F6, and a real pointer click did not change the global UI Automation
+root. Crucially, the post-action screenshot visibly said `Reading terminal
+output` and painted the output focus border. That proves the direct AccessKit
+handler ran and GPUI changed its internal focus state; native foreground
+activation addressed the wrong layer. Version 0.60.38 instead retains real
+keyboard focus on the terminal container and publishes the output Log as its
+active descendant, the framework-supported composite focus pattern.
 
 ### Build and limited-user startup
 
@@ -1434,6 +1505,14 @@ failures and the same two intentional real-shell ignores, the Rust boundary
 guard, and the Claude wiring guard. It makes no 0.60.23 executable, native,
 live, production, or release claim.
 
+Exact 0.60.37 commit `f21bc2d` passed formatting, strict all-target workspace
+Clippy, 436 workspace tests with zero failures and two intentional real-shell
+ignores, the Rust boundary guard, the Claude wiring guard, desktop headless
+verification, and diff hygiene before its native build. The current 0.60.38
+source candidate passed the same gate with 437 workspace tests, including the
+new terminal-mode persistence and reset coverage. These local results do not
+substitute for the exact native build or Narrator row.
+
 `cargo-deny` 0.20.2 could not parse the old `deny.toml` syntax. The follow-up
 configuration change removed deprecated keys and scoped seven existing
 non-allowlisted transitive licenses to their exact crates and versions. With
@@ -1451,7 +1530,7 @@ especially for the scoped MPL-2.0 exceptions.
 
 Phase 4 cannot yet be marked exited under `tasks/plan-rewrite.md`:
 
-1. Build an exact 0.60.25 or later native Windows candidate and rerun the
+1. Build an exact 0.60.38 or later native Windows candidate and rerun the
    expanded P4-C3 successful-login row: confirmation placement, automatic
    Terminal discovery and focus from Settings, retained output, keyboard input,
    explicit close, panel close and reopen, remote terminal ownership, 100 and

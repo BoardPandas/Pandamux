@@ -118,7 +118,6 @@ pub struct AppView {
     usage_subscription_name_input: Entity<InputState>,
     usage_account_label_input: Entity<InputState>,
     terminal_focus: FocusHandle,
-    terminal_output_focus: FocusHandle,
     terminal_poll_generation: u64,
     focus_terminal_on_render: bool,
 }
@@ -164,9 +163,8 @@ impl AppView {
         let settings_scroll_handle = ScrollHandle::new();
         let usage_table_focus = cx.focus_handle().tab_stop(true);
         let terminal_focus = cx.focus_handle().tab_stop(true);
-        let terminal_output_focus = cx.focus_handle().tab_stop(true);
-        // Narrator can leave the native window active without a GPUI child focus path.
-        // Intercept before focus-path dispatch so F6 remains reachable in that state.
+        // Intercept before focus-path dispatch so F6 can change the terminal's
+        // active-descendant mode even when UI Automation reports the window root.
         let app_window = window.window_handle();
         let app_view = cx.weak_entity();
         cx.intercept_keystrokes(move |event, window, cx| {
@@ -182,20 +180,15 @@ impl AppView {
                     return;
                 }
 
-                match terminal_focus_target(
+                if let Some(target) = terminal_focus_target(
                     &event.keystroke,
-                    this.terminal_focus.is_focused(window),
-                    this.terminal_output_focus.is_focused(window),
+                    this.surfaces_panel.terminal_output_mode,
                 ) {
-                    Some(TerminalFocusTarget::Input) => {
-                        window.focus(&this.terminal_focus, cx);
-                        cx.stop_propagation();
-                    }
-                    Some(TerminalFocusTarget::Output) => {
-                        window.focus(&this.terminal_output_focus, cx);
-                        cx.stop_propagation();
-                    }
-                    None => {}
+                    this.surfaces_panel.terminal_output_mode =
+                        target == TerminalFocusTarget::Output;
+                    window.focus(&this.terminal_focus, cx);
+                    cx.notify();
+                    cx.stop_propagation();
                 }
             });
         })
@@ -243,7 +236,6 @@ impl AppView {
             usage_subscription_name_input,
             usage_account_label_input,
             terminal_focus,
-            terminal_output_focus,
             terminal_poll_generation: 0,
             focus_terminal_on_render: false,
         };
@@ -855,6 +847,17 @@ impl AppView {
         } else {
             self.terminal_poll_generation = self.terminal_poll_generation.wrapping_add(1);
         }
+        cx.notify();
+    }
+
+    fn set_terminal_focus_target(
+        &mut self,
+        target: TerminalFocusTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.surfaces_panel.terminal_output_mode = target == TerminalFocusTarget::Output;
+        window.focus(&self.terminal_focus, cx);
         cx.notify();
     }
 
@@ -2123,6 +2126,7 @@ impl Render for AppView {
             && self.surfaces_panel.active_tab == Some(SurfaceTab::Terminal)
         {
             self.focus_terminal_on_render = false;
+            self.surfaces_panel.terminal_output_mode = false;
             let terminal_focus = self.terminal_focus.clone();
             window.defer(cx, move |window, cx| {
                 window.focus(&terminal_focus, cx);
@@ -2279,7 +2283,9 @@ impl Render for AppView {
                                 app.select_surface_file(file, cx);
                             },
                             &self.terminal_focus,
-                            &self.terminal_output_focus,
+                            |app, target, window, cx| {
+                                app.set_terminal_focus_target(target, window, cx);
+                            },
                             |app, input, _win, cx| {
                                 app.send_surface_terminal_input(input, cx);
                             },

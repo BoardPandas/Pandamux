@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Duration};
+use std::collections::HashMap;
 
 use gpui_kit::base::{Button as AccessibleButton, StyledExt as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -128,6 +128,7 @@ pub struct SurfacesPanelState {
     pub linked_prs: Vec<PullRequestSummary>,
     pub terminal: Option<TerminalViewState>,
     pub terminals_by_thread: HashMap<String, TerminalViewState>,
+    pub terminal_output_mode: bool,
 }
 
 impl Default for SurfacesPanelState {
@@ -152,14 +153,29 @@ impl SurfacesPanelState {
             linked_prs: Vec::new(),
             terminal: None,
             terminals_by_thread: HashMap::new(),
+            terminal_output_mode: false,
         }
     }
 
     pub fn set_terminal(&mut self, terminal: TerminalViewState) {
+        if self
+            .terminal
+            .as_ref()
+            .is_none_or(|current| current.terminal_id != terminal.terminal_id)
+        {
+            self.terminal_output_mode = false;
+        }
         self.terminal = Some(terminal);
     }
 
     pub fn set_terminal_for_thread(&mut self, thread_id: &str, terminal: TerminalViewState) {
+        if self
+            .terminal
+            .as_ref()
+            .is_none_or(|current| current.terminal_id != terminal.terminal_id)
+        {
+            self.terminal_output_mode = false;
+        }
         self.terminals_by_thread
             .insert(thread_id.to_string(), terminal.clone());
         self.terminal = Some(terminal);
@@ -184,6 +200,7 @@ impl SurfacesPanelState {
             .is_some_and(|terminal| terminal.terminal_id == terminal_id)
         {
             self.terminal = None;
+            self.terminal_output_mode = false;
         }
         self.terminals_by_thread
             .retain(|_, terminal| terminal.terminal_id != terminal_id);
@@ -228,7 +245,9 @@ pub fn render_surfaces_panel<V: 'static>(
     on_select_tab: impl Fn(&mut V, Option<SurfaceTab>, &mut Window, &mut Context<V>) + 'static + Copy,
     on_select_file: impl Fn(&mut V, String, &mut Window, &mut Context<V>) + 'static + Copy,
     terminal_focus: &FocusHandle,
-    terminal_output_focus: &FocusHandle,
+    on_terminal_focus: impl Fn(&mut V, TerminalFocusTarget, &mut Window, &mut Context<V>)
+    + 'static
+    + Copy,
     on_terminal_input: impl Fn(&mut V, String, &mut Window, &mut Context<V>) + 'static + Copy,
     on_close_terminal: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
     window: &mut Window,
@@ -391,7 +410,8 @@ pub fn render_surfaces_panel<V: 'static>(
                         state.terminal.as_ref(),
                         theme,
                         terminal_focus,
-                        terminal_output_focus,
+                        state.terminal_output_mode,
+                        on_terminal_focus,
                         on_terminal_input,
                         on_close_terminal,
                         window,
@@ -1210,15 +1230,14 @@ fn render_linked_prs_surface(prs: &[PullRequestSummary], theme: &Theme) -> AnyEl
 
 /// Terminal surface (local or remote).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum TerminalFocusTarget {
+pub enum TerminalFocusTarget {
     Input,
     Output,
 }
 
 pub(crate) fn terminal_focus_target(
     keystroke: &Keystroke,
-    input_focused: bool,
-    output_focused: bool,
+    output_mode: bool,
 ) -> Option<TerminalFocusTarget> {
     let modifiers = keystroke.modifiers;
     let key = keystroke.key.to_ascii_lowercase();
@@ -1230,10 +1249,7 @@ pub(crate) fn terminal_focus_target(
         && !modifiers.function;
 
     if bare_f6 {
-        if input_focused {
-            return Some(TerminalFocusTarget::Output);
-        }
-        if output_focused {
+        if output_mode {
             return Some(TerminalFocusTarget::Input);
         }
         return Some(TerminalFocusTarget::Output);
@@ -1245,7 +1261,7 @@ pub(crate) fn terminal_focus_target(
         && !modifiers.alt
         && !modifiers.platform
         && !modifiers.function;
-    if shift_tab && output_focused {
+    if shift_tab && output_mode {
         return Some(TerminalFocusTarget::Input);
     }
 
@@ -1256,21 +1272,17 @@ fn terminal_focus_button<V: 'static>(
     id: &'static str,
     label: &'static str,
     accessibility_label: String,
-    target: FocusHandle,
+    target: TerminalFocusTarget,
+    on_activate: impl Fn(&mut V, TerminalFocusTarget, &mut Window, &mut Context<V>) + 'static + Copy,
     window: &mut Window,
     cx: &mut Context<V>,
 ) -> AnyElement {
     // gpui-component's styled Button exposes UIA Invoke through synthesized
     // pointer input. Narrator can suppress that fallback, so these focus-mode
     // controls use the base button and a direct AccessKit Click listener. The
-    // accessibility path restores the native PandaMUX window, first focuses
-    // the invoked control, then moves to the requested terminal target after
-    // the Windows accessibility adapter has finished dispatching Invoke. The
-    // native activation is required because Narrator owns foreground focus
-    // while invoking the control; GPUI child focus alone cannot make that
-    // inactive window's child become UI Automation's focused element. The
-    // intermediate control focus also prevents the delayed target request from
-    // being elided when GPUI still considers that target focused.
+    // accessibility path updates the application-owned terminal focus mode
+    // directly. The terminal container retains real keyboard focus, while the
+    // output Log is published through GPUI's active-descendant pattern.
     let component_theme = cx.theme();
     let background: Background = component_theme.transparent.into();
     let hover_background: Background = if component_theme.mode.is_dark() {
@@ -1287,8 +1299,8 @@ fn terminal_focus_button<V: 'static>(
         .read(cx)
         .clone();
     let is_focused = focus_handle.is_focused(window);
-    let pointer_target = target.clone();
-    let accessibility_recovery_focus = focus_handle.clone();
+    let pointer_view = cx.weak_entity();
+    let accessibility_view = pointer_view.clone();
 
     AccessibleButton::new(id)
         .accessibility_label(accessibility_label)
@@ -1305,24 +1317,14 @@ fn terminal_focus_button<V: 'static>(
         .active(move |style| style.bg(active_background).text_color(hover_foreground))
         .track_focus(&focus_handle)
         .on_click(move |_event, window, cx| {
-            let target = pointer_target.clone();
-            window.defer(cx, move |window, cx| {
-                window.focus(&target, cx);
+            let _ = pointer_view.update(cx, |this, cx| {
+                on_activate(this, target, window, cx);
             });
         })
         .on_a11y_action(AccessibleAction::Click, move |_data, window, cx| {
-            window.activate_window();
-            window.focus(&accessibility_recovery_focus, cx);
-            let delayed_target = target.clone();
-            window
-                .spawn(cx, async move |cx| {
-                    smol::Timer::after(Duration::from_millis(100)).await;
-                    cx.update(move |window, cx| {
-                        window.focus(&delayed_target, cx);
-                    })
-                    .ok();
-                })
-                .detach();
+            let _ = accessibility_view.update(cx, |this, cx| {
+                on_activate(this, target, window, cx);
+            });
         })
         .child(label)
         .when(is_focused, |button| button.focus_ring_style(window, cx))
@@ -1334,19 +1336,21 @@ fn render_terminal_surface<V: 'static>(
     terminal: Option<&TerminalViewState>,
     theme: &Theme,
     focus_handle: &FocusHandle,
-    output_focus: &FocusHandle,
+    output_mode: bool,
+    on_terminal_focus: impl Fn(&mut V, TerminalFocusTarget, &mut Window, &mut Context<V>)
+    + 'static
+    + Copy,
     on_terminal_input: impl Fn(&mut V, String, &mut Window, &mut Context<V>) + 'static + Copy,
     on_close_terminal: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
     window: &mut Window,
     cx: &mut Context<V>,
 ) -> AnyElement {
     if let Some(term) = terminal {
-        let focus_for_pointer = focus_handle.clone();
         let focus_for_keyboard = focus_handle.clone();
-        let is_focused = focus_handle.is_focused(window);
-        let output_is_focused = output_focus.is_focused(window);
-        let input_focus_for_navigation = focus_handle.clone();
-        let output_focus_for_navigation = output_focus.clone();
+        let output_focus_view = cx.weak_entity();
+        let terminal_is_focused = focus_handle.is_focused(window);
+        let input_is_focused = terminal_is_focused && !output_mode;
+        let output_is_focused = terminal_is_focused && output_mode;
         div()
             .id("interactive-terminal-surface")
             .size_full()
@@ -1359,33 +1363,26 @@ fn render_terminal_surface<V: 'static>(
             .aria_description(term.accessible_output())
             .track_focus(focus_handle)
             .border_1()
-            .border_color(if is_focused {
+            .border_color(if terminal_is_focused {
                 theme.accent.color()
             } else {
                 rgba(0xffffff14)
             })
             .rounded(Radii::ROW)
-            .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
-                window.focus(&focus_for_pointer, cx);
-            })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _event, window, cx| {
+                    on_terminal_focus(this, TerminalFocusTarget::Input, window, cx);
+                }),
+            )
             .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
-                let input_focused = focus_for_keyboard.is_focused(window);
-                let output_focused = output_focus_for_navigation.is_focused(window);
-                match terminal_focus_target(&event.keystroke, input_focused, output_focused) {
-                    Some(TerminalFocusTarget::Input) => {
-                        window.focus(&input_focus_for_navigation, cx);
+                if let Some(target) = terminal_focus_target(&event.keystroke, output_mode) {
+                    on_terminal_focus(this, target, window, cx);
                         cx.stop_propagation();
                         return;
-                    }
-                    Some(TerminalFocusTarget::Output) => {
-                        window.focus(&output_focus_for_navigation, cx);
-                        cx.stop_propagation();
-                        return;
-                    }
-                    None => {}
                 }
 
-                if !input_focused {
+                if output_mode || !focus_for_keyboard.is_focused(window) {
                     return;
                 }
                 if let Some(input) =
@@ -1406,14 +1403,14 @@ fn render_terminal_surface<V: 'static>(
                     .child(
                         div()
                             .text_size(Typography::META_SIZE)
-                            .text_color(if is_focused || output_is_focused {
+                            .text_color(if terminal_is_focused {
                                 theme.accent.color()
                             } else {
                                 theme.chrome.text_t3
                             })
-                            .child(if output_is_focused {
+                            .child(if output_mode {
                                 "Reading terminal output. Choose Type here to return to input."
-                            } else if is_focused {
+                            } else if input_is_focused {
                                 "Typing in terminal. Choose Read output for screen readers."
                             } else {
                                 "Choose Type here or Read output. F6 switches modes."
@@ -1428,7 +1425,8 @@ fn render_terminal_surface<V: 'static>(
                                 "focus-active-terminal-input",
                                 "Type here",
                                 format!("Focus terminal input {}", term.title),
-                                focus_handle.clone(),
+                                TerminalFocusTarget::Input,
+                                on_terminal_focus,
                                 window,
                                 cx,
                             ))
@@ -1436,7 +1434,8 @@ fn render_terminal_surface<V: 'static>(
                                 "focus-active-terminal-output",
                                 "Read output",
                                 format!("Focus terminal output {}", term.title),
-                                output_focus.clone(),
+                                TerminalFocusTarget::Output,
+                                on_terminal_focus,
                                 window,
                                 cx,
                             ))
@@ -1463,8 +1462,17 @@ fn render_terminal_surface<V: 'static>(
                     .child(render_terminal_view(
                         term,
                         theme,
-                        output_focus,
                         output_is_focused,
+                        move |_data, window, cx| {
+                            let _ = output_focus_view.update(cx, |this, cx| {
+                                on_terminal_focus(
+                                    this,
+                                    TerminalFocusTarget::Output,
+                                    window,
+                                    cx,
+                                );
+                            });
+                        },
                     )),
             )
             .into_any_element()
@@ -1640,24 +1648,39 @@ mod tests {
     }
 
     #[test]
+    fn terminal_output_mode_survives_refreshes_and_resets_for_a_new_terminal() {
+        let mut state = SurfacesPanelState::new();
+        let mut current = TerminalViewState::new("term-current", ".", 24, 80);
+        state.set_terminal(current.clone());
+        state.terminal_output_mode = true;
+
+        current.feed_bytes(b"refreshed", 9, false);
+        state.set_terminal(current);
+        assert!(state.terminal_output_mode);
+
+        state.set_terminal(TerminalViewState::new("term-next", ".", 24, 80));
+        assert!(!state.terminal_output_mode);
+
+        state.terminal_output_mode = true;
+        state.clear_terminal("term-next");
+        assert!(!state.terminal_output_mode);
+    }
+
+    #[test]
     fn terminal_focus_shortcuts_switch_between_input_and_output() {
         let f6 = Keystroke::parse("f6").expect("F6 key");
         assert_eq!(
-            terminal_focus_target(&f6, true, false),
+            terminal_focus_target(&f6, false),
             Some(TerminalFocusTarget::Output)
         );
         assert_eq!(
-            terminal_focus_target(&f6, false, true),
+            terminal_focus_target(&f6, true),
             Some(TerminalFocusTarget::Input)
-        );
-        assert_eq!(
-            terminal_focus_target(&f6, false, false),
-            Some(TerminalFocusTarget::Output)
         );
 
         let shift_tab = Keystroke::parse("shift-tab").expect("Shift Tab");
         assert_eq!(
-            terminal_focus_target(&shift_tab, false, true),
+            terminal_focus_target(&shift_tab, true),
             Some(TerminalFocusTarget::Input)
         );
     }
@@ -1665,13 +1688,13 @@ mod tests {
     #[test]
     fn terminal_focus_shortcuts_preserve_pty_keys() {
         let tab = Keystroke::parse("tab").expect("Tab key");
-        assert_eq!(terminal_focus_target(&tab, true, false), None);
+        assert_eq!(terminal_focus_target(&tab, false), None);
         assert_eq!(
             terminal_input_for_keystroke(&tab, false).as_deref(),
             Some("\t")
         );
 
         let control_f6 = Keystroke::parse("ctrl-f6").expect("Control F6");
-        assert_eq!(terminal_focus_target(&control_f6, true, false), None);
+        assert_eq!(terminal_focus_target(&control_f6, false), None);
     }
 }

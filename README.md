@@ -83,10 +83,12 @@ R0 development gate:
   same-handle request while UI Automation focus remained on the PandaMUX
   window. Exact 0.60.36 commit `6fd5d02` made that move a distinct GPUI focus
   transition and passed the same native build, smoke, remote lifecycle, and
-  standard row, but child focus still could not escape Narrator's foreground
-  ownership. The 0.60.37 source candidate explicitly activates the native
-  PandaMUX window before moving to the requested terminal target and still
-  requires exact native Windows acceptance.
+  standard row, but UI Automation still reported the PandaMUX window. Exact
+  0.60.37 commit `f21bc2d` activated PandaMUX and passed the same gates, but its
+  Narrator result was unchanged. Diagnostics proved PandaMUX already owned the
+  foreground window and had visibly entered output-reading mode. The 0.60.38
+  source candidate instead reports the output Log through GPUI's supported
+  active-descendant pattern and still requires exact native Windows acceptance.
   Real external quota exhaustion, real post-side-effect interruption, and the
   deferred physical laptop checks keep the Phase 4 exit matrix open.
 

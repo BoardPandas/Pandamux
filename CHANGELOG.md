@@ -10,20 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Made visible Terminal output predictably reachable by assistive technology.**
   Terminal surfaces publish their bounded visible grid as a semantic log with
-  its own keyboard focus stop and visible focus border. The Terminal header now
-  exposes explicit `Type here` and `Read output` buttons, so assistive
-  technology can move focus without depending on application shortcuts being
-  passed through. Those controls use direct AccessKit Click handlers instead of
-  GPUI's synthesized-pointer fallback, which Narrator can suppress. Direct
-  accessibility activation first restores the native PandaMUX window from
-  Narrator, focuses the invoked control, then moves to the requested terminal
-  target on the application thread after Windows UI Automation completes its
-  Invoke bookkeeping. Native activation makes the child eligible for global UI
-  Automation focus; the intermediate focus makes the delayed move observable
-  even when GPUI still considers the terminal target focused. Pointer activation
-  remains deferred until its click callback finishes. F6 remains a
-  keyboard fast path between live terminal input and the read-only output log,
-  while Shift Tab returns from the log to input.
+  a visible focus border. The Terminal header exposes explicit `Type here` and
+  `Read output` buttons, so assistive technology can select a mode without
+  depending on application shortcuts being passed through. Those controls use
+  direct AccessKit Click handlers instead of GPUI's synthesized-pointer
+  fallback, which Narrator can suppress. PandaMUX now keeps real keyboard focus
+  on the interactive terminal container and publishes the output Log as that
+  container's active descendant while read mode is selected. This matches
+  GPUI's supported composite-widget focus pattern and avoids trying to move
+  real keyboard focus to a child while Windows UI Automation reports the
+  application root. F6 remains a keyboard fast path between live terminal
+  input and the read-only output Log, while Shift Tab returns from the Log to
+  input. Switching to another terminal resets the mode to input; ordinary
+  terminal refreshes preserve the selected mode.
   An application-level keystroke interceptor handles delivered F6 input before
   focus-path dispatch. Ordinary Tab remains PTY input for shell completion.
   Visible and accessible instructions report the active focus mode and its
