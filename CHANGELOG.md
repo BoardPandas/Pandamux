@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Changed
+
+- **Closed the P4-C3 native Windows acceptance gate on exact 0.60.41.** Clean
+  commit `c6a20ff4f768747d0dadd59b88b40d3e20f7674d` passed the complete local
+  source gate, clean limited-user MSVC build, host smoke and remote lifecycle,
+  controlled successful-login interaction at 100 and 200 percent scaling,
+  High Contrast, disabled animations, visual inspection, genuine Windows
+  Narrator traversal, and the full local plus independent-peer named-pipe
+  security matrix on one desktop, server, and CLI artifact set. Narrator
+  directly copied the exact READY, ECHO, and reopened-output phrases while
+  three synchronized Speech Recap screenshot pairs remain as audit evidence.
+  The full guest evidence root and task definitions are hash-archived on the
+  host, and the shared Hyper-V lab is restored to its Off, disconnected,
+  eight-checkpoint baseline.
+  P4-C5 real external quota exhaustion and post-side-effect interruptions, the
+  final documentation archive, and the physical disconnect and sleep rows stay
+  open. Version 0.60.42 is this documentation-only accounting follow-up; it
+  makes no new executable, native, live, production, or release claim.
+
 ### Fixed
 
 - **Made the terminal Document's bounded text traversable by Narrator.** The

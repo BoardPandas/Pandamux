@@ -49,7 +49,7 @@ deterministic routing, monotonic side-effect boundaries, safe single retry,
 audited fresh-session continuation, and independent rollback switches. Exact
 0.60.15 passed accounting and cloned-store reconciliation. Exact 0.60.22 passed
 its executed native Windows interaction, accessibility, visual, and normal-user
-IPC rows, but P4-C3 is reopened because successful provider-login terminal
+IPC rows, but P4-C3 was reopened because successful provider-login terminal
 discovery and interaction were omitted and then failed in manual use. Exact
 0.60.24 proved the repaired panel, terminal binding, and automatic focus
 natively, but PowerShell did not execute the injected command because ConPTY
@@ -106,15 +106,16 @@ the output as a focusable UI Automation Document, but genuine Narrator visited
 that Document without speaking its parent-only accessible name and then left
 PandaMUX. Exact 0.60.40 commit `d4c9dd8` retained the Document, passed its local
 gate, native build, and host gates, but failed the standard guest row because
-its label-only semantic child was absent from Windows UI Automation. The
-0.60.41 source candidate publishes the child value with a synthetic text run
-so UIA can expose TextPattern content. It still requires exact native Windows
-acceptance. Exact 0.60.17
+its label-only semantic child was absent from Windows UI Automation. Exact
+0.60.41 commit `c6a20ff` publishes the child value with a synthetic text
+run so UIA exposes TextPattern content. Its complete local, native,
+login-terminal, scaling, High Contrast, disabled-animation, genuine Narrator,
+visual, and named-pipe matrices passed, closing P4-C3. Exact 0.60.17
 partially passed P4-C5 with live scanner and Hub durability, conservative
-capacity and route decisions, and independent rollback controls. The reopened
-login-terminal row, real external quota exhaustion, real post-side-effect
-interruption, the final archive after those rows stabilize, and the deferred
-physical checks remain open. The complete current contract is in
+capacity and route decisions, and independent rollback controls. Real external
+quota exhaustion, real post-side-effect interruption, the final archive after
+those rows stabilize, and the deferred physical checks remain open. The
+complete current contract is in
 [`features/USAGE_OBSERVABILITY.md`](features/USAGE_OBSERVABILITY.md).
 
 The [Phase 4 live acceptance record](operations/PHASE4_ACCEPTANCE.md) holds hashes,

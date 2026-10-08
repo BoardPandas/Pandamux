@@ -1,8 +1,8 @@
 # PandaMUX Rewrite: Chat-First Agent Client with Remote Environments, Multi-Repo Fleet Orchestration, Agents, Schedules, Full MCP Settings Control, and Broadside Sharing
 
 Date: 2026-09-25 (Approved 2026-09-26; recovery rewrite 2026-09-28; Phase 4 closure rewrite 2026-10-06; accounting and native acceptance 2026-10-07)
-Status: **Phases 0 to 3 and Phase 4A through 4F implementation are recorded; P4-C1, P4-C2, and P4-C4 passed on exact 0.60.15, P4-C3 is reopened after an omitted successful-login terminal path failed on exact 0.60.22, and P4-C5 remains Partial, so native login-terminal retest, external failover, final documentation, and physical acceptance gates keep Phase 4 open**
-Baseline: The preserved original checkout remains PandaMUX v0.53.44 at `9511d0e22d44`; active recovery work is isolated on `codex/recovery-r0`, with exact 0.60.8 native UI evidence at `054bd3e941e394cd8ffcff62a8dc60faa9b7e1fe` and exact 0.60.15 accounting evidence at `3a77382`
+Status: **Phases 0 to 3 and Phase 4A through 4F implementation are recorded; P4-C1, P4-C2, and P4-C4 passed on exact 0.60.15, P4-C3 passed on exact 0.60.41, and P4-C5 remains Partial, so external failover, final documentation, and physical acceptance gates keep Phase 4 open**
+Baseline: The preserved original checkout remains PandaMUX v0.53.44 at `9511d0e22d44`; active recovery work is isolated on `codex/recovery-r0`, with exact 0.60.15 accounting evidence at `3a77382` and exact 0.60.41 native Windows evidence at `c6a20ff4f768747d0dadd59b88b40d3e20f7674d`
 
 Relationship to `tasks/plan-repo.md`: that file is the **historical** record of the Electron to native Rust rewrite (Phases 1 to 7, complete). This plan supersedes its product direction (terminal multiplexer) but keeps its engineering posture: backend-owned state, single writer, intent-in/delta-out, deliberate dependency pins, crate isolation, and tag-driven signed releases. Its Section 12 design tokens carry over where they still apply (Section 8). UI history: Iced is removed. An earlier draft of this plan chose Tauri 2 + React; the user replaced that with **GPUI + gpui-kit** (all Rust) on 2026-09-25, and Tauri 2 remains only as the documented fallback if the Phase 0 GPUI spike fails. `plan-repo.md` rejected GPUI for three reasons, each now handled explicitly: GPL contamination (zed#55470, still open; tracked as a license gate in S6 and Risks), "not built for external consumption" (gpui-kit publishes exact-pinned `gpui-pre` snapshots and ships in production in Longbridge Pro on Windows, macOS, and Linux), and weak accessibility. Phase 0 treated accessibility as exploratory; the rewritten Phase 4 and Phase 7 criteria make the defined v1 accessibility matrix release-gating.
 
@@ -212,12 +212,17 @@ Terminology used throughout:
   without speaking its parent-only accessible name and then left PandaMUX.
   Exact 0.60.40 commit `d4c9dd8` retained the Document, passed the local gate,
   native build, and host gates, but its label-only semantic child was absent
-  from the exact Windows UI Automation tree. The current workspace 0.60.41
-  source candidate supplies that child value with a synthetic text run so the
-  Document can expose TextPattern content. It is not native-accepted.
-- Phase 4 remains open on the P4-C3 login-terminal retest, the remaining live
-  P4-C5 failover rows, and the final documentation archive after those rows
-  stabilize. The re-scoped physical
+  from the exact Windows UI Automation tree. Exact 0.60.41 commit
+  `c6a20ff4f768747d0dadd59b88b40d3e20f7674d` supplied that child value with a
+  synthetic text run and passed the complete local gate, clean native build,
+  host smoke and remote lifecycle, controlled successful-login interaction at
+  100 and 200 percent, High Contrast, disabled animations, genuine Narrator
+  traversal with exact READY, ECHO, and reopened-output phrases, visual review,
+  and the complete local plus independent-peer named-pipe security matrix.
+  P4-C3 is Pass. Version 0.60.42 is the documentation-only accounting follow-up
+  and has no executable or native claim.
+- Phase 4 remains open on the remaining live P4-C5 failover rows and the final
+  documentation archive after those rows stabilize. The re-scoped physical
   laptop disconnect and sleep rows remain production-acceptance and release
   blockers.
 - Phase 5 implementation has not started. The next development work is the
@@ -2041,19 +2046,66 @@ gates, and standard successful-login interaction. Windows reported a focusable
 UI Automation Document, but Narrator reached it without speaking the
 parent-only accessible name and then left PandaMUX. Exact 0.60.40 retained that
 Document but failed because its label-only semantic child was absent from the
-Windows UI Automation tree. Version 0.60.41 provides the Label value plus a
-synthetic text run for TextPattern content. P4-C3 remains open until an exact
-native Windows artifact passes the expanded
-successful-login row and Narrator speaks the controlled output.
+Windows UI Automation tree.
 
-The retained host evidence root is
+Final result recorded 2026-10-07: **Pass** on exact commit
+`c6a20ff4f768747d0dadd59b88b40d3e20f7674d`, version `0.60.41`. The Label
+child now exposes the bounded terminal output as a value backed by a synthetic
+text run. One exact desktop, server, and CLI artifact set passed the complete
+local gate, clean limited-user MSVC build, host smoke, remote login lifecycle,
+controlled successful-login interaction at 100 and 200 percent scaling, High
+Contrast, disabled animations, visual inspection, genuine Windows Narrator,
+and the complete local plus independent-peer named-pipe security matrix.
+Narrator directly copied the exact READY, ECHO, and reopened-output phrases;
+three synchronized Speech Recap screenshot pairs remain as audit evidence.
+Direct UI Automation extraction of the XAML Speech Recap surface was not used
+as a gate because it exposed only a container and its viewport paged older
+lines nondeterministically. This corrects the observer without replacing the
+genuine screen-reader criterion.
+
+The accepted host build root is
+`C:\ProgramData\PandaMUX\acceptance\phase4-c6a20ff-0.60.41-p4-c3-text-ranges-build`;
+its build record has SHA-256
+`5ed4bf60e2da7d5bd07a222d7b4828997ba3194ff6088f2079dcda82c6a85c16`.
+The retained guest root is
+`C:\ProgramData\PandaMUX\acceptance\phase4-c6a20ff-0.60.41-p4-c3-text-ranges-lab`.
+The standard, Narrator, 200 percent, High Contrast, and animations-disabled
+result records have respective SHA-256 values
+`2da6a65114514b16056f0812ef7566fb584f3ba66130340edb98f0685a19797e`,
+`26cfd7011ecdd5d2a7b9f989e21ad39cd5d5cbe587df96fe84f28380e24c48f0`,
+`f3795f53746d72727e77c452d3cb6e665d025b2ae013c8ce44b8be2c564cce25`,
+`8fcc422012de9b380d8263bc94ae1be0d90ef302109b72bfeaa8eb68dcbb1d66`,
+and `aab4270a497fbf4bd3cb077e86bb779f5784b143b74bac19af298e596fc559bd`.
+The local pipe matrix, strict anti-squat repeat, and independent remote
+rejection have respective SHA-256 values
+`cd261f04758fafb2df97731846e02b98525621f25f499a9fee38e08226622424`,
+`c170b957f7e4b5f0cc086fe186e324771c526931386a50aa9ac9ebe4097beb43`,
+and `9c264e9c9ca6cc3586bd4bd7aa40f0cc7d4b255924c2bec2cec07cda8b3ed2af`.
+The full artifact hashes, row details, screenshots, and observer rationale are
+recorded in `docs/operations/PHASE4_ACCEPTANCE.md`.
+
+The full guest evidence root was archived on the host before lab restoration.
+Its 65,224,704-byte TAR has SHA-256
+`964291b96b306191f92439dada0f0c21a5389a6d32bdc028aa368c48c06f69e2`;
+its file and size manifest has SHA-256
+`49dcad9f291ee553cebf38922179c09d02e78142f0f45fd00492a18b3e1ef259`.
+All 86 host and 89 guest P4-C3 scheduled tasks were exported and unregistered.
+The temporary transfer account, share, mapped credential, and ingress folder
+were removed. The temporary checkpoint was restored and then deleted by exact
+ID. Final evidence at SHA-256
+`c141deaf69ed3ceff472864c276ba4794b55be4ed3c465f088faace795e12b66`
+records the VM Off and disconnected, Guest Service Interface disabled, default
+1920 by 1200 video, all eight original checkpoint IDs unchanged, and zero host
+acceptance tasks or PandaMUX processes.
+
+The historical 0.60.22 host evidence root is
 `C:\ProgramData\PandaMUX\acceptance\phase4-fee9e02-0.60.22-p4-c3`.
 Its original `p4-c3-acceptance-summary.json` has SHA-256
 `88cb877059ba08bc2cba1e2cc9903ab1e87bf20897b3cd7d34b11ae0a29c9ed2`.
 The 8,252-byte populated-row addendum has SHA-256
 `ed36c4221827d5377035dab393bd6ff4923dbef183b77087e1b9799a8933ebb6`.
 Together they support the rows recorded by the original matrix, but the omitted
-successful-login row keeps P4-C3 reopened.
+successful-login row means only the exact 0.60.41 result closes P4-C3.
 Rejected harness attempts remain preserved. They include a guest runtime-DLL
 staging miss, a deterministic-login-stub omission that reproduced on old and
 new binaries, a focus helper that restored rather than showed a maximized
@@ -2072,7 +2124,9 @@ follow-up did not start or edit the VM; both of its tasks were exported and
 removed, exact processes were zero, its runtime credential was absent, and the
 zero-row source profile remained unchanged. The documentation-only follow-up
 uses version `0.60.23`; it makes no 0.60.23 native result, push, deployment,
-activation, or release claim.
+activation, or release claim. Version `0.60.42` is the documentation-only
+accounting follow-up for the exact 0.60.41 Pass; it makes no 0.60.42 executable,
+native, live, production, push, deployment, activation, or release claim.
 
 ##### P4-C4: rerun defensible seven-day reconciliation
 

@@ -355,11 +355,13 @@ the output as a focusable UI Automation Document, but genuine Narrator visited
 that Document without speaking its parent-only accessible name and then left
 PandaMUX. Exact 0.60.40 commit `d4c9dd8` retained the Document, but its
 label-only semantic child was absent from the exact Windows UI Automation tree,
-so the standard guest row rejected it before Narrator. The 0.60.41 source
-candidate provides a Label value backed by a synthetic text run so the child
-and containing Document can expose TextPattern content. It still requires exact
-native Windows acceptance.
-That row, the open real external quota-exhaustion and post-side-effect
+so the standard guest row rejected it before Narrator. Exact 0.60.41 commit
+`c6a20ff4f768747d0dadd59b88b40d3e20f7674d` provides a Label value backed by a
+synthetic text run so the child and containing Document expose TextPattern
+content. Its complete local, native, login-terminal, scaling, High Contrast,
+disabled-animation, genuine Narrator, visual, and named-pipe matrices passed,
+closing P4-C3.
+The open real external quota-exhaustion and post-side-effect
 interruption rows, the deferred physical R0.5 laptop disconnect and sleep rows,
 the final archive after those results stabilize, and later release gates still
 block Phase 4 exit, production acceptance, and release. Exact results and

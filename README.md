@@ -41,7 +41,7 @@ R0 development gate:
   routing, or automatic failover. Exact 0.60.15 passed accounting and cloned-store
   reconciliation, exact 0.60.17 partially passed the P4-C5 durability and control
   matrix. Exact 0.60.22 also passed the current normal-user IPC matrix, but
-  P4-C3 is reopened because its successful provider-login launch path was not
+  P4-C3 was reopened because its successful provider-login launch path was not
   exercised and later left the Terminal surface undiscoverable and
   noninteractive. Exact 0.60.24 proved the repaired panel, terminal binding,
   and automatic focus natively, but PowerShell did not execute the injected
@@ -102,9 +102,12 @@ R0 development gate:
   0.60.40 commit `d4c9dd8` kept that Document and attempted a semantic Label
   child; its local gate, native build, and host gates passed, but the standard
   guest row proved the label-only child was absent from Windows UI Automation.
-  The 0.60.41 source candidate supplies the child value plus a synthetic text
-  run so the Document can expose TextPattern content. It still requires exact
-  native acceptance.
+  Exact 0.60.41 commit `c6a20ff` supplies the child value plus a synthetic text
+  run so the Document exposes TextPattern content. It passed the complete local
+  gate, clean native build, host gates, controlled login-terminal matrix at 100
+  and 200 percent, High Contrast, disabled animations, genuine Narrator with
+  exact READY, ECHO, and reopened-output phrases, visual review, and the full
+  named-pipe security matrix. P4-C3 is closed.
   Real external quota exhaustion, real post-side-effect interruption, and the
   deferred physical laptop checks keep the Phase 4 exit matrix open.
 

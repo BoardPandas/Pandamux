@@ -3,85 +3,20 @@
 Date: 2026-09-29
 Updated: 2026-10-07
 
-Status: **Accounting passed, P4-C3 native Windows acceptance is reopened,
-P4-C5 remains Partial, and Phase 4 live acceptance is incomplete.** Exact
-0.60.15 commit `3a77382` passed the P4-C1 implementation, P4-C2 local candidate,
-and P4-C4 cloned-store reconciliation gates. Exact 0.60.22 commit `fee9e02`
-passed every P4-C3 row that was executed, including limited-user interaction,
-accessibility, visual, and current normal-user IPC checks. P4-C3 was reopened
-after the omitted successful provider-login launch path left its Terminal
-surface undiscoverable and noninteractive during manual use. Exact 0.60.24
-commit `581113e` proved the repaired panel, terminal binding, and automatic
-focus natively, but PowerShell did not execute the injected login command
-because ConPTY received a line feed instead of carriage return. Exact 0.60.25
-proved command execution visually, then failed because painted Terminal output
-was absent from UI Automation. Exact 0.60.26 commit `b696aad` exposed bounded
-visible output as a semantic Log and passed the successful-login interaction,
-High Contrast, and disabled-animation rows. Its genuine Narrator Speech Recap
-did not announce READY or ECHO, so it is rejected for P4-C3. Version 0.60.27
-makes the output Log a dedicated keyboard focus stop. Its exact native build,
-smoke, remote routing, successful-login interaction, 200 percent scaling, High
-Contrast, and disabled-animation rows passed, but direct UI Automation focus
-did not reach the Log and the advertised Tab path remained PTY input. It is
-also rejected. Exact 0.60.28 commit `c0200a9` added an explicit F6 input/output
-focus toggle and passed native build, smoke, remote login lifecycle,
-successful-login interaction, 200 percent scaling, High Contrast, and
-disabled-animation rows. Narrator displaced focus to the PandaMUX window,
-where the terminal-scoped F6 handler could not run, so 0.60.28 is rejected.
-Exact 0.60.29 commit `2b3b806` passed native build, smoke, remote lifecycle,
-successful-login interaction, 200 percent scaling, High Contrast, and
-disabled-animation rows, but its root visual handler still had no GPUI focus
-path under Narrator and did not receive F6. Exact 0.60.30 commit `9dae237`
-passed native build, smoke, remote lifecycle, and standard successful-login
-interaction, but Narrator still consumed or withheld F6 before PandaMUX
-received it. Exact 0.60.31 commit `0394eb3` passed native build, smoke, remote
-lifecycle, and standard successful-login interaction. Its explicit controls
-were visible and invokable, but invoking `Read output` under Narrator left UI
-Automation focus on the PandaMUX window, so it is rejected. Exact 0.60.32
-commit `952b280` passed native build, smoke, remote lifecycle, and standard
-successful-login interaction, but direct UI Automation Invoke still left focus
-on the PandaMUX window because the styled control fell back to synthesized
-pointer input under Narrator. It is also rejected. Exact 0.60.33 commit
-`58452e7` passed native build, smoke, remote lifecycle, and standard
-successful-login interaction, but its direct AccessKit handler deferred the
-focus update and UI Automation Invoke still left focus on the PandaMUX window.
-It is rejected. Exact 0.60.34 commit `1f1df21` passed native build, smoke,
-remote lifecycle, and standard successful-login interaction, but Windows UI
-Automation still restored window-level focus after the synchronous
-accessibility callback. It is rejected. Exact 0.60.35 commit `b54f8e3` passed
-native build, smoke, remote lifecycle, and standard successful-login
-interaction, but its delayed retry requested the output handle that GPUI
-already considered focused. GPUI elided that retry while Windows UI Automation
-still reported the PandaMUX window, so 0.60.35 is rejected. Exact 0.60.36
-commit `6fd5d02` made the delayed move a distinct GPUI focus transition and
-passed native build, smoke, remote lifecycle, and standard interaction, but UI
-Automation still reported the PandaMUX window. It is rejected. Exact 0.60.37
-commit `f21bc2d` explicitly activated the native PandaMUX window and passed
-native build, smoke, remote lifecycle, and standard interaction, but Narrator
-still reported window-level focus. Instrumented diagnostics then proved that
-PandaMUX already owned the foreground window and had internally entered its
-visible output-reading state; native activation was not the missing condition.
-It is rejected. Exact 0.60.38 commit `d328ad8` then kept real keyboard focus on
-the terminal container and published the output Log through GPUI's supported
-active-descendant pattern. Its complete local gate, native build, host smoke,
-remote lifecycle, and standard successful-login interaction passed. Ordinary
-UI Automation honored the active descendant, but genuine Narrator did not speak
-READY. Instrumented follow-ups proved that PandaMUX retained native foreground,
-active, and keyboard focus while synchronized Narrator navigation reached the
-terminal header controls and skipped the semantic Log group. It is rejected.
-Exact 0.60.39 commit `8b7b880` changed that node to AccessKit's dedicated
-Terminal role and passed the complete local gate, native build, host gates, and
-standard successful-login interaction. Windows reported a focusable UI
-Automation Document, but genuine Narrator visited that Document without
-speaking its parent-only accessible name and then left PandaMUX. It is rejected.
-Exact 0.60.40 commit `d4c9dd8` retained the Document, passed its local gate,
-native build, and host gates, but failed the standard guest row because its
-label-only semantic child was absent from Windows UI Automation. The 0.60.41
-source candidate gives that child an AccessKit value backed by a synthetic text
-run so both the child and containing Document can expose TextPattern content.
-It has not passed exact native Windows acceptance.
-Exact
-0.60.17 commit `2f56a27` passed the scanner, Hub
+Status: **Accounting and P4-C3 native Windows acceptance passed, P4-C5 remains
+Partial, and Phase 4 live acceptance is incomplete.** Exact 0.60.15 commit
+`3a77382` passed the P4-C1 implementation, P4-C2 local candidate, and P4-C4
+cloned-store reconciliation gates. Exact 0.60.41 commit
+`c6a20ff4f768747d0dadd59b88b40d3e20f7674d` passed P4-C3 after the expanded
+successful-login path was added to the matrix. One exact desktop, server, and
+CLI artifact set passed clean limited-user build, host smoke, remote lifecycle,
+100 and 200 percent interaction, High Contrast, disabled animations, genuine
+Windows Narrator traversal, visual inspection, and the complete local plus
+independent-peer named-pipe security matrix. Narrator directly copied the exact
+READY, ECHO, and reopened-output phrases while synchronized Speech Recap
+screenshots remain as audit evidence. This supersedes the reopened 0.60.22 and
+rejected 0.60.24 through 0.60.40 candidates without erasing their diagnostic
+record. Exact 0.60.17 commit `2f56a27` passed the scanner, Hub
 synchronization, conservative capacity projection, route-explanation, and
 rollback-control portions of P4-C5. Real provider quota exhaustion and real
 interruptions after output or external side effects were not available, so
@@ -214,13 +149,15 @@ or release occurred.
   and remote lifecycle passed. The guest standard row confirmed the Document
   parent but found no `terminal-output-text` child, so the attempt is rejected
   before Narrator.
-- Current reopened P4-C3 repair source: workspace version `0.60.41` in the
-  isolated recovery worktree. It retains the Terminal/Document parent, gives
-  the Label child the bounded output as its value, and backs it with a synthetic
-  text run for UIA TextPattern. Its complete local source gate passed with 437
-  workspace tests and two intentional real-shell ignores, but it has not passed
-  exact native Windows acceptance; no native, live, production, or release
-  result is claimed.
+- Accepted P4-C3 repair source: clean commit
+  `c6a20ff4f768747d0dadd59b88b40d3e20f7674d`, version `0.60.41`. It retains
+  the Terminal/Document parent, gives the Label child the bounded output as its
+  value, and backs it with a synthetic text run for UIA TextPattern. Its
+  complete local source gate, exact native build, host gates, expanded guest
+  interaction and accessibility matrix, visual review, and named-pipe security
+  matrix passed. Workspace version `0.60.42` is the documentation-only
+  accounting follow-up; no 0.60.42 executable, native, live, production, or
+  release result is claimed.
 - The intermediate 0.60.2 commit `8a52d2a21da1d5d0f69540864a6162d2b30375bc`
   repaired direct UI Automation activation for Save and Cancel. The 0.60.3
   follow-up exposed the editor text fields on semantic nodes tied to their real
@@ -913,9 +850,10 @@ parent-only accessible name and then left PandaMUX. Exact 0.60.40 retained that
 Document, but the standard row rejected it because its label-only semantic
 child was absent from the Windows UI Automation tree. Version 0.60.41 gives the
 Label child a value backed by a synthetic text run so UIA can expose TextPattern
-content. P4-C3 stays open until an exact 0.60.41 or later Windows artifact
-passes successful launch, discovery, output, input, close, panel
-reopen, and the retained accessibility and scaling matrix.
+content. At that point P4-C3 stayed open pending an exact native rerun. The
+exact 0.60.41 artifact later passed successful launch, discovery, output,
+input, close, panel reopen, and the retained accessibility and scaling matrix
+as recorded below.
 
 ### Rejected 0.60.40 native repair attempt
 
@@ -1650,6 +1588,122 @@ The original checkout and retained Galahad acceptance database were not edited.
 No push, CI, signing, packaging, deployment, production activation, or release
 occurred.
 
+## Exact 0.60.41 P4-C3 native Windows acceptance
+
+P4-C3 is **Pass** on clean commit
+`c6a20ff4f768747d0dadd59b88b40d3e20f7674d`, version `0.60.41`. The retained
+host build root is
+`C:\ProgramData\PandaMUX\acceptance\phase4-c6a20ff-0.60.41-p4-c3-text-ranges-build`.
+The clean Windows build record has SHA-256
+`5ed4bf60e2da7d5bd07a222d7b4828997ba3194ff6088f2079dcda82c6a85c16`.
+Rust 1.98.1 produced this one artifact set:
+
+| Artifact | Bytes | SHA-256 |
+|-|-:|-|
+| `pandamux.exe` | 27,976,704 | `e58851c637b602cc4b33d8ea3b2620805d27c25627cbb09c89814c397930b6f7` |
+| `pandamux-server.exe` | 14,328,320 | `cfbf478ae1be98f667cd3d300247eba9c84648a1f465a020d1d8edf1fec17610` |
+| `pandamux-cli.exe` | 1,407,488 | `66f16a8201920c817da8d0a5f968fdab73f04423e91848a807b7bef459b50705` |
+
+The source tree was clean before and after the build. Host headless,
+limited-user, and remote-login lifecycle records passed at SHA-256 values
+`1cff727056392e9be09aa42dc143ed57b8115cc4ec8ff4e9b390fb87795163fd`,
+`678ba5154c6ea74459c369b880561719d7b0e5c2c0582dabab9a0fa34bb08279`,
+and `64b91b654d2db420f5021fbefc0b2a2e5f9425e6ef3fe0e3184797f223479616`.
+
+The guest evidence root is
+`C:\ProgramData\PandaMUX\acceptance\phase4-c6a20ff-0.60.41-p4-c3-text-ranges-lab`.
+Every accepted guest row used the artifact hashes above plus the same app-local
+MSVC runtime with SHA-256
+`d1f4225df2cd877dbf130d5668a021dce3f94118455ff5ec952061c30afc9ce7`.
+The controlled login command opened from Settings, kept the Surfaces panel
+available, focused the new Terminal automatically, exposed a UI Automation
+Document and Text child with TextPattern, presented READY, accepted keyboard
+input and presented ECHO, toggled between output reading and input with F6,
+closed by keyboard, and reopened the panel without losing the same terminal or
+its output.
+
+| Guest row | Result record SHA-256 | Verified conditions |
+|-|-|-|
+| Standard 100 percent | `2da6a65114514b16056f0812ef7566fb584f3ba66130340edb98f0685a19797e` | 96 DPI, High Contrast off, UI effects on, 495 pixel confirmation delta, interaction and cleanup |
+| Genuine Narrator | `26cfd7011ecdd5d2a7b9f989e21ad39cd5d5cbe587df96fe84f28380e24c48f0` | Exact READY, ECHO, and reopened-output phrases, Document and TextPattern, keyboard close and cleanup |
+| 200 percent | `f3795f53746d72727e77c452d3cb6e665d025b2ae013c8ce44b8be2c564cce25` | Actual 192 DPI at 2560 by 1440, 1,146 physical pixel confirmation delta, no clipped required action, interaction and cleanup |
+| High Contrast | `8fcc422012de9b380d8263bc94ae1be0d90ef302109b72bfeaa8eb68dcbb1d66` | High Contrast active, non-color state and focus cues, interaction and exact setting restoration |
+| Animations disabled | `aab4270a497fbf4bd3cb077e86bb779f5784b143b74bac19af298e596fc559bd` | UI effects and animations off, understandable focus and state changes, interaction and exact setting restoration |
+
+Narrator was synchronized to the terminal with Narrator+left bracket, traversed
+with Narrator+Right, and copied each exact last-spoken phrase with
+Narrator+Control+X. Three synchronized Speech Recap screenshot pairs provide
+the visual audit trail. Direct UI Automation extraction of Speech Recap was not
+used as a gate because Windows exposed only its `DesktopWindowXamlSource`
+container and the recap viewport paged older lines nondeterministically. The
+copied phrases are direct Narrator output, not a product-side accessibility
+substitute, so this corrects the observer without relaxing the screen-reader
+criterion.
+
+The 200 percent, High Contrast, and animations-disabled screenshots were
+visually inspected together in
+`visual-contact-sheet-login-matrix-run1.jpg`, SHA-256
+`113fe341ebcce7012b8c70f98e8a8275838a277462d4277ff5901a5f19f77679`.
+Confirmation remained visible without scrolling, terminal controls and output
+were reachable, High Contrast preserved explicit outlines and status cues, and
+no required action was clipped.
+
+The same server and CLI hashes passed the full normal-user named-pipe matrix.
+The local record has SHA-256
+`cd261f04758fafb2df97731846e02b98525621f25f499a9fee38e08226622424`
+and passed the SID-scoped name, legitimate ping, user-only DACL, unapproved
+client-image rejection, SYSTEM cross-user denial, runtime PID and image checks,
+fake-server rejection, first-instance anti-squatting, post-probe health, and
+cleanup. The strict anti-squat repeat passed at SHA-256
+`c170b957f7e4b5f0cc086fe186e324771c526931386a50aa9ac9ebe4097beb43`.
+The independent `SF-C4AD-VM` peer reached host TCP 445 but received Access
+Denied opening the pipe; its passing record has SHA-256
+`9c264e9c9ca6cc3586bd4bd7aa40f0cc7d4b255924c2bec2cec07cda8b3ed2af`.
+The legitimate host client still pinged afterward.
+
+### Preservation and final cleanup
+
+Before checkpoint restoration, the complete 104-file, 65,114,740-byte guest
+evidence root was stored as an uncompressed TAR in
+`C:\ProgramData\PandaMUX\acceptance\archives\phase4-c6a20ff-0.60.41-p4-c3-text-ranges-lab`.
+The 65,224,704-byte archive has SHA-256
+`964291b96b306191f92439dada0f0c21a5389a6d32bdc028aa368c48c06f69e2`.
+Its 27,958-byte file and size manifest has SHA-256
+`49dcad9f291ee553cebf38922179c09d02e78142f0f45fd00492a18b3e1ef259`.
+Source and destination archive hashes matched, the TAR listed successfully,
+and all standard, Narrator, 200 percent, High Contrast,
+animations-disabled, and contact-sheet artifacts were present. The archive
+verification record has SHA-256
+`01bcdffc8f8939172266e495b10e4fa6d44671683a951b9e3799269b3d0589cf`.
+
+All 86 host and 89 guest `PandaMUX-P4C3-*` scheduled-task definitions were
+exported before that namespace was unregistered. The host task index has
+SHA-256
+`9e81486780b7924b4a7f0d31c319c1520e20dac842e022c8b7ae0daaff15c0f7`;
+the 222,208-byte guest task archive has SHA-256
+`33265f82dfadc9c73c3a36c2f2c08dcab24d8f8754bdab05a0380c1066924ca4`.
+The temporary transfer share, local account, mapped credential, and ingress
+directory were removed after hash verification.
+
+The guest was gracefully stopped and restored to temporary checkpoint
+`codex-p4c3-b696aad-pre-20261007`, ID
+`6866fe0d-4d85-4f01-b261-4806d07fa27a`. One audit boot found zero restored
+P4-C3 tasks, zero PandaMUX or Narrator processes, no stored autologon password,
+no accepted-candidate root, 100 percent DPI, High Contrast off, and animations
+enabled. The VM was then shut down, its adapter disconnected, and only that
+temporary checkpoint was deleted. Final evidence records the VM Off and
+operating normally, Guest Service Interface disabled, default 1920 by 1200
+video, zero host acceptance tasks or PandaMUX processes, and all eight original
+checkpoint IDs unchanged. `lab-state-after-final-restoration.json` has
+SHA-256
+`c141deaf69ed3ceff472864c276ba4794b55be4ed3c465f088faace795e12b66`.
+
+This closes P4-C3. It does not close P4-C5, the final P4-C7 archive, or the
+deferred physical disconnect and sleep acceptance rows. No push, CI, signing,
+packaging, deployment, production activation, or release is claimed for
+0.60.41. Version 0.60.42 is documentation-only and has no executable or native
+acceptance claim.
+
 ## Static verification and remaining gates
 
 The source commit passed `cargo fmt --all --check`, strict workspace Clippy,
@@ -1696,9 +1750,19 @@ workspace Clippy, 437 workspace tests with zero failures and the same two
 intentional real-shell ignores, the Rust boundary guard, the Claude wiring
 guard, desktop headless verification, and diff hygiene before its rejected
 exact native run. Exact 0.60.40 passed that same complete local gate before its
-rejected exact native run. The current 0.60.41 source candidate also passed
-that gate with 437 tests and the same two intentional real-shell ignores. Local
-results do not substitute for the exact native build or Narrator row.
+rejected exact native run. Exact 0.60.41 passed formatting, strict all-target
+and all-feature workspace Clippy, 437 workspace tests with zero failures and
+the same two intentional real-shell ignores, the Rust boundary guard, the
+Claude wiring guard, desktop headless verification, and diff hygiene. Its exact
+native build, expanded guest matrix, genuine Narrator row, visual review, and
+complete named-pipe matrix then passed as recorded above.
+
+The documentation-only 0.60.42 workspace passed `cargo fmt --all --check`,
+strict all-target and all-feature workspace Clippy, 437 workspace tests with
+zero failures and two intentional Windows real-shell ignores, the Rust
+boundary guard, the Claude wiring guard, desktop headless verification,
+locked Cargo metadata, dependency policy, and diff hygiene. This verification
+does not create an executable or native acceptance claim for 0.60.42.
 
 `cargo-deny` 0.20.2 could not parse the old `deny.toml` syntax. The follow-up
 configuration change removed deprecated keys and scoped seven existing
@@ -1717,21 +1781,16 @@ especially for the scoped MPL-2.0 exceptions.
 
 Phase 4 cannot yet be marked exited under `tasks/plan-rewrite.md`:
 
-1. Build an exact 0.60.41 or later native Windows candidate and rerun the
-   expanded P4-C3 successful-login row: confirmation placement, automatic
-   Terminal discovery and focus from Settings, retained output, keyboard input,
-   explicit close, panel close and reopen, remote terminal ownership, 100 and
-   200 percent scaling, High Contrast, disabled animations, and Narrator.
-2. Close the remaining live P4-C5 failover rows with a real pre-output capacity
+1. Close the remaining live P4-C5 failover rows with a real pre-output capacity
    failure, real interruptions after text, file edit, command, network action,
    and approval, plus restart while real continuation or delivery work is
    pending. Exact 0.60.17 already passes scanner durability, reconnect and
    bounded backfill, capacity projection and route explanations, rollback
    controls, and the complete diagnostic fixture matrix.
-3. Complete the P4-C7 archive and maintained-document synchronization after the
+2. Complete the P4-C7 archive and maintained-document synchronization after the
    remaining P4-C5 and P4-C6 live rows stabilize. This record already reflects
-   the current P4-C3 Reopened and P4-C5 Partial results.
-4. Complete the explicitly deferred R0.5 30-minute physical laptop disconnect
+   the current P4-C3 Pass and P4-C5 Partial results.
+3. Complete the explicitly deferred R0.5 30-minute physical laptop disconnect
    and sleep checks before production acceptance or release.
 
 The acceptance VM is still a shared lab. Its existing network attachment and
