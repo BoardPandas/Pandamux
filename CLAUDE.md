@@ -61,15 +61,15 @@ real `claude-default` plus
 `claude-3-7-sonnet-latest`; exactly one disposable HTTPS request committed
 before the full provider process tree was killed, and restart did not replay
 the request or invent a terminal result. The endpoint was revoked and the
-isolated credential was restored during verified cleanup. A subsequent exact
-0.60.52 capacity diagnostic is retained and rejected: Codex remained
-serviceable, completed its requested turn, and emitted no capacity failure or
-failover. The diagnostic exposed a PandaMUX projection defect that treated a
-reported 100 percent window as a hard block despite the backend permitting
-ordinary usage and reporting available credits. Version 0.60.55 now uses the
-backend serviceability decision and structured terminal Codex errors, while
-allowing the app server to own errors it will retry. Exact live proof of this
-repair remains pending, and real provider capacity exhaustion is still open.
+isolated credential was restored during verified cleanup. Subsequent capacity
+diagnostics are retained and rejected: Codex remained serviceable, completed
+the requested turns, and emitted no capacity failure or failover. They exposed
+first a false hard limit from a 100 percent window, then an overbroad reading of
+`ordinaryUsageAllowed=false` while paid credits remained available. Version
+0.60.56 treats included usage and credits as separate serviceability paths and
+handles structured terminal Codex errors while allowing the app server to own
+errors it will retry. Exact live proof of this repair remains pending, and real
+provider capacity exhaustion is still open.
 A supporting Hyper-V
 rehearsal on exact 0.60.43 later passed a real
 30-minute provider-network interruption and full-screen terminal
@@ -81,7 +81,7 @@ conservative capacity projections and route explanations, and independent
 rollback controls. Real pre-output provider capacity exhaustion remains open.
 The exact results are recorded in
 [`docs/operations/PHASE4_ACCEPTANCE.md`](docs/operations/PHASE4_ACCEPTANCE.md).
-The pending exact 0.60.55 live repair proof, remaining capacity-failover, final
+The pending exact 0.60.56 live repair proof, remaining capacity-failover, final
 documentation archive, and physical rows keep Phase 4 open.
 
 Exact 0.60.38 commit `d328ad8` supersedes the preceding source-candidate note:

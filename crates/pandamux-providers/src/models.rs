@@ -328,30 +328,67 @@ pub(crate) fn message_is_capacity_exhaustion(message: &str) -> bool {
     .any(|needle| message.contains(needle))
 }
 
-fn details_indicate_capacity_exhaustion(details: &serde_json::Value) -> bool {
-    if details
-        .get("ordinaryUsageAllowed")
-        .and_then(serde_json::Value::as_bool)
-        == Some(true)
-    {
+pub(crate) fn rate_limit_snapshot_reports_hard_block(
+    limits: &serde_json::Value,
+    ordinary_usage_allowed: Option<bool>,
+) -> bool {
+    if ordinary_usage_allowed == Some(true) {
         return false;
     }
-    if details
-        .get("ordinaryUsageAllowed")
-        .and_then(serde_json::Value::as_bool)
-        == Some(false)
-    {
-        return true;
-    }
-    let limits = details.get("rateLimits").unwrap_or(details);
     if limits
         .get("spendControlReached")
         .and_then(serde_json::Value::as_bool)
         == Some(true)
-        || limits
-            .get("rateLimitReachedType")
-            .is_some_and(|value| !value.is_null())
     {
+        return true;
+    }
+
+    let reached_type = limits
+        .get("rateLimitReachedType")
+        .filter(|value| !value.is_null());
+    if reached_type.is_some_and(|value| value.as_str() != Some("rate_limit_reached")) {
+        return true;
+    }
+
+    let credits = limits.get("credits").filter(|value| value.is_object());
+    let credits_available = credits.is_some_and(|credits| {
+        credits
+            .get("hasCredits")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+            || credits
+                .get("unlimited")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+    });
+    if credits_available {
+        return false;
+    }
+    if reached_type.is_some() {
+        return true;
+    }
+
+    let credits_explicitly_unavailable = credits.is_some_and(|credits| {
+        credits
+            .get("hasCredits")
+            .and_then(serde_json::Value::as_bool)
+            == Some(false)
+            && credits
+                .get("unlimited")
+                .and_then(serde_json::Value::as_bool)
+                == Some(false)
+    });
+    ordinary_usage_allowed == Some(false) && credits_explicitly_unavailable
+}
+
+fn details_indicate_capacity_exhaustion(details: &serde_json::Value) -> bool {
+    let limits = details.get("rateLimits").unwrap_or(details);
+    if rate_limit_snapshot_reports_hard_block(
+        limits,
+        details
+            .get("ordinaryUsageAllowed")
+            .and_then(serde_json::Value::as_bool),
+    ) {
         return true;
     }
     let text = details.to_string().to_ascii_lowercase();
@@ -414,7 +451,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn serviceable_full_window_is_not_promoted_to_capacity_exhaustion() {
+    async fn credit_serviceable_full_window_is_not_promoted_to_capacity_exhaustion() {
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
         let details = serde_json::json!({
             "primary": {
@@ -427,8 +464,8 @@ mod tests {
                 "unlimited": false,
                 "balance": "100"
             },
-            "spendControlReached": null,
-            "rateLimitReachedType": null
+            "spendControlReached": false,
+            "rateLimitReachedType": "rate_limit_reached"
         });
         forward_provider_event(
             &tx,
@@ -450,6 +487,11 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
         let details = serde_json::json!({
             "primary": { "usedPercent": 100 },
+            "credits": {
+                "hasCredits": false,
+                "unlimited": false,
+                "balance": null
+            },
             "spendControlReached": true,
             "rateLimitReachedType": "workspace_owner_usage_limit_reached"
         });

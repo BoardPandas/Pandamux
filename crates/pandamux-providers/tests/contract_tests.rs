@@ -740,7 +740,7 @@ fn test_codex_rate_limit_fraction_conversion_is_exact_and_bounded() {
 }
 
 #[test]
-fn test_codex_backend_permission_controls_hard_limit() {
+fn test_codex_included_usage_and_credit_paths_control_hard_limit() {
     let allowed = JsonRpcResponse {
         jsonrpc: None,
         id: 5,
@@ -770,7 +770,34 @@ fn test_codex_backend_permission_controls_hard_limit() {
     assert_eq!(allowed_limits[0].remaining_millionths, Some(0));
     assert!(!allowed_limits[0].hard_limit);
 
-    let blocked = JsonRpcResponse {
+    let credit_serviceable = JsonRpcResponse {
+        result: Some(serde_json::json!({
+            "ordinaryUsageAllowed": false,
+            "rateLimits": {
+                "limitId": "codex",
+                "primary": {
+                    "usedPercent": 100,
+                    "windowDurationMins": 10080,
+                    "resetsAt": 1791948542
+                },
+                "credits": {
+                    "hasCredits": true,
+                    "unlimited": false,
+                    "balance": "100"
+                },
+                "spendControlReached": false,
+                "rateLimitReachedType": "rate_limit_reached"
+            }
+        })),
+        ..allowed.clone()
+    };
+    let serviceable_limits =
+        parse_rate_limits_response(&credit_serviceable).expect("parse credit-serviceable limits");
+    assert_eq!(serviceable_limits[0].used_millionths, Some(1_000_000));
+    assert_eq!(serviceable_limits[0].remaining_millionths, Some(0));
+    assert!(!serviceable_limits[0].hard_limit);
+
+    let unknown_credit_path = JsonRpcResponse {
         result: Some(serde_json::json!({
             "ordinaryUsageAllowed": false,
             "rateLimits": {
@@ -782,9 +809,36 @@ fn test_codex_backend_permission_controls_hard_limit() {
                 }
             }
         })),
+        ..allowed.clone()
+    };
+    let unknown_limits =
+        parse_rate_limits_response(&unknown_credit_path).expect("parse unknown credit path");
+    assert_eq!(unknown_limits[0].used_millionths, Some(420_000));
+    assert_eq!(unknown_limits[0].remaining_millionths, Some(580_000));
+    assert!(!unknown_limits[0].hard_limit);
+
+    let blocked = JsonRpcResponse {
+        result: Some(serde_json::json!({
+            "ordinaryUsageAllowed": false,
+            "rateLimits": {
+                "limitId": "codex",
+                "primary": {
+                    "usedPercent": 42,
+                    "windowDurationMins": 10080,
+                    "resetsAt": 1791948542
+                },
+                "credits": {
+                    "hasCredits": false,
+                    "unlimited": false,
+                    "balance": null
+                },
+                "spendControlReached": false,
+                "rateLimitReachedType": "rate_limit_reached"
+            }
+        })),
         ..allowed
     };
-    let blocked_limits = parse_rate_limits_response(&blocked).expect("parse blocked limits");
+    let blocked_limits = parse_rate_limits_response(&blocked).expect("parse fully blocked limits");
     assert_eq!(blocked_limits[0].used_millionths, Some(1_000_000));
     assert_eq!(blocked_limits[0].remaining_millionths, Some(0));
     assert!(blocked_limits[0].hard_limit);
@@ -805,6 +859,24 @@ fn test_codex_snapshot_requires_explicit_block_for_hard_limit() {
     .expect("parse serviceable observation");
     assert!(!observed[0].hard_limit);
 
+    let credit_serviceable = parse_rate_limits_value(&serde_json::json!({
+        "limitId": "codex",
+        "primary": {
+            "usedPercent": 100,
+            "windowDurationMins": 10080,
+            "resetsAt": 1791948542
+        },
+        "credits": {
+            "hasCredits": true,
+            "unlimited": false,
+            "balance": "100"
+        },
+        "spendControlReached": false,
+        "rateLimitReachedType": "rate_limit_reached"
+    }))
+    .expect("parse credit-serviceable observation");
+    assert!(!credit_serviceable[0].hard_limit);
+
     let blocked = parse_rate_limits_value(&serde_json::json!({
         "limitId": "codex",
         "primary": {
@@ -812,8 +884,13 @@ fn test_codex_snapshot_requires_explicit_block_for_hard_limit() {
             "windowDurationMins": 10080,
             "resetsAt": 1791948542
         },
-        "spendControlReached": false,
-        "rateLimitReachedType": "rate_limit_reached"
+        "credits": {
+            "hasCredits": false,
+            "unlimited": false,
+            "balance": null
+        },
+        "spendControlReached": true,
+        "rateLimitReachedType": "workspace_owner_usage_limit_reached"
     }))
     .expect("parse blocked observation");
     assert!(blocked[0].hard_limit);

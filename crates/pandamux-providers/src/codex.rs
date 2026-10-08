@@ -324,10 +324,8 @@ fn parse_rate_limits_value_with_permission(
     limits: &Value,
     ordinary_usage_allowed: Option<bool>,
 ) -> Result<Vec<RateLimitEntry>, ProviderError> {
-    let explicitly_blocked = match ordinary_usage_allowed {
-        Some(allowed) => !allowed,
-        None => rate_limit_snapshot_reports_block(limits),
-    };
+    let explicitly_blocked =
+        crate::models::rate_limit_snapshot_reports_hard_block(limits, ordinary_usage_allowed);
     let mut entries = Vec::new();
     if let Some(legacy_limits) = limits.as_array() {
         for item in legacy_limits {
@@ -392,13 +390,6 @@ fn parse_rate_limit_window(
         resets_at_ms: window.get("resetsAt").and_then(parse_epoch_ms),
         hard_limit: explicitly_blocked,
     })
-}
-
-fn rate_limit_snapshot_reports_block(limits: &Value) -> bool {
-    limits.get("spendControlReached").and_then(Value::as_bool) == Some(true)
-        || limits
-            .get("rateLimitReachedType")
-            .is_some_and(|value| !value.is_null())
 }
 
 fn codex_error_capacity_details(params: &Value, message: &str) -> Option<Value> {

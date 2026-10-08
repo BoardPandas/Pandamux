@@ -11,10 +11,10 @@ approval plus loopback-network recovery evidence on exact 0.60.47, atomic
 tool-result source evidence, a live pending-approval restart Pass, and an exact
 tool-result process-crash restart Pass on exact 0.60.49, plus a live
 pending-continuation restart Pass and a real external-service interruption Pass
-on repaired exact 0.60.52; a later real-capacity diagnostic on that runtime was
-correctly rejected when Codex completed instead of failing over, and version
-0.60.55 contains the resulting capacity-interpretation correction awaiting
-exact live proof; P4-C6 has
+on repaired exact 0.60.52; later capacity diagnostics on exact 0.60.52 and
+0.60.55 were correctly rejected when Codex completed instead of failing over,
+and version 0.60.56 contains the refined included-use plus credit-serviceability
+correction awaiting exact live proof; P4-C6 has
 supporting Hyper-V rehearsal evidence but its physical rows remain open; and
 Phase 4 acceptance is incomplete.** Exact 0.60.15 commit
 `3a77382` passed the P4-C1 implementation, P4-C2 local candidate, and P4-C4
@@ -55,10 +55,11 @@ endpoint. Organization policy selected real Claude, one marked POST committed,
 and restart after the full provider process tree was killed produced no replay
 or invented terminal result. P4-C5 remains Partial because real pre-output
 provider capacity exhaustion and failover under that condition are still open.
-The rejected capacity diagnostic also exposed a false hard-limit projection
-from a 100 percent Codex utilization window. Version 0.60.55 separates that
-utilization from backend serviceability and handles terminal structured Codex
-capacity errors without preempting app-server retries. This source correction
+The rejected capacity diagnostics exposed both a false hard-limit projection
+from a 100 percent Codex utilization window and an overbroad reading of
+exhausted included use while paid credits remained available. Version 0.60.56
+models both serviceability paths and handles terminal structured Codex capacity
+errors without preempting app-server retries. This refined source correction
 has focused local verification but no exact live acceptance in this record yet.
 The later supporting Hyper-V rehearsal passed real 30-minute provider-network
 and full-screen-terminal recovery paths, but neither a Windows guest nor
@@ -262,10 +263,12 @@ activation, or release occurred.
   runtime and server hash above, run from
   `/home/brandon/.pandamux/acceptance/phase4-5d8b77d-0.60.52-p4-c5-real-capacity-failover-live`.
   Codex completed the requested turn, so the retained root is diagnostic
-  evidence only and closes no acceptance row. Workspace version 0.60.55
-  contains the resulting source correction. No exact 0.60.55 live, native,
-  production, push, deployment, activation, or release result is claimed in
-  this record yet.
+  evidence only and closes no acceptance row. Exact 0.60.55 commit `025e443`
+  then supplied two further rejected Galahad diagnostics. Both observed
+  exhausted included usage plus available credits, and the second completed
+  the Codex turn. Workspace version 0.60.56 contains the refined source
+  correction. No exact 0.60.56 live, native, production, push, deployment,
+  activation, or release result is claimed in this record yet.
 - The intermediate 0.60.2 commit `8a52d2a21da1d5d0f69540864a6162d2b30375bc`
   repaired direct UI Automation activation for Save and Cancel. The 0.60.3
   follow-up exposed the editor text fields on semantic nodes tied to their real
@@ -2689,10 +2692,10 @@ pre-output failover under that condition. P4-C5 remains Partial and Phase 4
 remains open. No new executable, native, push, CI, signing, packaging,
 deployment, production activation, or release is claimed.
 
-## Rejected exact 0.60.52 real-capacity diagnostic and 0.60.55 correction
+## Rejected exact 0.60.52 and 0.60.55 capacity diagnostics
 
 Result: **Rejected for the P4-C5 capacity-failover row; accepted as diagnostic
-evidence for the 0.60.55 source correction.** The retained Galahad root is
+evidence for the 0.60.56 source correction.** The first retained Galahad root is
 `/home/brandon/.pandamux/acceptance/phase4-5d8b77d-0.60.52-p4-c5-real-capacity-failover-live`.
 It reused exact clean commit
 `5d8b77d7086a7a266251cd3106e5f124d6cd2aec`, version 0.60.52, and the
@@ -2716,24 +2719,51 @@ result. The current account remained serviceable, credits were available, the
 primary utilization window reported 100 percent, and the live rate-limit update
 reported null reached-type and spend-control fields. The old PandaMUX parser
 incorrectly made any 100 percent window a hard limit. Upstream Codex instead
-defines `ordinaryUsageAllowed` as the backend serviceability decision and says
-that a missing decision must not be reconstructed from percentages or reset
-times. Its error notification also marks whether the app server will retry a
-failure. See the upstream
+defines `ordinaryUsageAllowed` as permission for ordinary included usage and
+says that a missing value must not be reconstructed from percentages or reset
+times. Credit availability is reported separately. Its error notification also
+marks whether the app server will retry a failure. See the upstream
 [`GetAccountRateLimitsResponse`](https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/schema/typescript/v2/GetAccountRateLimitsResponse.ts),
 [`ErrorNotification`](https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/src/protocol/v2/notification.rs),
 and
 [`CodexErrorInfo` mapping](https://github.com/openai/codex/blob/main/codex-rs/protocol/src/error.rs).
 
-Version 0.60.55 now preserves the reported utilization value while deriving a
-hard block only from an explicit ordinary-usage denial, reached-type value, or
-spend-control signal. Terminal structured `usageLimitExceeded` and
+Version 0.60.55 first preserved the reported utilization value and added
+structured terminal error handling, but initially treated included-use denial
+or any reached-type value as a total block. Exact 0.60.55 commit
+`025e443a8f0113962e75b9e9b0beaa4b3549f8c5` and its 17,832,704-byte server at
+SHA-256 `31e3b7696df6017dce92c1c562e4d6d776c3821241904b1cfc4d9dd79786b312`
+then exposed the remaining distinction. A sanitized live probe reported
+`ordinaryUsageAllowed=false`, `rateLimitReachedType=rate_limit_reached`, no
+spend-control block, 100 percent included use, and available credits. The first
+serviceability harness stopped before server start because its assertion was
+too strict. The second diagnostic deliberately attempted Codex with capacity
+pre-routing disabled, and Codex completed
+`P4C5_REAL_CAPACITY_FAILOVER_OK` in one attempt instead of failing over. Thread
+`thread-28b6815c-1deb-4323-bb3b-dce52f5017cc`, turn
+`turn-1c6c6ba5-7750-4c71-9d71-db29afa53bc1`, and attempt
+`attempt-b60b222a-f4c1-4996-bba1-79f9d77a9915` are retained under
+`/home/brandon/.pandamux/acceptance/phase4-025e443-0.60.55-p4-c5-real-capacity-failover-live`.
+Its manifest is
+`269d66e848c2d852b67d3c3020d5ecae75251f7319da2dc5e7d442600beebc3a`
+and its final audit is
+`f712bc8970a748b9b309eda415adc81fb569f8ee90953af733b7c9aa695303c2`.
+The earlier preflight-only root is retained at
+`/home/brandon/.pandamux/acceptance/phase4-025e443-0.60.55-p4-c5-capacity-serviceability-live`,
+with manifest
+`f6c180372d029c074337369b1c5efe9b8b32bbfd6e0686e6d9cab48809633643`
+and final audit
+`383e1100adaea9e5e3a6b8043b066d67618730a3415c9cdfbc8b1c3bef775ecc`.
+
+Version 0.60.56 therefore treats available or unlimited credits as a separate
+serviceability path for ordinary `rate_limit_reached` exhaustion. Spend-control
+blocks, workspace-level limit types, and explicitly unavailable included use
+plus credits remain hard limits. Terminal structured `usageLimitExceeded` and
 `rateLimitExceeded` errors become recoverable PandaMUX capacity events only
 when `willRetry` is false. Structured non-capacity errors remain terminal, and
 message matching is only a compatibility fallback when no discriminator is
-present. Focused provider tests and the existing server failover regression
-pass, but an exact built 0.60.55 server has not yet supplied live proof in this
-record.
+present. Focused provider tests pass, but an exact built 0.60.56 server has not
+yet supplied live proof in this record.
 
 Cleanup stopped the exact server cleanly with no forced kill, removed the
 isolated socket and runtime records, restored the cloned Codex authentication,
@@ -3102,8 +3132,10 @@ Phase 4 cannot yet be marked exited under `tasks/plan-rewrite.md`:
    interruption. The unchanged exact 0.60.52 server also closes the real
    external-service interruption row with one marked disposable HTTPS request
    and no replay. The later exact 0.60.52 capacity diagnostic completed on
-   Codex and is therefore rejected for this row. Version 0.60.55 corrects the
-   false hard-limit projection, but still requires an exact live repair check.
+   Codex and is therefore rejected for this row. Exact 0.60.55 follow-ups also
+   completed on Codex with exhausted included use plus available credits.
+   Version 0.60.56 refines the hard-limit projection, but still requires an
+   exact live repair check.
    None substitutes for the remaining real capacity row.
 2. Complete the P4-C7 archive and maintained-document synchronization after the
    remaining P4-C5 and P4-C6 live rows stabilize. This record already reflects

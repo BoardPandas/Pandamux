@@ -408,27 +408,29 @@ real Claude, exactly one marked request committed before the full provider
 process tree was killed, and restart produced no replay or invented result.
 A later exact 0.60.52 diagnostic deliberately made Codex the preferred route
 for the remaining pre-output capacity row. Codex completed the turn, so the run
-is retained and rejected rather than misreported as failover evidence. The
-successful turn proved ordinary usage remained serviceable, and the update
-reported credits available with no reached-type or spend-control signal. No
-terminal capacity event appeared. The diagnostic instead found that
-PandaMUX had treated the 100 percent utilization display as a hard limit.
-Version 0.60.55 separates utilization from serviceability: explicit backend
-permission and structured block fields control snapshot hard limits, and only
-terminal structured Codex usage or rate-limit errors request failover. Errors
-that the app server will retry remain under its ownership. This follows the
+is retained and rejected rather than misreported as failover evidence. Exact
+0.60.55 follow-ups then observed 100 percent included usage,
+`ordinaryUsageAllowed=false`, `rateLimitReachedType=rate_limit_reached`, and
+available credits while Codex still completed the turn. Together the runs
+showed that neither displayed utilization nor exhausted included use means all
+service paths are blocked. Version 0.60.56 treats available or unlimited
+credits as a separate serviceability path. Spend-control blocks,
+workspace-level limit types, and explicitly unavailable included use plus
+credits remain hard limits. Only terminal structured Codex usage or rate-limit
+errors request failover, and errors the app server will retry remain under its
+ownership. This follows the
 upstream
 [`GetAccountRateLimitsResponse`](https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/schema/typescript/v2/GetAccountRateLimitsResponse.ts)
 and
 [`ErrorNotification`](https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/src/protocol/v2/notification.rs)
-contracts. Exact live proof of the repaired serviceable-at-100-percent route is
-still pending. P4-C5 remains Partial because the real pre-output
+contracts. Exact live proof of the refined credit-serviceable route is still
+pending. P4-C5 remains Partial because the real pre-output
 capacity-failure row is still open.
 A supporting Hyper-V rehearsal on the same exact runtime later passed a real
 30-minute provider-network interruption and full-screen terminal saved-state
 recovery with exact event, usage, offset, replay, and cleanup evidence. It does
 not replace the required physical laptop disconnect and sleep rows.
-The pending 0.60.55 live correction proof, the open real provider-capacity row,
+The pending 0.60.56 live correction proof, the open real provider-capacity row,
 the deferred physical R0.5 laptop
 disconnect and sleep rows, the final archive after those results stabilize,
 and later release gates still

@@ -155,22 +155,22 @@ R0 development gate:
   Interrupted, Failed, and Idle state without a second request, terminal tool
   result, continuation, or delivery. Cleanup revoked the endpoint and restored
   the isolated profile without changing either source database.
-  A later exact 0.60.52 capacity diagnostic deliberately preferred Codex over
-  Claude, but Codex completed the turn while the backend still permitted
-  ordinary usage and credits remained available. The run is retained and
-  rejected because no capacity failure or failover occurred. It exposed a
-  separate PandaMUX defect: a reported 100 percent window was being promoted
-  to a hard limit without the backend serviceability decision. Version 0.60.55
-  corrects that projection and handles terminal structured Codex capacity
-  errors without interrupting app-server retries. Exact live proof of the
-  repaired serviceable-at-100-percent route is still pending, and the rejected
-  run does not close the real capacity-failover row.
+  Later capacity diagnostics deliberately preferred Codex over Claude, but
+  Codex completed each turn while credits remained available. The retained
+  rejected runs first exposed a false hard limit from a 100 percent window,
+  then proved that `ordinaryUsageAllowed=false` describes exhausted included
+  use rather than total provider unavailability. Version 0.60.56 keeps
+  available or unlimited credits serviceable, preserves explicit full-block
+  signals, and handles terminal structured Codex capacity errors without
+  interrupting app-server retries. Exact live proof of the refined route is
+  still pending, and the rejected runs do not close the real capacity-failover
+  row.
   A supporting Hyper-V rehearsal on the same exact runtime later passed a real
   30-minute provider-network interruption and full-screen terminal saved-state
   recovery with exact event, usage, offset, replay, and cleanup evidence. It
   does not replace the required physical laptop disconnect and sleep rows.
   Real pre-output provider capacity exhaustion, exact live proof of the
-  0.60.55 correction, the final documentation
+  0.60.56 correction, the final documentation
   archive, and the deferred physical laptop checks keep P4-C5 Partial and the
   Phase 4 exit matrix open.
 
