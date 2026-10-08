@@ -28,6 +28,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Recorded the exact P4-C5 pending-approval restart pass and clarified the
+  tool-result restart contract.** Exact 0.60.49 commit
+  `d09641e86cd06d72d7312ceb1fa3b20e5931ff5f` passed the complete local gate
+  with 444 tests and supplied the hash-pinned Galahad server. A controlled
+  post-dispatch persistence fault left one real Codex approval delivery
+  Pending after exactly one loopback HTTP side effect. After an exact daemon
+  restart, two identical approval submissions both returned
+  `approval_delivery_pending`, the request count remained one, and no
+  resolution or second dispatch was invented. The acceptance contract now
+  states the stronger tool-result invariant: terminal ledger state, timeline
+  projection, and delivery state are atomic, so restart can observe either the
+  pre-result state or one Delivered result, never a durable half-commit.
+  Version 0.60.50 records this evidence only and has no executable, native,
+  production, push, deployment, activation, or release claim.
+
 - **Recorded the repaired P4-C5 approval and loopback-network recovery row.**
   An exact 0.60.43 diagnostic exposed a false-success path when provider output
   ended after starting a side-effecting tool without a durable result. Exact

@@ -1,8 +1,8 @@
 # PandaMUX Rewrite: Chat-First Agent Client with Remote Environments, Multi-Repo Fleet Orchestration, Agents, Schedules, Full MCP Settings Control, and Broadside Sharing
 
 Date: 2026-09-25 (Approved 2026-09-26; recovery rewrite 2026-09-28; Phase 4 closure rewrite 2026-10-06; accounting and native acceptance 2026-10-07)
-Status: **Phases 0 to 3 and Phase 4A through 4F implementation are recorded; P4-C1, P4-C2, and P4-C4 passed on exact 0.60.15; the terminal, Narrator, visual, scaling, and IPC rows passed on exact 0.60.41; the provider/model routing row passed local, live, and native Windows acceptance on exact 0.60.43; exact 0.60.43 passed supporting post-side-effect proxy-loss and Hyper-V recovery rehearsals; exact 0.60.47 repaired unresolved-tool false success and passed supporting approval plus loopback-network recovery; and P4-C5 remains Partial, so external capacity, pending-delivery restart, final documentation, and physical acceptance gates keep Phase 4 open**
-Baseline: The preserved original checkout remains PandaMUX v0.53.44 at `9511d0e22d44`; active recovery work is isolated on `codex/recovery-r0`, with exact 0.60.15 accounting evidence at `3a77382`, exact 0.60.41 native Windows evidence at `c6a20ff4f768747d0dadd59b88b40d3e20f7674d`, exact 0.60.43 local, live, and native provider-routing plus supporting recovery evidence at `372f2ae83e67a62cd3b382e5db52af96d00a85ce`, and exact 0.60.47 fail-closed plus supporting approval/network evidence at `1822486b4f7d98ba6026bbfd7224e97f09e447c9`
+Status: **Phases 0 to 3 and Phase 4A through 4F implementation are recorded; P4-C1, P4-C2, and P4-C4 passed on exact 0.60.15; the terminal, Narrator, visual, scaling, and IPC rows passed on exact 0.60.41; the provider/model routing row passed local, live, and native Windows acceptance on exact 0.60.43; exact 0.60.43 passed supporting post-side-effect proxy-loss and Hyper-V recovery rehearsals; exact 0.60.47 repaired unresolved-tool false success and passed supporting approval plus loopback-network recovery; exact 0.60.49 made tool-result projection atomic and passed the live pending-approval restart row; and P4-C5 remains Partial, so real capacity, external-service, pending-continuation, exact tool-result process, final documentation, and physical acceptance gates keep Phase 4 open**
+Baseline: The preserved original checkout remains PandaMUX v0.53.44 at `9511d0e22d44`; active recovery work is isolated on `codex/recovery-r0`, with exact 0.60.15 accounting evidence at `3a77382`, exact 0.60.41 native Windows evidence at `c6a20ff4f768747d0dadd59b88b40d3e20f7674d`, exact 0.60.43 local, live, and native provider-routing plus supporting recovery evidence at `372f2ae83e67a62cd3b382e5db52af96d00a85ce`, exact 0.60.47 fail-closed plus supporting approval/network evidence at `1822486b4f7d98ba6026bbfd7224e97f09e447c9`, and exact 0.60.49 atomic tool-result plus pending-approval restart evidence at `d09641e86cd06d72d7312ceb1fa3b20e5931ff5f`
 
 Relationship to `tasks/plan-repo.md`: that file is the **historical** record of the Electron to native Rust rewrite (Phases 1 to 7, complete). This plan supersedes its product direction (terminal multiplexer) but keeps its engineering posture: backend-owned state, single writer, intent-in/delta-out, deliberate dependency pins, crate isolation, and tag-driven signed releases. Its Section 12 design tokens carry over where they still apply (Section 8). UI history: Iced is removed. An earlier draft of this plan chose Tauri 2 + React; the user replaced that with **GPUI + gpui-kit** (all Rust) on 2026-09-25, and Tauri 2 remains only as the documented fallback if the Phase 0 GPUI spike fails. `plan-repo.md` rejected GPUI for three reasons, each now handled explicitly: GPL contamination (zed#55470, still open; tracked as a license gate in S6 and Risks), "not built for external consumption" (gpui-kit publishes exact-pinned `gpui-pre` snapshots and ships in production in Longbridge Pro on Windows, macOS, and Linux), and weak accessibility. Phase 0 treated accessibility as exploratory; the rewritten Phase 4 and Phase 7 criteria make the defined v1 accessibility matrix release-gating.
 
@@ -154,6 +154,17 @@ Terminology used throughout:
   matching managed usage observation. This supports P4-C5 but does not replace
   real provider capacity exhaustion, external-service interruption, or the
   pending-delivery restart rows.
+- Exact 0.60.49 commit
+  `d09641e86cd06d72d7312ceb1fa3b20e5931ff5f` commits each completed tool
+  result's immutable ledger transition, timeline projection, and Delivered
+  marker in one transaction. Its 444-test source gate proves rollback,
+  database reopen, exact duplicate suppression, and conflict rejection. The
+  exact Galahad server then passed a real pending-approval restart under a
+  controlled post-dispatch persistence fault: one approval produced one
+  loopback POST, two identical submissions after daemon restart both returned
+  `approval_delivery_pending`, and no resolution or second dispatch appeared.
+  The pending continuation row and exact process evidence around the atomic
+  tool-result boundary remain open.
 - Exact 0.60.22 commit `fee9e02` passed every P4-C3 row that was
   executed. The limited-user build and smoke, actionable Offline path,
   recorded 100 and 200 percent keyboard and scroll
@@ -233,10 +244,11 @@ Terminology used throughout:
   no-route picker rows, so P4-C3 is Pass again. Version 0.60.42 was the
   documentation-only accounting follow-up and has no executable or native
   claim.
-- Phase 4 remains open on the remaining real-capacity and pending-delivery
-  restart P4-C5 rows and the final documentation archive after those rows
-  stabilize. The re-scoped physical laptop disconnect and sleep rows remain
-  production-acceptance and release blockers.
+- Phase 4 remains open on real capacity exhaustion, external-service
+  interruption, pending continuation restart, exact process evidence around
+  the atomic tool-result boundary, and the final documentation archive after
+  those P4-C5 rows stabilize. The re-scoped physical laptop disconnect and
+  sleep rows remain production-acceptance and release blockers.
 - Phase 5 implementation has not started. The next development work is the
   ordered Phase 4 closure sequence in its verification record. Phase 5 begins
   only with its dependency, legacy-domain, and boundary gate. Phase 6 depends
@@ -2220,8 +2232,13 @@ Run this matrix in isolated roots with exact artifacts and timestamped logs:
 5. Real interruption after text, file edit, command, network action, and
    approval never silently replays. Each path persists checkpoint, partial
    output, tool ledger, provider evidence, and continuation status.
-6. Restart while a continuation, approval result, or tool result is pending.
-   Duplicate delivery remains at most once.
+6. Restart while a continuation or approval result is pending. Duplicate
+   delivery remains at most once. Terminal provider tool results use the
+   stronger atomic rule: the immutable ledger transition, timeline projection,
+   and Delivered marker commit in one transaction, so restart can observe only
+   the pre-result state or one Delivered result. A durable half-committed
+   Pending tool result is invalid; exact replay is a no-op and conflicting
+   replay fails closed.
 7. Toggle scanner, Hub usage sync, capacity-aware routing, and automatic
    failover independently. Existing observations and attempts remain queryable.
 
@@ -2357,6 +2374,48 @@ external-service action, and not restart with continuation, approval-result,
 or tool-result delivery pending. Those rows remain required. Full identifiers,
 hashes, rejected-run evidence, and cleanup proof are in
 `docs/operations/PHASE4_ACCEPTANCE.md`.
+
+Supporting result recorded 2026-10-08: **Pass for restart with one real
+approval result durably Pending on exact 0.60.49; P4-C5 remains Partial.**
+Exact commit `d09641e86cd06d72d7312ceb1fa3b20e5931ff5f` first closed the
+tool-result implementation gap by committing the terminal ledger transition,
+timeline event, and Delivered marker atomically. Formatting, both source
+guards, strict all-target and all-feature Clippy, all 444 workspace tests with
+zero failures and two intentional real-shell ignores, headless desktop checks,
+dependency policy, and diff hygiene passed. The exact 18,368,144-byte release
+server has SHA-256
+`06a824f93313ab8d1a27ba9775491ec9938de429c796a484e5128b11990a5a71`.
+
+The isolated Galahad run used a controlled SQLite trigger that rejected only
+the post-dispatch transition from approval Pending to Delivered. One real
+`codex-default` plus `gpt-6-luna` turn requested approval
+`00f62c36-5c30-47ff-acd7-8ecf4fee430e`. The provider received the approval and
+performed exactly one loopback HTTP POST, while the injected persistence error
+left exactly one delivery Pending with no fabricated `ApprovalResolved` event.
+The first exact daemon stopped cleanly while the side-effecting tool remained
+Started. After the second exact daemon reopened the same database, two
+identical approval submissions both returned error `-32022` with reason
+`approval_delivery_pending`. The request count remained one, event sequences 1
+through 14 remained unique and contiguous, and the interrupted turn retained
+one failed `externally_committed` attempt plus its ambiguous Started ledger.
+
+Evidence remains under
+`/home/brandon/.pandamux/acceptance/phase4-d09641e-0.60.49-p4-c5-pending-approval-live`.
+The 24-line manifest verifies at SHA-256
+`1bc2037c05bf85d1ecafa3b7db2623f72c8f1faecac322789bc34b1fa1944ed3`.
+Both daemons and the receiver stopped without forced kill, no root process or
+runtime socket remained, the cloned credential was restored, the disposable
+staging credential was deleted, and the source clone plus retained P4-C4
+database hashes remained unchanged. A first cleanup wrapper log and a first
+stale manifest are retained as rejected harness diagnostics; both failures
+occurred after the product assertions and were corrected before the final
+independent manifest check.
+
+This closes the live pending-approval part of row 6 and strengthens the
+tool-result contract without claiming a live process-boundary result for that
+atomic transaction. Real capacity exhaustion, external-service interruption,
+pending continuation restart, exact tool-result process evidence, final
+documentation archive, and physical laptop rows remain open.
 
 ##### P4-C6: close the physical R0.5 rows
 

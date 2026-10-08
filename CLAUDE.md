@@ -44,7 +44,11 @@ then repaired unresolved-tool false success and passed a clean supporting run
 with one approval plus one loopback HTTP POST across abrupt proxy loss.
 Reconnect kept one request, one terminal tool ledger row, one protected
 attempt, one settled turn, and one matching managed usage observation without
-replay. A supporting Hyper-V rehearsal on exact 0.60.43 later passed a real
+replay. Exact 0.60.49 then made terminal tool-result persistence atomic and
+passed a controlled Galahad restart while one real approval result remained
+durably Pending. Two identical post-restart submissions refused redispatch and
+the loopback request count remained one. A supporting Hyper-V rehearsal on
+exact 0.60.43 later passed a real
 30-minute provider-network interruption and full-screen terminal
 saved-state recovery with exact event, usage, offset, replay, and cleanup
 evidence. It does not replace the required physical laptop disconnect and
@@ -52,8 +56,8 @@ sleep rows. Exact 0.60.17 commit
 `2f56a27` partially passes P4-C5 with live scanner and Hub durability,
 conservative capacity projections and route explanations, and independent
 rollback controls. Real provider capacity exhaustion, external-service
-interruption, and the pending-delivery restart rows remain open even though
-their diagnostic fixtures pass.
+interruption, pending continuation restart, and remaining exact tool-result
+process evidence remain open even though their diagnostic fixtures pass.
 The exact results are recorded in
 [`docs/operations/PHASE4_ACCEPTANCE.md`](docs/operations/PHASE4_ACCEPTANCE.md).
 The remaining external failover, final documentation archive, and physical rows

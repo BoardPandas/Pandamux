@@ -128,13 +128,21 @@ R0 development gate:
   proxy loss. Reconnect retained one request, one terminal tool ledger row, one
   protected attempt, one settled turn, and one matching managed usage
   observation without replay.
+  Exact 0.60.49 then made terminal tool-result persistence atomic across the
+  ledger, timeline, and delivery marker, with duplicate-provider and database
+  reopen regressions. Its exact Galahad server also passed a controlled real
+  approval-result restart: one approval dispatched one loopback POST, a fault
+  left its delivery Pending, and two identical submissions after daemon restart
+  both refused redispatch with `approval_delivery_pending` while the request
+  count remained one.
   A supporting Hyper-V rehearsal on the same exact runtime later passed a real
   30-minute provider-network interruption and full-screen terminal saved-state
   recovery with exact event, usage, offset, replay, and cleanup evidence. It
   does not replace the required physical laptop disconnect and sleep rows.
   Real provider capacity exhaustion, external-service interruption, the
-  pending-delivery restart rows, and the deferred physical laptop checks keep
-  P4-C5 Partial and the Phase 4 exit matrix open.
+  pending continuation restart, remaining exact tool-result process evidence,
+  and the deferred physical laptop checks keep P4-C5 Partial and the Phase 4
+  exit matrix open.
 
 See the [Phase 4 live acceptance record](docs/operations/PHASE4_ACCEPTANCE.md)
 and the completion criteria in [`tasks/plan-rewrite.md`](tasks/plan-rewrite.md).
