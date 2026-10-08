@@ -55,19 +55,24 @@ repaired continuation-route persistence and passed a controlled-source,
 real-Codex continuation restart. The target route survived persistence, one
 loopback request occurred before the complete five-process descendant tree was
 killed, restart failed the continuation and attempt without replay, and two
-duplicate continuation calls refused redispatch. A supporting Hyper-V rehearsal
-on exact 0.60.43 later passed a real
+duplicate continuation calls refused redispatch. The unchanged exact server
+later passed a real external-service interruption. Organization policy selected
+real `claude-default` plus
+`claude-3-7-sonnet-latest`; exactly one disposable HTTPS request committed
+before the full provider process tree was killed, and restart did not replay
+the request or invent a terminal result. The endpoint was revoked and the
+isolated credential was restored during verified cleanup. A supporting Hyper-V
+rehearsal on exact 0.60.43 later passed a real
 30-minute provider-network interruption and full-screen terminal
 saved-state recovery with exact event, usage, offset, replay, and cleanup
 evidence. It does not replace the required physical laptop disconnect and
 sleep rows. Exact 0.60.17 commit
 `2f56a27` partially passes P4-C5 with live scanner and Hub durability,
 conservative capacity projections and route explanations, and independent
-rollback controls. Real provider capacity exhaustion and external-service
-interruption remain open even though their diagnostic fixtures pass.
+rollback controls. Real pre-output provider capacity exhaustion remains open.
 The exact results are recorded in
 [`docs/operations/PHASE4_ACCEPTANCE.md`](docs/operations/PHASE4_ACCEPTANCE.md).
-The remaining external failover, final documentation archive, and physical rows
+The remaining capacity-failover, final documentation archive, and physical rows
 keep Phase 4 open.
 
 Exact 0.60.38 commit `d328ad8` supersedes the preceding source-candidate note:

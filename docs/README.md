@@ -128,16 +128,22 @@ projection atomic and passed the live pending-approval plus exact tool-result
 process-crash restart rows without replay. Exact 0.60.52 repaired continuation
 route persistence and passed restart while one real Codex continuation was
 Running after a controlled source interruption. The loopback request count
-remained one, and duplicate continuation calls refused redispatch. A supporting
-Hyper-V rehearsal on exact 0.60.43
+remained one, and duplicate continuation calls refused redispatch. The real
+external-service interruption row on the unchanged exact server then passed
+against one disposable Webhook.site HTTPS endpoint. Organization policy routed
+the turn to real Claude, exactly one marked request committed before the full
+five-process tree was killed, and restart did not replay the request or invent
+a terminal result. The endpoint was revoked and isolated authentication was
+restored during cleanup. A supporting Hyper-V rehearsal on exact 0.60.43
 also passed a real 30-minute provider-network interruption and full-screen
 terminal saved-state recovery with exact event, usage, offset, replay, and
 cleanup evidence. It does not replace the required physical laptop disconnect
 and sleep rows. Exact 0.60.17 partially passed P4-C5 with live scanner and Hub
 durability, conservative capacity and route decisions, and independent
-rollback controls. Real provider capacity exhaustion, external-service
-interruption, the final archive after those rows stabilize, and the deferred
-physical checks remain open. The complete
+rollback controls. The real external-service interruption row is now closed;
+real pre-output provider capacity exhaustion, the final archive after the
+remaining rows stabilize, and the deferred physical
+checks remain open. The complete
 current contract is in
 [`features/USAGE_OBSERVABILITY.md`](features/USAGE_OBSERVABILITY.md).
 

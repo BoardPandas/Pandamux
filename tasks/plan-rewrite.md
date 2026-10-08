@@ -1,8 +1,8 @@
 # PandaMUX Rewrite: Chat-First Agent Client with Remote Environments, Multi-Repo Fleet Orchestration, Agents, Schedules, Full MCP Settings Control, and Broadside Sharing
 
-Date: 2026-09-25 (Approved 2026-09-26; recovery rewrite 2026-09-28; Phase 4 closure rewrite 2026-10-06; accounting and native acceptance 2026-10-07; continuation restart acceptance 2026-10-08)
-Status: **Phases 0 to 3 and Phase 4A through 4F implementation are recorded; P4-C1, P4-C2, and P4-C4 passed on exact 0.60.15; the terminal, Narrator, visual, scaling, and IPC rows passed on exact 0.60.41; the provider/model routing row passed local, live, and native Windows acceptance on exact 0.60.43; exact 0.60.43 passed supporting post-side-effect proxy-loss and Hyper-V recovery rehearsals; exact 0.60.47 repaired unresolved-tool false success and passed supporting approval plus loopback-network recovery; exact 0.60.49 made tool-result projection atomic and passed the live pending-approval plus exact tool-result process-crash restart rows; exact 0.60.52 repaired continuation route persistence and passed the pending-continuation restart row; and P4-C5 remains Partial, so real capacity, external-service, final documentation, and physical acceptance gates keep Phase 4 open**
-Baseline: The preserved original checkout remains PandaMUX v0.53.44 at `9511d0e22d44`; active recovery work is isolated on `codex/recovery-r0`, with exact 0.60.15 accounting evidence at `3a77382`, exact 0.60.41 native Windows evidence at `c6a20ff4f768747d0dadd59b88b40d3e20f7674d`, exact 0.60.43 local, live, and native provider-routing plus supporting recovery evidence at `372f2ae83e67a62cd3b382e5db52af96d00a85ce`, exact 0.60.47 fail-closed plus supporting approval/network evidence at `1822486b4f7d98ba6026bbfd7224e97f09e447c9`, exact 0.60.49 atomic tool-result, pending-approval restart, and exact process-crash evidence at `d09641e86cd06d72d7312ceb1fa3b20e5931ff5f`, and exact 0.60.52 continuation-route plus restart evidence at `5d8b77d7086a7a266251cd3106e5f124d6cd2aec`
+Date: 2026-09-25 (Approved 2026-09-26; recovery rewrite 2026-09-28; Phase 4 closure rewrite 2026-10-06; accounting and native acceptance 2026-10-07; continuation restart and external-service acceptance 2026-10-08)
+Status: **Phases 0 to 3 and Phase 4A through 4F implementation are recorded; P4-C1, P4-C2, and P4-C4 passed on exact 0.60.15; the terminal, Narrator, visual, scaling, and IPC rows passed on exact 0.60.41; the provider/model routing row passed local, live, and native Windows acceptance on exact 0.60.43; exact 0.60.43 passed supporting post-side-effect proxy-loss and Hyper-V recovery rehearsals; exact 0.60.47 repaired unresolved-tool false success and passed supporting approval plus loopback-network recovery; exact 0.60.49 made tool-result projection atomic and passed the live pending-approval plus exact tool-result process-crash restart rows; exact 0.60.52 repaired continuation route persistence, passed the pending-continuation restart row, and then passed the real external-service interruption row; and P4-C5 remains Partial, so real pre-output capacity, final documentation, and physical acceptance gates keep Phase 4 open**
+Baseline: The preserved original checkout remains PandaMUX v0.53.44 at `9511d0e22d44`; active recovery work is isolated on `codex/recovery-r0`, with exact 0.60.15 accounting evidence at `3a77382`, exact 0.60.41 native Windows evidence at `c6a20ff4f768747d0dadd59b88b40d3e20f7674d`, exact 0.60.43 local, live, and native provider-routing plus supporting recovery evidence at `372f2ae83e67a62cd3b382e5db52af96d00a85ce`, exact 0.60.47 fail-closed plus supporting approval/network evidence at `1822486b4f7d98ba6026bbfd7224e97f09e447c9`, exact 0.60.49 atomic tool-result, pending-approval restart, and exact process-crash evidence at `d09641e86cd06d72d7312ceb1fa3b20e5931ff5f`, and exact 0.60.52 continuation-route, pending-continuation restart, and real external-service interruption evidence at `5d8b77d7086a7a266251cd3106e5f124d6cd2aec`
 
 Relationship to `tasks/plan-repo.md`: that file is the **historical** record of the Electron to native Rust rewrite (Phases 1 to 7, complete). This plan supersedes its product direction (terminal multiplexer) but keeps its engineering posture: backend-owned state, single writer, intent-in/delta-out, deliberate dependency pins, crate isolation, and tag-driven signed releases. Its Section 12 design tokens carry over where they still apply (Section 8). UI history: Iced is removed. An earlier draft of this plan chose Tauri 2 + React; the user replaced that with **GPUI + gpui-kit** (all Rust) on 2026-09-25, and Tauri 2 remains only as the documented fallback if the Phase 0 GPUI spike fails. `plan-repo.md` rejected GPUI for three reasons, each now handled explicitly: GPL contamination (zed#55470, still open; tracked as a license gate in S6 and Risks), "not built for external consumption" (gpui-kit publishes exact-pinned `gpui-pre` snapshots and ships in production in Longbridge Pro on Windows, macOS, and Linux), and weak accessibility. Phase 0 treated accessibility as exploratory; the rewritten Phase 4 and Phase 7 criteria make the defined v1 accessibility matrix release-gating.
 
@@ -176,7 +176,16 @@ Terminology used throughout:
   failed the continuation and attempt without replay, and two duplicate
   continuation calls refused redispatch. The controlled source fixture does
   not replace real provider capacity exhaustion or a real external-service
-  interruption.
+  interruption at that point.
+- The unchanged exact 0.60.52 server subsequently passed the real
+  external-service interruption row. Organization policy selected real
+  `claude-default` plus `claude-3-7-sonnet-latest`, exactly one marked request
+  reached a disposable Webhook.site HTTPS endpoint, and the full five-process
+  provider tree was killed while the tool remained durably Started. Restart
+  reconciled Interrupted, Failed, and Idle state without a replay, terminal
+  result, continuation, or delivery. Cleanup revoked the endpoint and restored
+  isolated authentication. Only real pre-output provider capacity exhaustion
+  remains open within P4-C5.
 - Exact 0.60.22 commit `fee9e02` passed every P4-C3 row that was
   executed. The limited-user build and smoke, actionable Offline path,
   recorded 100 and 200 percent keyboard and scroll
@@ -256,9 +265,9 @@ Terminology used throughout:
   no-route picker rows, so P4-C3 is Pass again. Version 0.60.42 was the
   documentation-only accounting follow-up and has no executable or native
   claim.
-- Phase 4 remains open on real capacity exhaustion, external-service
-  interruption, and the final documentation archive after those P4-C5 rows
-  stabilize. The re-scoped physical laptop
+- Phase 4 remains open on real pre-output capacity exhaustion and the final
+  documentation archive after the remaining P4-C5 row stabilizes. The
+  re-scoped physical laptop
   disconnect and sleep rows remain production-acceptance and release blockers.
 - Phase 5 implementation has not started. The next development work is the
   ordered Phase 4 closure sequence in its verification record. Phase 5 begins
@@ -2526,6 +2535,73 @@ of a real external-service action. P4-C5 remains Partial, Phase 4 remains open,
 and no push, CI, signing, packaging, deployment, production activation, or
 release occurred. Workspace version 0.60.53 records this evidence only and
 supplies no new executable claim.
+
+Supporting result recorded 2026-10-08: **Pass for interruption of one real
+external HTTPS action on unchanged exact 0.60.52; P4-C5 remains Partial.** The
+accepted Galahad root is
+`/home/brandon/.pandamux/acceptance/phase4-5d8b77d-0.60.52-p4-c5-external-service-crash-live`.
+It reused the hash-pinned 17,829,288-byte server at SHA-256
+`3dc889a78245e628ec9cfbfc38bee0073b5b64add7fe9856f067659da485f3e3`,
+but used a new database clone, isolated repository, remapped profiles, and a
+disposable Webhook.site endpoint capped at ten requests and two hours.
+
+The request named `codex-default` and model `default`; explicit organization
+policy `org-phase4-live` and pool `pool-phase4-live` selected real
+`claude-default` plus `claude-3-7-sonnet-latest` because that route had the
+higher stored preference score. Thread
+`thread-5361e4e3-6ac0-411a-b6ff-1ce15e4ce42b`, turn
+`turn-574c7a4d-2de3-44c8-90bb-4183aac3e07b`, and attempt
+`attempt-32558cc7-253e-4896-81de-8b626ba8a9d6` emitted the expected visible
+text, then made exactly one marked external POST. The endpoint returned the
+controlled committed marker. Before any tool result existed, SQLite exposed
+one Running attempt at `tool_side_effect_begun`, one Started ledger row, one
+executing tool event, zero terminal tool events, zero deliveries, and zero
+continuations.
+
+The harness froze and killed exact server PID 1508587, Claude PID 1508877,
+shell PIDs 1509054 and 1509073, and sleep PID 1509079. No captured process
+survived, and the external request count remained one. The first stop attempt
+covered only the server process group because Claude and its shell owned
+separate groups; the retained salvage harness therefore enumerated and froze
+every descendant by PID before the intentional `SIGKILL`. This is recorded as
+an instrumentation correction rather than hidden or treated as a second run.
+
+Three stale isolated runtime entries had no process or socket listener after
+the crash. The harness recorded their metadata and removed only those entries
+before starting exact server PID 1520176 on the same database. Startup
+reconciliation changed the thread to Idle, the turn to Interrupted, and the
+attempt to Failed with an end timestamp. The turn end timestamp remained null,
+which matches the implemented startup reconciler. The ambiguous Started ledger
+remained intact, no terminal tool event, delivery, or continuation appeared,
+and the external request count remained one after repeated observation. The
+second server stopped cleanly without a forced kill.
+
+One earlier root is retained and rejected because Webhook.site correctly
+returned HTTP 201 while the first token-creation harness required HTTP 200 and
+stopped before recording the token ID. No provider started and no test request
+was sent in that root; its empty endpoint was bounded to automatic expiry.
+During the accepted run, the strict requested-route assertion exited after the
+turn had already been dispatched and policy selected Claude. The accepted
+salvage harness records the actual route and preserves the original harness,
+so no Codex execution is claimed for this row.
+
+Cleanup checkpointed the integral clone at SHA-256
+`b6743c2934687ee3c8cd1a86068dcb7fff7fcf485c2ede3230d58328bdcb0f5d`,
+restored profile authentication and mode 600, deleted staged authentication,
+revoked the disposable endpoint with HTTP 204, verified HTTP 404 afterward,
+and found zero exact server processes. The source rehearsal and retained P4-C4
+databases remained unchanged. Independent verification passed all 31 manifest
+entries. The manifest has SHA-256
+`0fea7f40c9d511da82734f28b2b463041b1e14e82025433883e94166a6553db6`;
+the final audit has SHA-256
+`312b5a4b5f9e69d523bb9e11bb3b3410c162768f6baf02fc96a2be756aba9e13`.
+
+This closes the external network-action portion of P4-C5 row 5. It does not
+prove real provider quota or capacity exhaustion or the required one-time
+pre-output failover under that condition. P4-C5 therefore remains Partial and
+Phase 4 remains open. Workspace version 0.60.54 records this evidence only; no
+new executable, native, push, CI, signing, packaging, deployment, production
+activation, or release is claimed.
 
 ##### P4-C6: close the physical R0.5 rows
 

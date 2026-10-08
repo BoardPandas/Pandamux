@@ -402,14 +402,18 @@ one real Codex continuation was Running after a controlled source interruption.
 The exact descendant tree stopped after one loopback request, restart failed
 the continuation and target attempt without replay, and duplicate continuation
 calls refused redispatch. These supporting runs do not cover real provider
-quota or capacity exhaustion or interruption of a real external service, so
-P4-C5 remains Partial.
+quota or capacity exhaustion. The unchanged exact server subsequently passed
+the real external HTTPS interruption row: organization policy selected
+real Claude, exactly one marked request committed before the full provider
+process tree was killed, and restart produced no replay or invented result.
+P4-C5 remains Partial only because the real pre-output capacity-failure row is
+still open.
 A supporting Hyper-V rehearsal on the same exact runtime later passed a real
 30-minute provider-network interruption and full-screen terminal saved-state
 recovery with exact event, usage, offset, replay, and cleanup evidence. It does
 not replace the required physical laptop disconnect and sleep rows.
-The open real external quota-exhaustion and external-service interruption rows,
-the deferred physical R0.5 laptop disconnect and sleep rows, the final archive
-after those results stabilize, and later release gates still
+The open real provider-capacity row, the deferred physical R0.5 laptop
+disconnect and sleep rows, the final archive after those results stabilize,
+and later release gates still
 block Phase 4 exit, production acceptance, and release. Exact results and
 limitations are recorded in `docs/operations/PHASE4_ACCEPTANCE.md`.

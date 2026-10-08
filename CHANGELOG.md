@@ -37,6 +37,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Recorded the real external-service interruption Pass for P4-C5.** The
+  unchanged exact 0.60.52 Galahad server opened one disposable Webhook.site
+  HTTPS endpoint and organization policy selected real `claude-default` plus
+  `claude-3-7-sonnet-latest`. The provider performed exactly one marked POST,
+  then remained inside the side-effecting shell tool with one Started ledger
+  row at `tool_side_effect_begun`. The harness froze and killed the exact
+  five-process server, provider, shell, and sleep tree. Restart reconciled the
+  thread, turn, and attempt to Idle, Interrupted, and Failed without a second
+  request, terminal tool result, continuation, or delivery. Cleanup restored
+  authentication, revoked the endpoint with HTTP 204, verified HTTP 404 after
+  deletion, and preserved both source databases at their pre-run hashes. The
+  accepted 31-entry manifest has SHA-256
+  `0fea7f40c9d511da82734f28b2b463041b1e14e82025433883e94166a6553db6`.
+  This closes the real external-service action portion of P4-C5 row 5. Real
+  pre-output provider capacity exhaustion remains open, so P4-C5 stays Partial.
+  Version 0.60.54 records this evidence only and has no new executable, native,
+  production, push, deployment, activation, or release claim.
+
 - **Recorded the repaired P4-C5 pending-continuation restart pass.** Exact
   0.60.52 commit `5d8b77d7086a7a266251cd3106e5f124d6cd2aec` passed the
   complete local gate with 445 tests and supplied the hash-pinned Galahad
