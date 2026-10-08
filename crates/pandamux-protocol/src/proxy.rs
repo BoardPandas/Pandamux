@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::{EventEnvelope, RpcId, RpcRequest, RpcResponse};
 
 /// Version of the NDJSON envelope spoken over an SSH proxy channel.
-pub const PROXY_PROTOCOL_VERSION: u32 = 1;
+pub const PROXY_PROTOCOL_VERSION: u32 = 2;
 
 /// A single bounded NDJSON frame exchanged by the Hub and a node proxy.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -33,6 +33,12 @@ pub enum ProxyMessage {
     },
     Cancel {
         id: RpcId,
+    },
+    Keepalive {
+        sequence: u64,
+    },
+    KeepaliveAck {
+        sequence: u64,
     },
     Event {
         event_seq: u64,
@@ -79,6 +85,15 @@ mod tests {
             )
             .expect("parse response"),
             response
+        );
+
+        let keepalive = ProxyMessage::Keepalive { sequence: 7 };
+        assert_eq!(
+            serde_json::from_str::<ProxyMessage>(
+                &serde_json::to_string(&keepalive).expect("serialize keepalive")
+            )
+            .expect("parse keepalive"),
+            keepalive
         );
 
         let event = ProxyMessage::Event {

@@ -132,6 +132,46 @@ async fn production_proxy_routes_requests_relays_events_and_joins_cleanup() {
 }
 
 #[tokio::test]
+async fn graceful_shutdown_drains_the_remote_goodbye_before_returning() {
+    let environment_id = EnvironmentId::from("env-drain-goodbye");
+    let (hub_stream, node_stream) = tokio::io::duplex(16 * 1024);
+    let expected_environment_id = environment_id.clone();
+    let (goodbye_tx, goodbye_rx) = tokio::sync::oneshot::channel();
+    let fake_node = tokio::spawn(async move {
+        let (mut reader, mut writer) =
+            accept_hello(node_stream, expected_environment_id, PROXY_PROTOCOL_VERSION).await;
+        loop {
+            match read_message(&mut reader).await {
+                ProxyMessage::Keepalive { sequence } => {
+                    write_message(&mut writer, &ProxyMessage::KeepaliveAck { sequence }).await;
+                }
+                ProxyMessage::Goodbye { .. } => break,
+                other => panic!("expected keepalive or goodbye, got {other:?}"),
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        write_message(
+            &mut writer,
+            &ProxyMessage::Goodbye {
+                reason: "node drained".to_string(),
+            },
+        )
+        .await;
+        goodbye_tx.send(()).expect("report remote goodbye");
+    });
+
+    let transport =
+        ProxyEnvironmentTransport::connect(hub_stream, environment_id, Arc::new(AtomicU64::new(0)))
+            .await
+            .expect("connect fake node");
+    transport.shutdown().await;
+    goodbye_rx
+        .await
+        .expect("shutdown returned before remote goodbye");
+    fake_node.await.expect("join fake node");
+}
+
+#[tokio::test]
 async fn dropped_request_sends_cancel_frame() {
     let environment_id = EnvironmentId::from("env-cancel");
     let (hub_stream, node_stream) = tokio::io::duplex(16 * 1024);

@@ -19,14 +19,32 @@ const OUTBOUND_QUEUE_CAPACITY: usize = 256;
 const MAX_IN_FLIGHT_REQUESTS: usize = 32;
 const REPLAY_PAGE_SIZE: usize = 128;
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
+// Six Hub heartbeat intervals keep ordinary scheduler jitter from retiring a
+// live proxy, but remain short enough to clean up a suspended Hub's SSH child.
+const PROXY_CLIENT_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 
 pub async fn serve_proxy_connection<S>(server: Arc<Server>, stream: S) -> io::Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    serve_proxy_connection_with_idle_timeout(server, stream, PROXY_CLIENT_IDLE_TIMEOUT).await
+}
+
+async fn serve_proxy_connection_with_idle_timeout<S>(
+    server: Arc<Server>,
+    stream: S,
+    idle_timeout: Duration,
+) -> io::Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     let (read_half, mut write_half) = tokio::io::split(stream);
     let mut reader = BufReader::new(read_half);
-    let Some(hello) = read_proxy_message(&mut reader).await? else {
+    let Ok(hello) = tokio::time::timeout(idle_timeout, read_proxy_message(&mut reader)).await
+    else {
+        return Ok(());
+    };
+    let Some(hello) = hello? else {
         return Ok(());
     };
 
@@ -232,8 +250,15 @@ where
                     active.remove(&id);
                 }
             }
-            message = read_proxy_message(&mut reader) => {
-                match message? {
+            message = tokio::time::timeout(idle_timeout, read_proxy_message(&mut reader)) => {
+                let message = match message {
+                    Ok(message) => message?,
+                    Err(_) => {
+                        close_reason = "proxy client heartbeat lease expired".to_string();
+                        break;
+                    }
+                };
+                match message {
                     Some(ProxyMessage::Request { request }) => {
                         if requests.len() >= MAX_IN_FLIGHT_REQUESTS {
                             if let Some(id) = request.id {
@@ -292,6 +317,11 @@ where
                             handle.abort();
                         }
                     }
+                    Some(ProxyMessage::Keepalive { sequence }) => {
+                        outbound.send(ProxyMessage::KeepaliveAck { sequence })
+                            .await
+                            .map_err(queue_closed)?;
+                    }
                     Some(ProxyMessage::Goodbye { reason }) => {
                         close_reason = reason;
                         break;
@@ -305,6 +335,7 @@ where
                     }
                     Some(ProxyMessage::HelloAck { .. })
                     | Some(ProxyMessage::Response { .. })
+                    | Some(ProxyMessage::KeepaliveAck { .. })
                     | Some(ProxyMessage::Event { .. })
                     | Some(ProxyMessage::Error { .. }) => {
                         outbound.send(ProxyMessage::Error {
@@ -405,4 +436,94 @@ fn store_io_error(error: crate::StoreError) -> io::Error {
 
 fn queue_closed(_: mpsc::error::SendError<ProxyMessage>) -> io::Error {
     io::Error::new(io::ErrorKind::BrokenPipe, "proxy output queue closed")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pandamux_core::EnvironmentId;
+    use pandamux_protocol::{PROTOCOL_VERSION, PROXY_PROTOCOL_VERSION, ServerRole};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+    fn test_server(environment_id: &str) -> Arc<Server> {
+        Arc::new(
+            Server::new(crate::ServerConfig {
+                role: ServerRole::Node,
+                environment_id: environment_id.to_string(),
+                runtime_dir: std::env::temp_dir().join("pandamux-proxy-lease-test"),
+                db_path: None,
+            })
+            .expect("create test server"),
+        )
+    }
+
+    async fn write_message<W>(writer: &mut W, message: &ProxyMessage)
+    where
+        W: AsyncWrite + Unpin,
+    {
+        let mut bytes = serde_json::to_vec(message).expect("serialize proxy message");
+        bytes.push(b'\n');
+        writer.write_all(&bytes).await.expect("write proxy message");
+    }
+
+    async fn read_message<R>(reader: &mut BufReader<R>) -> ProxyMessage
+    where
+        R: AsyncRead + Unpin,
+    {
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .await
+            .expect("read proxy message");
+        serde_json::from_str(line.trim_end()).expect("parse proxy message")
+    }
+
+    #[tokio::test]
+    async fn keepalives_refresh_idle_lease_and_abandoned_client_expires() {
+        let environment_id = EnvironmentId::from("env-proxy-lease");
+        let server = test_server(environment_id.as_str());
+        let (client_stream, node_stream) = tokio::io::duplex(16 * 1024);
+        let mut node = tokio::spawn(serve_proxy_connection_with_idle_timeout(
+            server,
+            node_stream,
+            Duration::from_millis(80),
+        ));
+        let (reader, mut writer) = tokio::io::split(client_stream);
+        let mut reader = BufReader::new(reader);
+
+        write_message(
+            &mut writer,
+            &ProxyMessage::Hello {
+                proxy_protocol_version: PROXY_PROTOCOL_VERSION,
+                rpc_protocol_version: PROTOCOL_VERSION,
+                client_version: env!("CARGO_PKG_VERSION").to_string(),
+                environment_id,
+                resume_after_event_seq: 0,
+            },
+        )
+        .await;
+        assert!(matches!(
+            read_message(&mut reader).await,
+            ProxyMessage::HelloAck { .. }
+        ));
+
+        for sequence in 1..=3 {
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            write_message(&mut writer, &ProxyMessage::Keepalive { sequence }).await;
+            assert_eq!(
+                read_message(&mut reader).await,
+                ProxyMessage::KeepaliveAck { sequence }
+            );
+            assert!(
+                !node.is_finished(),
+                "heartbeat {sequence} did not renew lease"
+            );
+        }
+
+        tokio::time::timeout(Duration::from_millis(500), &mut node)
+            .await
+            .expect("abandoned proxy lease did not expire")
+            .expect("join proxy lease task")
+            .expect("proxy lease cleanup");
+    }
 }

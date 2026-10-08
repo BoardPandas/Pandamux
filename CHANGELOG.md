@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Retired abandoned SSH proxy bridges after Hub suspension.** Proxy protocol
+  version 2 adds an application heartbeat every 15 seconds and a 90-second
+  node-side client lease, so a sleeping or disconnected Hub no longer leaves
+  its remote `pandamux-server proxy` process attached to a half-open SSH
+  session. Normal shutdown now drains the node's goodbye before falling back
+  to forced local task cleanup. Exact 0.60.62 physical-laptop continuity rows
+  completed successfully, but cleanup found one pre-sleep Galahad proxy still
+  alive and therefore rejected that P4-C6 candidate. Version 0.60.63 carries
+  the lifecycle repair and requires a fresh exact-candidate P4-C6 rerun.
+
 - **Rejected unusable Windows PowerShell App Execution Aliases.** Shell
   discovery now requires PowerShell candidates to return a real version within
   a bounded non-interactive probe. This prevents a `pwsh.exe` Store alias from

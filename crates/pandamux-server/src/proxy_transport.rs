@@ -23,6 +23,9 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const INSTALL_REQUEST_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+// This application heartbeat keeps the node-side proxy lease independent of
+// SSH/TCP half-open behavior when the Hub machine sleeps or loses networking.
+const PROXY_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 
 type PendingRequests = Arc<Mutex<HashMap<RpcId, oneshot::Sender<Result<RpcResponse, RpcError>>>>>;
 
@@ -78,6 +81,26 @@ impl ProxyEnvironmentTransport {
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
+        Self::connect_with_sftp_and_heartbeat(
+            stream,
+            environment_id,
+            last_event_seq,
+            sftp,
+            PROXY_HEARTBEAT_INTERVAL,
+        )
+        .await
+    }
+
+    async fn connect_with_sftp_and_heartbeat<S>(
+        stream: S,
+        environment_id: EnvironmentId,
+        last_event_seq: Arc<AtomicU64>,
+        sftp: Option<(SshConnectionPool, SshConfig)>,
+        heartbeat_interval: Duration,
+    ) -> Result<Arc<Self>, RpcError>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
         let (read_half, write_half) = tokio::io::split(stream);
         let (outgoing, mut outgoing_rx) = mpsc::channel(OUTBOUND_QUEUE_CAPACITY);
         let (events, initial_events) = broadcast::channel(EVENT_BROADCAST_CAPACITY);
@@ -98,6 +121,10 @@ impl ProxyEnvironmentTransport {
         let writer = tokio::spawn(async move {
             let mut writer = write_half;
             let mut normal_goodbye = false;
+            let mut heartbeat = tokio::time::interval(heartbeat_interval);
+            heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            heartbeat.tick().await;
+            let mut heartbeat_sequence = 1_u64;
             loop {
                 tokio::select! {
                     changed = writer_shutdown_rx.changed() => {
@@ -126,6 +153,28 @@ impl ProxyEnvironmentTransport {
                         if goodbye {
                             let _ = tokio::io::AsyncWriteExt::shutdown(&mut writer).await;
                             normal_goodbye = true;
+                            break;
+                        }
+                    }
+                    _ = heartbeat.tick() => {
+                        let keepalive = ProxyMessage::Keepalive {
+                            sequence: heartbeat_sequence,
+                        };
+                        heartbeat_sequence = heartbeat_sequence.wrapping_add(1);
+                        if let Err(error) = write_proxy_message(&mut writer, &keepalive).await {
+                            set_state(
+                                &writer_state,
+                                EnvironmentTransportState::Stale {
+                                    message: format!("proxy heartbeat failed: {error}"),
+                                },
+                            );
+                            fail_pending(
+                                &writer_pending,
+                                proxy_error(
+                                    "proxy_disconnected",
+                                    format!("proxy heartbeat failed: {error}"),
+                                ),
+                            );
                             break;
                         }
                     }
@@ -208,6 +257,7 @@ impl ProxyEnvironmentTransport {
                         );
                         break;
                     }
+                    Ok(Some(ProxyMessage::KeepaliveAck { .. })) => {}
                     Ok(Some(_)) => {}
                     Ok(None) => {
                         set_state(
@@ -342,13 +392,18 @@ impl ProxyEnvironmentTransport {
                 tasks.writer.abort();
                 let _ = tasks.writer.await;
             }
-            let _ = self.shutdown_tx.send(true);
             if tokio::time::timeout(SHUTDOWN_TIMEOUT, &mut tasks.reader)
                 .await
                 .is_err()
             {
-                tasks.reader.abort();
-                let _ = tasks.reader.await;
+                let _ = self.shutdown_tx.send(true);
+                if tokio::time::timeout(SHUTDOWN_TIMEOUT, &mut tasks.reader)
+                    .await
+                    .is_err()
+                {
+                    tasks.reader.abort();
+                    let _ = tasks.reader.await;
+                }
             }
         } else {
             let _ = self.shutdown_tx.send(true);
@@ -552,4 +607,98 @@ fn fail_pending(pending: &PendingRequests, error: RpcError) {
 
 fn proxy_error(code: &str, message: impl Into<String>) -> RpcError {
     RpcError::with_data(-32010, message, serde_json::json!({ "proxyCode": code }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+    async fn read_message<R>(reader: &mut BufReader<R>) -> ProxyMessage
+    where
+        R: AsyncRead + Unpin,
+    {
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .await
+            .expect("read proxy message");
+        serde_json::from_str(line.trim_end()).expect("parse proxy message")
+    }
+
+    async fn write_message<W>(writer: &mut W, message: &ProxyMessage)
+    where
+        W: AsyncWrite + Unpin,
+    {
+        let mut bytes = serde_json::to_vec(message).expect("serialize proxy message");
+        bytes.push(b'\n');
+        writer.write_all(&bytes).await.expect("write proxy message");
+    }
+
+    #[tokio::test]
+    async fn idle_hub_transport_emits_monotonic_heartbeats() {
+        let environment_id = EnvironmentId::from("env-heartbeat-writer");
+        let expected_environment_id = environment_id.clone();
+        let (hub_stream, node_stream) = tokio::io::duplex(16 * 1024);
+        let (observed_tx, observed_rx) = oneshot::channel();
+        let fake_node = tokio::spawn(async move {
+            let (reader, mut writer) = tokio::io::split(node_stream);
+            let mut reader = BufReader::new(reader);
+            assert!(matches!(
+                read_message(&mut reader).await,
+                ProxyMessage::Hello { .. }
+            ));
+            write_message(
+                &mut writer,
+                &ProxyMessage::HelloAck {
+                    proxy_protocol_version: PROXY_PROTOCOL_VERSION,
+                    rpc_protocol_version: PROTOCOL_VERSION,
+                    server_version: env!("CARGO_PKG_VERSION").to_string(),
+                    environment_id: expected_environment_id,
+                    current_event_seq: 0,
+                },
+            )
+            .await;
+
+            let mut sequences = Vec::new();
+            while sequences.len() < 2 {
+                match read_message(&mut reader).await {
+                    ProxyMessage::Keepalive { sequence } => {
+                        sequences.push(sequence);
+                        write_message(&mut writer, &ProxyMessage::KeepaliveAck { sequence }).await;
+                    }
+                    other => panic!("expected keepalive, got {other:?}"),
+                }
+            }
+            observed_tx.send(sequences).expect("report heartbeats");
+            assert!(matches!(
+                read_message(&mut reader).await,
+                ProxyMessage::Goodbye { .. }
+            ));
+            write_message(
+                &mut writer,
+                &ProxyMessage::Goodbye {
+                    reason: "node drained".to_string(),
+                },
+            )
+            .await;
+        });
+
+        let transport = ProxyEnvironmentTransport::connect_with_sftp_and_heartbeat(
+            hub_stream,
+            environment_id,
+            Arc::new(AtomicU64::new(0)),
+            None,
+            Duration::from_millis(20),
+        )
+        .await
+        .expect("connect heartbeat transport");
+        let sequences = tokio::time::timeout(Duration::from_secs(1), observed_rx)
+            .await
+            .expect("heartbeat timeout")
+            .expect("heartbeat observer");
+        assert_eq!(sequences, vec![1, 2]);
+        transport.shutdown().await;
+        fake_node.await.expect("join fake node");
+    }
 }
