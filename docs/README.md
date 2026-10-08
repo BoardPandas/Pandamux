@@ -115,7 +115,11 @@ visual, and named-pipe matrices passed; those rows remain accepted. Exact
 discovery, and a real turn through `codex-default` plus `gpt-6-luna`. Its exact
 limited-user Windows build, headless smoke, visible no-route fallback, and
 authenticated picker-created `codex-default` plus `gpt-6.1-sol` thread also
-passed, so P4-C3 is Pass again. Exact 0.60.17
+passed, so P4-C3 is Pass again. A supporting Hyper-V rehearsal on the same
+exact runtime later passed a real 30-minute provider-network interruption and
+full-screen terminal saved-state recovery with exact event, usage, offset,
+replay, and cleanup evidence. It does not replace the required physical laptop
+disconnect and sleep rows. Exact 0.60.17
 partially passed P4-C5 with live scanner and Hub durability, conservative
 capacity and route decisions, and independent rollback controls. Real external
 quota exhaustion, real post-side-effect interruption, the final archive after

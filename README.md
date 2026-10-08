@@ -115,6 +115,10 @@ R0 development gate:
   artifacts then passed native build, headless smoke, visible no-route fallback,
   and an authenticated picker-created thread whose `codex-default` and
   `gpt-6.1-sol` values matched the shipped CLI. P4-C3 is Pass again.
+  A supporting Hyper-V rehearsal on the same exact runtime later passed a real
+  30-minute provider-network interruption and full-screen terminal saved-state
+  recovery with exact event, usage, offset, replay, and cleanup evidence. It
+  does not replace the required physical laptop disconnect and sleep rows.
   Real external quota exhaustion, real post-side-effect interruption, and the
   deferred physical laptop checks keep the Phase 4 exit matrix open.
 

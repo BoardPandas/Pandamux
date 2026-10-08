@@ -2270,6 +2270,36 @@ These two rows may remain deferred for development sequencing only. They are
 mandatory before Phase 7 release authorization and cannot be converted to Pass
 by a waiver, short run, or fixture.
 
+Result recorded 2026-10-08: **Supporting Hyper-V rehearsal Pass; P4-C6 remains
+open.** Exact runtime code from commit
+`372f2ae83e67a62cd3b382e5db52af96d00a85ce`, version `0.60.43`, ran between
+the Windows guest `SF-C4ad-c4f68c3c` and the isolated Galahad node. During a
+real `codex-default` plus `gpt-6-luna` turn, COLT-SHINE detached the guest
+adapter 156.057 seconds after the executing tool event and restored it after
+1,825.420 seconds. Reconnect replayed unique thread sequences 4 through 22
+after pre-gap sequence 3, advanced the proxy cursor from 132 to 148, preserved
+one completed attempt and exact output `P4C6_VM_PROVIDER_REPLAY_OK`, and exposed
+one matching managed usage observation. The harness recorded a 2,210,272
+millisecond coordinator wait with graceful old-transport cleanup.
+
+A separate full-screen terminal remained remotely owned and running across
+1,814.121 seconds of VM saved state. Reconnect advanced its durable offset from
+1,655 to 6,901, returned the exact 5,246-byte replay without truncation, kept
+the full 6,901-byte buffer available, and proved exactly one input marker before
+clean close. Its guest-observed coordinator wait was 1,936,461 milliseconds.
+Host receipt times decide the adapter and saved-state durations; same-endpoint
+records decide process chronology.
+
+These results exercise production SSH proxy, event replay, managed usage, and
+terminal replay paths, but the Windows guest and Hyper-V host are not a physical
+laptop. `Save-VM` is also not physical laptop sleep. Both required P4-C6 rows
+therefore remain deferred and release-blocking. Hash-pinned evidence remains in
+the isolated Galahad and COLT-SHINE acceptance roots. Cleanup restored the
+original Galahad auth and SSH authorization, preserved the retained source
+database, removed only the temporary checkpoint and rehearsal tasks, and
+returned the shared VM to its Off, disconnected, GSI-disabled, original
+eight-checkpoint baseline.
+
 ##### P4-C7: archive and synchronize documentation
 
 After C1 through C5 stabilize, and after C6 when hardware is available:

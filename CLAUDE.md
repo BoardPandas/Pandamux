@@ -37,7 +37,11 @@ the exact configured instance and selected model. Its exact limited-user
 Windows artifacts also pass native build and headless smoke, visible no-route
 fallback into Provider Settings, and an authenticated picker-created thread
 whose `codex-default` and `gpt-6.1-sol` route matches the shipped CLI. P4-C3 is
-Pass again. Exact 0.60.17 commit
+Pass again. A supporting Hyper-V rehearsal on the same exact runtime later
+passed a real 30-minute provider-network interruption and full-screen terminal
+saved-state recovery with exact event, usage, offset, replay, and cleanup
+evidence. It does not replace the required physical laptop disconnect and
+sleep rows. Exact 0.60.17 commit
 `2f56a27` partially passes P4-C5 with live scanner and Hub durability,
 conservative capacity projections and route explanations, and independent
 rollback controls. Real external quota exhaustion and post-side-effect

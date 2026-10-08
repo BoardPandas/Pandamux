@@ -1,12 +1,13 @@
 # Phase 4 Acceptance Record
 
 Date: 2026-09-29
-Updated: 2026-10-07
+Updated: 2026-10-08
 
 Status: **Accounting passed; the P4-C3 terminal, Narrator, visual, scaling, and
 IPC rows passed on exact 0.60.41; the provider/model routing row passed local,
 live, and native Windows acceptance on exact 0.60.43; P4-C5 remains Partial;
-and Phase 4 acceptance is incomplete.** Exact 0.60.15 commit
+P4-C6 has supporting Hyper-V rehearsal evidence but its physical rows remain
+open; and Phase 4 acceptance is incomplete.** Exact 0.60.15 commit
 `3a77382` passed the P4-C1 implementation, P4-C2 local candidate, and P4-C4
 cloned-store reconciliation gates. Exact 0.60.41 commit
 `c6a20ff4f768747d0dadd59b88b40d3e20f7674d` passed P4-C3 after the expanded
@@ -30,9 +31,12 @@ synchronization, conservative capacity projection, route-explanation, and
 rollback-control portions of P4-C5. Real provider quota exhaustion and real
 interruptions after output or external side effects were not available, so
 their live rows remain open even though the focused diagnostic fixtures pass.
-The final documentation archive after those rows stabilize and the deferred
-physical matrix also remain open. No push, deployment, production activation,
-or release occurred.
+The later supporting Hyper-V rehearsal passed real 30-minute provider-network
+and full-screen-terminal recovery paths, but neither a Windows guest nor
+`Save-VM` substitutes for the required physical laptop disconnect and sleep
+rows. The final documentation archive after the remaining rows stabilize and
+the physical matrix therefore remain open. No push, deployment, production
+activation, or release occurred.
 
 ## Source and preservation boundary
 
@@ -174,6 +178,13 @@ or release occurred.
   plus no-route picker interactions passed. Workspace version `0.60.44` is this
   documentation-only follow-up; no 0.60.44 executable, native, live,
   production, push, deployment, activation, or release result is claimed.
+- Supporting P4-C6 Hyper-V rehearsal executable source: the same exact runtime
+  code from clean commit
+  `372f2ae83e67a62cd3b382e5db52af96d00a85ce`, version `0.60.43`, launched
+  from documentation head `e790db89075a49749749a0593df4442a17c8a8b8`.
+  Workspace version `0.60.45` records the resulting evidence only. No 0.60.45
+  executable, physical-laptop, production, push, deployment, activation, or
+  release result is claimed.
 - The intermediate 0.60.2 commit `8a52d2a21da1d5d0f69540864a6162d2b30375bc`
   repaired direct UI Automation activation for Save and Cancel. The 0.60.3
   follow-up exposed the editor text fields on semantic nodes tied to their real
@@ -1899,6 +1910,147 @@ login-terminal, Narrator, scaling, display-mode, visual, and IPC rows are
 unchanged and remain Pass. No push, CI, signing, packaging, deployment,
 production activation, or release occurred.
 
+## Exact 0.60.43 P4-C6 supporting Hyper-V rehearsal
+
+This is a **supporting Hyper-V rehearsal Pass, not a P4-C6 physical Pass**.
+Exact runtime code from clean commit
+`372f2ae83e67a62cd3b382e5db52af96d00a85ce`, version `0.60.43`, ran from
+documentation head `e790db89075a49749749a0593df4442a17c8a8b8` between the
+Windows guest `SF-C4ad-c4f68c3c` and the isolated Galahad node. The two
+rehearsals used the production SSH proxy, remote event replay, managed usage
+sync, and server-owned terminal replay paths. A Windows guest is not a physical
+laptop, and Hyper-V saved state is not physical laptop sleep. Both mandatory
+P4-C6 rows therefore remain open and release-blocking.
+
+The isolated roots are:
+
+- Galahad:
+  `/home/brandon/.pandamux/acceptance/phase4-372f2ae-0.60.43-p4-c6-vm-rehearsal`
+- Windows guest:
+  `C:\ProgramData\PandaMUX\acceptance\phase4-372f2ae-0.60.43-p4-c6-vm-rehearsal`
+- COLT-SHINE host evidence:
+  `C:\ProgramData\PandaMUX\acceptance\phase4-372f2ae-0.60.43-p4-c6-vm-rehearsal\host-evidence`
+
+The exact Galahad server artifact has SHA-256
+`f378d8c6e46a8492a21b01ac8e13282373dabf3940523497dd618114d15cefbd`.
+The final provider harness is 32,538,527 bytes at SHA-256
+`e9358f7f6b6d75fb932a727e22d4bb38bdcc4874cf7ab7ade820ceaa7a2f00a5`.
+The accepted terminal harness is 32,593,183 bytes at SHA-256
+`ee70fb89f71ac1e606775765b14f9044cb45c5cdd643386c2c4a48c8d2059686`.
+These purpose-built harnesses are acceptance instruments and are not shipped
+PandaMUX artifacts.
+
+### Real provider turn across a 30-minute network outage
+
+The accepted provider row used authenticated Codex CLI 0.158.0, configured
+instance `codex-default`, and model `gpt-6-luna`. Thread
+`thread-79e2f640-e1a9-4442-bc4f-0607de34507e`, turn
+`turn-08f8bf6d-0a95-47b3-bf88-e56e8ff9bdf9`, and attempt
+`attempt-8cfda338-d72f-4e55-9dd2-4f985fb722cf` began one real 180-second
+shell tool call. COLT-SHINE detached the guest adapter 156.057 seconds after
+the harness observed executing tool event sequence 3, so the interruption
+occurred before the tool and turn completed.
+
+The host recorded adapter disconnect at `2026-10-08T07:39:37.4526584Z` and
+primary reconnect completion at `2026-10-08T08:10:02.8727590Z`, an exact
+same-clock outage of 1,825.420 seconds. The scheduled recovery task returned
+zero. The guest agent needed one recorded 3.564-second virtual link cycle after
+primary reconnection; the VM was never restarted. GSI then delivered only the
+315-byte replay signal at SHA-256
+`20f35675ad018343772444287923306260c939116f77a355bbbcf946ce122e31`.
+
+Reconnect recovered post-gap event sequences 4 through 22 exactly once after
+pre-gap sequence 3, advanced the proxy cursor from 132 to 148, and settled the
+single durable attempt as Success with exact final text
+`P4C6_VM_PROVIDER_REPLAY_OK`. The old transport cleaned up gracefully. The
+harness recorded a 2,210,272 millisecond coordinator wait; that guest-clock
+duration includes the deliberate wait for host receipt and signal delivery and
+is not substituted for the host's adapter-outage measurement.
+
+The completed turn retained 14,279 input, 13 output, 13,056 cached-input, and
+zero cache-write tokens. Hub-owned `usage.query` returned exactly one matching
+managed observation,
+`usage-managed-488b5f0e0fc521ab8f68b09bd4cb190edff032a6fb801b31e12fbfb63dbd1d32`,
+after one millisecond with environment sync Ready. The result has SHA-256
+`912082443b805e8763b1e6d8dad1641e594dbc291646c6eff32a57a4ba2c92d1`;
+the ready record has SHA-256
+`133d6706585bce7dc8829842b76545e6453a630478ebc4b017931dc0686fe943`;
+stdout has SHA-256
+`b6550d25d9e6dab38817af80f7786a68d0913346d755fe8988315503189e80d4`;
+stderr is empty at the standard empty-file SHA-256.
+
+Run 5 is diagnostic only because its disconnect began after the turn had
+already completed. Run 6 performed a real mid-turn disconnect and correctly
+replayed its completed turn, but its supporting harness had not started the
+Hub-owned usage synchronization service and therefore timed out on
+`usage.query`. Run 7 added only that production composition step and is the
+accepted provider rehearsal.
+
+### Full-screen terminal across 30 minutes of saved VM state
+
+The accepted terminal row created remote terminal `term-2e5eba29` at 120 by 40
+in the isolated Galahad project. It was running at durable offset 1,655 before
+the gap. COLT-SHINE recorded saved state at
+`2026-10-08T06:19:15.6744700Z`, invoked resume at
+`2026-10-08T06:49:25.6373851Z`, and observed Running at
+`2026-10-08T06:49:29.7953343Z`. The same host clock measured 1,814.121 seconds
+from saved state to Running, and the recovery task returned zero.
+
+After reconnect, the remote process was still running at offset 6,901. Replay
+returned exactly 5,246 bytes with no truncation, and the full 6,901-byte buffer
+was available without truncation. The full-screen output marker remained
+present, input-marker verification returned exactly one line, the old transport
+cleaned up gracefully, and explicit terminal close left no listed terminal.
+The guest recorded a 1,936,461 millisecond coordinator wait.
+
+The accepted terminal result has SHA-256
+`3a1a58fd50b5ae0d274bc29874113b744fe0a7324c7ecfa44d34e1c89c63cce8`;
+its ready record has SHA-256
+`2b1515b0464d2e9e3aa355e8644c1cf5c285260dc10d6b99e2cc90dd93a83fd3`;
+stdout has SHA-256
+`e3491a6b01b3918c5abfc28dbbeef75a4ff048fa859f79c58bf531b7de173f4c`;
+stderr is empty. Host summary
+`suspend-measured-summary.json` has SHA-256
+`3f93260ced2303430ad12e23742aa35262e554ad833d21b3e2298a51cb45fb17`.
+Its explicit caveat rejects the mutable `Get-VM` object fields in the earlier
+`save-start.json`; acceptance uses the live harness-ready record plus immutable
+host timestamps. The first two full-duration attempts remain rejected harness
+diagnostics because one node process was not detached and one harness treated
+an unknown `TERM` value as a product failure.
+
+### Evidence preservation and cleanup
+
+Guest provider evidence is stored on Galahad under
+`evidence/guest-provider-run7`. Its nine-file manifest has SHA-256
+`bf37faea050cccfd1657ad2e2720dac3ced06ebe2f8f46ec86609c2c62563695`.
+Accepted terminal guest evidence remains under `evidence/guest-terminal-run3`.
+The 7,665-byte host archive containing the accepted terminal and provider host
+receipts plus task definitions has SHA-256
+`d5f9bd46140cc90e8d6d2223e2ce43f46a78fe6ef499993191a38b112ebe2a69`.
+The host also retains exact final-cleanup and task-cleanup receipts at SHA-256
+`755e04e99b9474d7cd61dc675f28e12191e267a420667b00587ea83a9dbd62f0`
+and `b5ed22a77b3b14a9e3e2efec2ea4f8b8c4d3ca22a02cedece7b49e4f2f6fc30f`.
+
+Cleanup stopped only verified isolated server PID 159520 with `SIGTERM`; no
+forced kill was required. The cloned database passed SQLite integrity after a
+WAL checkpoint. Original Codex auth was restored at SHA-256
+`c113c08e486e8c8825ccb288395593131699f5d1511e52d81309334d01f1c4e4`
+and mode 600. Exactly one marked temporary SSH public key was removed,
+`authorized_keys` returned to SHA-256
+`e447b47c714f942203afed79b60d0fd9187ad94ca4447289687bf6d8d582969c`,
+and a new connection using the removed key was denied. The retained P4-C4
+source database remained unchanged at SHA-256
+`5f45008d32b07e3c8491f2ad45361482e16cfa66a7f42bae7c5408c96350b323`.
+
+The guest shut down through Hyper-V's guest-OS path. Temporary checkpoint
+`b4499116-7368-4307-8eaf-5c6ea1225b72` was restored and removed; no original
+checkpoint changed. Final COLT-SHINE verification records the VM Off and
+operating normally, disconnected with no switch, GSI disabled, 1920 by 1200
+video, the exact original eight checkpoint IDs, and zero rehearsal tasks.
+SupportForge sessions were disconnected. The original checkout and historical
+untracked recovery bundles were not modified. No push, CI, signing, packaging,
+deployment, production activation, or release occurred.
+
 ## Static verification and remaining gates
 
 The source commit passed `cargo fmt --all --check`, strict workspace Clippy,
@@ -1980,6 +2132,18 @@ changes intact and the retained Galahad `node.db` at its recorded SHA-256
 with no open database handle. This verification does not create an executable,
 native, live, production, push, deployment, activation, or release claim for
 0.60.44.
+
+The documentation-only 0.60.45 workspace passed formatting, strict all-target
+and all-feature workspace Clippy, 440 workspace tests with zero failures and
+two intentional real-shell terminal ignores, the Rust boundary guard, the
+Claude wiring guard, desktop headless verification, locked Cargo metadata,
+dependency policy, and diff hygiene. The final read-only preservation audit
+reverified the original checkout at
+`9511d0e22d44192f106e2f84a7c96b96d76734b6` with its pre-existing changes
+intact, the historical recovery bundles untouched, and isolated rehearsal
+server PID 159520 absent. This verification does not create an executable,
+native, physical-laptop, production, push, deployment, activation, or release
+claim for 0.60.45.
 
 `cargo-deny` 0.20.2 could not parse the old `deny.toml` syntax. The follow-up
 configuration change removed deprecated keys and scoped seven existing

@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Changed
 
+- **Recorded supporting 30-minute Hyper-V P4-C6 rehearsals without closing the
+  physical rows.** Exact 0.60.43 runtime code replayed one real Codex turn after
+  a 1,825.420-second guest network outage with unique event sequences, exact
+  output, one durable attempt, and one matching managed usage observation. A
+  separate full-screen terminal remained remotely owned across 1,814.121
+  seconds of VM saved state, replayed exactly 5,246 bytes from offset 1,655 to
+  6,901 without truncation, and retained exactly one input marker. Hash-pinned
+  guest and host evidence remains in isolated acceptance roots. Cleanup stopped
+  only the rehearsal server, restored the original auth and SSH authorization,
+  preserved the retained source database, removed only the temporary checkpoint
+  and tasks, and returned the shared VM to its Off, disconnected, GSI-disabled,
+  eight-checkpoint baseline. The required physical laptop disconnect and sleep
+  rows remain open. Version 0.60.45 is documentation-only and makes no new
+  executable, physical, production, push, deployment, activation, or release
+  claim.
+
 - **Recorded exact 0.60.43 local, live, and native provider-routing
   acceptance.** The clean candidate passed the complete local source gate,
   migrated only the shipped Codex `o3-mini` defaults, discovered six current

@@ -380,6 +380,10 @@ visibly rejected a no-route create into Provider Settings and, with authenticate
 Codex 0.159.2, rendered `Codex CLI` plus live `GPT-6.1-Sol`; the shipped CLI
 read the same `codex-default` and `gpt-6.1-sol` values on the created thread.
 P4-C3 is Pass again.
+A supporting Hyper-V rehearsal on the same exact runtime later passed a real
+30-minute provider-network interruption and full-screen terminal saved-state
+recovery with exact event, usage, offset, replay, and cleanup evidence. It does
+not replace the required physical laptop disconnect and sleep rows.
 The open real external quota-exhaustion and post-side-effect
 interruption rows, the deferred physical R0.5 laptop disconnect and sleep rows,
 the final archive after those results stabilize, and later release gates still
