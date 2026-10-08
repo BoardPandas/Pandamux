@@ -53,7 +53,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let environment_id = run_args.environment_id;
 
     if proxy_mode {
-        return run_proxy_bridge(&runtime_dir).await;
+        match run_proxy_bridge(&runtime_dir).await {
+            Ok(()) => std::process::exit(0),
+            Err(error) => {
+                eprintln!("PandaMUX proxy bridge failed: {error}");
+                std::process::exit(1);
+            }
+        }
     }
 
     if db_path.is_none() {
@@ -301,6 +307,9 @@ fn default_pipe_path(runtime_dir: &Path, role: ServerRole) -> io::Result<String>
 
 #[cfg(not(windows))]
 async fn run_proxy_bridge(runtime_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    use std::time::Duration;
+    use tokio::io::{AsyncWriteExt, copy};
+
     let runtime = RuntimeInfo::read_from_dir(runtime_dir)?.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
@@ -320,22 +329,58 @@ async fn run_proxy_bridge(runtime_dir: &Path) -> Result<(), Box<dyn std::error::
     let proxy_path = runtime
         .proxy_path
         .unwrap_or_else(|| runtime_dir.join("proxy.sock").to_string_lossy().to_string());
-    let mut socket = tokio::net::UnixStream::connect(proxy_path).await?;
-    let mut stdio = tokio::io::join(tokio::io::stdin(), tokio::io::stdout());
-    match tokio::io::copy_bidirectional(&mut stdio, &mut socket).await {
-        Ok(_) => Ok(()),
-        Err(error)
-            if matches!(
-                error.kind(),
-                io::ErrorKind::BrokenPipe
-                    | io::ErrorKind::ConnectionReset
-                    | io::ErrorKind::UnexpectedEof
-            ) =>
-        {
-            Ok(())
+    let socket = tokio::net::UnixStream::connect(proxy_path).await?;
+    let (mut socket_reader, mut socket_writer) = socket.into_split();
+    let mut stdin = tokio::io::stdin();
+    let mut stdout = tokio::io::stdout();
+
+    let hub_to_node = async {
+        let copied = copy(&mut stdin, &mut socket_writer).await;
+        normalize_proxy_copy(copied)?;
+        normalize_proxy_write(socket_writer.shutdown().await)
+    };
+    let node_to_hub = async {
+        let copied = copy(&mut socket_reader, &mut stdout).await;
+        normalize_proxy_copy(copied)?;
+        normalize_proxy_write(stdout.flush().await)
+    };
+    tokio::pin!(hub_to_node);
+    tokio::pin!(node_to_hub);
+
+    tokio::select! {
+        result = &mut node_to_hub => result?,
+        result = &mut hub_to_node => {
+            result?;
+            let _ = tokio::time::timeout(Duration::from_secs(2), &mut node_to_hub).await;
         }
-        Err(error) => Err(error.into()),
     }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn normalize_proxy_copy(result: io::Result<u64>) -> io::Result<()> {
+    match result {
+        Ok(_) => Ok(()),
+        Err(error) if expected_proxy_close(error.kind()) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(not(windows))]
+fn normalize_proxy_write(result: io::Result<()>) -> io::Result<()> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) if expected_proxy_close(error.kind()) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(not(windows))]
+fn expected_proxy_close(kind: io::ErrorKind) -> bool {
+    matches!(
+        kind,
+        io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset | io::ErrorKind::UnexpectedEof
+    )
 }
 
 #[cfg(windows)]

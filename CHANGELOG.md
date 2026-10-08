@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- Fixed the Linux SSH proxy bridge so a node-side heartbeat lease closure
+  terminates the dedicated bridge process even while the Hub-side stdin pipe is
+  still half-open after a client network loss.
 - **Retired abandoned SSH proxy bridges after Hub suspension.** Proxy protocol
   version 2 adds an application heartbeat every 15 seconds and a 90-second
   node-side client lease, so a sleeping or disconnected Hub no longer leaves

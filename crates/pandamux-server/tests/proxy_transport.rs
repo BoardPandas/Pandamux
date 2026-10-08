@@ -430,3 +430,71 @@ async fn proxy_subcommand_bridges_stdio_to_the_node_daemon() {
         .expect("node daemon cleanup timeout")
         .expect("wait for node daemon");
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn proxy_subcommand_exits_when_node_socket_closes_with_hub_stdin_open() {
+    use std::process::Stdio;
+    use tokio::process::Command;
+
+    let temp = tempfile::tempdir().expect("create daemon temp dir");
+    let runtime_dir = temp.path().join("run");
+    let binary = env!("CARGO_BIN_EXE_pandamux-server");
+    let mut daemon = Command::new(binary)
+        .arg("daemon")
+        .arg("--runtime-dir")
+        .arg(&runtime_dir)
+        .arg("--environment-id")
+        .arg("env-process-proxy-node-close")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn node daemon");
+
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !tokio::fs::try_exists(runtime_dir.join("server.json"))
+            .await
+            .expect("check node runtime record")
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("node runtime record timeout");
+
+    let mut proxy = Command::new(binary)
+        .arg("proxy")
+        .arg("--runtime-dir")
+        .arg(&runtime_dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn proxy bridge");
+    let proxy_stdout = proxy.stdout.take().expect("proxy stdout");
+    let proxy_stdin = proxy.stdin.take().expect("proxy stdin");
+    let proxy_stdio = tokio::io::join(proxy_stdout, proxy_stdin);
+    let transport = ProxyEnvironmentTransport::connect(
+        proxy_stdio,
+        EnvironmentId::from("env-process-proxy-node-close"),
+        Arc::new(AtomicU64::new(0)),
+    )
+    .await
+    .expect("connect through proxy subcommand");
+
+    daemon.start_kill().expect("stop node daemon");
+    tokio::time::timeout(Duration::from_secs(2), daemon.wait())
+        .await
+        .expect("node daemon cleanup timeout")
+        .expect("wait for node daemon");
+
+    let proxy_status = tokio::time::timeout(Duration::from_secs(2), proxy.wait())
+        .await
+        .expect("proxy stayed alive after its node socket closed")
+        .expect("wait for proxy process");
+    assert!(proxy_status.success(), "proxy status was {proxy_status}");
+    drop(transport);
+}
