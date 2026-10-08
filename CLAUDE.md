@@ -68,8 +68,10 @@ first a false hard limit from a 100 percent window, then an overbroad reading of
 `ordinaryUsageAllowed=false` while paid credits remained available. Version
 0.60.56 treats included usage and credits as separate serviceability paths and
 handles structured terminal Codex errors while allowing the app server to own
-errors it will retry. Exact live proof of this repair remains pending, and real
-provider capacity exhaustion is still open.
+errors it will retry. Its exact Galahad artifact passed a live
+credit-serviceability route proof with capacity-aware routing enabled, one
+completed Codex attempt, and no retry or Claude fallback. Real total provider
+capacity exhaustion is still open.
 A supporting Hyper-V
 rehearsal on exact 0.60.43 later passed a real
 30-minute provider-network interruption and full-screen terminal
@@ -81,8 +83,8 @@ conservative capacity projections and route explanations, and independent
 rollback controls. Real pre-output provider capacity exhaustion remains open.
 The exact results are recorded in
 [`docs/operations/PHASE4_ACCEPTANCE.md`](docs/operations/PHASE4_ACCEPTANCE.md).
-The pending exact 0.60.56 live repair proof, remaining capacity-failover, final
-documentation archive, and physical rows keep Phase 4 open.
+The remaining capacity-failover row, final documentation archive, and physical
+rows keep Phase 4 open.
 
 Exact 0.60.38 commit `d328ad8` supersedes the preceding source-candidate note:
 its complete local gate, native build, host smoke, remote lifecycle, and

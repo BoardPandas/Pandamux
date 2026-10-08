@@ -20,9 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   remain nonrecoverable, with message matching retained only for older payloads
   that lack a discriminator. Retained exact 0.60.55 diagnostics proved that
   Codex could complete a turn in the credit-serviceable state and exposed the
-  first correction as too broad. Version 0.60.56 contains the refined source
-  logic and regressions; exact live proof is still pending, and the separate
-  real provider-capacity failover row remains open.
+  first correction as too broad. Exact 0.60.56 commit `2ca7d70` then passed a
+  live Galahad proof with capacity-aware routing enabled: the reported primary
+  window remained serviceable at 100 percent included-use utilization, one
+  Codex attempt completed, and no capacity retry or Claude fallback appeared.
+  The separate real provider-capacity failover row remains open because paid
+  credits were available throughout this proof.
 
 - **Persist continuation provider handoffs on the thread.** Existing thread
   upserts now store the provider instance and model selected for a continuation

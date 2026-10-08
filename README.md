@@ -162,15 +162,17 @@ R0 development gate:
   use rather than total provider unavailability. Version 0.60.56 keeps
   available or unlimited credits serviceable, preserves explicit full-block
   signals, and handles terminal structured Codex capacity errors without
-  interrupting app-server retries. Exact live proof of the refined route is
-  still pending, and the rejected runs do not close the real capacity-failover
-  row.
+  interrupting app-server retries. The exact 0.60.56 artifact then passed a
+  live credit-serviceability route proof: capacity-aware routing retained
+  Codex at 100 percent included-use utilization, one Codex attempt completed,
+  and no capacity retry or Claude fallback appeared. This verifies the
+  correction but does not close the real capacity-failover row because credits
+  were still available.
   A supporting Hyper-V rehearsal on the same exact runtime later passed a real
   30-minute provider-network interruption and full-screen terminal saved-state
   recovery with exact event, usage, offset, replay, and cleanup evidence. It
   does not replace the required physical laptop disconnect and sleep rows.
-  Real pre-output provider capacity exhaustion, exact live proof of the
-  0.60.56 correction, the final documentation
+  Real pre-output provider capacity exhaustion, the final documentation
   archive, and the deferred physical laptop checks keep P4-C5 Partial and the
   Phase 4 exit matrix open.
 

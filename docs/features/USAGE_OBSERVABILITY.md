@@ -423,15 +423,17 @@ upstream
 [`GetAccountRateLimitsResponse`](https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/schema/typescript/v2/GetAccountRateLimitsResponse.ts)
 and
 [`ErrorNotification`](https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/src/protocol/v2/notification.rs)
-contracts. Exact live proof of the refined credit-serviceable route is still
-pending. P4-C5 remains Partial because the real pre-output
+contracts. Exact live proof of the refined credit-serviceable route is now
+recorded on the exact 0.60.56 artifact. With capacity-aware routing enabled,
+the primary Codex projection stayed reported and serviceable at 100 percent
+included-use utilization, one Codex attempt completed, and no capacity retry or
+Claude fallback appeared. P4-C5 remains Partial because the real pre-output
 capacity-failure row is still open.
 A supporting Hyper-V rehearsal on the same exact runtime later passed a real
 30-minute provider-network interruption and full-screen terminal saved-state
 recovery with exact event, usage, offset, replay, and cleanup evidence. It does
 not replace the required physical laptop disconnect and sleep rows.
-The pending 0.60.56 live correction proof, the open real provider-capacity row,
-the deferred physical R0.5 laptop
+The open real provider-capacity row, the deferred physical R0.5 laptop
 disconnect and sleep rows, the final archive after those results stabilize,
 and later release gates still
 block Phase 4 exit, production acceptance, and release. Exact results and
