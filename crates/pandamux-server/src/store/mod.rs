@@ -220,6 +220,8 @@ impl Store {
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
             ON CONFLICT(id) DO UPDATE SET
                 title = excluded.title,
+                provider_instance_id = excluded.provider_instance_id,
+                model = excluded.model,
                 status = excluded.status,
                 access_mode = excluded.access_mode,
                 workspace_json = excluded.workspace_json,
@@ -4467,6 +4469,26 @@ mod tests {
 
         let loaded_settings = store.get_settings().expect("load settings").unwrap();
         assert_eq!(loaded_settings.ui.theme, "light");
+    }
+
+    #[test]
+    fn save_thread_persists_provider_route_changes() {
+        let store = Store::in_memory().expect("open in-memory store");
+        let mut thread = dummy_thread("thread-route-change");
+        store.save_thread(&thread).expect("save source route");
+
+        thread.provider_instance_id = ProviderInstanceId::from("prov-codex");
+        thread.model = "gpt-route-target".to_string();
+        thread.updated_at_ms = 2_000;
+        store.save_thread(&thread).expect("save target route");
+
+        let stored = store
+            .get_thread(&thread.id)
+            .expect("load routed thread")
+            .expect("routed thread exists");
+        assert_eq!(stored.provider_instance_id, thread.provider_instance_id);
+        assert_eq!(stored.model, thread.model);
+        assert_eq!(stored.updated_at_ms, thread.updated_at_ms);
     }
 
     #[test]

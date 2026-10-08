@@ -1777,6 +1777,16 @@ async fn audited_capacity_continuation_is_fresh_and_idempotent_after_manager_res
             .expect("continuation target turn id"),
     );
     wait_for_turn_status(&store, &target_turn_id, TurnStatus::Completed).await;
+    let routed_thread = store
+        .get_thread(&ThreadId::new(&thread_id))
+        .expect("load routed thread")
+        .expect("routed thread exists");
+    assert_eq!(
+        routed_thread.provider_instance_id.as_str(),
+        FALLBACK_PROVIDER_ID,
+        "the continuation target must survive a store reload"
+    );
+    assert_eq!(routed_thread.model, "mock-fast");
     assert!(
         mock.received_resume_tokens().is_empty(),
         "a provider-account handoff must not reuse the source resume token"

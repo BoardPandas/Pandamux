@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Persist continuation provider handoffs on the thread.** Existing thread
+  upserts now store the provider instance and model selected for a continuation
+  instead of silently retaining the interrupted source route. This prevents a
+  valid failover-pool target from being reloaded as the stale source provider
+  and then rejected by organization policy before its target turn starts.
+  Store and lifecycle regressions require the selected route to survive a
+  SQLite reload and manager restart. Version 0.60.52 contains this fix; the
+  live pending-continuation restart row remains open until the repaired exact
+  artifact passes the isolated Galahad rehearsal.
+
 - **Made completed tool-result projection atomic and restart-idempotent.** The
   production provider event path now gives each terminal tool result a stable
   delivery identity and commits its immutable ledger transition, timeline
