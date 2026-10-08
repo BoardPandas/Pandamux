@@ -35,6 +35,8 @@ R0 development gate:
 - Phase 4F adds explicit capability-compatible failover pools, deterministic hard-filter-
   first routing, durable per-attempt side-effect boundaries, one automatic retry only
   before output, and audited fresh-session continuation after unsafe capacity exhaustion.
+  Provider success fails closed when a started tool still lacks a durable result, leaving
+  its ledger intact without retry or an invented continuation.
   Authenticated remote turns carry a Hub-owned policy and pool snapshot that the node
   validates again before selecting a route. Independent rollback switches preserve
   observations while disabling scanning, Hub synchronization, capacity-aware

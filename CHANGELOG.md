@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Fixed
+
+- **Fail closed when a provider reports success with an unresolved tool
+  result.** Before accepting provider success, the thread manager now checks
+  the durable tool ledger. Any still-started side-effecting tool, or inability
+  to read that ledger, emits a nonrecoverable `unresolved_tool_result` error
+  and records the turn and attempt as failed. PandaMUX preserves the ambiguous
+  ledger for manual recovery and never retries or invents a continuation. A
+  lifecycle regression reproduces a started network tool followed by provider
+  success and verifies contiguous error, failed-completion, and settled events.
+
 ### Changed
 
 - **Recorded supporting live P4-C5 recovery after an abrupt post-side-effect

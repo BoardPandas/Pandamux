@@ -230,6 +230,13 @@ handoff is sent, which makes duplicate requests restart-safe. Approval delivery 
 at-most-once and durable; completed tool results are immutable and accept an identical
 redelivery without creating another result.
 
+Provider-reported success is not sufficient while any durable tool-ledger row
+remains `Started`. PandaMUX emits a nonrecoverable `unresolved_tool_result`
+event, records the turn and attempt as failed, preserves the ambiguous ledger
+for manual recovery, and performs no retry or synthetic continuation. Failure
+to read the ledger follows the same fail-closed path instead of creating a
+false-success state.
+
 Advanced settings independently gate usage scanning, Hub synchronization,
 capacity-aware routing, and automatic failover. Scanner and Hub switches apply at the
 next process start. Capacity routing applies to the next turn, and automatic failover

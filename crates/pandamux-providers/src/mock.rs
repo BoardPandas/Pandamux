@@ -408,6 +408,22 @@ impl ProviderSession for MockProviderSession {
                 .await;
             }
 
+            if prompt.starts_with("unresolved_tool_success:") {
+                let tool_name = prompt
+                    .trim_start_matches("unresolved_tool_success:")
+                    .trim()
+                    .to_string();
+                let _ = crate::forward_provider_event(
+                    &tx,
+                    ProviderEvent::ToolCallStarted {
+                        id: "unresolved-call-1".to_string(),
+                        name: tool_name,
+                        input: serde_json::json!({ "fixture": "unresolved success" }),
+                    },
+                )
+                .await;
+            }
+
             if prompt.starts_with("subagent:") {
                 let agent_type = prompt.trim_start_matches("subagent:").trim().to_string();
                 let _ = crate::forward_provider_event(

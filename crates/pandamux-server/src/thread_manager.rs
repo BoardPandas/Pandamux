@@ -1741,6 +1741,58 @@ impl ThreadManager {
                         });
                     }
                     ProviderEvent::TurnCompleted { outcome, usage } => {
+                        let unresolved_tool_error = if outcome == TurnOutcome::Success {
+                            match store.list_tool_ledger(&turn_id) {
+                                Ok(entries) => {
+                                    let unresolved_count = entries
+                                        .iter()
+                                        .filter(|entry| entry.status == ToolLedgerStatus::Started)
+                                        .count();
+                                    (unresolved_count > 0).then(|| {
+                                        format!(
+                                            "Provider reported success while {unresolved_count} side-effecting tool result(s) remained unresolved. PandaMUX marked the turn failed and preserved the tool ledger for manual recovery."
+                                        )
+                                    })
+                                }
+                                Err(error) => Some(format!(
+                                    "Provider reported success, but PandaMUX could not verify the durable tool ledger: {error}. PandaMUX marked the turn failed to prevent an unsafe false-success state."
+                                )),
+                            }
+                        } else {
+                            None
+                        };
+                        let outcome = if let Some(message) = unresolved_tool_error {
+                            let error = ThreadEvent {
+                                thread_id: thread_id.clone(),
+                                seq: stream_seq,
+                                at_ms: at,
+                                kind: ThreadEventKind::Error {
+                                    class: "unresolved_tool_result".to_string(),
+                                    message,
+                                    recoverable: false,
+                                },
+                            };
+                            if store.append_event(&error).is_err() {
+                                break;
+                            }
+                            let _ = broadcaster.send(EventEnvelope {
+                                subscription_id: String::new(),
+                                environment_id: env_id.clone().into(),
+                                thread_id: Some(thread_id.clone()),
+                                run_id: None,
+                                seq: stream_seq,
+                                at_ms: at,
+                                kind: error.kind,
+                            });
+                            let Some(completed_seq) = stream_seq.checked_add(1) else {
+                                break;
+                            };
+                            stream_seq = completed_seq;
+                            TurnOutcome::Failed
+                        } else {
+                            outcome
+                        };
+
                         let res_tok = session_clone
                             .lock()
                             .await

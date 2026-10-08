@@ -46,7 +46,8 @@ actions. Phase 4E adds the top-level Usage surface, named provider and
 subscription presentation, canonical policy enforcement, and source-level
 accessibility work. Phase 4F adds explicit compatible failover pools,
 deterministic routing, monotonic side-effect boundaries, safe single retry,
-audited fresh-session continuation, and independent rollback switches. Exact
+audited fresh-session continuation, fail-closed unresolved-tool completion,
+and independent rollback switches. Exact
 0.60.15 passed accounting and cloned-store reconciliation. Exact 0.60.22 passed
 its executed native Windows interaction, accessibility, visual, and normal-user
 IPC rows, but P4-C3 was reopened because successful provider-login terminal

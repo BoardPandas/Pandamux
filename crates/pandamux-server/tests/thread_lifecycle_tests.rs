@@ -11,8 +11,8 @@ use pandamux_core::thread::WorktreeRef;
 use pandamux_core::{
     AccessMode, AttemptBoundary, BroadsidePolicy, EnvironmentId, FailoverPool, FailoverPoolId,
     FailoverPoolMember, OrganizationId, OrganizationPolicy, ProjectId, ProviderInstanceId,
-    RoutingCapabilityRequirements, SubscriptionKey, ThreadId, TurnAttemptStatus, TurnId,
-    TurnStatus, UsageProvider, UsageSubscription, UserSettings,
+    RoutingCapabilityRequirements, SubscriptionKey, ThreadId, ToolLedgerStatus, TurnAttemptStatus,
+    TurnId, TurnStatus, UsageProvider, UsageSubscription, UserSettings,
 };
 use pandamux_protocol::{
     HubRoutingContext, RpcRequest, ServerRole, ThreadCreateParams, ThreadSendTurnParams,
@@ -639,6 +639,129 @@ async fn provider_stream_close_emits_failed_terminal_sequence() {
     let result = final_get.result.expect("get result");
     assert_eq!(result["thread"]["status"], "errored");
     assert_eq!(result["turns"][0]["status"], "failed");
+}
+
+#[tokio::test]
+async fn provider_success_with_unresolved_tool_result_fails_closed() {
+    let store = Store::in_memory().expect("open store");
+    configure_mock_instance(&store, "mock-default", 2);
+    let drivers = Arc::new(DriverRegistry::new());
+    drivers.register(
+        ProviderKind::Custom,
+        Arc::new(MockProviderDriver::new(
+            ProviderKind::Custom,
+            "Mock Provider",
+        )),
+    );
+    let router = Router::with_drivers(
+        store.clone(),
+        ServerRole::Hub,
+        "env-test".to_string(),
+        drivers,
+    );
+
+    let created = router
+        .handle_request(RpcRequest::new(
+            1,
+            "thread.create",
+            Some(json!({
+                "title": "Unresolved Tool Result Test",
+                "providerInstanceId": "mock-default",
+                "model": "mock-fast"
+            })),
+        ))
+        .await
+        .expect("create response");
+    let thread_id = created.result.expect("thread result")["id"]
+        .as_str()
+        .expect("thread id")
+        .to_string();
+
+    let sent = router
+        .handle_request(RpcRequest::new(
+            2,
+            "thread.send_turn",
+            Some(json!({
+                "threadId": thread_id,
+                "text": "unresolved_tool_success: network_post"
+            })),
+        ))
+        .await
+        .expect("send response");
+    assert!(sent.is_success());
+    let turn_id = TurnId::new(
+        sent.result.expect("send result")["turnId"]
+            .as_str()
+            .expect("turn id"),
+    );
+    wait_for_turn_status(&store, &turn_id, TurnStatus::Failed).await;
+
+    let turn = store
+        .get_turn(&turn_id)
+        .expect("load turn")
+        .expect("persisted turn");
+    assert_eq!(turn.status, TurnStatus::Failed);
+    assert_eq!(turn.usage.expect("failed turn usage").input_tokens, 15);
+
+    let attempts = store.list_turn_attempts(&turn_id).expect("load attempts");
+    assert_eq!(attempts.len(), 1);
+    assert_eq!(attempts[0].boundary, AttemptBoundary::ToolSideEffectBegun);
+    assert_eq!(attempts[0].status, TurnAttemptStatus::Failed);
+
+    let ledger = store.list_tool_ledger(&turn_id).expect("load tool ledger");
+    assert_eq!(ledger.len(), 1);
+    assert_eq!(ledger[0].provider_item_id, "unresolved-call-1");
+    assert_eq!(ledger[0].status, ToolLedgerStatus::Started);
+    assert_eq!(ledger[0].output, None);
+    assert_eq!(ledger[0].error, None);
+
+    let thread = store
+        .get_thread(&ThreadId::new(&thread_id))
+        .expect("load thread")
+        .expect("persisted thread");
+    assert_eq!(thread.status, pandamux_core::ThreadStatus::Errored);
+    assert!(
+        store
+            .list_continuations(&ThreadId::new(&thread_id))
+            .expect("load continuations")
+            .is_empty(),
+        "ambiguous non-capacity completion must not retry or invent a continuation"
+    );
+
+    let events = store
+        .get_events(&ThreadId::new(&thread_id), None)
+        .expect("load lifecycle events");
+    assert!(
+        events
+            .windows(2)
+            .all(|window| window[1].seq == window[0].seq + 1),
+        "fail-closed events must remain contiguous"
+    );
+    assert!(events.iter().any(|event| matches!(
+        &event.kind,
+        ThreadEventKind::Error {
+            class,
+            message,
+            recoverable: false,
+        } if class == "unresolved_tool_result"
+            && message.contains("1 side-effecting tool result(s) remained unresolved")
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event.kind,
+        ThreadEventKind::TurnCompleted {
+            outcome: TurnOutcome::Failed
+        }
+    )));
+    assert!(!events.iter().any(|event| matches!(
+        event.kind,
+        ThreadEventKind::TurnCompleted {
+            outcome: TurnOutcome::Success
+        }
+    )));
+    assert!(matches!(
+        events.last().map(|event| &event.kind),
+        Some(ThreadEventKind::TurnSettled { .. })
+    ));
 }
 
 #[tokio::test]
