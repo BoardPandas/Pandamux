@@ -227,8 +227,11 @@ checkpoint, routing decision, and tool ledger. Its continuation verifies the wor
 still at the recorded checkpoint, sends a bounded handoff in a fresh provider session,
 and retires any source native resume token. The continuation target is linked before the
 handoff is sent, which makes duplicate requests restart-safe. Approval delivery is
-at-most-once and durable; completed tool results are immutable and accept an identical
-redelivery without creating another result.
+at-most-once and durable. Each completed tool result commits its immutable ledger
+transition, timeline event, and delivered marker in one SQLite transaction. An identical
+provider redelivery after replay or database restart creates no second timeline result;
+a conflicting payload fails closed, and any projection failure rolls back the complete
+transaction.
 
 Provider-reported success is not sufficient while any durable tool-ledger row
 remains `Started`. PandaMUX emits a nonrecoverable `unresolved_tool_result`

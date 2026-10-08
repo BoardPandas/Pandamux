@@ -300,9 +300,12 @@ user-visible continuation starts a fresh provider session with a bounded handoff
 that checkpoint has not changed, and never carries a native resume token across provider
 instances. The continuation target is linked durably before its handoff reaches the
 provider, and duplicate continuation, approval, and completed tool-result delivery is
-idempotent across restart. A provider cannot turn an unresolved started tool into a
-successful PandaMUX turn: completion checks the durable ledger, emits a nonrecoverable
-`unresolved_tool_result` error, preserves the ambiguous row, and fails without retry.
+idempotent across restart. A completed tool result commits its immutable ledger
+transition, timeline event, and delivered marker in one transaction, so identical
+provider replay creates no second projection. A provider cannot turn an unresolved
+started tool into a successful PandaMUX turn: completion checks the durable ledger,
+emits a nonrecoverable `unresolved_tool_result` error, preserves the ambiguous row, and
+fails without retry.
 
 Advanced settings expose independent rollback switches for usage scanning, Hub usage
 synchronization, capacity-aware routing, and automatic failover. Scanner and Hub service

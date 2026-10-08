@@ -1602,52 +1602,66 @@ impl ThreadManager {
                         } else {
                             ToolLedgerStatus::Succeeded
                         };
-                        if store
-                            .save_tool_ledger_entry(&ToolLedgerEntry {
-                                attempt_id: attempt_id.clone(),
-                                turn_id: turn_id.clone(),
-                                provider_item_id: id.clone(),
-                                name: prior
-                                    .as_ref()
-                                    .map(|entry| entry.name.clone())
-                                    .unwrap_or_else(|| "provider_tool".to_string()),
-                                input: prior
-                                    .as_ref()
-                                    .map(|entry| entry.input.clone())
-                                    .unwrap_or(serde_json::Value::Null),
-                                status: ledger_status,
-                                output: output.clone(),
-                                error: error.clone(),
-                                updated_at_ms: at,
-                            })
-                            .is_err()
-                        {
-                            break;
-                        }
+                        let ledger_entry = ToolLedgerEntry {
+                            attempt_id: attempt_id.clone(),
+                            turn_id: turn_id.clone(),
+                            provider_item_id: id.clone(),
+                            name: prior
+                                .as_ref()
+                                .map(|entry| entry.name.clone())
+                                .unwrap_or_else(|| "provider_tool".to_string()),
+                            input: prior
+                                .as_ref()
+                                .map(|entry| entry.input.clone())
+                                .unwrap_or(serde_json::Value::Null),
+                            status: ledger_status,
+                            output: output.clone(),
+                            error: error.clone(),
+                            updated_at_ms: at,
+                        };
                         let ev = ThreadEvent {
                             thread_id: thread_id.clone(),
                             seq: stream_seq,
                             at_ms: at,
                             kind: ThreadEventKind::ToolCall {
-                                item_id: id,
+                                item_id: id.clone(),
                                 name: String::new(),
                                 input: serde_json::Value::Null,
                                 status,
                                 output,
                             },
                         };
-                        if store.append_event(&ev).is_err() {
-                            break;
+                        let continuation_id = match store.continuation_for_target_turn(&turn_id) {
+                            Ok(continuation) => continuation.map(|value| value.id),
+                            Err(_) => break,
+                        };
+                        let delivery_key = format!(
+                            "tool-result:{}:{}:{}:{}",
+                            thread_id.as_str(),
+                            turn_id.as_str(),
+                            attempt_id.as_str(),
+                            id
+                        );
+                        match store.record_tool_result_event(
+                            &delivery_key,
+                            continuation_id.as_ref(),
+                            &ledger_entry,
+                            &ev,
+                        ) {
+                            Ok(true) => {
+                                let _ = broadcaster.send(EventEnvelope {
+                                    subscription_id: String::new(),
+                                    environment_id: env_id.clone().into(),
+                                    thread_id: Some(thread_id.clone()),
+                                    run_id: None,
+                                    seq: stream_seq,
+                                    at_ms: at,
+                                    kind: ev.kind,
+                                });
+                            }
+                            Ok(false) => {}
+                            Err(_) => break,
                         }
-                        let _ = broadcaster.send(EventEnvelope {
-                            subscription_id: String::new(),
-                            environment_id: env_id.clone().into(),
-                            thread_id: Some(thread_id.clone()),
-                            run_id: None,
-                            seq: stream_seq,
-                            at_ms: at,
-                            kind: ev.kind,
-                        });
                     }
                     ProviderEvent::ApprovalRequested {
                         request_id,

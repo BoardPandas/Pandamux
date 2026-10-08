@@ -408,6 +408,33 @@ impl ProviderSession for MockProviderSession {
                 .await;
             }
 
+            if prompt.starts_with("duplicate_tool_result:") {
+                let tool_name = prompt
+                    .trim_start_matches("duplicate_tool_result:")
+                    .trim()
+                    .to_string();
+                let _ = crate::forward_provider_event(
+                    &tx,
+                    ProviderEvent::ToolCallStarted {
+                        id: "duplicate-call-1".to_string(),
+                        name: tool_name.clone(),
+                        input: serde_json::json!({ "arg": "duplicate-result-fixture" }),
+                    },
+                )
+                .await;
+                for _ in 0..2 {
+                    let _ = crate::forward_provider_event(
+                        &tx,
+                        ProviderEvent::ToolCallFinished {
+                            id: "duplicate-call-1".to_string(),
+                            output: Some(format!("Executed {tool_name}")),
+                            error: None,
+                        },
+                    )
+                    .await;
+                }
+            }
+
             if prompt.starts_with("unresolved_tool_success:") {
                 let tool_name = prompt
                     .trim_start_matches("unresolved_tool_success:")

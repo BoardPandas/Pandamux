@@ -37,6 +37,9 @@ R0 development gate:
   before output, and audited fresh-session continuation after unsafe capacity exhaustion.
   Provider success fails closed when a started tool still lacks a durable result, leaving
   its ledger intact without retry or an invented continuation.
+  A completed tool result commits its immutable ledger transition, timeline event, and
+  delivered marker atomically, so identical replay after reconnect or restart cannot
+  create a second projected result.
   Authenticated remote turns carry a Hub-owned policy and pool snapshot that the node
   validates again before selecting a route. Independent rollback switches preserve
   observations while disabling scanning, Hub synchronization, capacity-aware

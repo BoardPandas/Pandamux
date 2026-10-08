@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Made completed tool-result projection atomic and restart-idempotent.** The
+  production provider event path now gives each terminal tool result a stable
+  delivery identity and commits its immutable ledger transition, timeline
+  event, and delivered marker in one SQLite transaction. Identical provider
+  redelivery after replay or database restart creates no second result;
+  conflicting payloads fail closed, and a failed timeline write rolls the
+  entire result back to its prior Started state. Store and lifecycle
+  regressions cover rollback, reopen, and duplicate provider emission.
+
 - **Fail closed when a provider reports success with an unresolved tool
   result.** Before accepting provider success, the thread manager now checks
   the durable tool ledger. Any still-started side-effecting tool, or inability

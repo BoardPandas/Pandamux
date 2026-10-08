@@ -5,8 +5,10 @@ use pandamux_core::{
     ContinuationState, EnvironmentId, ProviderInstanceId, RoutingDecision, SubscriptionKey,
     ThreadId, ToolLedgerEntry, ToolLedgerStatus, TurnAttempt, TurnAttemptId, TurnId, TurnInput,
     TurnStatus,
+    event::{ThreadEvent, ThreadEventKind, ToolCallStatus},
 };
 use rusqlite::{OptionalExtension, params};
+use sha2::{Digest, Sha256};
 
 const MAX_CONTINUATION_HANDOFF_BYTES: usize = 16 * 1024;
 
@@ -301,61 +303,9 @@ impl Store {
     }
 
     pub fn save_tool_ledger_entry(&self, entry: &ToolLedgerEntry) -> Result<(), StoreError> {
-        if entry.provider_item_id.trim().is_empty() || entry.name.trim().is_empty() {
-            return Err(StoreError::Data(
-                "tool ledger item id and name must not be empty".to_string(),
-            ));
-        }
-        let input_json = serde_json::to_string(&entry.input)?;
-        let status = serde_json::to_string(&entry.status)?;
-        let updated_at_ms = checked_i64(entry.updated_at_ms, "tool ledger updated_at_ms")?;
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
-        let existing = query_tool_entry(&tx, entry.attempt_id.as_str(), &entry.provider_item_id)?;
-        if let Some(existing) = existing {
-            let existing = decode_tool_entry(existing)?;
-            if existing.turn_id != entry.turn_id
-                || existing.name != entry.name
-                || existing.input != entry.input
-            {
-                return Err(StoreError::Data(
-                    "tool ledger identity cannot change after creation".to_string(),
-                ));
-            }
-            if existing.status != ToolLedgerStatus::Started {
-                if existing.status == entry.status
-                    && existing.output == entry.output
-                    && existing.error == entry.error
-                {
-                    return Ok(());
-                }
-                return Err(StoreError::Data(
-                    "completed tool ledger entries are immutable".to_string(),
-                ));
-            }
-        }
-        tx.execute(
-            "INSERT INTO turn_tool_ledger (
-                attempt_id, turn_id, provider_item_id, name, input_json,
-                status, output, error, updated_at_ms
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-             ON CONFLICT(attempt_id, provider_item_id) DO UPDATE SET
-                status = excluded.status,
-                output = excluded.output,
-                error = excluded.error,
-                updated_at_ms = excluded.updated_at_ms",
-            params![
-                entry.attempt_id.as_str(),
-                entry.turn_id.as_str(),
-                entry.provider_item_id,
-                entry.name,
-                input_json,
-                status,
-                entry.output,
-                entry.error,
-                updated_at_ms,
-            ],
-        )?;
+        save_tool_ledger_entry_in_transaction(&tx, entry)?;
         tx.commit()?;
         Ok(())
     }
@@ -611,18 +561,7 @@ impl Store {
         let tx = conn.transaction()?;
         if let Some(existing) = query_delivery(&tx, &delivery.delivery_key)? {
             let existing = decode_delivery(existing)?;
-            if existing.kind != delivery.kind
-                || existing.item_id != delivery.item_id
-                || existing.payload_sha256 != delivery.payload_sha256
-                || existing.payload_json != delivery.payload_json
-                || existing.turn_id != delivery.turn_id
-                || existing.thread_id != delivery.thread_id
-                || existing.continuation_id != delivery.continuation_id
-            {
-                return Err(StoreError::Data(
-                    "delivery key already represents another payload".to_string(),
-                ));
-            }
+            ensure_delivery_identity(&existing, delivery)?;
             return Ok(existing);
         }
         tx.execute(
@@ -725,6 +664,218 @@ impl Store {
         delivery.delivered_at_ms = Some(checked_u64(delivered_at_ms, "delivery delivered_at_ms")?);
         Ok(delivery)
     }
+
+    pub fn record_tool_result_event(
+        &self,
+        delivery_key: &str,
+        continuation_id: Option<&ContinuationId>,
+        entry: &ToolLedgerEntry,
+        event: &ThreadEvent,
+    ) -> Result<bool, StoreError> {
+        let (item_id, event_status, event_output) = match &event.kind {
+            ThreadEventKind::ToolCall {
+                item_id,
+                status,
+                output,
+                ..
+            } if matches!(status, ToolCallStatus::Success | ToolCallStatus::Failed) => {
+                (item_id, status, output)
+            }
+            _ => {
+                return Err(StoreError::Data(
+                    "tool-result delivery requires a terminal tool-call event".to_string(),
+                ));
+            }
+        };
+        let status_matches = matches!(
+            (&entry.status, event_status),
+            (ToolLedgerStatus::Succeeded, ToolCallStatus::Success)
+                | (ToolLedgerStatus::Failed, ToolCallStatus::Failed)
+        );
+        if delivery_key.trim().is_empty()
+            || event.thread_id.as_str().trim().is_empty()
+            || entry.turn_id.as_str().trim().is_empty()
+            || entry.provider_item_id != *item_id
+            || entry.output != *event_output
+            || entry.updated_at_ms != event.at_ms
+            || !status_matches
+        {
+            return Err(StoreError::Data(
+                "tool-result delivery identity or terminal status is inconsistent".to_string(),
+            ));
+        }
+
+        let payload_json = serde_json::to_string(&serde_json::json!({
+            "error": &entry.error,
+            "output": &entry.output,
+            "status": &entry.status,
+        }))?;
+        let payload_sha256 = format!("{:x}", Sha256::digest(payload_json.as_bytes()));
+        let delivery = ContinuationDelivery {
+            delivery_key: delivery_key.to_string(),
+            continuation_id: continuation_id.cloned(),
+            thread_id: event.thread_id.clone(),
+            turn_id: entry.turn_id.clone(),
+            kind: ContinuationDeliveryKind::ToolResult,
+            item_id: entry.provider_item_id.clone(),
+            payload_sha256,
+            payload_json,
+            state: ContinuationDeliveryState::Pending,
+            created_at_ms: event.at_ms,
+            delivered_at_ms: None,
+        };
+        validate_delivery(&delivery)?;
+
+        let kind = serde_json::to_string(&delivery.kind)?;
+        let pending_state = serde_json::to_string(&ContinuationDeliveryState::Pending)?;
+        let delivered_state = serde_json::to_string(&ContinuationDeliveryState::Delivered)?;
+        let created_at_ms = checked_i64(delivery.created_at_ms, "delivery created_at_ms")?;
+        let delivered_at_ms = checked_i64(event.at_ms, "delivery delivered_at_ms")?;
+        let event_seq = checked_i64(event.seq, "thread event sequence")?;
+        let event_at_ms = checked_i64(event.at_ms, "thread event timestamp")?;
+        let event_payload_json = serde_json::to_string(&event.kind)?;
+
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let attempt = query_turn_attempt(&tx, entry.attempt_id.as_str())?
+            .map(decode_turn_attempt)
+            .transpose()?
+            .ok_or_else(|| StoreError::Data("tool-result attempt does not exist".to_string()))?;
+        if attempt.turn_id != entry.turn_id || attempt.thread_id != event.thread_id {
+            return Err(StoreError::Data(
+                "tool-result attempt does not belong to the event thread and turn".to_string(),
+            ));
+        }
+        if let Some(existing) = query_delivery(&tx, &delivery.delivery_key)? {
+            let existing = decode_delivery(existing)?;
+            ensure_delivery_identity(&existing, &delivery)?;
+            if existing.state == ContinuationDeliveryState::Delivered {
+                return Ok(false);
+            }
+        } else {
+            tx.execute(
+                "INSERT INTO continuation_deliveries (
+                    delivery_key, continuation_id, thread_id, turn_id, kind, item_id,
+                    payload_sha256, payload_json, state, created_at_ms, delivered_at_ms
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL)",
+                params![
+                    delivery.delivery_key,
+                    delivery
+                        .continuation_id
+                        .as_ref()
+                        .map(ContinuationId::as_str),
+                    delivery.thread_id.as_str(),
+                    delivery.turn_id.as_str(),
+                    kind,
+                    delivery.item_id,
+                    delivery.payload_sha256,
+                    delivery.payload_json,
+                    pending_state,
+                    created_at_ms,
+                ],
+            )?;
+        }
+
+        save_tool_ledger_entry_in_transaction(&tx, entry)?;
+        tx.execute(
+            "INSERT INTO events (thread_id, seq, at_ms, kind, payload_json)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                event.thread_id.as_str(),
+                event_seq,
+                event_at_ms,
+                "thread_event",
+                event_payload_json,
+            ],
+        )?;
+        tx.execute(
+            "UPDATE continuation_deliveries
+             SET state = ?2, delivered_at_ms = ?3
+             WHERE delivery_key = ?1",
+            params![delivery.delivery_key, delivered_state, delivered_at_ms],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+}
+
+fn save_tool_ledger_entry_in_transaction(
+    tx: &rusqlite::Transaction<'_>,
+    entry: &ToolLedgerEntry,
+) -> Result<(), StoreError> {
+    if entry.provider_item_id.trim().is_empty() || entry.name.trim().is_empty() {
+        return Err(StoreError::Data(
+            "tool ledger item id and name must not be empty".to_string(),
+        ));
+    }
+    let input_json = serde_json::to_string(&entry.input)?;
+    let status = serde_json::to_string(&entry.status)?;
+    let updated_at_ms = checked_i64(entry.updated_at_ms, "tool ledger updated_at_ms")?;
+    let existing = query_tool_entry(tx, entry.attempt_id.as_str(), &entry.provider_item_id)?;
+    if let Some(existing) = existing {
+        let existing = decode_tool_entry(existing)?;
+        if existing.turn_id != entry.turn_id
+            || existing.name != entry.name
+            || existing.input != entry.input
+        {
+            return Err(StoreError::Data(
+                "tool ledger identity cannot change after creation".to_string(),
+            ));
+        }
+        if existing.status != ToolLedgerStatus::Started {
+            if existing.status == entry.status
+                && existing.output == entry.output
+                && existing.error == entry.error
+            {
+                return Ok(());
+            }
+            return Err(StoreError::Data(
+                "completed tool ledger entries are immutable".to_string(),
+            ));
+        }
+    }
+    tx.execute(
+        "INSERT INTO turn_tool_ledger (
+            attempt_id, turn_id, provider_item_id, name, input_json,
+            status, output, error, updated_at_ms
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT(attempt_id, provider_item_id) DO UPDATE SET
+            status = excluded.status,
+            output = excluded.output,
+            error = excluded.error,
+            updated_at_ms = excluded.updated_at_ms",
+        params![
+            entry.attempt_id.as_str(),
+            entry.turn_id.as_str(),
+            entry.provider_item_id,
+            entry.name,
+            input_json,
+            status,
+            entry.output,
+            entry.error,
+            updated_at_ms,
+        ],
+    )?;
+    Ok(())
+}
+
+fn ensure_delivery_identity(
+    existing: &ContinuationDelivery,
+    delivery: &ContinuationDelivery,
+) -> Result<(), StoreError> {
+    if existing.kind != delivery.kind
+        || existing.item_id != delivery.item_id
+        || existing.payload_sha256 != delivery.payload_sha256
+        || existing.payload_json != delivery.payload_json
+        || existing.turn_id != delivery.turn_id
+        || existing.thread_id != delivery.thread_id
+        || existing.continuation_id != delivery.continuation_id
+    {
+        return Err(StoreError::Data(
+            "delivery key already represents another payload".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_attempt(attempt: &TurnAttempt) -> Result<(), StoreError> {
@@ -1365,6 +1516,182 @@ mod tests {
         let mut conflicting = first;
         conflicting.payload_sha256 = "c".repeat(64);
         assert!(store.prepare_continuation_delivery(&conflicting).is_err());
+    }
+
+    #[test]
+    fn tool_result_event_is_atomic_and_idempotent_after_database_restart() {
+        let temp = tempfile::tempdir().expect("temporary store directory");
+        let path = temp.path().join("pandamux.db");
+        let delivery_key = "tool-result:thread-failover:turn-failover:attempt-one:tool-one";
+        let (finished, event) = {
+            let store = Store::open(&path).expect("open first store");
+            let (thread, turn) = seed_turn(&store);
+            let value = attempt(&thread, &turn);
+            store.save_turn_attempt(&value).expect("save attempt");
+            let started = ToolLedgerEntry {
+                attempt_id: value.id,
+                turn_id: turn.id.clone(),
+                provider_item_id: "tool-one".to_string(),
+                name: "network".to_string(),
+                input: serde_json::json!({"url":"http://127.0.0.1/fixture"}),
+                status: ToolLedgerStatus::Started,
+                output: None,
+                error: None,
+                updated_at_ms: 110,
+            };
+            store
+                .save_tool_ledger_entry(&started)
+                .expect("save started tool entry");
+            let mut finished = started;
+            finished.status = ToolLedgerStatus::Succeeded;
+            finished.output = Some("committed".to_string());
+            finished.updated_at_ms = 120;
+            let event = ThreadEvent {
+                thread_id: thread.id,
+                seq: 1,
+                at_ms: 120,
+                kind: ThreadEventKind::ToolCall {
+                    item_id: "tool-one".to_string(),
+                    name: String::new(),
+                    input: serde_json::Value::Null,
+                    status: ToolCallStatus::Success,
+                    output: Some("committed".to_string()),
+                },
+            };
+            assert!(
+                store
+                    .record_tool_result_event(delivery_key, None, &finished, &event)
+                    .expect("record tool result")
+            );
+            assert_eq!(
+                store
+                    .get_continuation_delivery(delivery_key)
+                    .expect("load tool delivery")
+                    .expect("tool delivery exists")
+                    .state,
+                ContinuationDeliveryState::Delivered
+            );
+            (finished, event)
+        };
+
+        let reopened = Store::open(&path).expect("reopen store");
+        assert!(
+            !reopened
+                .record_tool_result_event(delivery_key, None, &finished, &event)
+                .expect("repeat tool result after restart")
+        );
+        assert_eq!(
+            reopened
+                .list_tool_ledger(&finished.turn_id)
+                .expect("load durable ledger"),
+            vec![finished.clone()]
+        );
+        assert_eq!(
+            reopened
+                .get_events(&event.thread_id, None)
+                .expect("load durable tool events"),
+            vec![event.clone()]
+        );
+        let delivery = reopened
+            .get_continuation_delivery(delivery_key)
+            .expect("load durable delivery")
+            .expect("durable delivery exists");
+        assert_eq!(delivery.state, ContinuationDeliveryState::Delivered);
+        assert_eq!(delivery.delivered_at_ms, Some(120));
+
+        let mut conflicting = finished;
+        conflicting.status = ToolLedgerStatus::Failed;
+        conflicting.output = None;
+        conflicting.error = Some("conflicting replay".to_string());
+        conflicting.updated_at_ms = 130;
+        let conflicting_event = ThreadEvent {
+            thread_id: event.thread_id,
+            seq: 2,
+            at_ms: 130,
+            kind: ThreadEventKind::ToolCall {
+                item_id: "tool-one".to_string(),
+                name: String::new(),
+                input: serde_json::Value::Null,
+                status: ToolCallStatus::Failed,
+                output: None,
+            },
+        };
+        assert!(
+            reopened
+                .record_tool_result_event(delivery_key, None, &conflicting, &conflicting_event,)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn tool_result_event_rolls_back_when_projection_cannot_commit() {
+        let store = Store::in_memory().expect("store");
+        let (thread, turn) = seed_turn(&store);
+        let value = attempt(&thread, &turn);
+        store.save_turn_attempt(&value).expect("save attempt");
+        let started = ToolLedgerEntry {
+            attempt_id: value.id,
+            turn_id: turn.id,
+            provider_item_id: "tool-one".to_string(),
+            name: "network".to_string(),
+            input: serde_json::json!({"url":"http://127.0.0.1/fixture"}),
+            status: ToolLedgerStatus::Started,
+            output: None,
+            error: None,
+            updated_at_ms: 110,
+        };
+        store
+            .save_tool_ledger_entry(&started)
+            .expect("save started tool entry");
+        let occupied = ThreadEvent {
+            thread_id: thread.id.clone(),
+            seq: 1,
+            at_ms: 115,
+            kind: ThreadEventKind::Notice {
+                level: "info".to_string(),
+                message: "occupy sequence".to_string(),
+            },
+        };
+        store
+            .append_event(&occupied)
+            .expect("occupy event sequence");
+
+        let mut finished = started.clone();
+        finished.status = ToolLedgerStatus::Succeeded;
+        finished.output = Some("committed".to_string());
+        finished.updated_at_ms = 120;
+        let conflicting_event = ThreadEvent {
+            thread_id: thread.id.clone(),
+            seq: 1,
+            at_ms: 120,
+            kind: ThreadEventKind::ToolCall {
+                item_id: "tool-one".to_string(),
+                name: String::new(),
+                input: serde_json::Value::Null,
+                status: ToolCallStatus::Success,
+                output: Some("committed".to_string()),
+            },
+        };
+        let delivery_key = "tool-result:rollback";
+        assert!(
+            store
+                .record_tool_result_event(delivery_key, None, &finished, &conflicting_event,)
+                .is_err()
+        );
+        assert_eq!(
+            store.list_tool_ledger(&started.turn_id).expect("ledger"),
+            vec![started]
+        );
+        assert_eq!(
+            store
+                .get_continuation_delivery(delivery_key)
+                .expect("load rolled-back delivery"),
+            None
+        );
+        assert_eq!(
+            store.get_events(&thread.id, None).expect("load events"),
+            vec![occupied]
+        );
     }
 
     #[test]

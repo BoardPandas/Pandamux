@@ -9,8 +9,9 @@ use pandamux_core::event::{ThreadEventKind, TurnOutcome};
 use pandamux_core::provider_config::{ProviderCapabilities, ProviderInstanceConfig, ProviderKind};
 use pandamux_core::thread::WorktreeRef;
 use pandamux_core::{
-    AccessMode, AttemptBoundary, BroadsidePolicy, EnvironmentId, FailoverPool, FailoverPoolId,
-    FailoverPoolMember, OrganizationId, OrganizationPolicy, ProjectId, ProviderInstanceId,
+    AccessMode, AttemptBoundary, BroadsidePolicy, ContinuationDeliveryKind,
+    ContinuationDeliveryState, EnvironmentId, FailoverPool, FailoverPoolId, FailoverPoolMember,
+    OrganizationId, OrganizationPolicy, ProjectId, ProviderInstanceId,
     RoutingCapabilityRequirements, SubscriptionKey, ThreadId, ToolLedgerStatus, TurnAttemptStatus,
     TurnId, TurnStatus, UsageProvider, UsageSubscription, UserSettings,
 };
@@ -762,6 +763,105 @@ async fn provider_success_with_unresolved_tool_result_fails_closed() {
         events.last().map(|event| &event.kind),
         Some(ThreadEventKind::TurnSettled { .. })
     ));
+}
+
+#[tokio::test]
+async fn duplicate_provider_tool_result_is_persisted_and_projected_once() {
+    let store = Store::in_memory().expect("open store");
+    configure_mock_instance(&store, "mock-default", 2);
+    let drivers = Arc::new(DriverRegistry::new());
+    drivers.register(
+        ProviderKind::Custom,
+        Arc::new(MockProviderDriver::new(
+            ProviderKind::Custom,
+            "Mock Provider",
+        )),
+    );
+    let router = Router::with_drivers(
+        store.clone(),
+        ServerRole::Hub,
+        "env-test".to_string(),
+        drivers,
+    );
+
+    let created = router
+        .handle_request(RpcRequest::new(
+            1,
+            "thread.create",
+            Some(json!({
+                "title": "Duplicate Tool Result Test",
+                "providerInstanceId": "mock-default",
+                "model": "mock-fast"
+            })),
+        ))
+        .await
+        .expect("create response");
+    let thread_id = ThreadId::new(
+        created.result.expect("thread result")["id"]
+            .as_str()
+            .expect("thread id"),
+    );
+
+    let sent = router
+        .handle_request(RpcRequest::new(
+            2,
+            "thread.send_turn",
+            Some(json!({
+                "threadId": thread_id.as_str(),
+                "text": "duplicate_tool_result: network_post"
+            })),
+        ))
+        .await
+        .expect("send response");
+    assert!(sent.is_success());
+    let result = sent.result.expect("send result");
+    let turn_id = TurnId::new(result["turnId"].as_str().expect("turn id"));
+    let attempt_id = result["attemptId"].as_str().expect("attempt id");
+    wait_for_turn_status(&store, &turn_id, TurnStatus::Completed).await;
+
+    let ledger = store.list_tool_ledger(&turn_id).expect("load tool ledger");
+    assert_eq!(ledger.len(), 1);
+    assert_eq!(ledger[0].provider_item_id, "duplicate-call-1");
+    assert_eq!(ledger[0].status, ToolLedgerStatus::Succeeded);
+    assert_eq!(ledger[0].output.as_deref(), Some("Executed network_post"));
+
+    let events = store
+        .get_events(&thread_id, None)
+        .expect("load lifecycle events");
+    assert!(
+        events
+            .windows(2)
+            .all(|window| window[1].seq == window[0].seq + 1),
+        "deduplicated tool result events must remain contiguous"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(
+                &event.kind,
+                ThreadEventKind::ToolCall {
+                    item_id,
+                    status: pandamux_core::ToolCallStatus::Success,
+                    ..
+                } if item_id == "duplicate-call-1"
+            ))
+            .count(),
+        1
+    );
+
+    let delivery_key = format!(
+        "tool-result:{}:{}:{}:duplicate-call-1",
+        thread_id.as_str(),
+        turn_id.as_str(),
+        attempt_id
+    );
+    let delivery = store
+        .get_continuation_delivery(&delivery_key)
+        .expect("load tool-result delivery")
+        .expect("tool-result delivery exists");
+    assert_eq!(delivery.kind, ContinuationDeliveryKind::ToolResult);
+    assert_eq!(delivery.state, ContinuationDeliveryState::Delivered);
+    assert!(delivery.delivered_at_ms.is_some());
 }
 
 #[tokio::test]
