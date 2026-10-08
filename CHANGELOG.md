@@ -65,6 +65,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Reopened the scoped P4-C3 native rows affected by the 0.60.59 UI fix.**
+  The Phase 4 plan and acceptance ledger now distinguish the prior accepted
+  terminal TextPattern and IPC evidence from the provider-login confirmation,
+  Surfaces handoff, scaling, visual, High Contrast, and accessibility rows that
+  must be rerun on exact 0.60.59 Windows artifacts. Version 0.60.60 records
+  this acceptance boundary only; it adds no runtime behavior or native result.
+
 - **Rebuilt the maintained wiki for the current GPUI architecture.** The
   generated documentation now maps all 142 Rust source modules across the nine
   active crates, documents provider routing and explicit login behavior, and

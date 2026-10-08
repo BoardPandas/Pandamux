@@ -5,7 +5,10 @@ Updated: 2026-10-08
 
 Status: **Accounting passed; the P4-C3 terminal, Narrator, visual, scaling, and
 IPC rows passed on exact 0.60.41; the provider/model routing row passed local,
-live, and native Windows acceptance on exact 0.60.43; P4-C5 remains Partial
+live, and native Windows acceptance on exact 0.60.43; exact 0.60.59 fixes
+provider-login discoverability and passes the complete local gate, but reopens
+its affected P4-C3 native interaction, visual, scaling, High Contrast, and
+accessibility rows; P4-C5 remains Partial
 with supporting live post-side-effect proxy-loss evidence on exact 0.60.43 and
 approval plus loopback-network recovery evidence on exact 0.60.47, atomic
 tool-result source evidence, a live pending-approval restart Pass, and an exact
@@ -33,8 +36,11 @@ record. Exact 0.60.43 commit
 provider/model selection route and passed the complete local gate, schema
 migration, live model discovery, and a real Codex turn. Its exact limited-user
 Windows artifacts then passed native build, headless smoke, visible no-route
-fallback, and authenticated configured-route picker interaction. P4-C3 is Pass
-again, and the unaffected 0.60.41 rows above remain Pass. Exact 0.60.17 commit
+fallback, and authenticated configured-route picker interaction. Exact 0.60.59
+later changed the provider-login confirmation, panel layout, terminal handoff,
+and titlebar toggle. Its local gate passed, but the corresponding native rows
+are Unrun, so P4-C3 is reopened only for that scope. The unchanged 0.60.41
+terminal TextPattern and IPC rows remain Pass. Exact 0.60.17 commit
 `2f56a27` passed the scanner, Hub
 synchronization, conservative capacity projection, route-explanation, and
 rollback-control portions of P4-C5. Real provider quota exhaustion and real
@@ -279,6 +285,14 @@ activation, or release occurred.
   version `0.60.57` records the evidence only. No 0.60.57 executable, native,
   provider-capacity, production, push, deployment, activation, or release
   result is claimed.
+- Exact P4-C3 provider-login discoverability repair source: clean commit
+  `06ed48cb8fe55c750905788c0bc9ec0a8e51f805`, version `0.60.59`. It pins
+  login confirmation above the provider scroller, makes the Surfaces toggle
+  state explicit, keeps the right panel from collapsing, and opens the
+  Terminal surface through one tested state transition. Its complete local
+  source gate passed. No native Windows artifact or interaction result is
+  claimed. Workspace version `0.60.60` records this scoped acceptance reopening
+  only; it adds no new runtime behavior or native evidence.
 - The intermediate 0.60.2 commit `8a52d2a21da1d5d0f69540864a6162d2b30375bc`
   repaired direct UI Automation activation for Save and Cancel. The 0.60.3
   follow-up exposed the editor text fields on semantic nodes tied to their real
@@ -1709,9 +1723,9 @@ The original checkout and retained Galahad acceptance database were not edited.
 No push, CI, signing, packaging, deployment, production activation, or release
 occurred.
 
-## Exact 0.60.41 P4-C3 native Windows acceptance
+## Historical exact 0.60.41 P4-C3 native Windows acceptance
 
-P4-C3 is **Pass** on clean commit
+P4-C3 was **Pass** for clean commit
 `c6a20ff4f768747d0dadd59b88b40d3e20f7674d`, version `0.60.41`. The retained
 host build root is
 `C:\ProgramData\PandaMUX\acceptance\phase4-c6a20ff-0.60.41-p4-c3-text-ranges-build`.
@@ -1997,12 +2011,71 @@ switch, Guest Service Interface disabled, default 1920 by 1200 video, and all
 eight original checkpoint IDs unchanged.
 
 The combined evidence proves live server-owned discovery and execution plus the
-native configured-route and no-route desktop behaviors. P4-C3 is Pass again.
-It is not quota exhaustion, failover, or an interruption after output or an
-external side effect, so P4-C5 remains Partial. The accepted 0.60.41
-login-terminal, Narrator, scaling, display-mode, visual, and IPC rows are
-unchanged and remain Pass. No push, CI, signing, packaging, deployment,
-production activation, or release occurred.
+native configured-route and no-route desktop behaviors. It is not quota
+exhaustion, failover, or an interruption after output or an external side
+effect, so P4-C5 remains Partial. These 0.60.43 results remain valid evidence,
+but the later 0.60.59 UI change reopens the affected provider-login rows as
+recorded below. No push, CI, signing, packaging, deployment, production
+activation, or release occurred.
+
+## Exact 0.60.59 provider-login discoverability repair, native rerun pending
+
+Result: **Local source Pass; scoped P4-C3 native rows Unrun.** Clean commit
+`06ed48cb8fe55c750905788c0bc9ec0a8e51f805`, version `0.60.59`, repairs two
+problems observed during normal use after the earlier native matrix. The
+prepared login confirmation could be inserted below the current provider-list
+scroll position, and successful launch could leave the user unsure whether the
+right-side Surfaces panel had opened because its titlebar control exposed no
+open state.
+
+The repair keeps confirmation outside the scrolling provider list. Successful
+launch now installs the login terminal, opens Surfaces, and selects Terminal
+through one state transition, while the status banner says that the terminal is
+on the right. The main Settings surface may shrink beside the panel, but the
+panel retains its configured width. While open, the titlebar control is selected
+and reads `Hide Surfaces`; its tooltip and accessible name announce the close
+action. Focused regressions cover the panel state transition and both toggle
+presentations.
+
+The exact source passed:
+
+- `cargo fmt --all --check`
+- `node scripts/check-claude-wiring.mjs`
+- `pwsh -File scripts/check-rust-boundaries.ps1`
+- `cargo clippy --locked --workspace --all-targets -- -D warnings`
+- `cargo test --locked --workspace`, with 437 passed, zero failed, and two
+  intentional real-shell ConPTY tests ignored
+- `cargo deny check advisories licenses`, with policy success and the retained
+  unmatched `Unicode-DFS-2016` allowance plus yanked transitive
+  `chacha20 0.10.1` and `yoke-derive 0.8.3` warnings
+- `cargo run --locked -p pandamux-desktop -- --headless`, with
+  `ALL CHECKS PASSED`
+- maintained-doc source, link, citation, and Mermaid validation, with all 142
+  Rust source modules mapped and no warning or error
+- diff hygiene and exact version checks
+
+Because this commit changes the successful-login UI after the accepted native
+runs, the following exact 0.60.59 rows must run on Windows before P4-C3 can
+return to Pass:
+
+1. Clean limited-user MSVC desktop, server, and CLI build plus exact hashes and
+   headless smoke.
+2. At 100 and 200 percent scale, prepare login while the provider list is
+   scrolled, prove the confirmation remains visible, launch it, and prove the
+   right-side Terminal surface is visible, focused, interactive, closable, and
+   recoverable through the titlebar control. Repeat the ownership assertion for
+   a remote login fixture.
+3. Inspect dark and light screenshots, High Contrast selected and focus states,
+   and disabled-animation state clarity without relying on tint alone.
+4. Verify UI Automation names, selected state, and open or close action, then
+   perform genuine Narrator traversal through the toggle and the opened terminal
+   output.
+
+The terminal output TextPattern implementation and named-pipe security boundary
+did not change, so their accepted 0.60.41 evidence remains Pass. Local tests do
+not substitute for the scoped native rows above. No VM was used for this repair,
+and no native, live-provider, production, push, CI, signing, packaging,
+deployment, activation, or release result is claimed.
 
 ## Exact 0.60.43 P4-C5 supporting post-side-effect proxy-loss rehearsal
 
@@ -3174,6 +3247,18 @@ This documentation snapshot does not turn the exact 0.60.52 live result into a
 0.60.54 executable, native, provider-capacity, physical-laptop, production,
 push, deployment, activation, or release claim.
 
+Exact 0.60.59 commit
+`06ed48cb8fe55c750905788c0bc9ec0a8e51f805` passed formatting, the Rust
+boundary and Claude wiring guards, strict locked all-target workspace Clippy,
+437 workspace tests with zero failures and two intentional real-shell ignores,
+dependency policy, desktop headless verification, maintained-doc validation,
+and diff hygiene. The original checkout remained at
+`9511d0e22d44192f106e2f84a7c96b96d76734b6` with status fingerprint
+`53ecd186cf08d3fe7fb727122e2a321f2ea00cd99ef53bbff3353e8d46c1f535`,
+and all eleven historical recovery bundles remained untracked and untouched.
+This local verification creates no native Windows or production acceptance
+claim.
+
 `cargo-deny` 0.20.2 could not parse the old `deny.toml` syntax. The follow-up
 configuration change removed deprecated keys and scoped seven existing
 non-allowlisted transitive licenses to their exact crates and versions. With
@@ -3191,7 +3276,12 @@ especially for the scoped MPL-2.0 exceptions.
 
 Phase 4 cannot yet be marked exited under `tasks/plan-rewrite.md`:
 
-1. Close the remaining live P4-C5 failover row with a real pre-output provider
+1. Run the scoped exact 0.60.59 P4-C3 Windows matrix for provider-login
+   confirmation visibility, Surfaces handoff and recovery, scaling, visual
+   review, High Contrast, disabled-animation clarity, UI Automation, and
+   genuine Narrator traversal. The unchanged terminal TextPattern and IPC rows
+   do not need to be repeated.
+2. Close the remaining live P4-C5 failover row with a real pre-output provider
    capacity failure and one retry on the explicitly allowed pool.
    Exact 0.60.17 already
    passes scanner durability, reconnect and bounded backfill, capacity
@@ -3209,10 +3299,11 @@ Phase 4 cannot yet be marked exited under `tasks/plan-rewrite.md`:
    Exact 0.60.56 passes the live credit-serviceability correction check with
    capacity-aware routing enabled, but paid credits kept Codex serviceable.
    None of these results substitutes for the remaining real capacity row.
-2. Complete the P4-C7 archive and maintained-document synchronization after the
+3. Complete the P4-C7 archive and maintained-document synchronization after the
    remaining P4-C5 and P4-C6 live rows stabilize. This record already reflects
-   the complete P4-C3 Pass and the P4-C5 Partial result.
-3. Complete the explicitly deferred R0.5 30-minute physical laptop disconnect
+   the historical P4-C3 evidence, scoped 0.60.59 reopening, and P4-C5 Partial
+   result.
+4. Complete the explicitly deferred R0.5 30-minute physical laptop disconnect
    and sleep checks before production acceptance or release.
 
 The acceptance VM is still a shared lab. Its existing network attachment and

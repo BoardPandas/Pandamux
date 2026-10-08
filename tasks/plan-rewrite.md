@@ -1,8 +1,8 @@
 # PandaMUX Rewrite: Chat-First Agent Client with Remote Environments, Multi-Repo Fleet Orchestration, Agents, Schedules, Full MCP Settings Control, and Broadside Sharing
 
 Date: 2026-09-25 (Approved 2026-09-26; recovery rewrite 2026-09-28; Phase 4 closure rewrite 2026-10-06; accounting and native acceptance 2026-10-07; continuation restart, external-service acceptance, and capacity interpretation correction 2026-10-08)
-Status: **Phases 0 to 3 and Phase 4A through 4F implementation are recorded; P4-C1, P4-C2, and P4-C4 passed on exact 0.60.15; the terminal, Narrator, visual, scaling, and IPC rows passed on exact 0.60.41; the provider/model routing row passed local, live, and native Windows acceptance on exact 0.60.43; exact 0.60.43 passed supporting post-side-effect proxy-loss and Hyper-V recovery rehearsals; exact 0.60.47 repaired unresolved-tool false success and passed supporting approval plus loopback-network recovery; exact 0.60.49 made tool-result projection atomic and passed the live pending-approval plus exact tool-result process-crash restart rows; exact 0.60.52 repaired continuation route persistence, passed the pending-continuation restart row, and then passed the real external-service interruption row; later exact 0.60.52 and 0.60.55 capacity diagnostics were rejected when Codex remained serviceable and exposed false hard-limit interpretations corrected and live-proven on exact 0.60.56; and P4-C5 remains Partial, so real pre-output capacity, final documentation, and physical acceptance gates keep Phase 4 open**
-Baseline: The preserved original checkout remains PandaMUX v0.53.44 at `9511d0e22d44`; active recovery work is isolated on `codex/recovery-r0`, with exact 0.60.15 accounting evidence at `3a77382`, exact 0.60.41 native Windows evidence at `c6a20ff4f768747d0dadd59b88b40d3e20f7674d`, exact 0.60.43 local, live, and native provider-routing plus supporting recovery evidence at `372f2ae83e67a62cd3b382e5db52af96d00a85ce`, exact 0.60.47 fail-closed plus supporting approval/network evidence at `1822486b4f7d98ba6026bbfd7224e97f09e447c9`, exact 0.60.49 atomic tool-result, pending-approval restart, and exact process-crash evidence at `d09641e86cd06d72d7312ceb1fa3b20e5931ff5f`, exact 0.60.52 continuation-route, pending-continuation restart, real external-service interruption, and rejected capacity-diagnostic evidence at `5d8b77d7086a7a266251cd3106e5f124d6cd2aec`, exact 0.60.55 source plus rejected credit-serviceability diagnostics at `025e443a8f0113962e75b9e9b0beaa4b3549f8c5`, and exact 0.60.56 credit-serviceability source and live evidence at `2ca7d70210f64bc8896e30903fe073d7c5dad65e`. Workspace version 0.60.57 records that evidence only.
+Status: **Phases 0 to 3 and Phase 4A through 4F implementation are recorded; P4-C1, P4-C2, and P4-C4 passed on exact 0.60.15; the terminal, Narrator, visual, scaling, and IPC rows passed on exact 0.60.41; the provider/model routing row passed local, live, and native Windows acceptance on exact 0.60.43; exact 0.60.43 passed supporting post-side-effect proxy-loss and Hyper-V recovery rehearsals; exact 0.60.47 repaired unresolved-tool false success and passed supporting approval plus loopback-network recovery; exact 0.60.49 made tool-result projection atomic and passed the live pending-approval plus exact tool-result process-crash restart rows; exact 0.60.52 repaired continuation route persistence, passed the pending-continuation restart row, and then passed the real external-service interruption row; later exact 0.60.52 and 0.60.55 capacity diagnostics were rejected when Codex remained serviceable and exposed false hard-limit interpretations corrected and live-proven on exact 0.60.56; exact 0.60.59 fixes provider-login discoverability and passes the complete local gate but reopens its affected P4-C3 native interaction, visual, scaling, High Contrast, and accessibility rows; and P4-C5 remains Partial, so the scoped P4-C3 rerun, real pre-output capacity, final documentation, and physical acceptance gates keep Phase 4 open**
+Baseline: The preserved original checkout remains PandaMUX v0.53.44 at `9511d0e22d44`; active recovery work is isolated on `codex/recovery-r0`, with exact 0.60.15 accounting evidence at `3a77382`, exact 0.60.41 native Windows evidence at `c6a20ff4f768747d0dadd59b88b40d3e20f7674d`, exact 0.60.43 local, live, and native provider-routing plus supporting recovery evidence at `372f2ae83e67a62cd3b382e5db52af96d00a85ce`, exact 0.60.47 fail-closed plus supporting approval/network evidence at `1822486b4f7d98ba6026bbfd7224e97f09e447c9`, exact 0.60.49 atomic tool-result, pending-approval restart, and exact process-crash evidence at `d09641e86cd06d72d7312ceb1fa3b20e5931ff5f`, exact 0.60.52 continuation-route, pending-continuation restart, real external-service interruption, and rejected capacity-diagnostic evidence at `5d8b77d7086a7a266251cd3106e5f124d6cd2aec`, exact 0.60.55 source plus rejected credit-serviceability diagnostics at `025e443a8f0113962e75b9e9b0beaa4b3549f8c5`, exact 0.60.56 credit-serviceability source and live evidence at `2ca7d70210f64bc8896e30903fe073d7c5dad65e`, and exact 0.60.59 local provider-login discoverability source at `06ed48cb8fe55c750905788c0bc9ec0a8e51f805`. Workspace version 0.60.60 records the scoped acceptance reopening only.
 
 Relationship to `tasks/plan-repo.md`: that file is the **historical** record of the Electron to native Rust rewrite (Phases 1 to 7, complete). This plan supersedes its product direction (terminal multiplexer) but keeps its engineering posture: backend-owned state, single writer, intent-in/delta-out, deliberate dependency pins, crate isolation, and tag-driven signed releases. Its Section 12 design tokens carry over where they still apply (Section 8). UI history: Iced is removed. An earlier draft of this plan chose Tauri 2 + React; the user replaced that with **GPUI + gpui-kit** (all Rust) on 2026-09-25, and Tauri 2 remains only as the documented fallback if the Phase 0 GPUI spike fails. `plan-repo.md` rejected GPUI for three reasons, each now handled explicitly: GPL contamination (zed#55470, still open; tracked as a license gate in S6 and Risks), "not built for external consumption" (gpui-kit publishes exact-pinned `gpui-pre` snapshots and ships in production in Longbridge Pro on Windows, macOS, and Linux), and weak accessibility. Phase 0 treated accessibility as exploratory; the rewritten Phase 4 and Phase 7 criteria make the defined v1 accessibility matrix release-gating.
 
@@ -272,12 +272,17 @@ Terminology used throughout:
   100 and 200 percent, High Contrast, disabled animations, genuine Narrator
   traversal with exact READY, ECHO, and reopened-output phrases, visual review,
   and the complete local plus independent-peer named-pipe security matrix.
-  Those P4-C3 rows remain Pass. Exact 0.60.43 later passed local live
-  provider/model routing and its exact native Windows configured-route and
-  no-route picker rows, so P4-C3 is Pass again. Version 0.60.42 was the
-  documentation-only accounting follow-up and has no executable or native
+  Those historical P4-C3 rows remain evidence. Exact 0.60.43 later passed local
+  live provider/model routing and its exact native Windows configured-route and
+  no-route picker rows. Exact 0.60.59 then changed the successful-login
+  confirmation, Surfaces panel layout, terminal handoff, and titlebar toggle.
+  Its complete local gate passed, but the corresponding native interaction,
+  visual, scaling, High Contrast, and accessibility rows are reopened. The
+  unchanged terminal TextPattern and named-pipe rows remain Pass. Version
+  0.60.60 records this scoped reopening only and has no executable or native
   claim.
-- Phase 4 remains open on real pre-output capacity exhaustion and the final
+- Phase 4 remains open on the scoped 0.60.59 native Windows rerun, real
+  pre-output capacity exhaustion, and the final
   documentation archive after the remaining P4-C5 row stabilizes. The
   re-scoped physical laptop
   disconnect and sleep rows remain production-acceptance and release blockers.
@@ -2198,9 +2203,12 @@ Windows artifacts. Native UI Automation proved that an unavailable route
 visibly redirects to Provider Settings without creating a thread and that
 authenticated Codex 0.159.2 renders `Codex CLI` plus live `GPT-6.1-Sol` before
 creating a thread whose persisted `codex-default` and `gpt-6.1-sol` values
-match the shipped CLI. These results close the later native picker row, so
-P4-C3 is Pass again. The unchanged 0.60.41 login-terminal, Narrator, scaling,
-High Contrast, disabled-animation, visual, and named-pipe rows remain Pass.
+match the shipped CLI. The exact 0.60.43 picker row passed. Exact 0.60.59 later
+changed the provider-login confirmation and terminal handoff UI, so P4-C3 is
+reopened only for the successful-login interaction, panel layout, scaling,
+visual, High Contrast, and accessible toggle rows. The unchanged 0.60.41 terminal output
+TextPattern and named-pipe security rows remain Pass. The scoped native rerun is
+listed below and cannot be replaced by local tests.
 
 ##### P4-C4: rerun defensible seven-day reconciliation
 
@@ -2756,6 +2764,16 @@ Phase 4 development exits only when C1 through C5 and the development portion of
 C7 pass. Phase 4 production acceptance additionally requires C6. Any later code
 change affecting accounting, transport, routing, UI, accessibility, or IPC
 invalidates the corresponding exact-candidate row.
+
+Current application of that rule: exact 0.60.59 commit
+`06ed48cb8fe55c750905788c0bc9ec0a8e51f805` changed provider-login UI and
+Surfaces presentation after the 0.60.41 and 0.60.43 native runs. Its local gate
+passes, but its successful-login interaction at 100 and 200 percent, dark and
+light visual inspection, High Contrast, disabled-animation state clarity, and
+UI Automation plus Narrator toggle and terminal traversal are Unrun. The
+terminal TextPattern implementation and IPC security boundary did not change,
+so their earlier exact rows remain Pass. Phase 5 stays blocked until this scoped
+rerun and the other development-exit gates are archived.
 
 Phase 4 exit contract:
 
