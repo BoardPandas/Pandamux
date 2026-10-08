@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Exposed the Surfaces toggle state to Windows assistive technology.**
+  The titlebar control now publishes its pressed state through the button's
+  accessibility toggle contract in addition to retaining selected styling and
+  its state-specific `Open surfaces panel` or `Close surfaces panel` name.
+  Exact 0.60.59 physical-laptop diagnostics proved the visual state and action
+  changed but Windows UI Automation exposed only Invoke, so that candidate is
+  rejected for the reopened accessibility row. Version 0.60.61 carries the
+  semantic repair and requires a fresh exact-candidate native rerun.
+
 - **Kept provider login handoffs visible and made Surfaces state explicit.**
   Prepared login confirmation now stays above the scrolling provider list,
   instead of appearing below the user's current viewport. Opening the reviewed
@@ -15,7 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the titlebar control now reads `Hide Surfaces` with selected, tooltip, and
   accessibility state while the panel is open. Focused desktop regressions
   cover the open/select transition and the toggle presentation. Version
-  0.60.59 carries the local fix; native Windows acceptance remains pending.
+  0.60.59 carried the initial repair, but its physical-laptop UI Automation run
+  exposed the missing semantic toggle state corrected in 0.60.61.
 
 - **Model Codex included usage and credits as separate serviceability paths.**
   Codex account snapshots now keep reported utilization separate from both

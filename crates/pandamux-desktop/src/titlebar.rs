@@ -177,6 +177,7 @@ impl CustomTitlebar {
                                 .ghost()
                                 .label(surfaces_label)
                                 .selected(surfaces_open)
+                                .toggled(surfaces_open)
                                 .accessibility_label(surfaces_accessibility_label)
                                 .tooltip(surfaces_accessibility_label)
                                 .on_click(cx.listener(move |this, _event, window, cx| {
