@@ -380,6 +380,11 @@ visibly rejected a no-route create into Provider Settings and, with authenticate
 Codex 0.159.2, rendered `Codex CLI` plus live `GPT-6.1-Sol`; the shipped CLI
 read the same `codex-default` and `gpt-6.1-sol` values on the created thread.
 P4-C3 is Pass again.
+A separate supporting live run later killed the exact remote proxy after
+visible text and one successful file-writing shell tool. Reconnect kept one
+protected attempt and the one-line marker without replay. It did not cover
+quota or capacity exhaustion, a network side effect, approval, or the remaining
+restart rows, so P4-C5 remains Partial.
 A supporting Hyper-V rehearsal on the same exact runtime later passed a real
 30-minute provider-network interruption and full-screen terminal saved-state
 recovery with exact event, usage, offset, replay, and cleanup evidence. It does

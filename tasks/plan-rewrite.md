@@ -1,7 +1,7 @@
 # PandaMUX Rewrite: Chat-First Agent Client with Remote Environments, Multi-Repo Fleet Orchestration, Agents, Schedules, Full MCP Settings Control, and Broadside Sharing
 
 Date: 2026-09-25 (Approved 2026-09-26; recovery rewrite 2026-09-28; Phase 4 closure rewrite 2026-10-06; accounting and native acceptance 2026-10-07)
-Status: **Phases 0 to 3 and Phase 4A through 4F implementation are recorded; P4-C1, P4-C2, and P4-C4 passed on exact 0.60.15; the terminal, Narrator, visual, scaling, and IPC rows passed on exact 0.60.41; the provider/model routing row passed local, live, and native Windows acceptance on exact 0.60.43; and P4-C5 remains Partial, so external failover, final documentation, and physical acceptance gates keep Phase 4 open**
+Status: **Phases 0 to 3 and Phase 4A through 4F implementation are recorded; P4-C1, P4-C2, and P4-C4 passed on exact 0.60.15; the terminal, Narrator, visual, scaling, and IPC rows passed on exact 0.60.41; the provider/model routing row passed local, live, and native Windows acceptance on exact 0.60.43; exact 0.60.43 also passed supporting post-side-effect proxy-loss and Hyper-V recovery rehearsals; and P4-C5 remains Partial, so external failover, final documentation, and physical acceptance gates keep Phase 4 open**
 Baseline: The preserved original checkout remains PandaMUX v0.53.44 at `9511d0e22d44`; active recovery work is isolated on `codex/recovery-r0`, with exact 0.60.15 accounting evidence at `3a77382`, exact 0.60.41 native Windows evidence at `c6a20ff4f768747d0dadd59b88b40d3e20f7674d`, and exact 0.60.43 local, live, and native provider-routing evidence at `372f2ae83e67a62cd3b382e5db52af96d00a85ce`
 
 Relationship to `tasks/plan-repo.md`: that file is the **historical** record of the Electron to native Rust rewrite (Phases 1 to 7, complete). This plan supersedes its product direction (terminal multiplexer) but keeps its engineering posture: backend-owned state, single writer, intent-in/delta-out, deliberate dependency pins, crate isolation, and tag-driven signed releases. Its Section 12 design tokens carry over where they still apply (Section 8). UI history: Iced is removed. An earlier draft of this plan chose Tauri 2 + React; the user replaced that with **GPUI + gpui-kit** (all Rust) on 2026-09-25, and Tauri 2 remains only as the documented fallback if the Phase 0 GPUI spike fails. `plan-repo.md` rejected GPUI for three reasons, each now handled explicitly: GPL contamination (zed#55470, still open; tracked as a license gate in S6 and Risks), "not built for external consumption" (gpui-kit publishes exact-pinned `gpui-pre` snapshots and ships in production in Longbridge Pro on Windows, macOS, and Linux), and weak accessibility. Phase 0 treated accessibility as exploratory; the rewritten Phase 4 and Phase 7 criteria make the defined v1 accessibility matrix release-gating.
@@ -2253,6 +2253,48 @@ real `gpt-6-luna` turn completed through `codex-default`. That result proves the
 corrected success route but is not quota exhaustion, failover, or an interruption
 after output or an external side effect. It therefore does not change the P4-C5
 Partial result or close live rows 4 through 6.
+
+Supporting result recorded 2026-10-08: **Pass for abrupt proxy loss after
+visible text plus one file and command side effect; P4-C5 remains Partial.** A
+local Hub on Pendragon used exact 0.60.43 runtime code from commit
+`372f2ae83e67a62cd3b382e5db52af96d00a85ce` against a separately cloned
+Galahad node root. One real `codex-default` plus `gpt-6-luna` turn emitted
+`P4C5_TEXT_BEFORE_SIDE_EFFECT`, ran one successful shell tool that created the
+one-line marker `P4C5_SIDE_EFFECT_ONCE`, emitted
+`P4C5_TEXT_AFTER_SIDE_EFFECT`, and started a separate 120-second shell tool.
+Only then did the harness kill the exact remote proxy process with `SIGKILL`.
+The transport reported stale EOF, reconnected after a measured 20.125-second
+gap, replayed unique thread event sequences 24 through 41 after pre-gap
+sequences 1 through 23, and advanced its environment event cursor from 189 to
+190.
+
+The turn settled Success with exactly one completed attempt at durable boundary
+`tool_side_effect_begun`. The marker remained exactly one line at SHA-256
+`f639743d9f2d0aee455ee4b6a2511fb53994a9f74a5d1684757fe6cb0327ef4f`,
+so the command and file side effect did not replay. Managed usage retained
+15,804 input, 15,104 cached-input, 13 output, and zero cache-write tokens in
+exactly one matching observation. A first diagnostic attempt is rejected: the
+restored Codex credential returned 401 before output or a tool, the attempt
+remained `safe_to_retry`, and no marker was created. The accepted rerun used a
+temporary copy of the current credential only inside the isolated profile.
+
+Hash-pinned evidence remains under
+`/home/brandon/.pandamux/acceptance/phase4-372f2ae-0.60.43-p4-c5-side-effect-live`.
+Its accepted ready and result records have SHA-256
+`d2649ad805864bb2ec5c045e5aba76987d422ac8e1b4e2cf6f3ab6c0dcdb0d94`
+and `77fee0df51b63e10850c697e142adf555be10a88e6bbdc2d5cf0dff7d892e7d4`.
+The 22-line evidence manifest has SHA-256
+`a73a4f27b37f64576c72e5dc9e439d45e2ca0878f42d0a49042f6953f62fd963`.
+Cleanup stopped only verified isolated server PID 748959 with `SIGTERM`, used
+no forced kill, restored the original auth, left zero root processes or runtime
+sockets, preserved the P4-C6 clone and retained P4-C4 database at their exact
+pre-run hashes, and left the cloned database integral at SHA-256
+`b08c16560efdd77f412b7372843cd070c2627c53983728a2d7c1bf100f0822d0`.
+
+This run closes no quota or capacity-exhaustion row and did not exercise a
+network side effect, approval result, pending continuation restart, or pending
+approval or tool-result restart. Those live rows remain required, so P4-C5 is
+still Partial and Phase 4 remains open.
 
 ##### P4-C6: close the physical R0.5 rows
 

@@ -5,9 +5,10 @@ Updated: 2026-10-08
 
 Status: **Accounting passed; the P4-C3 terminal, Narrator, visual, scaling, and
 IPC rows passed on exact 0.60.41; the provider/model routing row passed local,
-live, and native Windows acceptance on exact 0.60.43; P4-C5 remains Partial;
-P4-C6 has supporting Hyper-V rehearsal evidence but its physical rows remain
-open; and Phase 4 acceptance is incomplete.** Exact 0.60.15 commit
+live, and native Windows acceptance on exact 0.60.43; P4-C5 remains Partial
+with supporting live post-side-effect proxy-loss evidence; P4-C6 has supporting
+Hyper-V rehearsal evidence but its physical rows remain open; and Phase 4
+acceptance is incomplete.** Exact 0.60.15 commit
 `3a77382` passed the P4-C1 implementation, P4-C2 local candidate, and P4-C4
 cloned-store reconciliation gates. Exact 0.60.41 commit
 `c6a20ff4f768747d0dadd59b88b40d3e20f7674d` passed P4-C3 after the expanded
@@ -31,6 +32,10 @@ synchronization, conservative capacity projection, route-explanation, and
 rollback-control portions of P4-C5. Real provider quota exhaustion and real
 interruptions after output or external side effects were not available, so
 their live rows remain open even though the focused diagnostic fixtures pass.
+The later supporting abrupt-proxy rehearsal passed visible-text, file, and
+command-side-effect recovery, but it was not provider quota exhaustion or a
+capacity interruption and did not cover a network side effect, approval, or
+the remaining live restart cases. P4-C5 therefore remains Partial.
 The later supporting Hyper-V rehearsal passed real 30-minute provider-network
 and full-screen-terminal recovery paths, but neither a Windows guest nor
 `Save-VM` substitutes for the required physical laptop disconnect and sleep
@@ -184,6 +189,13 @@ activation, or release occurred.
   from documentation head `e790db89075a49749749a0593df4442a17c8a8b8`.
   Workspace version `0.60.45` records the resulting evidence only. No 0.60.45
   executable, physical-laptop, production, push, deployment, activation, or
+  release result is claimed.
+- Supporting P4-C5 post-side-effect rehearsal executable source: the same exact
+  runtime code from clean commit
+  `372f2ae83e67a62cd3b382e5db52af96d00a85ce`, version `0.60.43`, launched
+  from documentation head `bcc583e6da30089ca7e01abea18dfcb7d8bda321`.
+  Workspace version `0.60.46` records the resulting evidence only. No 0.60.46
+  executable, provider-capacity, production, push, deployment, activation, or
   release result is claimed.
 - The intermediate 0.60.2 commit `8a52d2a21da1d5d0f69540864a6162d2b30375bc`
   repaired direct UI Automation activation for Save and Cancel. The 0.60.3
@@ -1910,6 +1922,116 @@ login-terminal, Narrator, scaling, display-mode, visual, and IPC rows are
 unchanged and remain Pass. No push, CI, signing, packaging, deployment,
 production activation, or release occurred.
 
+## Exact 0.60.43 P4-C5 supporting post-side-effect proxy-loss rehearsal
+
+This is a **supporting live Pass for visible text plus file and command side
+effects across abrupt proxy loss, not a complete P4-C5 Pass**. A local Hub on
+Pendragon used exact runtime code from clean commit
+`372f2ae83e67a62cd3b382e5db52af96d00a85ce`, version `0.60.43`, launched
+from documentation head `bcc583e6da30089ca7e01abea18dfcb7d8bda321`.
+It connected through the production SSH exec proxy to a separately cloned
+Galahad node root:
+
+`/home/brandon/.pandamux/acceptance/phase4-372f2ae-0.60.43-p4-c5-side-effect-live`
+
+The node server artifact has SHA-256
+`f378d8c6e46a8492a21b01ac8e13282373dabf3940523497dd618114d15cefbd`.
+The 24,909,296-byte Linux acceptance harness has SHA-256
+`bdc9322b4add710572813a641a9fd3cf9237d307bb5e5c60ecef7375339a27c1`;
+its retained formatted source has SHA-256
+`557cf462108bdb3ec0d99d18b9762d4153d3cf7b351f41ec4ea220be71c9057d`.
+The harness is an acceptance instrument and is not a shipped artifact.
+
+### Isolation and rejected diagnostic
+
+Setup cloned the clean P4-C6 evidence database at source SHA-256
+`0a64a5d92f53725525f409e98434c25799157591e5369cb495591ac641100c0a`,
+remapped only the clone's provider profile paths, and created a private Git
+fixture. The retained P4-C4 source database remained read-only. Exact server
+PID 748959 ran with the isolated runtime and database under PPID 1 and its own
+session.
+
+The first turn is diagnostic only. The restored Codex credential returned 401
+before any assistant output or tool call. The durable attempt stayed
+`safe_to_retry`, no marker existed, and the harness rejected the run before it
+could disconnect anything. The accepted rerun used a temporary copy of the
+current credential only inside the isolated Codex profile, after preserving the
+restored file in a private hash-verified backup.
+
+### Accepted abrupt post-side-effect proxy loss
+
+The accepted route used Codex CLI 0.158.0, configured instance
+`codex-default`, and model `gpt-6-luna`. Thread
+`thread-fd8abc5e-e8c0-41ee-a764-3f7678b7d6a6`, turn
+`turn-33970bdd-13b6-4ae6-b94a-7b53ab2b500c`, and attempt
+`attempt-0e92e266-b8ce-4668-89b3-f49dc91fc4ba` performed the following
+ordered actions:
+
+1. Emitted exact visible text `P4C5_TEXT_BEFORE_SIDE_EFFECT`.
+2. Ran one successful shell tool that refused to overwrite an existing marker,
+   then created `p4c5-side-effect-once.txt` with exact content
+   `P4C5_SIDE_EFFECT_ONCE`.
+3. Emitted exact visible text `P4C5_TEXT_AFTER_SIDE_EFFECT`.
+4. Started a distinct `sleep 120` shell tool.
+
+Only after all four preconditions were durable did the harness select exact
+remote proxy PID 759226 by executable, runtime directory, and command line, then
+kill that proxy with `SIGKILL`. It did not signal the node daemon or provider
+process. The Hub reported the transport as stale with `proxy reached EOF`.
+Reconnect completed 20.125 seconds after the stale observation.
+
+Pre-gap thread event sequences 1 through 23 and post-gap replay sequences 24
+through 41 were unique and contiguous. The environment event cursor advanced
+from 189 to 190. The old transport cleanup completed, the turn settled Success,
+and final visible text ended exactly with `P4C5_SIDE_EFFECT_REPLAY_OK`. The
+single durable attempt kept ordinal 1, status Completed, and boundary
+`tool_side_effect_begun`; no retry or continuation attempt appeared.
+
+The marker matched before disconnect and after reconnect: exactly one line at
+SHA-256
+`f639743d9f2d0aee455ee4b6a2511fb53994a9f74a5d1684757fe6cb0327ef4f`.
+That proves the successful command and file side effect did not replay. The
+turn retained 15,804 input, 15,104 cached-input, 13 output, and zero cache-write
+tokens. Hub-owned `usage.query` exposed exactly one matching managed
+observation,
+`usage-managed-43631eb5a402f1dddacb44664d02e29c829318eed80317291135c119b4ba91aa`,
+after 54,063 milliseconds with environment synchronization Ready. Coverage
+remained Partial with 12 quarantined transcript records and unknown pricing, so
+this run is not used as accounting or external reconciliation evidence.
+
+### Evidence and cleanup
+
+The accepted ready record has SHA-256
+`d2649ad805864bb2ec5c045e5aba76987d422ac8e1b4e2cf6f3ab6c0dcdb0d94`;
+the result record has SHA-256
+`77fee0df51b63e10850c697e142adf555be10a88e6bbdc2d5cf0dff7d892e7d4`;
+and the console receipt has SHA-256
+`355bda462157e96a75b8bc2f5f6c8acb2828f7eb00db125bada22a16c6a86721`.
+The 22-line retained manifest validates 21 evidence files and has SHA-256
+`a73a4f27b37f64576c72e5dc9e439d45e2ca0878f42d0a49042f6953f62fd963`.
+
+Cleanup stopped only exact isolated server PID 748959 with `SIGTERM`; no forced
+kill was required. The cloned database passed WAL checkpoint and integrity at
+final SHA-256
+`b08c16560efdd77f412b7372843cd070c2627c53983728a2d7c1bf100f0822d0`.
+Original isolated auth was restored at SHA-256
+`c113c08e486e8c8825ccb288395593131699f5d1511e52d81309334d01f1c4e4`
+and mode 600, with no temporary auth file remaining. The P4-C6 clone stayed at
+SHA-256
+`0a64a5d92f53725525f409e98434c25799157591e5369cb495591ac641100c0a`,
+and the retained P4-C4 source database stayed at SHA-256
+`5f45008d32b07e3c8491f2ad45361482e16cfa66a7f42bae7c5408c96350b323`.
+Final audit recorded zero matching processes and no runtime sockets. The
+original checkout remained unchanged. The Hyper-V VM remained Off and was not
+used for this row; the read-only SupportForge session was disconnected.
+
+This run did not produce provider quota exhaustion or a capacity interruption.
+It also did not exercise a network side effect, approval result, pending
+continuation restart, pending approval-result restart, or pending tool-result
+restart. Those live P4-C5 rows remain required. P4-C5 is still Partial, Phase 4
+remains open, and no push, CI, signing, packaging, deployment, production
+activation, or release occurred.
+
 ## Exact 0.60.43 P4-C6 supporting Hyper-V rehearsal
 
 This is a **supporting Hyper-V rehearsal Pass, not a P4-C6 physical Pass**.
@@ -2144,6 +2266,18 @@ intact, the historical recovery bundles untouched, and isolated rehearsal
 server PID 159520 absent. This verification does not create an executable,
 native, physical-laptop, production, push, deployment, activation, or release
 claim for 0.60.45.
+
+The documentation-only 0.60.46 workspace passed formatting, strict all-target
+and all-feature workspace Clippy, 440 workspace tests with zero failures and
+two intentional real-shell terminal ignores, the Rust boundary guard, the
+Claude wiring guard, desktop headless verification, locked Cargo metadata,
+dependency policy, and diff hygiene. The final preservation audit reverified
+the original checkout at `9511d0e22d44192f106e2f84a7c96b96d76734b6` with its
+pre-existing changes intact, the historical recovery bundles untouched, no
+isolated acceptance processes or sockets, the local Codex credential unchanged,
+and the read-only SupportForge session disconnected. This verification does
+not create an executable, provider-capacity, physical-laptop, production, push,
+deployment, activation, or release claim for 0.60.46.
 
 `cargo-deny` 0.20.2 could not parse the old `deny.toml` syntax. The follow-up
 configuration change removed deprecated keys and scoped seven existing

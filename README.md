@@ -115,6 +115,11 @@ R0 development gate:
   artifacts then passed native build, headless smoke, visible no-route fallback,
   and an authenticated picker-created thread whose `codex-default` and
   `gpt-6.1-sol` values matched the shipped CLI. P4-C3 is Pass again.
+  A separate supporting live run later killed the exact remote proxy after
+  visible text and one successful file-writing shell tool. Reconnect retained
+  one protected attempt and the one-line marker without replay. It was not
+  quota or capacity exhaustion and did not cover a network side effect,
+  approval, or the remaining restart rows, so P4-C5 remains Partial.
   A supporting Hyper-V rehearsal on the same exact runtime later passed a real
   30-minute provider-network interruption and full-screen terminal saved-state
   recovery with exact event, usage, offset, replay, and cleanup evidence. It

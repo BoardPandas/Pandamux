@@ -37,8 +37,13 @@ the exact configured instance and selected model. Its exact limited-user
 Windows artifacts also pass native build and headless smoke, visible no-route
 fallback into Provider Settings, and an authenticated picker-created thread
 whose `codex-default` and `gpt-6.1-sol` route matches the shipped CLI. P4-C3 is
-Pass again. A supporting Hyper-V rehearsal on the same exact runtime later
-passed a real 30-minute provider-network interruption and full-screen terminal
+Pass again. A separate supporting live run later killed the exact remote proxy
+after visible text and one successful file-writing shell tool. Reconnect kept
+one protected attempt and the one-line marker without replay. It did not cover
+quota or capacity exhaustion, a network side effect, approval, or the remaining
+restart rows, so P4-C5 remains Partial. A supporting Hyper-V rehearsal on the
+same exact runtime later passed a real 30-minute provider-network interruption
+and full-screen terminal
 saved-state recovery with exact event, usage, offset, replay, and cleanup
 evidence. It does not replace the required physical laptop disconnect and
 sleep rows. Exact 0.60.17 commit

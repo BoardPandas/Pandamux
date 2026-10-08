@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Changed
 
+- **Recorded supporting live P4-C5 recovery after an abrupt post-side-effect
+  proxy loss.** Exact 0.60.43 runtime code completed one real Codex turn after
+  its exact remote proxy process was killed with `SIGKILL`. Before the cut, the
+  turn emitted visible text, created one hash-pinned marker through a successful
+  shell tool, emitted more visible text, and started a separate 120-second tool.
+  Reconnect after a 20.125-second gap replayed unique event sequences, retained
+  one completed `tool_side_effect_begun` attempt, preserved the one-line marker,
+  and exposed one matching managed usage observation. P4-C5 remains Partial:
+  provider quota or capacity exhaustion, a network side effect, an approval
+  result, and the remaining live restart rows are still open. Cleanup stopped
+  only the isolated server, restored its original auth, preserved both source
+  databases, and retained a hash manifest for audit. Version 0.60.46 is
+  documentation-only and makes no new executable, production, push,
+  deployment, activation, or release claim.
+
 - **Recorded supporting 30-minute Hyper-V P4-C6 rehearsals without closing the
   physical rows.** Exact 0.60.43 runtime code replayed one real Codex turn after
   a 1,825.420-second guest network outage with unique event sequences, exact
