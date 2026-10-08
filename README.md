@@ -107,7 +107,14 @@ R0 development gate:
   gate, clean native build, host gates, controlled login-terminal matrix at 100
   and 200 percent, High Contrast, disabled animations, genuine Narrator with
   exact READY, ECHO, and reopened-output phrases, visual review, and the full
-  named-pipe security matrix. P4-C3 is closed.
+  named-pipe security matrix. Those P4-C3 rows remain accepted. Exact 0.60.43
+  commit `372f2ae` then replaced static provider kinds and stale models with
+  authenticated configured instances and live driver discovery. Its complete
+  local gate, schema migration, six-model Codex discovery, and real
+  `codex-default` plus `gpt-6-luna` turn passed. Exact limited-user Windows
+  artifacts then passed native build, headless smoke, visible no-route fallback,
+  and an authenticated picker-created thread whose `codex-default` and
+  `gpt-6.1-sol` values matched the shipped CLI. P4-C3 is Pass again.
   Real external quota exhaustion, real post-side-effect interruption, and the
   deferred physical laptop checks keep the Phase 4 exit matrix open.
 

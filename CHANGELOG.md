@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Changed
 
+- **Recorded exact 0.60.43 local, live, and native provider-routing
+  acceptance.** The clean candidate passed the complete local source gate,
+  migrated only the shipped Codex `o3-mini` defaults, discovered six current
+  models from authenticated Codex 0.157.0, and completed a real
+  `codex-default` plus `gpt-6-luna` turn. Exact limited-user Windows artifacts
+  then passed build and headless smoke. The desktop visibly rejected a
+  no-route create into Provider Settings without creating a thread, and the
+  authenticated path rendered `Codex CLI` plus live `GPT-6.1-Sol` before the
+  shipped CLI read the same `codex-default` and `gpt-6.1-sol` thread route.
+  Cleanup removed every temporary credential, task, process, and runtime
+  record while the Hyper-V lab remained Off and unchanged. P4-C3 is Pass again;
+  P4-C5, the final archive, and physical laptop rows remain open. Version
+  0.60.44 is this documentation-only follow-up and makes no new executable,
+  production, push, deployment, activation, or release claim.
+
 - **Closed the P4-C3 native Windows acceptance gate on exact 0.60.41.** Clean
   commit `c6a20ff4f768747d0dadd59b88b40d3e20f7674d` passed the complete local
   source gate, clean limited-user MSVC build, host smoke and remote lifecycle,

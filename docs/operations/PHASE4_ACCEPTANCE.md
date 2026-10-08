@@ -3,8 +3,10 @@
 Date: 2026-09-29
 Updated: 2026-10-07
 
-Status: **Accounting and P4-C3 native Windows acceptance passed, P4-C5 remains
-Partial, and Phase 4 live acceptance is incomplete.** Exact 0.60.15 commit
+Status: **Accounting passed; the P4-C3 terminal, Narrator, visual, scaling, and
+IPC rows passed on exact 0.60.41; the provider/model routing row passed local,
+live, and native Windows acceptance on exact 0.60.43; P4-C5 remains Partial;
+and Phase 4 acceptance is incomplete.** Exact 0.60.15 commit
 `3a77382` passed the P4-C1 implementation, P4-C2 local candidate, and P4-C4
 cloned-store reconciliation gates. Exact 0.60.41 commit
 `c6a20ff4f768747d0dadd59b88b40d3e20f7674d` passed P4-C3 after the expanded
@@ -16,7 +18,14 @@ independent-peer named-pipe security matrix. Narrator directly copied the exact
 READY, ECHO, and reopened-output phrases while synchronized Speech Recap
 screenshots remain as audit evidence. This supersedes the reopened 0.60.22 and
 rejected 0.60.24 through 0.60.40 candidates without erasing their diagnostic
-record. Exact 0.60.17 commit `2f56a27` passed the scanner, Hub
+record. Exact 0.60.43 commit
+`372f2ae83e67a62cd3b382e5db52af96d00a85ce` then corrected the
+provider/model selection route and passed the complete local gate, schema
+migration, live model discovery, and a real Codex turn. Its exact limited-user
+Windows artifacts then passed native build, headless smoke, visible no-route
+fallback, and authenticated configured-route picker interaction. P4-C3 is Pass
+again, and the unaffected 0.60.41 rows above remain Pass. Exact 0.60.17 commit
+`2f56a27` passed the scanner, Hub
 synchronization, conservative capacity projection, route-explanation, and
 rollback-control portions of P4-C5. Real provider quota exhaustion and real
 interruptions after output or external side effects were not available, so
@@ -158,6 +167,13 @@ or release occurred.
   matrix passed. Workspace version `0.60.42` is the documentation-only
   accounting follow-up; no 0.60.42 executable, native, live, production, or
   release result is claimed.
+- Exact provider/model routing source: clean commit
+  `372f2ae83e67a62cd3b382e5db52af96d00a85ce`, version `0.60.43`. Its
+  complete local gate, isolated live Codex discovery and turn, exact
+  limited-user Windows build and headless smoke, and native configured-route
+  plus no-route picker interactions passed. Workspace version `0.60.44` is this
+  documentation-only follow-up; no 0.60.44 executable, native, live,
+  production, push, deployment, activation, or release result is claimed.
 - The intermediate 0.60.2 commit `8a52d2a21da1d5d0f69540864a6162d2b30375bc`
   repaired direct UI Automation activation for Save and Cancel. The 0.60.3
   follow-up exposed the editor text fields on semantic nodes tied to their real
@@ -1698,11 +1714,190 @@ checkpoint IDs unchanged. `lab-state-after-final-restoration.json` has
 SHA-256
 `c141deaf69ed3ceff472864c276ba4794b55be4ed3c465f088faace795e12b66`.
 
-This closes P4-C3. It does not close P4-C5, the final P4-C7 archive, or the
-deferred physical disconnect and sleep acceptance rows. No push, CI, signing,
+This closed the then-current P4-C3 matrix. The later 0.60.43 routing and UI
+change adds the separate native picker row recorded below; it does not invalidate
+these unchanged 0.60.41 results. It also does not close P4-C5, the final P4-C7
+archive, or the deferred physical disconnect and sleep acceptance rows. No push,
+CI, signing,
 packaging, deployment, production activation, or release is claimed for
 0.60.41. Version 0.60.42 is documentation-only and has no executable or native
 acceptance claim.
+
+## Exact 0.60.43 provider/model routing acceptance
+
+The routing correction is a **local live Pass and native Windows Pass** on clean
+commit `372f2ae83e67a62cd3b382e5db52af96d00a85ce`, version `0.60.43`.
+It removes the desktop's static provider-kind and model choices, introduces the
+authenticated bounded `provider.models` RPC, and builds new-thread routes only
+from enabled, healthy, authenticated configured instances with nonempty driver
+model results. Missing routes fail visibly into Provider Settings instead of
+creating a thread with an invalid provider kind or stale model.
+
+The settings schema migrated from 6 to 7. The migration changes only exact
+shipped Codex provider and reasoning-tier targets from `o3-mini` to the
+provider-owned `default` selector. Tests prove that custom provider and tier
+targets are preserved. The isolated pre-migration database passed integrity at
+SHA-256
+`6f80dca77aadba414ae0824a3f516b438c61d628d6ddf224cf8b562fdbe2868f`.
+After startup, authenticated `settings.get` persisted schema 7 with the two
+shipped targets set to `default`; the database still passed integrity.
+
+### Local source gate and artifacts
+
+The exact candidate passed:
+
+- `cargo fmt --all --check`
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- `cargo test --workspace`, with 437 passed, zero failed, and two intentional
+  real-shell tests ignored
+- `pwsh -NoProfile -File scripts/check-rust-boundaries.ps1`
+- `node scripts/check-claude-wiring.mjs`
+- `cargo run -p pandamux-desktop -- --headless`, with `ALL CHECKS PASSED`
+- locked Cargo metadata, dependency policy, and diff hygiene
+
+Dependency policy returned success with the retained non-failing duplicate,
+unmatched-license, and yanked transitive `chacha20 0.10.1` and
+`yoke-derive 0.8.3` warnings. The debug artifacts used for isolated runtime
+acceptance were:
+
+| Artifact | SHA-256 |
+|-|-|
+| `target/debug/pandamux` | `cb6a5f1efda411f4ec7fd5a98d536eeb225a583afaa030b0868f263e1729ff2d` |
+| `target/debug/pandamux-server` | `afe1f3546287583838b97d23b154402457b058eab00a1df621e1c74f7d9af57c` |
+| `target/debug/pandamux-cli` | `afc122ca359a2be6c065ff3573f1a9de5b242c5159c5a4ce1022cb1e3eaa2700` |
+
+The server and CLI both reported version 0.60.43.
+
+### Isolated live model discovery and routed turn
+
+The accepted root is `tmp/p4m43` in the recovery worktree. It used absolute
+isolated data and attachment directories, a short relative runtime directory
+for the Unix socket, an isolated database, and a mode-600 clone of the existing
+Codex authentication record. Token contents were never printed. The exact
+server's authenticated health result reported instance `codex-default`, Codex
+0.157.0 at `/home/brandon/.local/bin/codex`, Healthy runtime, and Reported
+authenticated state with a masked account label.
+
+Authenticated `provider.models` returned the exact configured instance and six
+live driver models, with no stale `o3-mini` fallback:
+
+- `gpt-6-astra`
+- `gpt-6-sol`
+- `gpt-6-luna`
+- `gpt-5.6-sol`
+- `gpt-5.6-terra`
+- `gpt-5.6-luna`
+
+The acceptance harness selected `gpt-6-luna` from that response, created thread
+`thread-bc0e57f1-4ca4-4eea-afd0-eab916903eec` with provider instance
+`codex-default`, and submitted turn
+`turn-75bd8cc4-f6c3-4a95-bf7c-3fe9cee5174d`. Attempt
+`attempt-e2cb1878-3c47-4a57-b844-9d22d5922334` persisted the same provider
+instance and model, completed, and returned exact output
+`P4-MODEL-ROUTE-OK`.
+
+Two rejected setup attempts remain diagnostic only. A descriptive runtime path
+exceeded the Unix socket length limit, and a relative `PANDAMUX_DATA_DIR`
+double-joined the resolved profile path. The accepted run used a short socket
+path and absolute data directory, as the isolation contract requires. Neither
+rejected attempt touched the normal PandaMUX data root or retained evidence.
+
+The accepted server stopped gracefully. No candidate server process, runtime
+record, or socket remained. The final isolated database passed integrity at
+SHA-256
+`8cfc280b78641a43c4e8a6282b2e4f2a2a3a5d0f5eb5d0c59b71ca01f98d9540`.
+The normal `/home/brandon/.pandamux/data/hub.db` remained absent, and the
+preserved original checkout remained at `9511d0e22d44192f106e2f84a7c96b96d76734b6`
+with its pre-existing prototype changes untouched.
+
+### Native Windows build and headless smoke
+
+The native evidence root is
+`C:\ProgramData\PandaMUX\acceptance\phase4-372f2ae-0.60.43-p4-c3-picker-build`.
+An isolated limited-user task applied a verified incremental bundle to a clean
+retained 0.60.41 source clone and built clean commit
+`372f2ae83e67a62cd3b382e5db52af96d00a85ce` with Rust 1.98.1 and Cargo
+1.98.1. The source was clean before and after the build. The exact release
+artifacts were:
+
+| Artifact | Bytes | SHA-256 |
+|-|-:|-|
+| `pandamux.exe` | 28,002,304 | `533368919193023ed0388bf5b1dfd44f133ef72a813abcbe6c53e3f2c3167aa4` |
+| `pandamux-server.exe` | 14,394,880 | `185e57ca7011db199c6f9d35aa145c3610e94debb53156cc593c1a2ff6d1d05a` |
+| `pandamux-cli.exe` | 1,407,488 | `c2cb4e29c10f4cf9c5792eca49e010b6434febd5b41cbde83b7be5d5450ebd05` |
+
+The same limited user ran the exact desktop headlessly with isolated local-app,
+data, and attachment roots. It exited zero with `ALL CHECKS PASSED`; the exact
+server and CLI both reported 0.60.43, the source remained clean, and no exact
+process survived. The build and headless tasks were exported and unregistered.
+
+The installed Windows Codex binary was inspected without reading token content:
+Codex CLI 0.159.2 at the isolated plugin-appserver path reported `Logged in
+using ChatGPT`. A hash-verified auth clone was used only under the acceptance
+root. Its source record remained unchanged, and all cloned records were removed
+after the interaction matrix.
+
+### Native configured-route and no-route interaction
+
+The no-route row used fresh isolated roots and a PATH that deliberately exposed
+no provider binaries. After startup health and model discovery settled, UI
+Automation invoked `+ Create Thread`. The desktop changed to Providers & Tiers
+and exposed this visible alert:
+
+`No authenticated provider with a discovered model is available. Check provider health or complete login first.`
+
+The shipped CLI returned an empty thread list. The accepted result is
+`native-picker-fallback-run2.json`; its screenshot
+`no-route-provider-settings-run2.png` has SHA-256
+`f7ae4e313703d435ebf6183319164e099e56f533701d54f81d32a1c054cbb5c7`.
+The exact desktop and server stopped, the runtime credential was removed, and
+no Codex process existed. The first fallback attempt remains diagnostic only:
+the product interaction passed, but its harness expected the database beneath
+the wrong directory and mishandled PowerShell's empty-array conversion.
+
+The configured-route row used a fresh isolated PandaMUX root plus the temporary
+hash-matched Codex profile. Windows UI Automation observed the `Codex CLI`
+provider as Healthy, authenticated (reported), and version 0.159.2 with only a
+masked account label. It then invoked `+ Create Thread` and observed the
+focusable picker buttons `Codex CLI ▾`, `GPT-6.1-Sol ▾`, and
+`Effort: medium ▾`. The created thread
+`thread-0fd9c6fd-4919-4443-8bf6-939e8e49fb9e` persisted instance
+`codex-default`, model `gpt-6.1-sol`, effort `medium`, and environment
+`env-local`. The exact shipped CLI independently returned that same thread ID,
+instance, model, and idle status; its JSON has SHA-256
+`74bddf014311967335eda1b4c177e8563684cd6265bc8d7b40335d23095354a0`.
+The accepted result is `native-picker-success-run3.json`; its screenshot
+`configured-provider-discovered-model-run3.png` has SHA-256
+`b193dbe3afd5e0aff9cebb29fbb6095810d7d86a2147fd32309f5417c75034ac`.
+
+Two rejected success-harness attempts remain diagnostic only. A direct
+PowerShell named-pipe probe was correctly rejected because the Windows server
+allows only the desktop and CLI control images. The following interaction run
+proved the correct UI and CLI values but tried to hash SQLite while the server
+still held the file. The accepted run moved that evidence read after process
+shutdown; neither rejection indicates a product failure.
+
+### Native cleanup and preserved lab
+
+The final cleanup audit `native-picker-final-cleanup.json` has SHA-256
+`7cf16f929d376f2dfd5e7dc352b1bcdd7bb04e92845f688d9818fd1ff8cdc323`.
+It records zero acceptance auth clones, tasks, exact processes, PandaMUX
+processes, and runtime credentials; the real source auth hash was unchanged.
+The exact Windows candidate remained clean at `372f2ae`, and the retained
+0.60.41 source remained clean at `c6a20ff`.
+
+The Hyper-V VM `SF-C4ad-c4f68c3c` was never started or modified for this row.
+Final verification records it Off and operating normally, disconnected with no
+switch, Guest Service Interface disabled, default 1920 by 1200 video, and all
+eight original checkpoint IDs unchanged.
+
+The combined evidence proves live server-owned discovery and execution plus the
+native configured-route and no-route desktop behaviors. P4-C3 is Pass again.
+It is not quota exhaustion, failover, or an interruption after output or an
+external side effect, so P4-C5 remains Partial. The accepted 0.60.41
+login-terminal, Narrator, scaling, display-mode, visual, and IPC rows are
+unchanged and remain Pass. No push, CI, signing, packaging, deployment,
+production activation, or release occurred.
 
 ## Static verification and remaining gates
 
@@ -1764,6 +1959,28 @@ boundary guard, the Claude wiring guard, desktop headless verification,
 locked Cargo metadata, dependency policy, and diff hygiene. This verification
 does not create an executable or native acceptance claim for 0.60.42.
 
+Exact 0.60.43 commit
+`372f2ae83e67a62cd3b382e5db52af96d00a85ce` passed the same complete
+local gate, including 437 workspace tests with zero failures and two intentional
+real-shell ignores. Its isolated schema migration, provider health, live model
+discovery, routed Codex turn, database integrity, and cleanup passed as recorded
+above. Its exact limited-user Windows build, headless smoke, configured-route
+picker, no-route fallback, CLI persistence check, and cleanup also passed.
+Documentation-only 0.60.44 makes no executable, native, or live result of its
+own.
+
+The documentation-only 0.60.44 workspace passed formatting, strict all-target
+and all-feature workspace Clippy, 440 workspace tests with zero failures and two
+intentional real-shell ignores, the Rust boundary guard, the Claude wiring
+guard, desktop headless verification, locked Cargo metadata, dependency policy,
+and diff hygiene. A final read-only preservation audit reverified the original
+checkout at `9511d0e22d44192f106e2f84a7c96b96d76734b6` with its pre-existing
+changes intact and the retained Galahad `node.db` at its recorded SHA-256
+`8392e444508c6c598312e97adf1c761dafc8674dcc704c2f7cdca6aa97de806f`,
+with no open database handle. This verification does not create an executable,
+native, live, production, push, deployment, activation, or release claim for
+0.60.44.
+
 `cargo-deny` 0.20.2 could not parse the old `deny.toml` syntax. The follow-up
 configuration change removed deprecated keys and scoped seven existing
 non-allowlisted transitive licenses to their exact crates and versions. With
@@ -1789,7 +2006,7 @@ Phase 4 cannot yet be marked exited under `tasks/plan-rewrite.md`:
    controls, and the complete diagnostic fixture matrix.
 2. Complete the P4-C7 archive and maintained-document synchronization after the
    remaining P4-C5 and P4-C6 live rows stabilize. This record already reflects
-   the current P4-C3 Pass and P4-C5 Partial results.
+   the complete P4-C3 Pass and the P4-C5 Partial result.
 3. Complete the explicitly deferred R0.5 30-minute physical laptop disconnect
    and sleep checks before production acceptance or release.
 

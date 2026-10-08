@@ -1,8 +1,8 @@
 # PandaMUX Rewrite: Chat-First Agent Client with Remote Environments, Multi-Repo Fleet Orchestration, Agents, Schedules, Full MCP Settings Control, and Broadside Sharing
 
 Date: 2026-09-25 (Approved 2026-09-26; recovery rewrite 2026-09-28; Phase 4 closure rewrite 2026-10-06; accounting and native acceptance 2026-10-07)
-Status: **Phases 0 to 3 and Phase 4A through 4F implementation are recorded; P4-C1, P4-C2, and P4-C4 passed on exact 0.60.15, P4-C3 passed on exact 0.60.41, and P4-C5 remains Partial, so external failover, final documentation, and physical acceptance gates keep Phase 4 open**
-Baseline: The preserved original checkout remains PandaMUX v0.53.44 at `9511d0e22d44`; active recovery work is isolated on `codex/recovery-r0`, with exact 0.60.15 accounting evidence at `3a77382` and exact 0.60.41 native Windows evidence at `c6a20ff4f768747d0dadd59b88b40d3e20f7674d`
+Status: **Phases 0 to 3 and Phase 4A through 4F implementation are recorded; P4-C1, P4-C2, and P4-C4 passed on exact 0.60.15; the terminal, Narrator, visual, scaling, and IPC rows passed on exact 0.60.41; the provider/model routing row passed local, live, and native Windows acceptance on exact 0.60.43; and P4-C5 remains Partial, so external failover, final documentation, and physical acceptance gates keep Phase 4 open**
+Baseline: The preserved original checkout remains PandaMUX v0.53.44 at `9511d0e22d44`; active recovery work is isolated on `codex/recovery-r0`, with exact 0.60.15 accounting evidence at `3a77382`, exact 0.60.41 native Windows evidence at `c6a20ff4f768747d0dadd59b88b40d3e20f7674d`, and exact 0.60.43 local, live, and native provider-routing evidence at `372f2ae83e67a62cd3b382e5db52af96d00a85ce`
 
 Relationship to `tasks/plan-repo.md`: that file is the **historical** record of the Electron to native Rust rewrite (Phases 1 to 7, complete). This plan supersedes its product direction (terminal multiplexer) but keeps its engineering posture: backend-owned state, single writer, intent-in/delta-out, deliberate dependency pins, crate isolation, and tag-driven signed releases. Its Section 12 design tokens carry over where they still apply (Section 8). UI history: Iced is removed. An earlier draft of this plan chose Tauri 2 + React; the user replaced that with **GPUI + gpui-kit** (all Rust) on 2026-09-25, and Tauri 2 remains only as the documented fallback if the Phase 0 GPUI spike fails. `plan-repo.md` rejected GPUI for three reasons, each now handled explicitly: GPL contamination (zed#55470, still open; tracked as a license gate in S6 and Risks), "not built for external consumption" (gpui-kit publishes exact-pinned `gpui-pre` snapshots and ships in production in Longbridge Pro on Windows, macOS, and Linux), and weak accessibility. Phase 0 treated accessibility as exploratory; the rewritten Phase 4 and Phase 7 criteria make the defined v1 accessibility matrix release-gating.
 
@@ -219,8 +219,11 @@ Terminology used throughout:
   100 and 200 percent, High Contrast, disabled animations, genuine Narrator
   traversal with exact READY, ECHO, and reopened-output phrases, visual review,
   and the complete local plus independent-peer named-pipe security matrix.
-  P4-C3 is Pass. Version 0.60.42 is the documentation-only accounting follow-up
-  and has no executable or native claim.
+  Those P4-C3 rows remain Pass. Exact 0.60.43 later passed local live
+  provider/model routing and its exact native Windows configured-route and
+  no-route picker rows, so P4-C3 is Pass again. Version 0.60.42 was the
+  documentation-only accounting follow-up and has no executable or native
+  claim.
 - Phase 4 remains open on the remaining live P4-C5 failover rows and the final
   documentation archive after those rows stabilize. The re-scoped physical
   laptop disconnect and sleep rows remain production-acceptance and release
@@ -2105,7 +2108,8 @@ Its original `p4-c3-acceptance-summary.json` has SHA-256
 The 8,252-byte populated-row addendum has SHA-256
 `ed36c4221827d5377035dab393bd6ff4923dbef183b77087e1b9799a8933ebb6`.
 Together they support the rows recorded by the original matrix, but the omitted
-successful-login row means only the exact 0.60.41 result closes P4-C3.
+successful-login row means only the exact 0.60.41 result closes that historical
+matrix. The later 0.60.43 routing change adds a separate native picker row.
 Rejected harness attempts remain preserved. They include a guest runtime-DLL
 staging miss, a deterministic-login-stub omission that reproduced on old and
 new binaries, a focus helper that restored rather than showed a maximized
@@ -2127,6 +2131,23 @@ uses version `0.60.23`; it makes no 0.60.23 native result, push, deployment,
 activation, or release claim. Version `0.60.42` is the documentation-only
 accounting follow-up for the exact 0.60.41 Pass; it makes no 0.60.42 executable,
 native, live, production, push, deployment, activation, or release claim.
+
+Narrowly reopened 2026-10-07 for the later provider/model selection path:
+exact commit `372f2ae83e67a62cd3b382e5db52af96d00a85ce`, version `0.60.43`,
+replaced the desktop's hard-coded provider kinds and stale model names with
+enabled, authenticated configured instance IDs intersected with bounded
+driver-backed `provider.models` results. Its complete local gate passed, its
+schema-6 clone migrated only the exact shipped Codex `o3-mini` defaults, and an
+isolated live Codex 0.157.0 run discovered six current models before completing
+a real turn through `codex-default` and `gpt-6-luna` with exact output
+`P4-MODEL-ROUTE-OK`. The same exact source then produced clean limited-user
+Windows artifacts. Native UI Automation proved that an unavailable route
+visibly redirects to Provider Settings without creating a thread and that
+authenticated Codex 0.159.2 renders `Codex CLI` plus live `GPT-6.1-Sol` before
+creating a thread whose persisted `codex-default` and `gpt-6.1-sol` values
+match the shipped CLI. These results close the later native picker row, so
+P4-C3 is Pass again. The unchanged 0.60.41 login-terminal, Narrator, scaling,
+High Contrast, disabled-animation, visual, and named-pipe rows remain Pass.
 
 ##### P4-C4: rerun defensible seven-day reconciliation
 
@@ -2225,6 +2246,13 @@ rows remain required. Exact artifacts, databases, logs, controlled-evidence
 labels, isolation corrections, limitations, and cleanup are recorded in
 `docs/operations/PHASE4_ACCEPTANCE.md`. No push, deployment, production
 activation, or release is claimed.
+
+Exact 0.60.43 later added a successful ordinary provider route as diagnostic
+evidence: authenticated Codex model discovery returned six current models and a
+real `gpt-6-luna` turn completed through `codex-default`. That result proves the
+corrected success route but is not quota exhaustion, failover, or an interruption
+after output or an external side effect. It therefore does not change the P4-C5
+Partial result or close live rows 4 through 6.
 
 ##### P4-C6: close the physical R0.5 rows
 

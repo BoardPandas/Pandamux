@@ -110,7 +110,12 @@ its label-only semantic child was absent from Windows UI Automation. Exact
 0.60.41 commit `c6a20ff` publishes the child value with a synthetic text
 run so UIA exposes TextPattern content. Its complete local, native,
 login-terminal, scaling, High Contrast, disabled-animation, genuine Narrator,
-visual, and named-pipe matrices passed, closing P4-C3. Exact 0.60.17
+visual, and named-pipe matrices passed; those rows remain accepted. Exact
+0.60.43 commit `372f2ae` passed local schema migration, live six-model Codex
+discovery, and a real turn through `codex-default` plus `gpt-6-luna`. Its exact
+limited-user Windows build, headless smoke, visible no-route fallback, and
+authenticated picker-created `codex-default` plus `gpt-6.1-sol` thread also
+passed, so P4-C3 is Pass again. Exact 0.60.17
 partially passed P4-C5 with live scanner and Hub durability, conservative
 capacity and route decisions, and independent rollback controls. Real external
 quota exhaustion, real post-side-effect interruption, the final archive after

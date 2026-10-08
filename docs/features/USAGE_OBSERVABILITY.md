@@ -370,7 +370,16 @@ so the standard guest row rejected it before Narrator. Exact 0.60.41 commit
 synthetic text run so the child and containing Document expose TextPattern
 content. Its complete local, native, login-terminal, scaling, High Contrast,
 disabled-animation, genuine Narrator, visual, and named-pipe matrices passed,
-closing P4-C3.
+and those unchanged rows remain accepted. Exact 0.60.43 commit `372f2ae` then
+replaced static desktop provider kinds and stale model names with enabled,
+authenticated configured instances and bounded driver model discovery. Its
+complete local gate, schema migration, live six-model Codex discovery, and real
+turn through `codex-default` plus `gpt-6-luna` passed. Exact limited-user
+Windows artifacts then passed native build and headless smoke. The desktop
+visibly rejected a no-route create into Provider Settings and, with authenticated
+Codex 0.159.2, rendered `Codex CLI` plus live `GPT-6.1-Sol`; the shipped CLI
+read the same `codex-default` and `gpt-6.1-sol` values on the created thread.
+P4-C3 is Pass again.
 The open real external quota-exhaustion and post-side-effect
 interruption rows, the deferred physical R0.5 laptop disconnect and sleep rows,
 the final archive after those results stabilize, and later release gates still

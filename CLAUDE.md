@@ -25,19 +25,27 @@ checks so development could continue. Those rows still block any
 production-accepted, released, or shipped claim until the matrix passes and its
 record is archived. Exact 0.60.15 commit `3a77382` passes P4-C1, P4-C2, and
 P4-C4. Exact 0.60.41 commit
-`c6a20ff4f768747d0dadd59b88b40d3e20f7674d` passes P4-C3 on one clean native
+`c6a20ff4f768747d0dadd59b88b40d3e20f7674d` passes the unchanged P4-C3
+terminal, accessibility, visual, scaling, and IPC rows on one clean native
 artifact set, including controlled successful-login interaction, 100 and 200
 percent scaling, High Contrast, disabled animations, visual review, genuine
 Narrator with exact READY, ECHO, and reopened-output phrases, and the complete
-local plus independent-peer named-pipe security matrix. Exact 0.60.17 commit
+local plus independent-peer named-pipe security matrix. Exact 0.60.43 commit
+`372f2ae83e67a62cd3b382e5db52af96d00a85ce` passes the complete local gate,
+schema migration, live driver model discovery, and a real Codex turn through
+the exact configured instance and selected model. Its exact limited-user
+Windows artifacts also pass native build and headless smoke, visible no-route
+fallback into Provider Settings, and an authenticated picker-created thread
+whose `codex-default` and `gpt-6.1-sol` route matches the shipped CLI. P4-C3 is
+Pass again. Exact 0.60.17 commit
 `2f56a27` partially passes P4-C5 with live scanner and Hub durability,
 conservative capacity projections and route explanations, and independent
 rollback controls. Real external quota exhaustion and post-side-effect
 capacity interruption remain open even though their diagnostic fixtures pass.
 The exact results are recorded in
 [`docs/operations/PHASE4_ACCEPTANCE.md`](docs/operations/PHASE4_ACCEPTANCE.md).
-The remaining external failover, final documentation archive, and physical
-rows keep Phase 4 open.
+The remaining external failover, final documentation archive, and physical rows
+keep Phase 4 open.
 
 Exact 0.60.38 commit `d328ad8` supersedes the preceding source-candidate note:
 its complete local gate, native build, host smoke, remote lifecycle, and
@@ -61,7 +69,9 @@ Windows UI Automation tree despite passing the local, native-build, and host
 gates. Exact 0.60.41 commit `c6a20ff` provides that child through an AccessKit
 value backed by a synthetic text run, enabling UIA TextPattern content. Its
 complete local, native, interaction, scaling, display-mode, Narrator, visual,
-and named-pipe matrices passed, so P4-C3 is closed.
+and named-pipe matrices passed. Those rows remain accepted. The later 0.60.43
+routing and UI correction also passed its exact native Windows picker and
+no-route rows, so P4-C3 is Pass again.
 
 ## Build and development
 
