@@ -16,11 +16,12 @@ use pandamux_protocol::{
     AttachmentPutResult, CapacityQueryResult, EventEnvelope, GitCommitParams, GitCommitResult,
     GitCreatePrParams, GitCreatePrResult, GitPushParams, GitPushResult, GitStatusParams,
     GitStatusResult, ProviderHealthParams, ProviderHealthResult, ProviderLoginLaunchParams,
-    ProviderLoginLaunchResult, ProviderLoginPreview, ProviderLoginPreviewParams, SettingsGetResult,
-    SettingsSetParams, SettingsSetResult, TerminalAttachParams, TerminalAttachResult,
-    TerminalCloseParams, TerminalInputParams, TerminalOpenResult, ThreadCancelTurnParams,
-    ThreadContinueParams, ThreadContinueResult, ThreadCreateParams, ThreadRespondApprovalParams,
-    ThreadSendTurnParams, UsageCatalogResult, UsageQueryResult, UsageSubscriptionSetParams,
+    ProviderLoginLaunchResult, ProviderLoginPreview, ProviderLoginPreviewParams,
+    ProviderModelsParams, ProviderModelsResult, SettingsGetResult, SettingsSetParams,
+    SettingsSetResult, TerminalAttachParams, TerminalAttachResult, TerminalCloseParams,
+    TerminalInputParams, TerminalOpenResult, ThreadCancelTurnParams, ThreadContinueParams,
+    ThreadContinueResult, ThreadCreateParams, ThreadRespondApprovalParams, ThreadSendTurnParams,
+    UsageCatalogResult, UsageQueryResult, UsageSubscriptionSetParams,
 };
 
 use crate::command_palette::{
@@ -107,6 +108,7 @@ pub struct AppView {
     pub system_tray: SystemTrayState,
     pub usage_view: UsageViewState,
     pub usage_catalog: UsageCatalogResult,
+    provider_models: ProviderModelsResult,
     usage_request_generation: u64,
     usage_editor_target: Option<UsageEditorTarget>,
     usage_editor_previous_focus: Option<WeakFocusHandle>,
@@ -225,6 +227,7 @@ impl AppView {
             system_tray: SystemTrayState::new(),
             usage_view: UsageViewState::default(),
             usage_catalog: UsageCatalogResult::default(),
+            provider_models: ProviderModelsResult::default(),
             usage_request_generation: 0,
             usage_editor_target: None,
             usage_editor_previous_focus: None,
@@ -455,14 +458,17 @@ impl AppView {
 
     /// Dispatches create_thread intent to backend server using active picker state.
     pub fn create_default_thread(&mut self, cx: &mut Context<Self>) {
+        let Some((provider_instance_id, model, effort)) = self.selected_picker_route(cx) else {
+            return;
+        };
         let title = format!("Thread #{}", self.thread_order.len() + 1);
         let params = ThreadCreateParams {
             project_id: None,
             environment_id: Some(EnvironmentId::from("env-local")),
             title: Some(title),
-            provider_instance_id: Some(self.picker.provider_instance_id()),
-            model: Some(self.picker.model().to_string()),
-            effort: self.picker.effort.clone(),
+            provider_instance_id: Some(provider_instance_id),
+            model: Some(model),
+            effort,
             access_mode: None,
             agent_id: None,
             cwd: None,
@@ -474,14 +480,17 @@ impl AppView {
 
     /// Dispatches create_thread intent assigned to a specific agent.
     pub fn create_agent_thread(&mut self, agent_id: &'static str, cx: &mut Context<Self>) {
+        let Some((provider_instance_id, model, effort)) = self.selected_picker_route(cx) else {
+            return;
+        };
         let title = format!("Agent: {agent_id} #{}", self.thread_order.len() + 1);
         let params = ThreadCreateParams {
             project_id: None,
             environment_id: Some(EnvironmentId::from("env-local")),
             title: Some(title),
-            provider_instance_id: Some(self.picker.provider_instance_id()),
-            model: Some(self.picker.model().to_string()),
-            effort: self.picker.effort.clone(),
+            provider_instance_id: Some(provider_instance_id),
+            model: Some(model),
+            effort,
             access_mode: None,
             agent_id: Some(AgentId::from(agent_id)),
             cwd: None,
@@ -490,6 +499,31 @@ impl AppView {
 
         self.active_rail_tab = RailTab::Threads;
         self.dispatch_create_thread(params, cx);
+    }
+
+    fn selected_picker_route(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<(pandamux_core::ProviderInstanceId, String, Option<String>)> {
+        let provider_instance_id = self.picker.provider_instance_id();
+        let model = self.picker.model().map(str::to_string);
+        match (provider_instance_id, model) {
+            (Some(provider_instance_id), Some(model)) => {
+                Some((provider_instance_id, model, self.picker.effort.clone()))
+            }
+            _ => {
+                self.active_rail_tab = RailTab::Settings;
+                self.settings_view.active_category =
+                    crate::settings_view::SettingsCategory::Providers;
+                self.settings_view.status_banner = Some((
+                    "No authenticated provider with a discovered model is available. Check provider health or complete login first."
+                        .to_string(),
+                    true,
+                ));
+                cx.notify();
+                None
+            }
+        }
     }
 
     fn dispatch_create_thread(&mut self, params: ThreadCreateParams, cx: &mut Context<Self>) {
@@ -538,7 +572,7 @@ impl AppView {
             thread_id: thread_id.clone(),
             text: effective_text,
             attachment_ids,
-            model: Some(self.picker.model().to_string()),
+            model: self.picker.model().map(str::to_string),
             effort: self.picker.effort.clone(),
             hub_routing_context: None,
         };
@@ -1302,6 +1336,7 @@ impl AppView {
                 {
                     let _ = this.update(cx, |app, cx| {
                         app.settings_view.settings = res.settings;
+                        app.synchronize_picker();
                         app.sync_theme_from_settings(cx);
                         cx.notify();
                     });
@@ -1309,6 +1344,38 @@ impl AppView {
             })
             .detach();
         }
+    }
+
+    fn synchronize_picker(&mut self) {
+        self.picker.synchronize(
+            &self.settings_view.settings,
+            &self.settings_view.health_reports,
+            &self.provider_models.reports,
+        );
+    }
+
+    /// Loads bounded, non-interactive model discovery for configured provider
+    /// instances. A failed discovery leaves that instance out of the composer
+    /// instead of offering a fabricated or stale model.
+    pub fn load_provider_models(&mut self, cx: &mut Context<Self>) {
+        let Some(bridge) = &self.bridge else {
+            return;
+        };
+        let rx = bridge.send_request(
+            "provider.models",
+            serde_json::to_value(ProviderModelsParams::default()).ok(),
+        );
+        cx.spawn(async move |this, cx| {
+            let result = decode_rpc_result::<ProviderModelsResult>(rx.await);
+            let _ = this.update(cx, |app, cx| {
+                if let Ok(result) = result {
+                    app.provider_models = result;
+                    app.synchronize_picker();
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Loads the Usage projection and its display catalog through independent,
@@ -1607,6 +1674,7 @@ impl AppView {
                         app.settings_view.status_banner =
                             Some(("Settings saved successfully".to_string(), false));
                         app.sync_theme_from_settings(cx);
+                        app.run_health_checks(None, cx);
                     } else {
                         app.settings_view.is_saving = false;
                         let message = result
@@ -1669,6 +1737,8 @@ impl AppView {
                             .to_string(),
                             false,
                         ));
+                        app.synchronize_picker();
+                        app.load_provider_models(cx);
                     }
                     Err(message) => {
                         app.settings_view.status_banner = Some((message, true));

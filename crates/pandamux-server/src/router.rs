@@ -1,5 +1,5 @@
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -27,7 +27,8 @@ use pandamux_protocol::{
     IdentifyResult, McpCallToolParams, PROTOCOL_VERSION, PingResult, ProviderHealthParams,
     ProviderHealthReport, ProviderHealthResult, ProviderLoginFlow, ProviderLoginGuidance,
     ProviderLoginLaunchParams, ProviderLoginLaunchResult, ProviderLoginPreview,
-    ProviderLoginPreviewParams, RoutingProviderCatalogEntry, RpcError, RpcRequest, RpcResponse,
+    ProviderLoginPreviewParams, ProviderModelInfo, ProviderModelsParams, ProviderModelsReport,
+    ProviderModelsResult, RoutingProviderCatalogEntry, RpcError, RpcRequest, RpcResponse,
     ScheduleRunParams, ScheduleRunResult, ScheduleSaveParams, ScheduleValidateParams,
     ScheduleValidationResult, ServerCapabilities, ServerRole, SettingsGetParams, SettingsGetResult,
     SettingsSetParams, SubAgentTreeItem, SubAgentTreeParams, SubAgentTreeResult,
@@ -1228,6 +1229,7 @@ impl Router {
             "settings.get" | "config.get" => self.handle_settings_get(params),
             "settings.set" | "config.set" => self.handle_settings_set(params),
             "provider.health" | "provider.probe" => self.handle_provider_health(params).await,
+            "provider.models" => self.handle_provider_models(params).await,
             "provider.login.preview" => self.handle_provider_login_preview(params).await,
             "provider.login.launch" => self.handle_provider_login_launch(params),
             "usage.export" => self.handle_usage_export(context, params),
@@ -1899,6 +1901,221 @@ impl Router {
             has_more,
         };
         serde_json::to_value(&res).map_err(|e| RpcError::internal_error(e.to_string()))
+    }
+
+    async fn handle_provider_models(&self, params: Value) -> Result<Value, RpcError> {
+        let filter = if params.is_null() {
+            ProviderModelsParams::default()
+        } else {
+            serde_json::from_value::<ProviderModelsParams>(params).map_err(|error| {
+                RpcError::with_data(
+                    -32602,
+                    format!("Invalid provider.models params: {error}"),
+                    json!({ "reason": "provider_models_params_invalid" }),
+                )
+            })?
+        };
+        filter.validate().map_err(|error| {
+            RpcError::with_data(
+                -32602,
+                error,
+                json!({ "reason": "provider_models_page_limit_invalid" }),
+            )
+        })?;
+        let environment_id = filter
+            .environment_id
+            .clone()
+            .unwrap_or_else(|| EnvironmentId::new(self.environment_id.clone()));
+        let settings = self
+            .store
+            .get_settings()
+            .map_err(|error| RpcError::internal_error(error.to_string()))?
+            .unwrap_or_default();
+
+        if let Some(instance_id) = filter.instance_id.as_ref()
+            && !settings
+                .providers
+                .iter()
+                .any(|config| &config.id == instance_id)
+        {
+            self.provider_resolver
+                .resolve_allow_disabled(instance_id, &environment_id)?;
+        }
+
+        let mut instances = settings
+            .providers
+            .iter()
+            .filter(|instance| {
+                filter
+                    .instance_id
+                    .as_ref()
+                    .is_none_or(|target_id| &instance.id == target_id)
+            })
+            .filter(|instance| {
+                filter
+                    .after_instance_id
+                    .as_ref()
+                    .is_none_or(|after| instance.id.as_str() > after.as_str())
+            })
+            .collect::<Vec<_>>();
+        instances.sort_by(|left, right| left.id.cmp(&right.id));
+        let has_more = instances.len() > filter.limit as usize;
+        instances.truncate(filter.limit as usize);
+
+        enum DiscoveryOutcome {
+            Models(Vec<pandamux_providers::ModelInfo>),
+            Failed(String),
+            TimedOut,
+        }
+
+        let semaphore = Arc::new(Semaphore::new(filter.max_concurrency as usize));
+        let mut tasks = JoinSet::new();
+        let mut reports = Vec::with_capacity(instances.len());
+        let mut expected = HashMap::new();
+
+        for instance in instances {
+            expected.insert(
+                instance.id.clone(),
+                (
+                    instance.provider,
+                    instance.display_name.clone(),
+                    instance.enabled,
+                ),
+            );
+            match self
+                .provider_resolver
+                .resolve_allow_disabled(&instance.id, &environment_id)
+            {
+                Ok(resolved) if !resolved.config.enabled => {
+                    reports.push(ProviderModelsReport {
+                        environment_id: environment_id.clone(),
+                        instance_id: resolved.config.id,
+                        provider: resolved.config.provider,
+                        display_name: resolved.config.display_name,
+                        enabled: false,
+                        models: Vec::new(),
+                        checked_at_ms: Self::now_ms(),
+                        error: Some("Provider instance is disabled".to_string()),
+                        retryable: false,
+                    });
+                }
+                Ok(resolved) => {
+                    let semaphore = semaphore.clone();
+                    let timeout = Duration::from_millis(filter.timeout_ms);
+                    tasks.spawn(async move {
+                        let outcome = match semaphore.acquire_owned().await {
+                            Ok(_permit) => match tokio::time::timeout(
+                                timeout,
+                                resolved.driver.list_models(&resolved.config),
+                            )
+                            .await
+                            {
+                                Ok(Ok(models)) => DiscoveryOutcome::Models(models),
+                                Ok(Err(error)) => DiscoveryOutcome::Failed(error.to_string()),
+                                Err(_) => DiscoveryOutcome::TimedOut,
+                            },
+                            Err(_) => DiscoveryOutcome::TimedOut,
+                        };
+                        (resolved.config, outcome)
+                    });
+                }
+                Err(error) => {
+                    reports.push(ProviderModelsReport {
+                        environment_id: environment_id.clone(),
+                        instance_id: instance.id.clone(),
+                        provider: instance.provider,
+                        display_name: instance.display_name.clone(),
+                        enabled: instance.enabled,
+                        models: Vec::new(),
+                        checked_at_ms: Self::now_ms(),
+                        error: Some(error.message),
+                        retryable: true,
+                    });
+                }
+            }
+        }
+
+        while let Some(result) = tasks.join_next().await {
+            let Ok((config, outcome)) = result else {
+                continue;
+            };
+            let checked_at_ms = Self::now_ms();
+            let (models, error) = match outcome {
+                DiscoveryOutcome::Models(models) => {
+                    let mut seen = BTreeSet::new();
+                    let models = models
+                        .into_iter()
+                        .filter(|model| {
+                            !model.id.trim().is_empty() && seen.insert(model.id.clone())
+                        })
+                        .map(|model| ProviderModelInfo {
+                            id: model.id,
+                            display_name: model.display_name,
+                            context_window: model.context_window,
+                            max_output_tokens: model.max_output_tokens,
+                            supports_reasoning: model.supports_reasoning,
+                        })
+                        .collect::<Vec<_>>();
+                    if models.is_empty() {
+                        (
+                            models,
+                            Some("Provider returned no available models".to_string()),
+                        )
+                    } else {
+                        (models, None)
+                    }
+                }
+                DiscoveryOutcome::Failed(error) => (Vec::new(), Some(error)),
+                DiscoveryOutcome::TimedOut => (
+                    Vec::new(),
+                    Some(format!(
+                        "Provider model discovery exceeded {} ms",
+                        filter.timeout_ms
+                    )),
+                ),
+            };
+            let retryable = error.is_some();
+            reports.push(ProviderModelsReport {
+                environment_id: environment_id.clone(),
+                instance_id: config.id,
+                provider: config.provider,
+                display_name: config.display_name,
+                enabled: config.enabled,
+                models,
+                checked_at_ms,
+                error,
+                retryable,
+            });
+        }
+
+        for (instance_id, (provider, display_name, enabled)) in expected {
+            if reports
+                .iter()
+                .any(|report| report.instance_id == instance_id)
+            {
+                continue;
+            }
+            reports.push(ProviderModelsReport {
+                environment_id: environment_id.clone(),
+                instance_id,
+                provider,
+                display_name,
+                enabled,
+                models: Vec::new(),
+                checked_at_ms: Self::now_ms(),
+                error: Some("Provider model discovery task failed".to_string()),
+                retryable: true,
+            });
+        }
+
+        reports.sort_by(|left, right| left.instance_id.cmp(&right.instance_id));
+        let next_instance_id = reports.last().map(|report| report.instance_id.clone());
+        serde_json::to_value(ProviderModelsResult {
+            reports,
+            next_instance_id,
+            has_more,
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
     }
 
     async fn handle_provider_login_preview(&self, params: Value) -> Result<Value, RpcError> {
@@ -4285,6 +4502,65 @@ mod tests {
         assert_eq!(
             invalid_page.error.unwrap().data.unwrap()["reason"],
             "provider_health_page_limit_invalid"
+        );
+    }
+
+    #[tokio::test]
+    async fn router_discovers_models_for_configured_provider_instances() {
+        let store = Store::in_memory().unwrap();
+        let router = mock_router(store);
+
+        let response = router
+            .handle_request(RpcRequest::new(
+                1,
+                "provider.models",
+                Some(json!({ "environmentId": "env-test" })),
+            ))
+            .await
+            .expect("provider models response");
+        assert!(response.is_success());
+        let result = response.result.expect("provider models result");
+        assert_eq!(result["hasMore"], false);
+        assert_eq!(result["nextInstanceId"], "mock-default");
+        assert_eq!(result["reports"].as_array().unwrap().len(), 1);
+        let report = &result["reports"][0];
+        assert_eq!(report["environmentId"], "env-test");
+        assert_eq!(report["instanceId"], "mock-default");
+        assert_eq!(report["displayName"], "Mock Provider");
+        assert_eq!(report["error"], Value::Null);
+        assert_eq!(report["retryable"], false);
+        assert_eq!(report["models"].as_array().unwrap().len(), 2);
+        assert_eq!(report["models"][0]["id"], "mock-fast");
+        assert_eq!(report["models"][1]["id"], "mock-reasoning");
+
+        let empty_page = router
+            .handle_request(RpcRequest::new(
+                2,
+                "provider.models",
+                Some(json!({
+                    "environmentId": "env-test",
+                    "afterInstanceId": "mock-default"
+                })),
+            ))
+            .await
+            .expect("empty provider models page");
+        assert!(empty_page.is_success());
+        let empty_page = empty_page.result.expect("empty page result");
+        assert!(empty_page["reports"].as_array().unwrap().is_empty());
+        assert_eq!(empty_page["hasMore"], false);
+        assert_eq!(empty_page["nextInstanceId"], Value::Null);
+
+        let invalid_page = router
+            .handle_request(RpcRequest::new(
+                3,
+                "provider.models",
+                Some(json!({ "limit": 0 })),
+            ))
+            .await
+            .expect("invalid provider models page");
+        assert_eq!(
+            invalid_page.error.unwrap().data.unwrap()["reason"],
+            "provider_models_page_limit_invalid"
         );
     }
 

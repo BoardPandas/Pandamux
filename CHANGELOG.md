@@ -27,6 +27,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Routed new threads through real provider instances and current model discovery.**
+  The composer now uses enabled, authenticated `ProviderInstanceConfig` IDs instead
+  of hard-coded provider kinds, and its model choices come from bounded driver-backed
+  discovery rather than stale desktop constants. New Thread fails visibly into
+  Provider Settings when no usable route exists. Settings schema 7 also replaces only
+  the shipped Codex `o3-mini` defaults with the provider-owned `default` selector while
+  preserving custom provider and tier targets.
+
 - **Made the terminal Document's bounded text traversable by Narrator.** The
   visible terminal grid now sits inside an explicit semantic Text child whose
   AccessKit value is backed by a synthetic text run using the same

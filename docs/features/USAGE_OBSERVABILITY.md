@@ -148,6 +148,16 @@ account and subscription label, runtime state and reason code, check time, expir
 successful check, retryability, and structured login guidance. Unknown authentication
 is never classified Healthy. Health tests assert that no provider session is started.
 
+`provider.models` uses the same bounded page size, deadline, and concurrency controls
+to ask each configured provider driver for model choices. Every report retains the
+exact environment and provider instance identity, and discovery failure or an empty
+result remains explicit. The desktop composer intersects those results with enabled,
+Healthy, authenticated instances. It never rewrites a provider kind into an instance
+ID and never offers a stale fallback model. Codex discovery reads its authenticated
+app-server model list; providers without a live list API may return declared driver
+metadata. If the intersection is empty, New Thread directs the user to Provider
+Settings instead of creating an invalid route.
+
 Login is a separate explicit action. Claude and Codex first return a short-lived one-time
 preview containing the exact environment, instance, isolated profile, flow, and safely
 quoted command. A matching launch opens the Terminal surface with private profile and

@@ -194,6 +194,52 @@ pub struct ProviderHealthResult {
     pub has_more: bool,
 }
 
+/// One model returned by a configured provider instance's bounded discovery call.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderModelInfo {
+    pub id: String,
+    pub display_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u64>,
+    pub supports_reasoning: bool,
+}
+
+/// Model-discovery result for one configured provider instance.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderModelsReport {
+    pub environment_id: EnvironmentId,
+    pub instance_id: ProviderInstanceId,
+    pub provider: ProviderKind,
+    pub display_name: String,
+    pub enabled: bool,
+    #[serde(default)]
+    pub models: Vec<ProviderModelInfo>,
+    pub checked_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub retryable: bool,
+}
+
+/// Bounded model-discovery page. It intentionally reuses
+/// [`ProviderHealthParams`] so health and model discovery have identical
+/// pagination, timeout, and concurrency limits.
+pub type ProviderModelsParams = ProviderHealthParams;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderModelsResult {
+    pub reports: Vec<ProviderModelsReport>,
+    #[serde(default)]
+    pub next_instance_id: Option<ProviderInstanceId>,
+    #[serde(default)]
+    pub has_more: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -274,5 +320,44 @@ mod tests {
             ..ProviderHealthParams::default()
         };
         assert!(invalid.validate().is_err());
+    }
+
+    #[test]
+    fn provider_models_report_round_trips_without_fabricating_models() {
+        let report = ProviderModelsReport {
+            environment_id: EnvironmentId::new("env-local"),
+            instance_id: ProviderInstanceId::new("codex-default"),
+            provider: ProviderKind::Codex,
+            display_name: "Codex CLI".to_string(),
+            enabled: true,
+            models: vec![ProviderModelInfo {
+                id: "gpt-test".to_string(),
+                display_name: "GPT Test".to_string(),
+                context_window: None,
+                max_output_tokens: None,
+                supports_reasoning: true,
+            }],
+            checked_at_ms: 123,
+            error: None,
+            retryable: false,
+        };
+
+        let json = serde_json::to_string(&report).expect("serialize model report");
+        let parsed: ProviderModelsReport =
+            serde_json::from_str(&json).expect("deserialize model report");
+        assert_eq!(parsed, report);
+
+        let unavailable: ProviderModelsReport = serde_json::from_value(serde_json::json!({
+            "environmentId": "env-local",
+            "instanceId": "codex-default",
+            "provider": "codex",
+            "displayName": "Codex CLI",
+            "enabled": true,
+            "checkedAtMs": 124,
+            "error": "not authenticated"
+        }))
+        .expect("deserialize unavailable model report");
+        assert!(unavailable.models.is_empty());
+        assert!(!unavailable.retryable);
     }
 }

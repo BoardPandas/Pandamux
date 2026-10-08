@@ -1,4 +1,5 @@
-use pandamux_core::ProviderInstanceId;
+use pandamux_core::{ProviderInstanceId, ProviderKind, UserSettings};
+use pandamux_protocol::{ProviderHealthReport, ProviderModelsReport};
 
 /// Represents a model option for a provider.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,85 +37,117 @@ impl Default for PickerState {
 }
 
 impl PickerState {
-    /// Creates a new picker initialized with Claude 3.7 Sonnet and high reasoning effort.
+    /// Creates an empty picker. Configured, authenticated instances and their
+    /// discovered models are synchronized after the desktop connects.
     pub fn new() -> Self {
-        let providers = vec![
-            ProviderChoice {
-                id: "claude".to_string(),
-                display_name: "Claude".to_string(),
-                badge: "🟣 Anthropic".to_string(),
-                models: vec![
-                    ModelChoice {
-                        id: "claude-3-7-sonnet".to_string(),
-                        display_name: "Claude 3.7 Sonnet".to_string(),
-                        supports_reasoning: true,
-                    },
-                    ModelChoice {
-                        id: "claude-3-5-sonnet".to_string(),
-                        display_name: "Claude 3.5 Sonnet".to_string(),
-                        supports_reasoning: false,
-                    },
-                    ModelChoice {
-                        id: "claude-3-5-haiku".to_string(),
-                        display_name: "Claude 3.5 Haiku".to_string(),
-                        supports_reasoning: false,
-                    },
-                ],
-            },
-            ProviderChoice {
-                id: "codex".to_string(),
-                display_name: "Codex".to_string(),
-                badge: "🟢 OpenAI".to_string(),
-                models: vec![
-                    ModelChoice {
-                        id: "o3-mini".to_string(),
-                        display_name: "o3-mini".to_string(),
-                        supports_reasoning: true,
-                    },
-                    ModelChoice {
-                        id: "gpt-4.5-preview".to_string(),
-                        display_name: "GPT-4.5 Preview".to_string(),
-                        supports_reasoning: true,
-                    },
-                    ModelChoice {
-                        id: "gpt-4o".to_string(),
-                        display_name: "GPT-4o".to_string(),
-                        supports_reasoning: false,
-                    },
-                ],
-            },
-            ProviderChoice {
-                id: "antigravity".to_string(),
-                display_name: "Antigravity".to_string(),
-                badge: "🔵 Google".to_string(),
-                models: vec![
-                    ModelChoice {
-                        id: "gemini-2.0-flash".to_string(),
-                        display_name: "Gemini 2.0 Flash".to_string(),
-                        supports_reasoning: false,
-                    },
-                    ModelChoice {
-                        id: "gemini-2.0-flash-thinking".to_string(),
-                        display_name: "Gemini 2.0 Flash Thinking".to_string(),
-                        supports_reasoning: true,
-                    },
-                    ModelChoice {
-                        id: "gemini-2.0-pro-exp".to_string(),
-                        display_name: "Gemini 2.0 Pro Exp".to_string(),
-                        supports_reasoning: true,
-                    },
-                ],
-            },
-        ];
-
         Self {
-            provider_id: "claude".to_string(),
-            model_id: "claude-3-7-sonnet".to_string(),
-            effort: Some("high".to_string()),
-            providers,
+            provider_id: String::new(),
+            model_id: String::new(),
+            effort: Some("medium".to_string()),
+            providers: Vec::new(),
             show_provider_dropdown: false,
             show_model_dropdown: false,
             show_effort_dropdown: false,
+        }
+    }
+
+    /// Rebuilds picker choices from configured instance identities, successful
+    /// authentication evidence, and bounded provider model discovery.
+    pub fn synchronize(
+        &mut self,
+        settings: &UserSettings,
+        health_reports: &[ProviderHealthReport],
+        model_reports: &[ProviderModelsReport],
+    ) {
+        let previous_provider = self.provider_id.clone();
+        let previous_model = self.model_id.clone();
+        let mut providers = Vec::new();
+
+        for config in settings.providers.iter().filter(|config| config.enabled) {
+            let environment_id = config
+                .environment_id
+                .as_ref()
+                .map(|environment_id| environment_id.as_str())
+                .unwrap_or("env-local");
+            let authenticated = health_reports.iter().any(|report| {
+                report.instance_id == config.id
+                    && report.environment_id.as_str() == environment_id
+                    && report.enabled
+                    && report.status == "healthy"
+                    && report.authentication_state == "authenticated"
+            });
+            if !authenticated {
+                continue;
+            }
+            let Some(discovery) = model_reports.iter().find(|report| {
+                report.instance_id == config.id
+                    && report.environment_id.as_str() == environment_id
+                    && report.enabled
+                    && report.error.is_none()
+                    && !report.models.is_empty()
+            }) else {
+                continue;
+            };
+            let models = discovery
+                .models
+                .iter()
+                .map(|model| ModelChoice {
+                    id: model.id.clone(),
+                    display_name: model.display_name.clone(),
+                    supports_reasoning: model.supports_reasoning,
+                })
+                .collect::<Vec<_>>();
+            providers.push(ProviderChoice {
+                id: config.id.as_str().to_string(),
+                display_name: config.display_name.clone(),
+                badge: provider_badge(config.provider).to_string(),
+                models,
+            });
+        }
+
+        self.providers = providers;
+        if self.providers.is_empty() {
+            self.provider_id.clear();
+            self.model_id.clear();
+            self.show_provider_dropdown = false;
+            self.show_model_dropdown = false;
+            return;
+        }
+
+        self.provider_id = if self
+            .providers
+            .iter()
+            .any(|provider| provider.id == previous_provider)
+        {
+            previous_provider
+        } else {
+            self.providers[0].id.clone()
+        };
+        let provider = self
+            .providers
+            .iter()
+            .find(|provider| provider.id == self.provider_id)
+            .expect("selected provider comes from synchronized choices");
+        self.model_id = if provider
+            .models
+            .iter()
+            .any(|model| model.id == previous_model)
+        {
+            previous_model
+        } else {
+            provider
+                .models
+                .first()
+                .map(|model| model.id.clone())
+                .unwrap_or_default()
+        };
+        if !provider
+            .models
+            .iter()
+            .find(|model| model.id == self.model_id)
+            .is_some_and(|model| model.supports_reasoning)
+        {
+            self.effort = None;
         }
     }
 
@@ -143,6 +176,9 @@ impl PickerState {
 
     /// Cycles to the next available provider.
     pub fn cycle_provider(&mut self) {
+        if self.providers.is_empty() {
+            return;
+        }
         let current_idx = self
             .providers
             .iter()
@@ -180,13 +216,13 @@ impl PickerState {
     }
 
     /// Returns the active `ProviderInstanceId`.
-    pub fn provider_instance_id(&self) -> ProviderInstanceId {
-        ProviderInstanceId::from(self.provider_id.as_str())
+    pub fn provider_instance_id(&self) -> Option<ProviderInstanceId> {
+        (!self.provider_id.is_empty()).then(|| ProviderInstanceId::from(self.provider_id.as_str()))
     }
 
     /// Returns the active model string.
-    pub fn model(&self) -> &str {
-        &self.model_id
+    pub fn model(&self) -> Option<&str> {
+        (!self.model_id.is_empty()).then_some(self.model_id.as_str())
     }
 
     /// Returns the active effort string.
@@ -200,7 +236,7 @@ impl PickerState {
             .iter()
             .find(|p| p.id == self.provider_id)
             .map(|p| p.display_name.as_str())
-            .unwrap_or(&self.provider_id)
+            .unwrap_or("No provider")
     }
 
     /// Returns current model display name.
@@ -210,6 +246,22 @@ impl PickerState {
         {
             return &model.display_name;
         }
-        &self.model_id
+        if self.model_id.is_empty() {
+            "No model"
+        } else {
+            &self.model_id
+        }
+    }
+}
+
+fn provider_badge(provider: ProviderKind) -> &'static str {
+    match provider {
+        ProviderKind::Claude => "🟣 Anthropic",
+        ProviderKind::Codex => "🟢 OpenAI",
+        ProviderKind::Antigravity => "🔵 Google",
+        ProviderKind::Cursor => "🟣 Cursor",
+        ProviderKind::Grok => "⚫ xAI",
+        ProviderKind::OpenCode => "🟠 OpenCode",
+        ProviderKind::Custom => "⚪ Custom",
     }
 }

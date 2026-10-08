@@ -171,6 +171,15 @@ Every executable provider path starts from a stored `ProviderInstanceConfig` res
 
 Per-instance permits are held for the complete provider-process lifetime, including approval waits, and are released on cancellation, crash, configuration replacement, or shutdown. The selected instance ID is carried through the thread, health and login paths, turn, process audit, and provider launch.
 
+The desktop composer never converts a provider kind into an instance ID. After bounded
+health checks, it builds its routes from enabled, authenticated stored instances and
+`provider.models` results. Model discovery uses each provider driver's current contract,
+is bounded by the same pagination, deadline, and concurrency limits as health, and
+returns explicit per-instance failures instead of fabricated fallback models. Codex
+queries its authenticated app-server model list; drivers without a live model-list API
+may return their declared metadata. If no configured route has both accepted health
+evidence and a nonempty model result, New Thread opens Provider Settings with an error.
+
 Phase 4A extends that typed identity into normalized usage observations and subscription mappings. It uses additive migration 6 because R0.3 already applied migration 5 for provider execution audit. The recovered usage prototype remains evidence only; its append-only buckets, caller-supplied provenance, floating-point pricing, and in-memory path cursors are not the implementation contract.
 
 Phase 4B puts transcript scanning under `pandamux-server`. Provider parsing in

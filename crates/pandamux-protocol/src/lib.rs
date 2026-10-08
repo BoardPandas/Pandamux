@@ -60,7 +60,8 @@ pub use settings_rpc::{
     DEFAULT_PROVIDER_HEALTH_PAGE_SIZE, DEFAULT_PROVIDER_PROBE_CONCURRENCY,
     DEFAULT_PROVIDER_PROBE_TIMEOUT_MS, MAX_PROVIDER_HEALTH_PAGE_SIZE,
     MAX_PROVIDER_PROBE_CONCURRENCY, MAX_PROVIDER_PROBE_TIMEOUT_MS, MIN_PROVIDER_PROBE_TIMEOUT_MS,
-    ProviderHealthParams, ProviderHealthReport, ProviderHealthResult, SettingsGetParams,
+    ProviderHealthParams, ProviderHealthReport, ProviderHealthResult, ProviderModelInfo,
+    ProviderModelsParams, ProviderModelsReport, ProviderModelsResult, SettingsGetParams,
     SettingsGetResult, SettingsSetParams, SettingsSetResult,
 };
 pub use subagent_rpc::{SubAgentTreeItem, SubAgentTreeParams, SubAgentTreeResult};

@@ -117,7 +117,11 @@ and the completion criteria in [`tasks/plan-rewrite.md`](tasks/plan-rewrite.md).
 ## Product shape
 
 - Chat threads stream provider output into a virtualized timeline and support approval, cancel, reconnect, attachments, model selection, and effort selection.
-- Provider instances are explicit stored configurations. Claude, Codex, Antigravity, Cursor, Grok, and OpenCode adapters exist, but live acceptance varies by provider and environment.
+- Provider instances are explicit stored configurations. New threads select only
+  enabled, authenticated instances with successful driver-backed model discovery;
+  PandaMUX does not substitute a provider kind or stale hard-coded model. Claude,
+  Codex, Antigravity, Cursor, Grok, and OpenCode adapters exist, but live acceptance
+  varies by provider and environment.
 - The right-side surfaces include agents, diffs, confined files, pull-request views, terminal sessions, floor-plan data, and artifacts.
 - The server owns local PTYs and durable byte replay. The desktop owns only terminal grid rendering.
 - Linux nodes run `pandamux-server daemon`; the Hub reaches them through `pandamux-server proxy` over SSH. No remote TCP listener is opened.

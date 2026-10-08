@@ -65,10 +65,13 @@ mod tests {
     use core::prelude::v1::test;
     use gpui_kit::gpui::{px, rgb};
     use pandamux_core::{
-        ApprovalDecision, ApprovalKind, EnvironmentId, ProviderInstanceId, Thread, ThreadEvent,
-        ThreadEventKind, ThreadId, ThreadStatus, ThreadWorkspace, TurnId, TurnInput, TurnOutcome,
+        ApprovalDecision, ApprovalKind, EnvironmentId, ProviderInstanceId, ProviderKind, Thread,
+        ThreadEvent, ThreadEventKind, ThreadId, ThreadStatus, ThreadWorkspace, TurnId, TurnInput,
+        TurnOutcome, UserSettings,
     };
-    use pandamux_protocol::EventEnvelope;
+    use pandamux_protocol::{
+        EventEnvelope, ProviderHealthReport, ProviderModelInfo, ProviderModelsReport,
+    };
 
     #[test]
     fn test_gpui_kit_highlighter_theme() {
@@ -241,40 +244,115 @@ mod tests {
     #[test]
     fn test_picker_cycling_and_selection() {
         let mut picker = PickerState::new();
-        assert_eq!(picker.provider_id, "claude");
-        assert_eq!(picker.model_id, "claude-3-7-sonnet");
-        assert_eq!(picker.effort_str(), Some("high"));
-
-        // Cycle provider: claude -> codex
+        assert_eq!(picker.provider_instance_id(), None);
+        assert_eq!(picker.model(), None);
         picker.cycle_provider();
-        assert_eq!(picker.provider_id, "codex");
-        assert_eq!(picker.model_id, "o3-mini");
 
-        // Cycle model for codex: o3-mini -> gpt-4.5-preview
+        let health = |instance_id: &str, provider, status: &str, authentication: &str| {
+            ProviderHealthReport {
+                environment_id: EnvironmentId::new("env-local"),
+                instance_id: ProviderInstanceId::new(instance_id),
+                provider,
+                display_name: instance_id.to_string(),
+                enabled: true,
+                installed: true,
+                resolved_executable: None,
+                version: Some("test".to_string()),
+                status: status.to_string(),
+                authentication_state: authentication.to_string(),
+                authentication_confidence: "reported".to_string(),
+                runtime_status: status.to_string(),
+                runtime_code: None,
+                account_badge: None,
+                subscription: None,
+                reason: None,
+                disabled_reason: None,
+                checked_at_ms: 100,
+                expires_at_ms: 200,
+                last_success_at_ms: Some(100),
+                login_guidance: None,
+                retryable: true,
+            }
+        };
+        let models = |instance_id: &str, provider, ids: &[(&str, bool)]| ProviderModelsReport {
+            environment_id: EnvironmentId::new("env-local"),
+            instance_id: ProviderInstanceId::new(instance_id),
+            provider,
+            display_name: instance_id.to_string(),
+            enabled: true,
+            models: ids
+                .iter()
+                .map(|(id, supports_reasoning)| ProviderModelInfo {
+                    id: (*id).to_string(),
+                    display_name: (*id).to_string(),
+                    context_window: None,
+                    max_output_tokens: None,
+                    supports_reasoning: *supports_reasoning,
+                })
+                .collect(),
+            checked_at_ms: 100,
+            error: None,
+            retryable: true,
+        };
+        let settings = UserSettings::default();
+        let mut health_reports = vec![
+            health(
+                "claude-default",
+                ProviderKind::Claude,
+                "healthy",
+                "authenticated",
+            ),
+            health(
+                "codex-default",
+                ProviderKind::Codex,
+                "healthy",
+                "authenticated",
+            ),
+        ];
+        let model_reports = vec![
+            models(
+                "claude-default",
+                ProviderKind::Claude,
+                &[("claude-current", true)],
+            ),
+            models(
+                "codex-default",
+                ProviderKind::Codex,
+                &[("gpt-fast", true), ("gpt-deep", true)],
+            ),
+        ];
+
+        picker.synchronize(&settings, &health_reports, &model_reports);
+        assert_eq!(picker.provider_id, "claude-default");
+        assert_eq!(picker.model(), Some("claude-current"));
+
+        picker.cycle_provider();
+        assert_eq!(picker.provider_id, "codex-default");
+        assert_eq!(picker.model(), Some("gpt-fast"));
+
         picker.cycle_model();
-        assert_eq!(picker.model_id, "gpt-4.5-preview");
+        assert_eq!(picker.model(), Some("gpt-deep"));
 
-        // Cycle provider again: codex -> antigravity
-        picker.cycle_provider();
-        assert_eq!(picker.provider_id, "antigravity");
-        assert_eq!(picker.model_id, "gemini-2.0-flash");
-
-        // Direct selection
-        picker.select_provider("claude");
-        picker.select_model("claude-3-5-haiku");
         assert_eq!(
             picker.provider_instance_id(),
-            ProviderInstanceId::from("claude")
+            Some(ProviderInstanceId::from("codex-default"))
         );
-        assert_eq!(picker.model(), "claude-3-5-haiku");
 
-        // Effort cycling: high -> max -> None -> low -> medium -> high
+        // Effort cycling: medium -> high -> max -> None -> low.
+        picker.cycle_effort();
+        assert_eq!(picker.effort_str(), Some("high"));
         picker.cycle_effort();
         assert_eq!(picker.effort_str(), Some("max"));
         picker.cycle_effort();
         assert_eq!(picker.effort_str(), None);
         picker.cycle_effort();
         assert_eq!(picker.effort_str(), Some("low"));
+
+        health_reports[1].authentication_state = "unauthenticated".to_string();
+        health_reports[1].status = "unauthenticated".to_string();
+        picker.synchronize(&settings, &health_reports, &model_reports);
+        assert_eq!(picker.provider_id, "claude-default");
+        assert_eq!(picker.model(), Some("claude-current"));
     }
 
     #[test]

@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-pub const SETTINGS_SCHEMA_VERSION: u32 = 6;
+pub const SETTINGS_SCHEMA_VERSION: u32 = 7;
 
 /// Bounds for `terminal.scrollbackLines` (clamped on load and set).
 pub const SCROLLBACK_LINES_MIN: u32 = 1_000;
@@ -71,7 +71,7 @@ pub fn default_tier_mapping() -> crate::organization::TierMapping {
         "reasoning".to_string(),
         ModelTarget {
             provider_instance_id: ProviderInstanceId::new("codex-default"),
-            model: "o3-mini".to_string(),
+            model: "default".to_string(),
             effort: Some("high".to_string()),
         },
     );
@@ -116,7 +116,7 @@ pub fn default_providers() -> Vec<crate::provider_config::ProviderInstanceConfig
             concurrency_limit: 3,
             env_overrides: BTreeMap::new(),
             settings: serde_json::json!({
-                "defaultModel": "o3-mini"
+                "defaultModel": "default"
             }),
             enabled: true,
             disabled_reason: None,
@@ -249,6 +249,30 @@ impl UserSettings {
         }
         if self.version < 6 {
             self.version = 6;
+        }
+        if self.version < 7 {
+            for provider in &mut self.providers {
+                if provider.provider == crate::provider_config::ProviderKind::Codex
+                    && provider
+                        .settings
+                        .get("defaultModel")
+                        .and_then(Value::as_str)
+                        == Some("o3-mini")
+                    && let Some(settings) = provider.settings.as_object_mut()
+                {
+                    settings.insert("defaultModel".to_string(), Value::String("default".into()));
+                }
+            }
+            if let Some(target) = self
+                .tier_mapping
+                .as_mut()
+                .and_then(|mapping| mapping.tiers.get_mut("reasoning"))
+                && target.provider_instance_id.as_str() == "codex-default"
+                && target.model == "o3-mini"
+            {
+                target.model = "default".to_string();
+            }
+            self.version = 7;
         }
         for provider in &mut self.providers {
             if provider.enabled {
@@ -514,6 +538,82 @@ mod tests {
                 .expect("enabled Cursor provider")
                 .disabled_reason
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn version_six_migrates_only_the_shipped_codex_model_default() {
+        let mut settings = UserSettings {
+            version: 6,
+            ..UserSettings::default()
+        };
+        let codex = settings
+            .providers
+            .iter_mut()
+            .find(|provider| provider.provider == ProviderKind::Codex)
+            .expect("Codex default provider");
+        codex.settings["defaultModel"] = Value::String("o3-mini".to_string());
+        settings
+            .tier_mapping
+            .as_mut()
+            .expect("default tier mapping")
+            .tiers
+            .get_mut("reasoning")
+            .expect("reasoning tier")
+            .model = "o3-mini".to_string();
+
+        settings.normalize();
+
+        assert_eq!(settings.version, SETTINGS_SCHEMA_VERSION);
+        let codex = settings
+            .providers
+            .iter()
+            .find(|provider| provider.provider == ProviderKind::Codex)
+            .expect("migrated Codex provider");
+        assert_eq!(codex.settings["defaultModel"], "default");
+        assert_eq!(
+            settings
+                .tier_mapping
+                .as_ref()
+                .expect("migrated tier mapping")
+                .tiers["reasoning"]
+                .model,
+            "default"
+        );
+
+        settings.version = 6;
+        let codex = settings
+            .providers
+            .iter_mut()
+            .find(|provider| provider.provider == ProviderKind::Codex)
+            .expect("Codex provider");
+        codex.settings["defaultModel"] = Value::String("gpt-custom".to_string());
+        settings
+            .tier_mapping
+            .as_mut()
+            .expect("tier mapping")
+            .tiers
+            .get_mut("reasoning")
+            .expect("reasoning tier")
+            .model = "gpt-custom-tier".to_string();
+        settings.normalize();
+        assert_eq!(
+            settings
+                .providers
+                .iter()
+                .find(|provider| provider.provider == ProviderKind::Codex)
+                .expect("custom Codex provider")
+                .settings["defaultModel"],
+            "gpt-custom"
+        );
+        assert_eq!(
+            settings
+                .tier_mapping
+                .as_ref()
+                .expect("custom tier mapping")
+                .tiers["reasoning"]
+                .model,
+            "gpt-custom-tier"
         );
     }
 
