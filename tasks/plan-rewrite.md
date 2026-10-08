@@ -1,8 +1,8 @@
 # PandaMUX Rewrite: Chat-First Agent Client with Remote Environments, Multi-Repo Fleet Orchestration, Agents, Schedules, Full MCP Settings Control, and Broadside Sharing
 
 Date: 2026-09-25 (Approved 2026-09-26; recovery rewrite 2026-09-28; Phase 4 closure rewrite 2026-10-06; accounting and native acceptance 2026-10-07)
-Status: **Phases 0 to 3 and Phase 4A through 4F implementation are recorded; P4-C1, P4-C2, and P4-C4 passed on exact 0.60.15; the terminal, Narrator, visual, scaling, and IPC rows passed on exact 0.60.41; the provider/model routing row passed local, live, and native Windows acceptance on exact 0.60.43; exact 0.60.43 also passed supporting post-side-effect proxy-loss and Hyper-V recovery rehearsals; and P4-C5 remains Partial, so external failover, final documentation, and physical acceptance gates keep Phase 4 open**
-Baseline: The preserved original checkout remains PandaMUX v0.53.44 at `9511d0e22d44`; active recovery work is isolated on `codex/recovery-r0`, with exact 0.60.15 accounting evidence at `3a77382`, exact 0.60.41 native Windows evidence at `c6a20ff4f768747d0dadd59b88b40d3e20f7674d`, and exact 0.60.43 local, live, and native provider-routing evidence at `372f2ae83e67a62cd3b382e5db52af96d00a85ce`
+Status: **Phases 0 to 3 and Phase 4A through 4F implementation are recorded; P4-C1, P4-C2, and P4-C4 passed on exact 0.60.15; the terminal, Narrator, visual, scaling, and IPC rows passed on exact 0.60.41; the provider/model routing row passed local, live, and native Windows acceptance on exact 0.60.43; exact 0.60.43 passed supporting post-side-effect proxy-loss and Hyper-V recovery rehearsals; exact 0.60.47 repaired unresolved-tool false success and passed supporting approval plus loopback-network recovery; and P4-C5 remains Partial, so external capacity, pending-delivery restart, final documentation, and physical acceptance gates keep Phase 4 open**
+Baseline: The preserved original checkout remains PandaMUX v0.53.44 at `9511d0e22d44`; active recovery work is isolated on `codex/recovery-r0`, with exact 0.60.15 accounting evidence at `3a77382`, exact 0.60.41 native Windows evidence at `c6a20ff4f768747d0dadd59b88b40d3e20f7674d`, exact 0.60.43 local, live, and native provider-routing plus supporting recovery evidence at `372f2ae83e67a62cd3b382e5db52af96d00a85ce`, and exact 0.60.47 fail-closed plus supporting approval/network evidence at `1822486b4f7d98ba6026bbfd7224e97f09e447c9`
 
 Relationship to `tasks/plan-repo.md`: that file is the **historical** record of the Electron to native Rust rewrite (Phases 1 to 7, complete). This plan supersedes its product direction (terminal multiplexer) but keeps its engineering posture: backend-owned state, single writer, intent-in/delta-out, deliberate dependency pins, crate isolation, and tag-driven signed releases. Its Section 12 design tokens carry over where they still apply (Section 8). UI history: Iced is removed. An earlier draft of this plan chose Tauri 2 + React; the user replaced that with **GPUI + gpui-kit** (all Rust) on 2026-09-25, and Tauri 2 remains only as the documented fallback if the Phase 0 GPUI spike fails. `plan-repo.md` rejected GPUI for three reasons, each now handled explicitly: GPL contamination (zed#55470, still open; tracked as a license gate in S6 and Risks), "not built for external consumption" (gpui-kit publishes exact-pinned `gpui-pre` snapshots and ships in production in Longbridge Pro on Windows, macOS, and Linux), and weak accessibility. Phase 0 treated accessibility as exploratory; the rewritten Phase 4 and Phase 7 criteria make the defined v1 accessibility matrix release-gating.
 
@@ -145,6 +145,15 @@ Terminology used throughout:
   failover fixtures, and all four rollback controls passed in isolated roots.
   Real external quota exhaustion and post-side-effect capacity interruption
   remain open.
+- Exact 0.60.47 commit
+  `1822486b4f7d98ba6026bbfd7224e97f09e447c9` fails closed when a provider
+  reports success while a side-effecting tool still lacks a durable result. Its
+  complete local gate and clean live rehearsal passed one approval plus one
+  loopback HTTP POST across exact remote-proxy loss with unique replay, one
+  protected attempt, one terminal tool result, one settled turn, and one
+  matching managed usage observation. This supports P4-C5 but does not replace
+  real provider capacity exhaustion, external-service interruption, or the
+  pending-delivery restart rows.
 - Exact 0.60.22 commit `fee9e02` passed every P4-C3 row that was
   executed. The limited-user build and smoke, actionable Offline path,
   recorded 100 and 200 percent keyboard and scroll
@@ -224,10 +233,10 @@ Terminology used throughout:
   no-route picker rows, so P4-C3 is Pass again. Version 0.60.42 was the
   documentation-only accounting follow-up and has no executable or native
   claim.
-- Phase 4 remains open on the remaining live P4-C5 failover rows and the final
-  documentation archive after those rows stabilize. The re-scoped physical
-  laptop disconnect and sleep rows remain production-acceptance and release
-  blockers.
+- Phase 4 remains open on the remaining real-capacity and pending-delivery
+  restart P4-C5 rows and the final documentation archive after those rows
+  stabilize. The re-scoped physical laptop disconnect and sleep rows remain
+  production-acceptance and release blockers.
 - Phase 5 implementation has not started. The next development work is the
   ordered Phase 4 closure sequence in its verification record. Phase 5 begins
   only with its dependency, legacy-domain, and boundary gate. Phase 6 depends
@@ -2295,6 +2304,59 @@ This run closes no quota or capacity-exhaustion row and did not exercise a
 network side effect, approval result, pending continuation restart, or pending
 approval or tool-result restart. Those live rows remain required, so P4-C5 is
 still Partial and Phase 4 remains open.
+
+Supporting result recorded 2026-10-08: **Pass for one approval plus one
+loopback HTTP side effect across abrupt proxy loss on repaired exact 0.60.47;
+P4-C5 remains Partial.** An old 0.60.43 diagnostic first exposed an
+unacceptable false-success state: after one approval and exactly one POST, the
+proxy loss left the only tool ledger row Started with no `ToolFinished`, but
+the turn persisted Success and Settled. That run is rejected. Exact 0.60.47
+commit `1822486b4f7d98ba6026bbfd7224e97f09e447c9` now checks the durable tool
+ledger before accepting provider success. An unresolved row or ledger read
+failure emits nonrecoverable `unresolved_tool_result`, preserves the ambiguous
+row, records failure, and never retries or invents a continuation. Its complete
+local gate passed 441 tests with zero failures and two intentional real-shell
+ignores.
+
+The authoritative clean live run used thread
+`thread-84c95a5b-983f-4d34-a13a-d8a9273da953`, turn
+`turn-21013827-2acf-46d0-8b3d-6670cf673056`, attempt
+`attempt-6e81e7c8-e448-426b-a203-beed8b592c61`, and approval
+`ad5b78a1-96ef-4f8d-8558-eac9677608a2`. Only after the approval and one
+loopback HTTP request were durable did the harness kill exact remote proxy PID
+1038306 with `SIGKILL`. Reconnect after a measured 20.135-second gap replayed
+unique contiguous event sequences 16 through 49 after pre-gap sequences 1
+through 15 and advanced the proxy cursor from 166 to 182.
+
+Exactly one tool ledger row ended Succeeded with output
+`P4C5_APPROVED_NETWORK_COMMAND_DONE\n`; exactly one protected attempt ended
+Completed at boundary `externally_committed`; no retry or continuation
+appeared; the turn completed Success and Settled once; and final visible text
+ended exactly with `P4C5_APPROVAL_NETWORK_REPLAY_OK`. Exactly one matching
+managed usage observation retained 16,117 input, 15,104 cached-input, 14
+output, zero cache-write, and zero reasoning tokens. The single request's
+receipt, ledger, and request SHA-256 values were stable before and after
+reconnect.
+
+Two earlier 0.60.47 runs remain explicitly rejected as instrumentation. The
+first proved the new fail-closed terminal branch, but its outer pipeline failed
+because a logging directory was absent. The second safely resolved the tool
+and turn, but an overly narrow harness accepted only fail-closed failure. The
+corrected harness accepts either internally consistent terminal branch and
+still rejects duplicates, inconsistent ledger state, continuation, or
+ambiguous success. The final run exited 0, cleanup exited 0, and the 27-line
+manifest at SHA-256
+`831d96fbf4004046f210d401ef03f3ececb0b248903aaee8df8c4a039583b362`
+validates 26 retained evidence files. Cleanup used no forced kill, left zero
+matching processes or sockets, restored auth, preserved both source databases,
+and left the clone integral.
+
+This result covers an explicit approval and an isolated loopback network side
+effect. It is not real provider quota or capacity exhaustion, not a real
+external-service action, and not restart with continuation, approval-result,
+or tool-result delivery pending. Those rows remain required. Full identifiers,
+hashes, rejected-run evidence, and cleanup proof are in
+`docs/operations/PHASE4_ACCEPTANCE.md`.
 
 ##### P4-C6: close the physical R0.5 rows
 

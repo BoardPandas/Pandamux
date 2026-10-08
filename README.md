@@ -119,15 +119,19 @@ R0 development gate:
   `gpt-6.1-sol` values matched the shipped CLI. P4-C3 is Pass again.
   A separate supporting live run later killed the exact remote proxy after
   visible text and one successful file-writing shell tool. Reconnect retained
-  one protected attempt and the one-line marker without replay. It was not
-  quota or capacity exhaustion and did not cover a network side effect,
-  approval, or the remaining restart rows, so P4-C5 remains Partial.
+  one protected attempt and the one-line marker without replay. Exact 0.60.47
+  then repaired a false-success path for unresolved tools and passed a clean
+  supporting run with one approval plus one loopback HTTP POST across abrupt
+  proxy loss. Reconnect retained one request, one terminal tool ledger row, one
+  protected attempt, one settled turn, and one matching managed usage
+  observation without replay.
   A supporting Hyper-V rehearsal on the same exact runtime later passed a real
   30-minute provider-network interruption and full-screen terminal saved-state
   recovery with exact event, usage, offset, replay, and cleanup evidence. It
   does not replace the required physical laptop disconnect and sleep rows.
-  Real external quota exhaustion, real post-side-effect interruption, and the
-  deferred physical laptop checks keep the Phase 4 exit matrix open.
+  Real provider capacity exhaustion, external-service interruption, the
+  pending-delivery restart rows, and the deferred physical laptop checks keep
+  P4-C5 Partial and the Phase 4 exit matrix open.
 
 See the [Phase 4 live acceptance record](docs/operations/PHASE4_ACCEPTANCE.md)
 and the completion criteria in [`tasks/plan-rewrite.md`](tasks/plan-rewrite.md).

@@ -19,6 +19,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Recorded the repaired P4-C5 approval and loopback-network recovery row.**
+  An exact 0.60.43 diagnostic exposed a false-success path when provider output
+  ended after starting a side-effecting tool without a durable result. Exact
+  0.60.47 commit `1822486b4f7d98ba6026bbfd7224e97f09e447c9`
+  repaired that invariant and passed the complete local gate. Its final clean
+  live rehearsal killed the exact remote proxy after one approval and one
+  loopback HTTP POST, then reconnected after a measured 20.135-second gap with
+  unique contiguous replay, one request, one succeeded tool ledger row, one
+  completed protected attempt, one settled turn, and one matching managed
+  usage observation. Two earlier fixed-runtime runs remain recorded as
+  rejected instrumentation: one had a wrapper-only logging failure after the
+  product correctly failed closed, and one proved safe resolved success but
+  exposed an overly narrow harness assertion. P4-C5 remains Partial because
+  real provider capacity exhaustion, an external-service interruption, and
+  the pending-delivery restart rows are still open. Version 0.60.48 is
+  documentation-only and makes no new executable, production, push,
+  deployment, activation, or release claim.
+
 - **Recorded supporting live P4-C5 recovery after an abrupt post-side-effect
   proxy loss.** Exact 0.60.43 runtime code completed one real Codex turn after
   its exact remote proxy process was killed with `SIGKILL`. Before the cut, the

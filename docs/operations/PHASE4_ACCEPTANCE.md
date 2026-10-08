@@ -6,9 +6,10 @@ Updated: 2026-10-08
 Status: **Accounting passed; the P4-C3 terminal, Narrator, visual, scaling, and
 IPC rows passed on exact 0.60.41; the provider/model routing row passed local,
 live, and native Windows acceptance on exact 0.60.43; P4-C5 remains Partial
-with supporting live post-side-effect proxy-loss evidence; P4-C6 has supporting
-Hyper-V rehearsal evidence but its physical rows remain open; and Phase 4
-acceptance is incomplete.** Exact 0.60.15 commit
+with supporting live post-side-effect proxy-loss evidence on exact 0.60.43 and
+approval plus loopback-network recovery evidence on exact 0.60.47; P4-C6 has
+supporting Hyper-V rehearsal evidence but its physical rows remain open; and
+Phase 4 acceptance is incomplete.** Exact 0.60.15 commit
 `3a77382` passed the P4-C1 implementation, P4-C2 local candidate, and P4-C4
 cloned-store reconciliation gates. Exact 0.60.41 commit
 `c6a20ff4f768747d0dadd59b88b40d3e20f7674d` passed P4-C3 after the expanded
@@ -32,10 +33,12 @@ synchronization, conservative capacity projection, route-explanation, and
 rollback-control portions of P4-C5. Real provider quota exhaustion and real
 interruptions after output or external side effects were not available, so
 their live rows remain open even though the focused diagnostic fixtures pass.
-The later supporting abrupt-proxy rehearsal passed visible-text, file, and
-command-side-effect recovery, but it was not provider quota exhaustion or a
-capacity interruption and did not cover a network side effect, approval, or
-the remaining live restart cases. P4-C5 therefore remains Partial.
+The first supporting abrupt-proxy rehearsal passed visible-text, file, and
+command-side-effect recovery. Exact 0.60.47 then repaired an unresolved-tool
+false-success defect exposed by a rejected diagnostic and passed one approval
+plus one loopback HTTP POST across abrupt proxy loss. These are not provider
+quota exhaustion, external capacity interruption, an external-service network
+action, or the remaining live restart cases. P4-C5 therefore remains Partial.
 The later supporting Hyper-V rehearsal passed real 30-minute provider-network
 and full-screen-terminal recovery paths, but neither a Windows guest nor
 `Save-VM` substitutes for the required physical laptop disconnect and sleep
@@ -197,6 +200,15 @@ activation, or release occurred.
   Workspace version `0.60.46` records the resulting evidence only. No 0.60.46
   executable, provider-capacity, production, push, deployment, activation, or
   release result is claimed.
+- Supporting P4-C5 approval and loopback-network recovery source: clean commit
+  `1822486b4f7d98ba6026bbfd7224e97f09e447c9`, version `0.60.47`. It repairs
+  unresolved-tool false success, passes the complete local source gate, and
+  supplies the exact release server used by the accepted live rehearsal at
+  SHA-256
+  `c46db2a47c586dd3e6ccdc1bf729ff39ab4738725dd29b55d1f042c46684c53e`.
+  Workspace version `0.60.48` records the resulting evidence only. No 0.60.48
+  executable, native, provider-capacity, external-service, production, push,
+  deployment, activation, or release result is claimed.
 - The intermediate 0.60.2 commit `8a52d2a21da1d5d0f69540864a6162d2b30375bc`
   repaired direct UI Automation activation for Save and Cancel. The 0.60.3
   follow-up exposed the editor text fields on semantic nodes tied to their real
@@ -2032,6 +2044,155 @@ restart. Those live P4-C5 rows remain required. P4-C5 is still Partial, Phase 4
 remains open, and no push, CI, signing, packaging, deployment, production
 activation, or release occurred.
 
+## Exact 0.60.47 P4-C5 supporting approval and loopback-network recovery
+
+This is a **supporting approval and loopback-network recovery Pass, not a
+complete P4-C5 Pass**. Exact runtime code from clean commit
+`1822486b4f7d98ba6026bbfd7224e97f09e447c9`, version `0.60.47`, ran from
+the isolated root
+`/home/brandon/.pandamux/acceptance/phase4-1822486-0.60.47-p4-c5-approval-network-live-pass3`.
+The exact release server was 18,323,880 bytes at SHA-256
+`c46db2a47c586dd3e6ccdc1bf729ff39ab4738725dd29b55d1f042c46684c53e`.
+The purpose-built ignored acceptance harness has source SHA-256
+`ba5a1860c24a61e6bf0b088a938729c7635d1429fb9b90cdaaf32212955ec8c1`
+and release SHA-256
+`a003c0d3151b2f1c082fe1409430aee90aaa26836e57c2170a0b120138b6b3eb`.
+The harness is an acceptance instrument and is not a shipped artifact.
+
+### Rejected false-success diagnostic and repair
+
+The first diagnostic used old exact 0.60.43 runtime code under
+`/home/brandon/.pandamux/acceptance/phase4-372f2ae-0.60.43-p4-c5-approval-network-live`.
+Thread `thread-aee16718-e430-4d80-adba-2e2e5d183c5c`, turn
+`turn-267bda9c-6315-4fba-a668-607cfb15c4df`, and attempt
+`attempt-51a676cb-b15c-41c2-996d-66450be80ec6` produced one approval,
+`1aed4207-e1c8-4ed9-91f7-b23839b77680`, and exactly one loopback HTTP POST.
+The receiver's receipt, ledger, and request bodies had SHA-256 values
+`73ae5dd652ecf595b79117a2245d8b888cfe9da55cb9330c61256c9a994b6087`,
+`0ae33c79f99f21e96a3ab4d08b9ed945d7e7a97d9ece31f16ccfc451248d5db6`,
+and `1c9108d289f03623ded8d6193ef8d8b2475618ebdcc41c46206ddcda9098dfe1`.
+
+After the exact remote proxy was killed, old runtime code persisted turn
+Success even though the sole durable tool ledger row remained Started and no
+`ToolFinished` event existed. Event sequence 13 started the tool, sequence 14
+requested approval, sequence 15 resolved it, sequence 37 completed the turn as
+Success, and sequence 38 settled it. That internally inconsistent result is
+rejected and is not acceptance evidence.
+
+Exact 0.60.47 repairs the defect before accepting provider success. The thread
+manager reads the durable tool ledger and transforms the outcome to Failed if
+any row remains Started or if the ledger cannot be read. It emits a
+nonrecoverable `unresolved_tool_result`, preserves the ambiguous ledger for
+manual recovery, and never retries or invents a continuation. A lifecycle
+regression reproduces a provider success after an unresolved network tool and
+checks contiguous error, failed-completion, and settled events. Formatting,
+strict all-target and all-feature Clippy, all 441 workspace tests with zero
+failures and two intentional real-shell ignores, locked metadata, both source
+guards, desktop headless verification, dependency policy, and diff hygiene
+passed before the exact release artifact was built.
+
+### Rejected fixed-runtime instrumentation runs
+
+Two fixed-runtime runs are retained for diagnosis but are not the authoritative
+acceptance pass:
+
+1. The first fixed run under
+   `/home/brandon/.pandamux/acceptance/phase4-1822486-0.60.47-p4-c5-approval-network-live`
+   exercised the new fail-closed branch. After a 20.143-second gap, event
+   sequence 49 emitted `unresolved_tool_result`, sequence 50 completed the turn
+   Failed, and sequence 51 settled it. It retained one Started tool ledger row,
+   one failed `externally_committed` attempt, no continuation, and exactly one
+   request with the same three receiver hashes above. The harness itself
+   emitted Pass, but the outer pipeline exited 1 because its logging `tee`
+   target directory had not been created. The product result is supporting
+   fail-closed evidence, while the wrapper result is rejected. Its retained
+   30-line manifest has SHA-256
+   `2b933bb26821a47911eaacdd3a8eab02f8570052e49a2ed89815402d10d313ee`.
+2. The second fixed run under
+   `/home/brandon/.pandamux/acceptance/phase4-1822486-0.60.47-p4-c5-approval-network-live-pass2`
+   cleanly resolved the tool after reconnect, persisted one Succeeded ledger
+   row and one HTTP request, completed the turn Success, and settled it. The
+   original harness rejected that safe terminal branch because it expected
+   only fail-closed failure. The run is rejected as an instrumentation result,
+   not as a product failure. Its 26-line manifest has SHA-256
+   `e7d2e9319fbb8988b6297468ee0527f05dda7b0bbfe30a9476a0dd690adc6888`.
+
+The corrected harness accepts exactly two internally consistent terminal
+branches: one Succeeded ledger row with one successful turn, or one Started
+ledger row with `unresolved_tool_result` and one failed turn. It still rejects
+duplicate approval, duplicate network request, duplicate tool result,
+inconsistent ledger state, continuation, or ambiguous success.
+
+### Accepted clean approval and network recovery
+
+The authoritative third run exited 0 under shell pipeline failure propagation.
+Its terminal branch was `resolved_success`. Thread
+`thread-84c95a5b-983f-4d34-a13a-d8a9273da953`, turn
+`turn-21013827-2acf-46d0-8b3d-6670cf673056`, and attempt
+`attempt-6e81e7c8-e448-426b-a203-beed8b592c61` created exactly one approval,
+`ad5b78a1-96ef-4f8d-8558-eac9677608a2`, whose payload had SHA-256
+`70ab47ec8fbd75027e36d5fae28639b51de6e7265220723cc99156dca295fcc5`.
+It sent exactly one loopback HTTP request. The receiver receipt, ledger, and
+request hashes matched the earlier values exactly before and after reconnect.
+
+Only after approval and the network side effect were observed did the harness
+select exact remote proxy PID 1038306 by executable, runtime directory, and
+command line, then kill that proxy with `SIGKILL`. It did not signal the node
+daemon, provider process, Hub, or receiver. The old transport reported stale
+EOF. Reconnect completed after a measured 20.135-second gap and advanced the
+proxy cursor from 166 to 182.
+
+Pre-gap thread event sequences 1 through 15 and post-gap sequences 16 through
+49 were unique and contiguous. The single tool ledger row for
+`exec-49c2f7b8-e7e2-4f47-afa1-19e067131149` ended Succeeded with exact output
+`P4C5_APPROVED_NETWORK_COMMAND_DONE\n` and no error. The single durable attempt
+ended Completed at boundary `externally_committed`; no retry or continuation
+appeared. The turn completed Success, settled once, and final visible text
+ended exactly with `P4C5_APPROVAL_NETWORK_REPLAY_OK`.
+
+Hub-owned `usage.query` exposed exactly one matching managed observation,
+`usage-managed-82a6629c911df7e297bc65af62fc78db52016db7cc168eb913a740bb49535502`,
+with 16,117 input, 15,104 cached-input, 14 output, zero cache-write, and zero
+reasoning tokens. This observation supports continuity only. It does not
+change the accounting result or provide provider-statement reconciliation.
+
+### Evidence, cleanup, and limitations
+
+The structured ready record has SHA-256
+`641d2865390a10101e26fe6cc6a570e24edf4170950fce90f0b4ae9b9afb80e2`;
+the result record has SHA-256
+`f7fb80f4d33080b2203e8dd088d04feb8aa7ad7249bf0630edf143a9c7600cdc`;
+the run console has SHA-256
+`a8df91582def7a1c51614d199924b05f2408016952063cb7c84995fd9021ee63`;
+and the wrapper status has SHA-256
+`5b6a12fe019d872706268a2761647ced0c3baab23a56cf18a3640d71fbe8fb6c`.
+The 27-line retained manifest validates 26 files and has SHA-256
+`831d96fbf4004046f210d401ef03f3ececb0b248903aaee8df8c4a039583b362`.
+
+Cleanup exited 0. It stopped only exact isolated server PID 1037306 and receiver
+PID 1037296 with `SIGTERM`; no forced kill was required. Final audit found zero
+matching processes and zero runtime sockets. Original isolated auth was
+restored at SHA-256
+`c113c08e486e8c8825ccb288395593131699f5d1511e52d81309334d01f1c4e4`
+and mode 600. The source clone remained at SHA-256
+`0a64a5d92f53725525f409e98434c25799157591e5369cb495591ac641100c0a`,
+and the retained P4-C4 database remained at SHA-256
+`5f45008d32b07e3c8491f2ad45361482e16cfa66a7f42bae7c5408c96350b323`.
+The cloned database passed integrity at final SHA-256
+`e0bc2485029f427b6115f44a1d9621c72eb9a3a26df603a978fa16c5a256b785`.
+Its final-node evidence backup has SHA-256
+`f8e91b8b5c94f6533bfe34412169ae49599ccaf862dc44821283f91418b3cf35`.
+Disposable staging was removed only after those hashes were checked. The final
+exact audit passed at `2026-10-08T09:44:49.163463184Z`.
+
+This run proves one explicit approval result and one isolated loopback HTTP
+side effect across abrupt proxy loss. It does not prove real provider quota or
+capacity exhaustion, pre-output failover under that condition, interruption
+of an external service, or restart while continuation, approval-result, or
+tool-result delivery is pending. P4-C5 remains Partial, Phase 4 remains open,
+and no push, CI, signing, packaging, deployment, production activation, or
+release occurred.
+
 ## Exact 0.60.43 P4-C6 supporting Hyper-V rehearsal
 
 This is a **supporting Hyper-V rehearsal Pass, not a P4-C6 physical Pass**.
@@ -2279,6 +2440,31 @@ and the read-only SupportForge session disconnected. This verification does
 not create an executable, provider-capacity, physical-laptop, production, push,
 deployment, activation, or release claim for 0.60.46.
 
+Exact 0.60.47 commit
+`1822486b4f7d98ba6026bbfd7224e97f09e447c9` passed formatting, strict
+all-target and all-feature workspace Clippy, 441 workspace tests with zero
+failures and two intentional real-shell ignores, the Rust boundary guard, the
+Claude wiring guard, desktop headless verification, locked Cargo metadata,
+dependency policy, and diff hygiene. Its exact release server then passed the
+accepted live approval and loopback-network recovery run recorded above. This
+verification does not create a native Windows, provider-capacity,
+external-service, production, push, deployment, activation, or release claim
+for 0.60.47.
+
+The documentation-only 0.60.48 workspace passed formatting, strict all-target
+and all-feature workspace Clippy, 441 workspace tests with zero failures and
+two intentional real-shell terminal ignores, the Rust boundary guard, the
+Claude wiring guard, desktop headless verification, locked Cargo metadata,
+dependency policy, and diff hygiene. A final read-only preservation audit
+reverified the original checkout at
+`9511d0e22d44192f106e2f84a7c96b96d76734b6` with its nine pre-existing
+modified paths and three pre-existing untracked paths intact, while the eleven
+historical recovery bundles remained untouched. The retained Galahad database
+was not accessed or mutated by this documentation gate. This verification does
+not create an executable, native, provider-capacity, external-service,
+physical-laptop, production, push, deployment, activation, or release claim
+for 0.60.48.
+
 `cargo-deny` 0.20.2 could not parse the old `deny.toml` syntax. The follow-up
 configuration change removed deprecated keys and scoped seven existing
 non-allowlisted transitive licenses to their exact crates and versions. With
@@ -2296,12 +2482,15 @@ especially for the scoped MPL-2.0 exceptions.
 
 Phase 4 cannot yet be marked exited under `tasks/plan-rewrite.md`:
 
-1. Close the remaining live P4-C5 failover rows with a real pre-output capacity
-   failure, real interruptions after text, file edit, command, network action,
-   and approval, plus restart while real continuation or delivery work is
-   pending. Exact 0.60.17 already passes scanner durability, reconnect and
+1. Close the remaining live P4-C5 failover rows with a real pre-output provider
+   capacity failure, an interruption of a real external-service action, and
+   restart while real continuation, approval-result, or tool-result delivery
+   is pending. Exact 0.60.17 already passes scanner durability, reconnect and
    bounded backfill, capacity projection and route explanations, rollback
-   controls, and the complete diagnostic fixture matrix.
+   controls, and the complete diagnostic fixture matrix. Exact 0.60.43 covers
+   visible text plus file and command side effects, while exact 0.60.47 covers
+   one approval plus one isolated loopback HTTP side effect. Neither supporting
+   rehearsal substitutes for the remaining real capacity and restart rows.
 2. Complete the P4-C7 archive and maintained-document synchronization after the
    remaining P4-C5 and P4-C6 live rows stabilize. This record already reflects
    the complete P4-C3 Pass and the P4-C5 Partial result.
