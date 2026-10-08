@@ -1832,7 +1832,6 @@ impl AppView {
                             .find(|provider| provider.id == result.provider_instance_id)
                             .map(|provider| provider.display_name.clone())
                             .unwrap_or_else(|| "Provider".to_string());
-                        let terminal_id = result.terminal_id.clone();
                         let mut terminal = crate::terminal_view::TerminalViewState::new_with_env(
                             result.terminal_id,
                             "Provider authentication",
@@ -1842,15 +1841,12 @@ impl AppView {
                         );
                         terminal.title = format!("{provider_name} login");
                         terminal.is_attached = false;
-                        app.surfaces_panel.set_terminal(terminal);
-                        app.surfaces_panel.is_open = true;
-                        app.surfaces_panel
-                            .set_active_tab(None, Some(SurfaceTab::Terminal));
+                        app.surfaces_panel.show_terminal(None, terminal);
                         app.focus_terminal_on_render = true;
                         app.settings_view.login_preview = None;
                         app.settings_view.status_banner = Some((
                             format!(
-                                "Login terminal {terminal_id} opened in Surfaces. Complete authentication there, then retry health."
+                                "{provider_name} login is open in the Terminal surface on the right. Complete authentication there, then retry health."
                             ),
                             false,
                         ));
@@ -2241,6 +2237,7 @@ impl Render for AppView {
                 &theme,
                 &server_status,
                 active_title,
+                self.surfaces_panel.is_open,
                 |this, _win, cx| {
                     this.toggle_command_palette(cx);
                 },

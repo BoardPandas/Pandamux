@@ -1,4 +1,4 @@
-use gpui_kit::base::StyledExt as _;
+use gpui_kit::base::{Selectable as _, StyledExt as _};
 use gpui_kit::component::TitleBar as GpuiTitleBar;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::gpui::*;
@@ -9,6 +9,14 @@ use crate::theme::{Radii, Spacing, Theme, Typography};
 /// Renders the Section 12 40px custom frameless titlebar.
 pub struct CustomTitlebar;
 
+fn surfaces_button_presentation(is_open: bool) -> (&'static str, &'static str) {
+    if is_open {
+        ("📋 Hide Surfaces", "Close surfaces panel")
+    } else {
+        ("📋 Surfaces", "Open surfaces panel")
+    }
+}
+
 impl CustomTitlebar {
     /// Builds the 40px custom titlebar element.
     #[allow(clippy::too_many_arguments)]
@@ -16,6 +24,7 @@ impl CustomTitlebar {
         theme: &Theme,
         server_status: &ServerStatus,
         active_title: Option<&str>,
+        surfaces_open: bool,
         on_toggle_palette: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
         on_toggle_theme: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
         on_open_settings: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
@@ -37,6 +46,8 @@ impl CustomTitlebar {
         };
 
         let title_text = active_title.unwrap_or("PandaMUX");
+        let (surfaces_label, surfaces_accessibility_label) =
+            surfaces_button_presentation(surfaces_open);
 
         GpuiTitleBar::new().child(
             div()
@@ -164,12 +175,33 @@ impl CustomTitlebar {
                         .child(
                             Button::new("btn-titlebar-surfaces")
                                 .ghost()
-                                .label("📋 Surfaces")
+                                .label(surfaces_label)
+                                .selected(surfaces_open)
+                                .accessibility_label(surfaces_accessibility_label)
+                                .tooltip(surfaces_accessibility_label)
                                 .on_click(cx.listener(move |this, _event, window, cx| {
                                     on_toggle_surfaces(this, window, cx);
                                 })),
                         ),
                 ),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::prelude::v1::test;
+
+    #[test]
+    fn surfaces_button_exposes_its_current_toggle_action() {
+        assert_eq!(
+            surfaces_button_presentation(false),
+            ("📋 Surfaces", "Open surfaces panel")
+        );
+        assert_eq!(
+            surfaces_button_presentation(true),
+            ("📋 Hide Surfaces", "Close surfaces panel")
+        );
     }
 }

@@ -181,6 +181,16 @@ impl SurfacesPanelState {
         self.terminal = Some(terminal);
     }
 
+    pub fn show_terminal(&mut self, thread_id: Option<&str>, terminal: TerminalViewState) {
+        if let Some(thread_id) = thread_id {
+            self.set_terminal_for_thread(thread_id, terminal);
+        } else {
+            self.set_terminal(terminal);
+        }
+        self.is_open = true;
+        self.set_active_tab(thread_id, Some(SurfaceTab::Terminal));
+    }
+
     pub fn terminal_for_thread(&self, thread_id: &str) -> Option<&TerminalViewState> {
         self.terminals_by_thread.get(thread_id)
     }
@@ -266,6 +276,7 @@ pub fn render_surfaces_panel<V: 'static>(
     div()
         .id("surfaces-panel")
         .w(px(state.width))
+        .flex_shrink_0()
         .h_full()
         .bg(theme.chrome.panel)
         .border_l_1()
@@ -1646,6 +1657,25 @@ mod tests {
         assert!(state.terminal.is_none());
         assert!(state.terminal_for_thread("t2").is_none());
         assert!(state.terminal_for_thread("t1").is_some());
+    }
+
+    #[test]
+    fn show_terminal_opens_the_panel_and_selects_the_terminal_surface() {
+        let mut state = SurfacesPanelState::new();
+        state.is_open = false;
+        state.set_active_tab(None, Some(SurfaceTab::Files));
+
+        state.show_terminal(None, TerminalViewState::new("term-login", ".", 30, 120));
+
+        assert!(state.is_open);
+        assert_eq!(state.active_tab, Some(SurfaceTab::Terminal));
+        assert_eq!(
+            state
+                .terminal
+                .as_ref()
+                .map(|terminal| terminal.terminal_id.as_str()),
+            Some("term-login")
+        );
     }
 
     #[test]

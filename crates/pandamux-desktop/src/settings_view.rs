@@ -406,6 +406,7 @@ pub fn render_settings_view<V: 'static>(
 ) -> AnyElement {
     div()
         .flex_1()
+        .min_w_0()
         .h_full()
         .v_flex()
         .bg(theme.chrome.bg_base_start)
@@ -474,6 +475,23 @@ pub fn render_settings_view<V: 'static>(
                     .child(msg.clone()),
             )
         })
+        // Keep the confirmation outside the scrolling provider list so an
+        // asynchronously prepared command cannot appear below the viewport.
+        .when(
+            state.active_category == SettingsCategory::Providers,
+            |this| {
+                this.when_some(state.login_preview.as_ref(), |this, preview| {
+                    this.child(render_provider_login_confirmation(
+                        preview,
+                        state.is_login_busy,
+                        theme,
+                        on_launch_login,
+                        on_cancel_login,
+                        cx,
+                    ))
+                })
+            },
+        )
         // Category Content Body
         .child(
             div()
@@ -512,8 +530,6 @@ pub fn render_settings_view<V: 'static>(
                         theme,
                         on_check_health,
                         on_preview_login,
-                        on_launch_login,
-                        on_cancel_login,
                         on_modify,
                         cx,
                     )
@@ -656,6 +672,67 @@ fn provider_health_is_error(status: Option<&str>) -> bool {
     matches!(status, Some("degraded" | "unavailable"))
 }
 
+fn render_provider_login_confirmation<V: 'static>(
+    preview: &ProviderLoginPreview,
+    is_login_busy: bool,
+    theme: &Theme,
+    on_launch_login: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
+    on_cancel_login: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
+    cx: &mut Context<V>,
+) -> AnyElement {
+    div()
+        .id("provider-login-confirmation")
+        .role(Role::Group)
+        .aria_label(format!(
+            "Confirm provider login. Profile: {}. Command: {}",
+            preview.profile, preview.display_command
+        ))
+        .p_3()
+        .v_flex()
+        .gap_2()
+        .rounded(Radii::ROW)
+        .bg(theme.chrome.panel2)
+        .border_1()
+        .border_color(theme.accent.color())
+        .child(
+            div()
+                .font_weight(FontWeight::BOLD)
+                .child("Confirm provider login"),
+        )
+        .child(format!("Profile: {}", preview.profile))
+        .child(format!("Command: {}", preview.display_command))
+        .child(
+            "Opening the terminal is the first side effect. Health checks never perform this action.",
+        )
+        .child(
+            div()
+                .h_flex()
+                .gap_2()
+                .child(
+                    Button::new("confirm-provider-login")
+                        .primary()
+                        .label("Open login terminal")
+                        .disabled(is_login_busy)
+                        .accessibility_label(
+                            "Open the reviewed provider login command in a terminal",
+                        )
+                        .on_click(cx.listener(move |this, _event, window, cx| {
+                            on_launch_login(this, window, cx);
+                        })),
+                )
+                .child(
+                    Button::new("cancel-provider-login")
+                        .ghost()
+                        .label("Cancel")
+                        .accessibility_label("Cancel provider login")
+                        .on_click(cx.listener(move |this, _event, window, cx| {
+                            on_cancel_login(this, window, cx);
+                        })),
+                ),
+        )
+        .into_any_element()
+}
+
 /// Renders the Providers & Tier Mapping settings panel.
 #[allow(clippy::too_many_arguments)]
 fn render_providers_tab<V: 'static>(
@@ -667,8 +744,6 @@ fn render_providers_tab<V: 'static>(
     on_preview_login: impl Fn(&mut V, ProviderInstanceId, EnvironmentId, &mut Window, &mut Context<V>)
     + 'static
     + Copy,
-    on_launch_login: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
-    on_cancel_login: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
     on_modify: impl Fn(
         &mut V,
         Box<dyn FnOnce(&mut UserSettings) + Send + 'static>,
@@ -726,56 +801,6 @@ fn render_providers_tab<V: 'static>(
                         .child("Health probes may run bounded non-interactive status/version commands. They never start an interactive login or provider session; login requires a separate preview and confirmation."),
                 ),
         )
-        .when_some(state.login_preview.as_ref(), |this, preview| {
-            this.child(
-                div()
-                    .id("provider-login-confirmation")
-                    .role(Role::Group)
-                    .aria_label(format!(
-                        "Confirm provider login. Profile: {}. Command: {}",
-                        preview.profile, preview.display_command
-                    ))
-                    .p_3()
-                    .v_flex()
-                    .gap_2()
-                    .rounded(Radii::ROW)
-                    .bg(theme.chrome.panel2)
-                    .border_1()
-                    .border_color(theme.accent.color())
-                    .child(
-                        div()
-                            .font_weight(FontWeight::BOLD)
-                            .child("Confirm provider login"),
-                    )
-                    .child(format!("Profile: {}", preview.profile))
-                    .child(format!("Command: {}", preview.display_command))
-                    .child("Opening the terminal is the first side effect. Health checks never perform this action.")
-                    .child(
-                        div()
-                            .h_flex()
-                            .gap_2()
-                            .child(
-                                Button::new("confirm-provider-login")
-                                    .primary()
-                                    .label("Open login terminal")
-                                    .disabled(state.is_login_busy)
-                                    .accessibility_label("Open the reviewed provider login command in a terminal")
-                                    .on_click(cx.listener(move |this, _event, window, cx| {
-                                        on_launch_login(this, window, cx);
-                                    })),
-                            )
-                            .child(
-                                Button::new("cancel-provider-login")
-                                    .ghost()
-                                    .label("Cancel")
-                                    .accessibility_label("Cancel provider login")
-                                    .on_click(cx.listener(move |this, _event, window, cx| {
-                                        on_cancel_login(this, window, cx);
-                                    })),
-                            ),
-                    ),
-            )
-        })
         // 2. Provider Instances List
         .child(
             div()

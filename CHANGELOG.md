@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Kept provider login handoffs visible and made Surfaces state explicit.**
+  Prepared login confirmation now stays above the scrolling provider list,
+  instead of appearing below the user's current viewport. Opening the reviewed
+  command atomically reveals the non-collapsing right-side Terminal surface,
+  the titlebar control now reads `Hide Surfaces` with selected, tooltip, and
+  accessibility state while the panel is open. Focused desktop regressions
+  cover the open/select transition and the toggle presentation. Version
+  0.60.59 carries the local fix; native Windows acceptance remains pending.
+
 - **Model Codex included usage and credits as separate serviceability paths.**
   Codex account snapshots now keep reported utilization separate from both
   included-use permission and paid-credit availability. A 100 percent window,
