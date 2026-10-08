@@ -135,14 +135,19 @@ R0 development gate:
   left its delivery Pending, and two identical submissions after daemon restart
   both refused redispatch with `approval_delivery_pending` while the request
   count remained one.
+  The same hash-pinned server then passed an exact process crash inside the
+  terminal tool-result transaction. One real Codex command completed exactly
+  one loopback HTTP side effect before the isolated daemon process group was
+  killed under a confirmed SQLite writer lock. The database exposed only the
+  complete pre-result state, and restart reconciled the interrupted attempt
+  without a second request, terminal event, or delivery row.
   A supporting Hyper-V rehearsal on the same exact runtime later passed a real
   30-minute provider-network interruption and full-screen terminal saved-state
   recovery with exact event, usage, offset, replay, and cleanup evidence. It
   does not replace the required physical laptop disconnect and sleep rows.
   Real provider capacity exhaustion, external-service interruption, the
-  pending continuation restart, remaining exact tool-result process evidence,
-  and the deferred physical laptop checks keep P4-C5 Partial and the Phase 4
-  exit matrix open.
+  pending continuation restart, and the deferred physical laptop checks keep
+  P4-C5 Partial and the Phase 4 exit matrix open.
 
 See the [Phase 4 live acceptance record](docs/operations/PHASE4_ACCEPTANCE.md)
 and the completion criteria in [`tasks/plan-rewrite.md`](tasks/plan-rewrite.md).

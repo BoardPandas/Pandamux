@@ -28,6 +28,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Recorded an exact process crash inside atomic tool-result persistence.**
+  The hash-pinned 0.60.49 Galahad server ran one real Codex tool call that made
+  exactly one loopback HTTP side effect. A clone-only trigger held the terminal
+  tool-result transaction open after the ledger and delivery writes but before
+  timeline insertion. After three consecutive writer-lock observations, the
+  harness sent `SIGKILL` only to the isolated daemon process group. SQLite
+  reopened to the complete pre-result state: one ambiguous Started tool, no
+  terminal event, and no tool-result delivery row. An exact daemon restart
+  reconciled the turn to Interrupted and its attempt to Failed without a second
+  network request or an invented result. Version 0.60.51 records this evidence
+  only and has no executable, native, production, push, deployment,
+  activation, or release claim.
+
 - **Recorded the exact P4-C5 pending-approval restart pass and clarified the
   tool-result restart contract.** Exact 0.60.49 commit
   `d09641e86cd06d72d7312ceb1fa3b20e5931ff5f` passed the complete local gate
