@@ -119,7 +119,7 @@ R0 development gate:
   `codex-default` plus `gpt-6-luna` turn passed. Exact limited-user Windows
   artifacts then passed native build, headless smoke, visible no-route fallback,
   and an authenticated picker-created thread whose `codex-default` and
-  `gpt-6.1-sol` values matched the shipped CLI. P4-C3 is Pass again.
+  `gpt-6.1-sol` values matched the exact-build CLI. P4-C3 is Pass again.
   A separate supporting live run later killed the exact remote proxy after
   visible text and one successful file-writing shell tool. Reconnect retained
   one protected attempt and the one-line marker without replay. Exact 0.60.47

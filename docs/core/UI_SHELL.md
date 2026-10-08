@@ -4,221 +4,156 @@
 
 The following files were used as evidence for this page:
 
-- [lib.rs:1-66](../../crates/pandamux-ui/src/lib.rs#L1-L66)
-- [iced_shell.rs:1-325](../../crates/pandamux-ui/src/iced_shell.rs#L1-L325)
-- [iced_shell.rs:1237-1349](../../crates/pandamux-ui/src/iced_shell.rs#L1237-L1349)
-- [shell_projection.rs:1-224](../../crates/pandamux-ui/src/shell_projection.rs#L1-L224)
-- [chrome.rs:31-141](../../crates/pandamux-ui/src/chrome.rs#L31-L141)
-- [chrome.rs:147-227](../../crates/pandamux-ui/src/chrome.rs#L147-L227)
-- [content_views.rs:1-90](../../crates/pandamux-ui/src/content_views.rs#L1-L90)
-- [session_panel.rs:25-121](../../crates/pandamux-ui/src/session_panel.rs#L25-L121)
-- [session_launcher.rs:1-57](../../crates/pandamux-ui/src/session_launcher.rs#L1-L57)
-- [command_palette.rs:1-59](../../crates/pandamux-ui/src/command_palette.rs#L1-L59)
-- [context_menu.rs:1-59](../../crates/pandamux-ui/src/context_menu.rs#L1-L59)
-- [overlays.rs:1-30](../../crates/pandamux-ui/src/overlays.rs#L1-L30)
-- [settings.rs:14-71](../../crates/pandamux-ui/src/settings.rs#L14-L71)
-- [theme.rs:213-272](../../crates/pandamux-ui/src/theme.rs#L213-L272)
-- [icons.rs:1-46](../../crates/pandamux-ui/src/icons.rs#L1-L46)
-- [metrics.rs:1-55](../../crates/pandamux-ui/src/metrics.rs#L1-L55)
+- [lib.rs:1-60](../../crates/pandamux-desktop/src/lib.rs#L1-L60)
+- [app_view.rs:89-2635](../../crates/pandamux-desktop/src/app_view.rs#L89-L2635)
+- [command_palette.rs:1-605](../../crates/pandamux-desktop/src/command_palette.rs#L1-L605)
+- [composer.rs:12-279](../../crates/pandamux-desktop/src/composer.rs#L12-L279)
+- [diff_view.rs:1-1712](../../crates/pandamux-desktop/src/diff_view.rs#L1-L1712)
+- [notification.rs:1-210](../../crates/pandamux-desktop/src/notification.rs#L1-L210)
+- [picker.rs:1-267](../../crates/pandamux-desktop/src/picker.rs#L1-L267)
+- [scratchpad.rs:1-332](../../crates/pandamux-desktop/src/scratchpad.rs#L1-L332)
+- [sidebar.rs:1-1324](../../crates/pandamux-desktop/src/sidebar.rs#L1-L1324)
+- [timeline.rs:22-2175](../../crates/pandamux-desktop/src/timeline.rs#L22-L2175)
+- [surfaces_panel.rs:18-1285](../../crates/pandamux-desktop/src/surfaces_panel.rs#L18-L1285)
+- [terminal_view.rs:22-650](../../crates/pandamux-desktop/src/terminal_view.rs#L22-L650)
+- [settings_view.rs:19-715](../../crates/pandamux-desktop/src/settings_view.rs#L19-L715)
+- [theme.rs:1-237](../../crates/pandamux-desktop/src/theme.rs#L1-L237)
+- [titlebar.rs:1-175](../../crates/pandamux-desktop/src/titlebar.rs#L1-L175)
+- [tray.rs:1-126](../../crates/pandamux-desktop/src/tray.rs#L1-L126)
+- [usage_view.rs:23-260](../../crates/pandamux-desktop/src/usage_view.rs#L23-L260)
 
 </details>
 
-# UI Shell
+# GPUI Desktop
 
-> **Related Pages**: [Architecture](ARCHITECTURE.md), [Application Runtime](APP_RUNTIME.md)
-
----
-
-<!-- BEGIN:AUTOGEN pandamux_06_ui-shell_overview -->
-## Overview and Iced Isolation
-
-`pandamux-ui` is the Iced-based native shell: it renders the split workspace, chrome, and every overlay as a read-projection of backend state and never owns canonical data (`crates/pandamux-ui/src/iced_shell.rs` doc comment) ([iced_shell.rs:1-9](../../crates/pandamux-ui/src/iced_shell.rs#L1-L9)).
-
-Per the crate-isolation invariant, `pandamux-ui` is the ONLY crate in the workspace allowed to import Iced; every module except `shell_projection` is gated behind the `iced-runtime` feature so the projection types stay usable from headless/CLI-facing crates without pulling in the GPU stack ([lib.rs:1-26](../../crates/pandamux-ui/src/lib.rs#L1-L26)). `shell_projection` is the sole module that compiles unconditionally, which is why it is the boundary other crates (and `pandamux-core` consumers) can depend on ([lib.rs:23](../../crates/pandamux-ui/src/lib.rs#L23)).
-
-| Module | Responsibility |
-|---|---|
-| `chrome` | Titlebar, icon rail, status bar; `ChromeState`, `MainView`, `Overlay`, `RailItem`, `SessionActivity` ([lib.rs:2](../../crates/pandamux-ui/src/lib.rs#L2)) |
-| `command_palette` | Ctrl+K command palette and quick-launch popover list picker ([lib.rs:4](../../crates/pandamux-ui/src/lib.rs#L4)) |
-| `content_views` | Renderers for non-terminal surface content (markdown / diff) ([lib.rs:6](../../crates/pandamux-ui/src/lib.rs#L6)) |
-| `context_menu` | Right-click terminal context menu and the session-rail actions menu ([lib.rs:8](../../crates/pandamux-ui/src/lib.rs#L8)) |
-| `iced_shell` | The canvas terminal viewport, `ShellMessage`, `ShellViewModel`, `app_view`/`shell_view` composition ([lib.rs:10](../../crates/pandamux-ui/src/lib.rs#L10)) |
-| `icons` | Line-glyph icon set drawn as `canvas::Program`s ([lib.rs:12](../../crates/pandamux-ui/src/lib.rs#L12)) |
-| `metrics` | Measured monospace `CellMetrics` (width/height) driving grid sizing ([lib.rs:14](../../crates/pandamux-ui/src/lib.rs#L14)) |
-| `overlays` | Find bar, copy-mode indicator, notifications slide-over ([lib.rs:16](../../crates/pandamux-ui/src/lib.rs#L16)) |
-| `session_launcher` | Staged Local/SSH project session launcher (multi-step wizard) ([lib.rs:18](../../crates/pandamux-ui/src/lib.rs#L18)) |
-| `session_panel` | The Sessions rail panel (project/type grouping, rename, close) ([lib.rs:20](../../crates/pandamux-ui/src/lib.rs#L20)) |
-| `settings` | Settings modal (General/Terminal/Keyboard/Notifications/Quick launch) ([lib.rs:22](../../crates/pandamux-ui/src/lib.rs#L22)) |
-| `shell_projection` | Backend-to-UI read-projection of the split tree; the only feature-independent module ([lib.rs:23](../../crates/pandamux-ui/src/lib.rs#L23)) |
-| `theme` | `UiTheme`/`Accent`/`Palette`/`TermScheme` design tokens ([lib.rs:25](../../crates/pandamux-ui/src/lib.rs#L25)) |
-
-Sources: [lib.rs:1-66](../../crates/pandamux-ui/src/lib.rs#L1-L66)
-<!-- END:AUTOGEN pandamux_06_ui-shell_overview -->
+> **Related Pages**: [Terminal Engine](TERMINAL_ENGINE.md), [Application Runtime](APP_RUNTIME.md), [Provider Routing and Capacity](../features/PROVIDER_ROUTING.md)
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_06_ui-shell_shell -->
-## The Iced Shell
+<!-- BEGIN:AUTOGEN pandamux_06_ui-shell_composition -->
+## Window Composition
 
-`iced_shell.rs` is the largest module in the crate (2573 lines) and hosts the `ShellMessage` intent enum, the `ShellViewModel` read model, the canvas-backed `TerminalViewport`, and the top-level view composition functions.
+The desktop crate is the GPUI presentation client. It exports the application view plus focused modules for the composer, timeline, settings, usage, terminal, sidebars, notifications, command palette, and other presentation surfaces ([lib.rs:3-60](../../crates/pandamux-desktop/src/lib.rs#L3-L60)).
 
-`ShellMessage` is a single flat enum carrying every UI interaction: pane/surface intents (`PaneFocused`, `PaneSplit`, `PaneClosed`), tab drag-and-drop (`TabDragArmed`, `DragOverZone`, `DragReleased`), chrome/window actions, the session panel, overlays (palette/launcher/settings/confirm), the in-app updater, and low-level terminal I/O (`TerminalInput`, `ViewportResized`, `ViewportScrolled`, selection and context-menu variants) ([iced_shell.rs:31-325](../../crates/pandamux-ui/src/iced_shell.rs#L31-L325)). Every field is documented inline with which spec section it implements, since the runtime is the single place that turns a message into a core intent.
-
-```rust
-/// The terminal canvas measured a pane size whose grid dimensions differ
-/// from the engine grid. The runtime debounces these and resizes the
-/// engine + PTY/SSH channel to match (spec 1.1).
-ViewportResized {
-    surface_id: SurfaceId,
-    columns: usize,
-    rows: usize,
-},
+```mermaid
+graph TD
+    Window["GPUI Window"] --> Titlebar["Custom Titlebar"]
+    Window --> Layout["Central Layout"]
+    Layout --> Rail["Navigation Rail"]
+    Layout --> Sidebar["Navigation Sidebar"]
+    Layout --> Workspace["Main Workspace"]
+    Layout --> Surfaces["Surfaces Panel"]
+    Window --> Status["Status Bar"]
+    Window --> Overlays["Palette and Toasts"]
 ```
 
-Sources: [iced_shell.rs:243-250](../../crates/pandamux-ui/src/iced_shell.rs#L243-L250)
+`AppView` owns client projections and view-local state: active thread and rail selection, composer and picker state, settings, usage, surfaces, timeline virtualization, notifications, terminal focus, and the server bridge ([app_view.rs:89-125](../../crates/pandamux-desktop/src/app_view.rs#L89-L125)). Its renderer composes a custom titlebar over the rail/sidebar/workspace/surfaces layout and defers terminal focus until the terminal panel is actually rendered ([app_view.rs:2192-2267](../../crates/pandamux-desktop/src/app_view.rs#L2192-L2267)).
 
-`ShellViewModel` is the render-time aggregate: the `ShellProjection` split-tree view, a `Vec<TerminalSnapshot>` (one per live surface), `ChromeState`, and one field per overlay/panel (`find`, `notifications`, `sessions`, `palette`, `launcher`, `settings`, `context_menu`, `rail_menu`, `confirm`, `home`, `update`) ([iced_shell.rs:413-456](../../crates/pandamux-ui/src/iced_shell.rs#L413-L456)). `TerminalSnapshot` carries both plain-text `lines` (for link detection/text consumers) and styled per-cell `cells`, the write-cursor position, detected `links`, selection spans, and terminal mode flags for input routing ([iced_shell.rs:350-382](../../crates/pandamux-ui/src/iced_shell.rs#L350-L382)).
-
-`TerminalViewport` is a `canvas::Program<ShellMessage>` that owns per-canvas interaction state (`ViewportState`) and paints the fixed-pitch grid using measured `crate::metrics::CellMetrics` ([metrics.rs:18-29](../../crates/pandamux-ui/src/metrics.rs#L18-L29)) for column/row sizing ([iced_shell.rs:644-725](../../crates/pandamux-ui/src/iced_shell.rs#L644-L725)). Its `update` method (part of the `canvas::Program` impl starting at line 817) turns raw mouse/keyboard canvas events into `ShellMessage`s such as `ViewportResized`, `SelectionStarted`/`SelectionUpdated`, and `ViewportScrollTo` ([iced_shell.rs:817-820](../../crates/pandamux-ui/src/iced_shell.rs#L817-L820)).
-
-Two entry points compose the final `Element`: `app_view` builds the complete chrome (titlebar, icon rail + optional session panel, workspace or Home view, optional update banner, optional status bar) and stacks overlays/notifications/context menus on top with `iced::widget::stack!` ([iced_shell.rs:1253-1349](../../crates/pandamux-ui/src/iced_shell.rs#L1253-L1349)); `shell_view` renders just the pane workspace and backs the headless smoke path and unit tests ([iced_shell.rs:1352-1354](../../crates/pandamux-ui/src/iced_shell.rs#L1352-L1354)).
-
-Sources: [iced_shell.rs:1-325](../../crates/pandamux-ui/src/iced_shell.rs#L1-L325), [iced_shell.rs:350-456](../../crates/pandamux-ui/src/iced_shell.rs#L350-L456), [iced_shell.rs:644-820](../../crates/pandamux-ui/src/iced_shell.rs#L644-L820), [iced_shell.rs:1237-1354](../../crates/pandamux-ui/src/iced_shell.rs#L1237-L1354), [metrics.rs:1-55](../../crates/pandamux-ui/src/metrics.rs#L1-L55)
-<!-- END:AUTOGEN pandamux_06_ui-shell_shell -->
-
----
-
-<!-- BEGIN:AUTOGEN pandamux_06_ui-shell_projection -->
-## Read-Projection
-
-`shell_projection.rs` converts a `pandamux_core::WorkspaceState`'s canonical binary `SplitNode` tree into the UI's `ShellProjection`, which carries the focused/zoomed pane ids, the raw `ShellNodeProjection` tree, a flattened `visible_panes` list, and the design's 2-level `columns` layout ([shell_projection.rs:6-20](../../crates/pandamux-ui/src/shell_projection.rs#L6-L20)).
-
-`project_workspace_shell` resolves the zoomed pane (if any) to a single-pane root, otherwise projects the full tree via `project_node`, then derives both `visible_panes` (depth-first pane collection) and `columns` (the column layout) from that root ([shell_projection.rs:78-114](../../crates/pandamux-ui/src/shell_projection.rs#L78-L114)).
-
-`columns_from_node` implements the graceful fallback for arbitrary-depth trees: a `Pane` becomes a single one-pane column; a `Horizontal` split concatenates the columns of each side (side-by-side); a `Vertical` split flattens everything beneath it, including any nested split, into one column's stack. This preserves 2-level design fidelity while guaranteeing deeper CLI/orchestrator-built trees (e.g. `layout.grid`) never drop a pane ([shell_projection.rs:116-155](../../crates/pandamux-ui/src/shell_projection.rs#L116-L155)).
-
-```rust
-fn columns_from_node(node: &ShellNodeProjection) -> Vec<ColumnProjection> {
-    match node {
-        ShellNodeProjection::Pane(pane) => vec![ColumnProjection {
-            panes: vec![pane.clone()],
-        }],
-        ShellNodeProjection::Split {
-            direction: SplitDirection::Horizontal,
-            first,
-            second,
-            ..
-        } => {
-            let mut columns = columns_from_node(first);
-            columns.extend(columns_from_node(second));
-            columns
-        }
-        ShellNodeProjection::Split {
-            direction: SplitDirection::Vertical,
-            first,
-            second,
-            ..
-        } => {
-            let mut panes = Vec::new();
-            collect_visible_panes(first, &mut panes);
-            collect_visible_panes(second, &mut panes);
-            vec![ColumnProjection { panes }]
-        }
-    }
-}
-```
-
-Sources: [shell_projection.rs:128-155](../../crates/pandamux-ui/src/shell_projection.rs#L128-L155)
-
-`project_pane` fills a `PaneProjection` (focused/zoomed flags, the pane's `SurfaceProjection` list, the active surface id) from a core `LeafNode`, and `ratio_percent` converts the branch's `f32` split ratio to a display percentage ([shell_projection.rs:183-223](../../crates/pandamux-ui/src/shell_projection.rs#L183-L223)). A dedicated test suite exercises the default single-pane workspace, horizontal/vertical splits, zoom, and a 5-pane `layout.grid` tree to assert no pane is ever dropped by the column projection ([shell_projection.rs:225-345](../../crates/pandamux-ui/src/shell_projection.rs#L225-L345)).
-
-Sources: [shell_projection.rs:1-224](../../crates/pandamux-ui/src/shell_projection.rs#L1-L224), [shell_projection.rs:225-345](../../crates/pandamux-ui/src/shell_projection.rs#L225-L345)
-<!-- END:AUTOGEN pandamux_06_ui-shell_projection -->
-
----
-
-<!-- BEGIN:AUTOGEN pandamux_06_ui-shell_chrome -->
-## Chrome and Content Views
-
-`chrome.rs` owns the app frame: `ChromeState` aggregates the theme/accent, the active rail item, session-panel open/grouping state, the active overlay, activity/shell-kind, and status-bar fields (git branch/ahead, listening ports, sidebar progress) ([chrome.rs:79-107](../../crates/pandamux-ui/src/chrome.rs#L79-L107)). `RailItem` (Sessions/CommandPalette/NewSession/Notifications/Settings), `Overlay` (None/CommandPalette/QuickLaunch/Settings/Confirm/CheatSheet), `MainView` (Workspace/Home), and `SessionActivity` (Idle/Running/BusyAgent) are the small enums that drive which chrome elements render ([chrome.rs:31-74](../../crates/pandamux-ui/src/chrome.rs#L31-L74)).
-
-Three public view functions render the frame's fixed regions:
-
-| Function | Renders |
+| Region | Primary responsibility |
 |---|---|
-| `titlebar` | Brand mark, session-switcher pill (opens the command palette), bell/settings icons, window controls ([chrome.rs:147-227](../../crates/pandamux-ui/src/chrome.rs#L147-L227)) |
-| `icon_rail` | The 52px icon rail (`theme::RAIL_WIDTH`): Sessions/Palette/New/Notifications at top, Settings pinned to the bottom ([chrome.rs:252-307](../../crates/pandamux-ui/src/chrome.rs#L252-L307)) |
-| `status_bar` | The bottom status strip (shell kind, git branch/ahead, ports, encoding, version) ([chrome.rs:345-429](../../crates/pandamux-ui/src/chrome.rs#L345-L429)) |
+| Titlebar | Server status, active title, command palette, theme, settings, and surface-panel controls ([app_view.rs:2234-2259](../../crates/pandamux-desktop/src/app_view.rs#L2234-L2259)) |
+| Rail and sidebar | Switch top-level destinations and select threads, agents, or settings categories ([app_view.rs:2260-2305](../../crates/pandamux-desktop/src/app_view.rs#L2260-L2305)) |
+| Main workspace | Thread metadata, virtualized timeline, composer, attachments, and git actions ([app_view.rs:2413-2581](../../crates/pandamux-desktop/src/app_view.rs#L2413-L2581)) |
+| Status bar | Connected server version/PID/path or reconnect/error state ([app_view.rs:2616-2631](../../crates/pandamux-desktop/src/app_view.rs#L2616-L2631)) |
 
-`content_views.rs` renders the two non-terminal surface kinds inside the same fixed-dark pane box the terminal viewport uses, so both stay theme-independent light-on-dark and never touch `palette.ov` (which flips with the chrome theme) ([content_views.rs:1-11](../../crates/pandamux-ui/src/content_views.rs#L1-L11)). `markdown_view` is a pragmatic line-based pass (headings, bullets, blockquotes, fenced code, rules, paragraphs) rather than a full CommonMark tree, built to cover the orchestrator dashboard and doc surfaces ([content_views.rs:23-65](../../crates/pandamux-ui/src/content_views.rs#L23-L65)). `diff_view` colors each line of a unified diff in monospace by its leading character ([content_views.rs:68-81](../../crates/pandamux-ui/src/content_views.rs#L68-L81)).
-
-Sources: [chrome.rs:31-141](../../crates/pandamux-ui/src/chrome.rs#L31-L141), [chrome.rs:147-429](../../crates/pandamux-ui/src/chrome.rs#L147-L429), [content_views.rs:1-90](../../crates/pandamux-ui/src/content_views.rs#L1-L90)
-<!-- END:AUTOGEN pandamux_06_ui-shell_chrome -->
+Sources: [lib.rs:3-60](../../crates/pandamux-desktop/src/lib.rs#L3-L60), [app_view.rs:89-125](../../crates/pandamux-desktop/src/app_view.rs#L89-L125), [app_view.rs:2192-2305](../../crates/pandamux-desktop/src/app_view.rs#L2192-L2305), [app_view.rs:2412-2635](../../crates/pandamux-desktop/src/app_view.rs#L2412-L2635)
+<!-- END:AUTOGEN pandamux_06_ui-shell_composition -->
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_06_ui-shell_panels -->
-## Session Panel, Launcher, and Palette
+<!-- BEGIN:AUTOGEN pandamux_06_ui-shell_threads -->
+## Threads, Composer, and Timeline
 
-These four modules cover session discovery/switching (the rail panel), creating new sessions (the launcher wizard), running arbitrary commands (the palette), and contextual per-pane actions (the context menus).
+The desktop creates threads from the exact selected provider instance, discovered model, and optional effort. When that tuple is incomplete it opens Provider Settings with an actionable error instead of fabricating a route ([app_view.rs:459-526](../../crates/pandamux-desktop/src/app_view.rs#L459-L526)).
 
-| Module | Purpose |
+`ComposerState` stores text and de-duplicated attachment records; clearing after dispatch removes both, and the renderer exposes provider, model, effort, attachment, clear, and send controls through callbacks ([composer.rs:12-74](../../crates/pandamux-desktop/src/composer.rs#L12-L74)). `send_composer_turn` refuses empty input, supplies a text prompt for attachment-only turns, sends selected model and effort through `thread.send_turn`, and clears the composer before awaiting the response ([app_view.rs:549-588](../../crates/pandamux-desktop/src/app_view.rs#L549-L588)).
+
+| Timeline behavior | Implementation |
 |---|---|
-| `session_panel` | Projects `AppState` into `SessionsViewState`: grouped `SessionGroup`s (by `SessionGrouping::Project` or `::Type`) of `SessionEntry` rows, each carrying a type badge, host, activity, and active flag; `project_sessions`/`project_sessions_with_profiles` build the projection and `session_panel` renders it ([session_panel.rs:25-121](../../crates/pandamux-ui/src/session_panel.rs#L25-L121)) |
-| `session_launcher` | A staged wizard (`LauncherStep`: Project → SessionType → Connection/ProfileForm/Credential/HostConfirmation → Folder → Launching) for local and SSH sessions; `LauncherItem` rows carry the `ShellMessage` a keyboard or mouse activation dispatches so both paths hit the same action ([session_launcher.rs:1-57](../../crates/pandamux-ui/src/session_launcher.rs#L1-L57)) |
-| `command_palette` | The Ctrl+K palette and quick-launch popover; `PaletteItem` pairs a glyph/label/shortcut with the `ShellMessage` it fires, and `filter_items` does a case-insensitive substring filter over the label ([command_palette.rs:1-59](../../crates/pandamux-ui/src/command_palette.rs#L1-L59)) |
-| `context_menu` | The right-click terminal menu (`ContextMenuAction`: Copy/Paste/SelectAll/ClearBuffer/Find/SplitRight/SplitDown/CloseTab) and the session-rail actions menu (`RailMenuAction`), both positioned cards over a transparent backdrop ([context_menu.rs:1-59](../../crates/pandamux-ui/src/context_menu.rs#L1-L59)) |
+| Event ingestion | Applies each sequenced server envelope to its `ThreadProjection` and updates the virtualized item count ([app_view.rs:253-265](../../crates/pandamux-desktop/src/app_view.rs#L253-L265)) |
+| User-visible alerts | Turn completion, approval, capacity interruption, and error events raise level-specific notifications ([app_view.rs:267-311](../../crates/pandamux-desktop/src/app_view.rs#L267-L311)) |
+| Virtualization | Computes visible item range plus top/bottom spacer heights from scroll state ([timeline.rs:1991-2105](../../crates/pandamux-desktop/src/timeline.rs#L1991-L2105)) |
+| Interaction | Timeline callbacks answer approvals, request safe continuation after capacity interruption, select text, and jump to the tail ([app_view.rs:2504-2532](../../crates/pandamux-desktop/src/app_view.rs#L2504-L2532)) |
 
-The launcher's `SshProfileForm` holds the in-progress name/host/port/user/auth/identity-file fields plus a validation `error` string for the connection-profile step ([session_launcher.rs:48-57](../../crates/pandamux-ui/src/session_launcher.rs#L48-L57)). `SessionEntry::type_label` picks the Type-grouping key: the shell's abbreviation for a plain terminal, or the session kind's label (Claude/Codex/Gemini/custom) otherwise ([session_panel.rs:57-65](../../crates/pandamux-ui/src/session_panel.rs#L57-L65)).
-
-Sources: [session_panel.rs:25-121](../../crates/pandamux-ui/src/session_panel.rs#L25-L121), [session_launcher.rs:1-57](../../crates/pandamux-ui/src/session_launcher.rs#L1-L57), [command_palette.rs:1-59](../../crates/pandamux-ui/src/command_palette.rs#L1-L59), [context_menu.rs:1-59](../../crates/pandamux-ui/src/context_menu.rs#L1-L59)
-<!-- END:AUTOGEN pandamux_06_ui-shell_panels -->
+Sources: [app_view.rs:253-311](../../crates/pandamux-desktop/src/app_view.rs#L253-L311), [app_view.rs:459-588](../../crates/pandamux-desktop/src/app_view.rs#L459-L588), [app_view.rs:2413-2577](../../crates/pandamux-desktop/src/app_view.rs#L2413-L2577), [composer.rs:12-74](../../crates/pandamux-desktop/src/composer.rs#L12-L74), [timeline.rs:1991-2175](../../crates/pandamux-desktop/src/timeline.rs#L1991-L2175)
+<!-- END:AUTOGEN pandamux_06_ui-shell_threads -->
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_06_ui-shell_theme -->
-## Overlays, Settings, and Theming
+<!-- BEGIN:AUTOGEN pandamux_06_ui-shell_surfaces -->
+## Surfaces and Terminal
 
-`overlays.rs` groups the terminal-adjacent floating surfaces: `FindViewState` (query/case-sensitivity/match count/current match span) backs the find bar ([overlays.rs:14-27](../../crates/pandamux-ui/src/overlays.rs#L14-L27)); `ConfirmViewState` backs the generic destructive-action confirm modal (`Overlay::Confirm`) whose pending action lives in the runtime ([overlays.rs:87-93](../../crates/pandamux-ui/src/overlays.rs#L87-L93)); `NotificationsViewState`/`NotificationCard` back the right-side notifications slide-over ([overlays.rs:263-279](../../crates/pandamux-ui/src/overlays.rs#L263-L279)).
+The right-side panel groups thread-adjacent surfaces rather than owning their durable data. Tabs cover agents, diffs, files, pull requests, terminal, floor-plan data, and artifacts, each with a stable label, shortcut, and icon ([surfaces_panel.rs:18-80](../../crates/pandamux-desktop/src/surfaces_panel.rs#L18-L80)).
 
-`settings.rs` defines the settings modal's navigation and content: `SettingsSection` (General/Terminal/Keyboard/Notifications/QuickLaunch, with a `SettingsSection::ALL` array driving the nav list) and `TerminalToggle` (WelcomePrompt/RightClickPaste/ConfirmClose) for the Terminal tab's persisted toggles ([settings.rs:14-49](../../crates/pandamux-ui/src/settings.rs#L14-L49)). `SettingsViewState` carries the active section, theme/accent, the live keyboard-shortcut list sourced from the runtime's keymap (so the cheat sheet and this list can never drift apart), the persistent `pandamux_core::TerminalSettings`, and the in-app `UpdateState` for the General tab's "Check for updates" / Install controls ([settings.rs:51-71](../../crates/pandamux-ui/src/settings.rs#L51-L71)).
+`SurfacesPanelState` retains per-thread active tabs and terminal views, restores those choices when a thread is selected, and toggles terminal polling/focus only while the terminal tab is visible ([surfaces_panel.rs:117-240](../../crates/pandamux-desktop/src/surfaces_panel.rs#L117-L240), [app_view.rs:833-884](../../crates/pandamux-desktop/src/app_view.rs#L833-L884)). The desktop terminal consumes server-owned byte replay into its own grid: `feed_bytes` clears stale grid state when replay is truncated, advances current bytes, and stores the next offset ([terminal_view.rs:198-301](../../crates/pandamux-desktop/src/terminal_view.rs#L198-L301)).
 
-`theme.rs` is the shared design-token source: layout constants (`TITLEBAR_HEIGHT`, `RAIL_WIDTH`, `SESSION_PANEL_WIDTH`, `WORKSPACE_PADDING`, corner radii), font helpers, and text-size constants, plus `Palette` (the chrome color set for a `UiTheme` + `Accent` pair) and `TermScheme` (the terminal canvas color set) ([theme.rs:115-166](../../crates/pandamux-ui/src/theme.rs#L115-L166)).
+| Terminal concern | Desktop responsibility |
+|---|---|
+| Attach/open/input/resize | Build typed protocol parameters carrying terminal id, environment, offsets, data, and dimensions ([terminal_view.rs:301-377](../../crates/pandamux-desktop/src/terminal_view.rs#L301-L377)) |
+| Rendering | Batch grid cells into styled spans and render header, screen grid, cursor, selection, and scrollbar ([terminal_view.rs:112-196](../../crates/pandamux-desktop/src/terminal_view.rs#L112-L196), [terminal_view.rs:514-650](../../crates/pandamux-desktop/src/terminal_view.rs#L514-L650)) |
+| Keyboard input | Convert named keys, Ctrl chords, Alt prefixes, and character input into terminal byte sequences ([terminal_view.rs:437-512](../../crates/pandamux-desktop/src/terminal_view.rs#L437-L512)) |
+| View state | Track running/exit state, errors, cached cells, dimensions, remote environment, offset, and focus mode ([terminal_view.rs:198-421](../../crates/pandamux-desktop/src/terminal_view.rs#L198-L421)) |
 
-Theme *loading* from a `.theme` file happens in `pandamux_core` (`parse_ghostty_theme`/`parse_hex`); `TermScheme::from_theme` is where `pandamux-ui` adapts a loaded `pandamux_core::Theme` into the canvas's color set, falling back to the fixed-dark default for any missing or invalid color (background/foreground direct, `dim`/`success`/`gold` from ANSI palette indices 8/2/3):
+Sources: [app_view.rs:833-884](../../crates/pandamux-desktop/src/app_view.rs#L833-L884), [surfaces_panel.rs:18-240](../../crates/pandamux-desktop/src/surfaces_panel.rs#L18-L240), [terminal_view.rs:112-650](../../crates/pandamux-desktop/src/terminal_view.rs#L112-L650)
+<!-- END:AUTOGEN pandamux_06_ui-shell_surfaces -->
 
-```rust
-pub fn from_theme(theme: &pandamux_core::Theme) -> Self {
-    let base = Self::default();
-    let hex = |value: &Option<String>, fallback: Color| {
-        value.as_deref().and_then(hex_to_color).unwrap_or(fallback)
-    };
-    let palette = |index: usize, fallback: Color| {
-        theme
-            .palette
-            .get(index)
-            .and_then(|value| hex_to_color(value))
-            .unwrap_or(fallback)
-    };
-    Self {
-        background: hex(&theme.background, base.background),
-        text: hex(&theme.foreground, base.text),
-        dim: palette(8, base.dim),
-        success: palette(2, base.success),
-        gold: palette(3, base.gold),
-        cursor: hex(&theme.cursor, hex(&theme.foreground, base.text)),
-        ansi: std::array::from_fn(|index| palette(index, base.ansi[index])),
-    }
-}
-```
+---
 
-Sources: [theme.rs:213-268](../../crates/pandamux-ui/src/theme.rs#L213-L268)
+<!-- BEGIN:AUTOGEN pandamux_06_ui-shell_settings -->
+## Settings and Provider Controls
 
-A unit test confirms the fallback behavior end to end: a partial `.theme` file (background, foreground, and only palette index 2) yields the parsed colors for what is present and the default scheme's `gold` for what is absent ([theme.rs:466-479](../../crates/pandamux-ui/src/theme.rs#L466-L479)).
+Settings is a top-level surface with six categories: providers, organizations, environments, terminal, general appearance, and advanced engine diagnostics ([settings_view.rs:19-73](../../crates/pandamux-desktop/src/settings_view.rs#L19-L73)). `SettingsViewState` combines editable `UserSettings` with provider health reports, environments, save/check progress, status banners, and explicit login-preview state ([settings_view.rs:76-114](../../crates/pandamux-desktop/src/settings_view.rs#L76-L114)).
 
-`icons.rs` draws every chrome glyph (`Icon`: Search, Bell, Settings, Sessions, Palette, Plus, Git, Terminal, SplitRight/Down, ZoomIn/Out, Close, Minimize, Maximize, Folder, Home, Drive) as a stroked `canvas::Program` in a normalized `[0, 1]` box rather than an icon font, so one glyph definition renders crisply at any requested size ([icons.rs:1-46](../../crates/pandamux-ui/src/icons.rs#L1-L46)).
+| Provider action | Desktop flow |
+|---|---|
+| Load models | Fetch server-backed provider models and update picker routes, rather than using a static list ([app_view.rs:1360-1383](../../crates/pandamux-desktop/src/app_view.rs#L1360-L1383)) |
+| Save settings | Submit the edited settings and surface success/error state in the settings banner ([app_view.rs:1660-1692](../../crates/pandamux-desktop/src/app_view.rs#L1660-L1692)) |
+| Check health | Request all or one provider instance, then replace the health report collection ([app_view.rs:1693-1753](../../crates/pandamux-desktop/src/app_view.rs#L1693-L1753)) |
+| Login | Preview the exact provider/environment command before launching it in a terminal; cancel clears preview state ([app_view.rs:1754-1870](../../crates/pandamux-desktop/src/app_view.rs#L1754-L1870)) |
 
-Sources: [overlays.rs:1-30](../../crates/pandamux-ui/src/overlays.rs#L1-L30), [settings.rs:14-71](../../crates/pandamux-ui/src/settings.rs#L14-L71), [theme.rs:115-272](../../crates/pandamux-ui/src/theme.rs#L115-L272), [icons.rs:1-46](../../crates/pandamux-ui/src/icons.rs#L1-L46)
-<!-- END:AUTOGEN pandamux_06_ui-shell_theme -->
+The settings renderer receives callbacks for save, health, preview, launch, cancel, and mutation, and presents status banners as polite status or assertive alert live regions depending on success/error state ([settings_view.rs:382-460](../../crates/pandamux-desktop/src/settings_view.rs#L382-L460)). Provider health cards expose status, version, authentication, freshness, last-success time, reason, and optional account badge as one accessible description ([settings_view.rs:636-652](../../crates/pandamux-desktop/src/settings_view.rs#L636-L652)).
+
+Sources: [app_view.rs:1360-1383](../../crates/pandamux-desktop/src/app_view.rs#L1360-L1383), [app_view.rs:1660-1870](../../crates/pandamux-desktop/src/app_view.rs#L1660-L1870), [settings_view.rs:19-114](../../crates/pandamux-desktop/src/settings_view.rs#L19-L114), [settings_view.rs:382-460](../../crates/pandamux-desktop/src/settings_view.rs#L382-L460), [settings_view.rs:636-652](../../crates/pandamux-desktop/src/settings_view.rs#L636-L652)
+<!-- END:AUTOGEN pandamux_06_ui-shell_settings -->
+
+---
+
+<!-- BEGIN:AUTOGEN pandamux_06_ui-shell_usage -->
+## Usage and Capacity Views
+
+Usage is a top-level rail destination with filters for date, environment, provider, named subscription, agent, schedule, model, and source ([usage_view.rs:23-57](../../crates/pandamux-desktop/src/usage_view.rs#L23-L57)). Its editor target uses provider-instance and environment identities internally while showing a provider display name and accepting user-managed subscription presentation ([usage_view.rs:60-67](../../crates/pandamux-desktop/src/usage_view.rs#L60-L67)).
+
+The view presents token totals and coverage before detailed rows, then capacity cards and the subscription editor. It keeps shared scroll handles for focus restoration and shows retryable failures in an assertive alert ([usage_view.rs:75-97](../../crates/pandamux-desktop/src/usage_view.rs#L75-L97), [usage_view.rs:98-229](../../crates/pandamux-desktop/src/usage_view.rs#L98-L229)).
+
+| View state | Presentation intent |
+|---|---|
+| Ready | Current data is available |
+| Loading | A request is in flight |
+| Empty | Query completed with no matching facts |
+| Partial, stale, or migration quarantine | Data is usable only with an explicit caution |
+| Offline, malformed source, or server error | Error presentation with retry action |
+
+These status families use distinct accessible labels and live-region urgency instead of conveying state by color alone ([usage_view.rs:231-257](../../crates/pandamux-desktop/src/usage_view.rs#L231-L257)). `AppView` reloads usage when entering the rail destination, cycles individual filters, clears them, and manages editor focus and save/cancel state ([app_view.rs:1384-1577](../../crates/pandamux-desktop/src/app_view.rs#L1384-L1577)).
+
+Sources: [app_view.rs:1384-1577](../../crates/pandamux-desktop/src/app_view.rs#L1384-L1577), [usage_view.rs:23-260](../../crates/pandamux-desktop/src/usage_view.rs#L23-L260)
+<!-- END:AUTOGEN pandamux_06_ui-shell_usage -->
+
+---
+
+<!-- BEGIN:AUTOGEN pandamux_06_ui-shell_accessibility -->
+## Focus and Accessibility
+
+The desktop carries explicit focus handles for usage tables and terminal interaction. Terminal focus is deferred until render, and a window-level keystroke interceptor recognizes F6 even when Windows UI Automation reports the application root rather than the terminal descendant ([app_view.rs:117-124](../../crates/pandamux-desktop/src/app_view.rs#L117-L124), [app_view.rs:166-185](../../crates/pandamux-desktop/src/app_view.rs#L166-L185), [app_view.rs:2192-2204](../../crates/pandamux-desktop/src/app_view.rs#L2192-L2204)).
+
+Terminal output has a bounded semantic representation: text is assembled from the visible grid and limited to 4,096 characters so assistive technology receives current output without an unbounded accessibility tree ([terminal_view.rs:22-50](../../crates/pandamux-desktop/src/terminal_view.rs#L22-L50)). The terminal view distinguishes input focus from output-reading mode, while the surfaces panel exposes the corresponding focus targets ([surfaces_panel.rs:1233-1285](../../crates/pandamux-desktop/src/surfaces_panel.rs#L1233-L1285), [terminal_view.rs:198-227](../../crates/pandamux-desktop/src/terminal_view.rs#L198-L227)).
+
+- Settings success banners use `Role::Status` with polite live updates; errors use `Role::Alert` with assertive updates ([settings_view.rs:423-460](../../crates/pandamux-desktop/src/settings_view.rs#L423-L460)).
+- Usage errors include the recovery instruction in the accessible alert, and status badges announce all reducer states ([usage_view.rs:171-193](../../crates/pandamux-desktop/src/usage_view.rs#L171-L193), [usage_view.rs:231-257](../../crates/pandamux-desktop/src/usage_view.rs#L231-L257)).
+- Every usage filter has a purpose-specific accessible name rather than relying on its short visual label ([usage_view.rs:34-57](../../crates/pandamux-desktop/src/usage_view.rs#L34-L57)).
+- Provider health is summarized as text containing status, authentication, freshness, evidence time, reason, and account badge ([settings_view.rs:636-652](../../crates/pandamux-desktop/src/settings_view.rs#L636-L652)).
+- Terminal keyboard conversion preserves platform shortcuts for the application and translates only terminal-intended keystrokes ([terminal_view.rs:437-493](../../crates/pandamux-desktop/src/terminal_view.rs#L437-L493)).
+
+Sources: [app_view.rs:117-185](../../crates/pandamux-desktop/src/app_view.rs#L117-L185), [app_view.rs:2192-2204](../../crates/pandamux-desktop/src/app_view.rs#L2192-L2204), [settings_view.rs:423-460](../../crates/pandamux-desktop/src/settings_view.rs#L423-L460), [settings_view.rs:636-652](../../crates/pandamux-desktop/src/settings_view.rs#L636-L652), [surfaces_panel.rs:1233-1285](../../crates/pandamux-desktop/src/surfaces_panel.rs#L1233-L1285), [terminal_view.rs:22-50](../../crates/pandamux-desktop/src/terminal_view.rs#L22-L50), [terminal_view.rs:437-493](../../crates/pandamux-desktop/src/terminal_view.rs#L437-L493), [usage_view.rs:34-57](../../crates/pandamux-desktop/src/usage_view.rs#L34-L57), [usage_view.rs:171-257](../../crates/pandamux-desktop/src/usage_view.rs#L171-L257)
+<!-- END:AUTOGEN pandamux_06_ui-shell_accessibility -->
 
 ---

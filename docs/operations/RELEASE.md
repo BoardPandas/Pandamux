@@ -4,138 +4,157 @@
 
 The following files were used as evidence for this page:
 
-- [CLAUDE.md:75-92](../../CLAUDE.md#L75-L92)
-- [.github/workflows/release.yml:1-172](../../.github/workflows/release.yml#L1-L172)
-- [.github/workflows/winget.yml:1-40](../../.github/workflows/winget.yml#L1-L40)
-- [crates/pandamux-app/Cargo.toml:1-73](../../crates/pandamux-app/Cargo.toml#L1-L73)
-- [crates/pandamux-app/src/updater.rs:1-262](../../crates/pandamux-app/src/updater.rs#L1-L262)
-- [crates/pandamux-app/build.rs:1-29](../../crates/pandamux-app/build.rs#L1-L29)
-- [CLAUDE.md:9-9](../../CLAUDE.md#L9)
-- [.claude/rules/commit-changelog.md:1-49](../../.claude/rules/commit-changelog.md#L1-L49)
+- [CLAUDE.md:142-170](../../CLAUDE.md#L142-L170)
+- [Cargo.toml:1-40](../../Cargo.toml#L1-L40)
+- [CHANGELOG.md:1-45](../../CHANGELOG.md#L1-L45)
+- [release.yml:1-179](../../.github/workflows/release.yml#L1-L179)
+- [winget.yml:1-39](../../.github/workflows/winget.yml#L1-L39)
+- [build-remote-musl.sh:1-38](../../scripts/build-remote-musl.sh#L1-L38)
+- [smoke-built-artifacts.ps1:1-93](../../scripts/smoke-built-artifacts.ps1#L1-L93)
+- [manifest.json:1-29](../../resources/remote-binaries/manifest.json#L1-L29)
 
 </details>
 
 # Release and Packaging
 
-> **Related Pages**: [Getting Started](../GETTING_STARTED.md), [Application Runtime](../core/APP_RUNTIME.md)
+> **Related Pages**: [Getting Started](../GETTING_STARTED.md), [SSH Remote Nodes](../features/SSH_REMOTE.md)
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_14_release_overview -->
-## Overview
+<!-- BEGIN:AUTOGEN pandamux_14_release_versioning -->
+## Version and Changelog
 
-The release pipeline is a tag-driven GitHub Actions workflow that runs entirely on `windows-latest`; a person never builds or signs a release locally (CLAUDE.md:75-76). Pushing a `v*` tag (or a manual `workflow_dispatch`) triggers `build-sign-release`, which builds both binaries, signs them with Azure Trusted Signing, bundles the signed `pandamux.exe` into a single NSIS `Setup.exe` via `cargo-packager`, signs that installer, and publishes a GitHub Release whose only asset is the installer (.github/workflows/release.yml#L1-L26). There is no Velopack feed or `latest.yml`; the in-app updater discovers new releases directly through the GitHub Releases API instead (.github/workflows/release.yml:1-7).
+The root workspace package version is the single version source inherited by the nine active crates. At this documentation commit it is `0.60.58`, the workspace uses Rust 1.89 and edition 2024, and the active desktop package is `pandamux-desktop` ([Cargo.toml:1-28](../../Cargo.toml#L1-L28)).
+
+| Artifact | Current source of identity |
+|---|---|
+| Rust crates and binaries | `[workspace.package] version` in root `Cargo.toml` ([Cargo.toml:23-28](../../Cargo.toml#L23-L28)) |
+| Human-readable change record | `CHANGELOG.md`, with current work under `Unreleased` ([CHANGELOG.md:1-11](../../CHANGELOG.md#L1-L11)) |
+| Release tag | No currently authorized tag procedure; the dormant workflow derives `v<workspace-version>` only as historical pipeline behavior ([release.yml:48-66](../../.github/workflows/release.yml#L48-L66)) |
+| Remote binary manifest | Checked-in placeholder is version `0.53.36`, not the current workspace version ([manifest.json:1-3](../../resources/remote-binaries/manifest.json#L1-L3), [Cargo.toml:23-24](../../Cargo.toml#L23-L24)) |
+
+Repository convention requires updating both `CHANGELOG.md` and the root version when preparing a commit, but a version bump or implementation commit does not grant release authorization ([CLAUDE.md:362-373](../../CLAUDE.md#L362-L373)). The current changelog explicitly retains open capacity-failover evidence, so its `Unreleased` content must not be read as a production-acceptance record ([CHANGELOG.md:8-28](../../CHANGELOG.md#L8-L28)).
+
+Sources: [Cargo.toml:1-28](../../Cargo.toml#L1-L28), [CHANGELOG.md:1-28](../../CHANGELOG.md#L1-L28), [CLAUDE.md:362-373](../../CLAUDE.md#L362-L373), [release.yml:48-66](../../.github/workflows/release.yml#L48-L66), [manifest.json:1-3](../../resources/remote-binaries/manifest.json#L1-L3)
+<!-- END:AUTOGEN pandamux_14_release_versioning -->
+
+---
+
+<!-- BEGIN:AUTOGEN pandamux_14_release_gates -->
+## Pre-Release Gates
+
+The maintained development guide defines the local validation gate and requires Cargo commands to run serially in one checkout ([CLAUDE.md:142-152](../../CLAUDE.md#L142-L152)). These checks establish source quality; they do not by themselves authorize packaging or prove native live acceptance.
+
+```bash
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+pwsh -File scripts/check-rust-boundaries.ps1
+node scripts/check-claude-wiring.mjs
+```
+
+Sources: [CLAUDE.md:142-152](../../CLAUDE.md#L142-L152)
+
+| Gate | Required evidence |
+|---|---|
+| Formatting and lint | Successful `rustfmt` and warning-denied workspace Clippy run |
+| Automated behavior | Successful workspace tests, plus relevant scoped crate tests when isolating failures ([CLAUDE.md:154-165](../../CLAUDE.md#L154-L165)) |
+| Architecture | Successful crate-boundary guard |
+| Repository wiring | Successful Claude wiring guard |
+| Built binaries | Server/CLI/desktop release builds, then the artifact smoke harness where applicable ([CLAUDE.md:168-168](../../CLAUDE.md#L168)) |
+| Native acceptance | The applicable acceptance matrix on exact artifacts; current release state says the GPUI rewrite has not passed R0.5 ([CLAUDE.md:362-366](../../CLAUDE.md#L362-L366)) |
+
+`smoke-built-artifacts.ps1` locates built server and CLI binaries, starts the server headlessly, waits up to 15 seconds for a protocol handshake, then verifies hello, ping, and identify before force-stopping the background process ([smoke-built-artifacts.ps1:1-27](../../scripts/smoke-built-artifacts.ps1#L1-L27), [smoke-built-artifacts.ps1:29-93](../../scripts/smoke-built-artifacts.ps1#L29-L93)). That is IPC smoke evidence, not desktop packaging, deployment, or production acceptance.
+
+Sources: [CLAUDE.md:142-168](../../CLAUDE.md#L142-L168), [CLAUDE.md:362-366](../../CLAUDE.md#L362-L366), [smoke-built-artifacts.ps1:1-93](../../scripts/smoke-built-artifacts.ps1#L1-L93)
+<!-- END:AUTOGEN pandamux_14_release_gates -->
+
+---
+
+<!-- BEGIN:AUTOGEN pandamux_14_release_windows -->
+## Windows Packaging
+
+There is no current supported Windows packaging procedure for the GPUI workspace. The repository guide explicitly says the checked-in release workflow contains historical packaging references and must not be used as evidence that the current workspace is releasable; final packaging, signing, publication, and updates belong to a later Phase 7 ([CLAUDE.md:362-366](../../CLAUDE.md#L362-L366)).
+
+The dormant workflow describes a prior design: build CLI and GUI binaries, sign executables with Azure Trusted Signing, package one NSIS installer with `cargo-packager`, sign the installer, and upload it ([release.yml:3-7](../../.github/workflows/release.yml#L3-L7), [release.yml:69-99](../../.github/workflows/release.yml#L69-L99), [release.yml:101-163](../../.github/workflows/release.yml#L101-L163)). It is not aligned with the active workspace because it still builds removed package `pandamux-app` with `iced-runtime`, while the workspace lists `pandamux-desktop` ([release.yml:68-73](../../.github/workflows/release.yml#L68-L73), [Cargo.toml:1-12](../../Cargo.toml#L1-L12)).
+
+| Historical workflow control | Current meaning |
+|---|---|
+| `RELEASES_ENABLED` must equal `true` | The job intentionally fails while releases remain disabled ([release.yml:31-37](../../.github/workflows/release.yml#L31-L37)) |
+| Azure signing inputs | Configuration retained for the historical design, not proof that current binaries were signed ([release.yml:79-99](../../.github/workflows/release.yml#L79-L99)) |
+| NSIS packaging retries | Historical network-resilience logic for `cargo-packager` ([release.yml:101-128](../../.github/workflows/release.yml#L101-L128)) |
+| `PandaMUX-Setup-<version>.exe` | Intended historical installer name, not a currently produced artifact ([release.yml:130-148](../../.github/workflows/release.yml#L130-L148)) |
+
+No local packaging command should be inferred from this dormant file. Before Windows release work begins, the workflow must be replaced or reconciled with the GPUI desktop and then verified on exact native artifacts.
+
+Sources: [CLAUDE.md:362-366](../../CLAUDE.md#L362-L366), [Cargo.toml:1-12](../../Cargo.toml#L1-L12), [release.yml:3-7](../../.github/workflows/release.yml#L3-L7), [release.yml:31-37](../../.github/workflows/release.yml#L31-L37), [release.yml:68-163](../../.github/workflows/release.yml#L68-L163)
+<!-- END:AUTOGEN pandamux_14_release_windows -->
+
+---
+
+<!-- BEGIN:AUTOGEN pandamux_14_release_remote -->
+## Remote Linux Artifacts
+
+Remote Linux binaries are a separate artifact path from the Windows desktop installer. `build-remote-musl.sh` targets x86_64 and aarch64 musl, builds `pandamux-server` plus `pandamux-cli`, and copies any resulting server and `pandamux` CLI binaries into architecture-specific resource directories while reporting SHA-256 and size ([build-remote-musl.sh:1-38](../../scripts/build-remote-musl.sh#L1-L38)).
+
+```text
+resources/remote-binaries/
+  x86_64-unknown-linux-musl/{pandamux-server,pandamux}
+  aarch64-unknown-linux-musl/{pandamux-server,pandamux}
+```
+
+This helper is not a strict release gate: when a normal cargo build fails it prints guidance and continues, and it copies only binaries that exist ([build-remote-musl.sh:14-35](../../scripts/build-remote-musl.sh#L14-L35)). The maintained non-release R0 harness instead refuses a dirty tree, requires both binaries, records commit/version/size/SHA-256, re-verifies the directory, and leaves publication disabled ([CLAUDE.md:350-360](../../CLAUDE.md#L350-L360)).
+
+The checked-in manifest currently contains zero-byte SHA-256 values for both architectures and reports version `0.53.36`; it is placeholder data and cannot verify current artifacts ([manifest.json:1-29](../../resources/remote-binaries/manifest.json#L1-L29)). Exact bootstrap requires size and SHA-256 verification before atomic placement on the node ([CLAUDE.md:351-357](../../CLAUDE.md#L351-L357)).
+
+Sources: [CLAUDE.md:350-360](../../CLAUDE.md#L350-L360), [build-remote-musl.sh:1-38](../../scripts/build-remote-musl.sh#L1-L38), [manifest.json:1-29](../../resources/remote-binaries/manifest.json#L1-L29)
+<!-- END:AUTOGEN pandamux_14_release_remote -->
+
+---
+
+<!-- BEGIN:AUTOGEN pandamux_14_release_pipeline -->
+## Tag and Publication Pipeline
+
+The only checked-in tag workflow is dormant and historical. A `v*` tag or manual dispatch enters the workflow, but the first substantive gate fails unless the repository variable `RELEASES_ENABLED` is explicitly set to `true` ([release.yml:9-16](../../.github/workflows/release.yml#L9-L16), [release.yml:24-37](../../.github/workflows/release.yml#L24-L37)). Current repository guidance says not to enable or rely on it for the GPUI rewrite ([CLAUDE.md:362-366](../../CLAUDE.md#L362-L366)).
 
 ```mermaid
 graph TD
-    A["Push v* tag"] --> B["Build CLI + GUI (cargo build --release)"]
-    B --> C["Sign pandamux.exe + pandamux-cli.exe (Azure Trusted Signing)"]
-    C --> D["cargo packager: bundle into NSIS Setup.exe"]
-    D --> E["Sign Setup.exe (Azure Trusted Signing)"]
-    E --> F["gh release: publish Setup.exe as the only asset"]
+    Trigger["Tag or Manual Trigger"] --> Gate{"Releases Enabled?"}
+    Gate -->|"No"| Stop["Workflow Fails Closed"]
+    Gate -->|"Yes"| Historical["Historical Build Steps"]
+    Historical --> Reconcile{"GPUI Reconciled?"}
+    Reconcile -->|"No"| Invalid["Not a Valid Release"]
+    Reconcile -->|"Yes"| Future["Future Phase 7 Pipeline"]
 ```
 
-The workflow triggers on `push` to tags matching `v*` or manual dispatch, and resolves the release version either from the pushed tag, a dispatch input, or the workspace `Cargo.toml` version as a fallback (.github/workflows/release.yml:9-58).
+For reference only, the dormant path resolves a tag, builds old package targets, signs executables, packages and signs an installer, uploads a workflow artifact, and creates a GitHub Release ([release.yml:48-179](../../.github/workflows/release.yml#L48-L179)). The winget workflow is independently disabled with `if: false`; its retained configuration would otherwise react to a published release and submit matching NSIS installers after a one-time package bootstrap ([winget.yml:1-17](../../.github/workflows/winget.yml#L1-L17), [winget.yml:20-39](../../.github/workflows/winget.yml#L20-L39)).
 
-Sources: [CLAUDE.md:75-92](../../CLAUDE.md#L75-L92), [release.yml:1-58](../../.github/workflows/release.yml#L1-L58)
-<!-- END:AUTOGEN pandamux_14_release_overview -->
+No deployment occurs in either workflow. GitHub Release publication and winget metadata submission would be distribution events, while host installation/activation and served-version verification would remain separate evidence.
+
+Sources: [CLAUDE.md:362-366](../../CLAUDE.md#L362-L366), [release.yml:9-179](../../.github/workflows/release.yml#L9-L179), [winget.yml:1-39](../../.github/workflows/winget.yml#L1-L39)
+<!-- END:AUTOGEN pandamux_14_release_pipeline -->
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_14_release_build -->
-## Build and Metadata Embedding
+<!-- BEGIN:AUTOGEN pandamux_14_release_evidence -->
+## Acceptance and Evidence Boundaries
 
-Before signing, the workflow builds both release binaries directly with cargo: `cargo build --release -p pandamux-cli` and `cargo build --release -p pandamux-app --features iced-runtime` (the GUI binary requires the `iced-runtime` feature) (release.yml:61-65).
+Release state must be reported as distinct facts. Implementation, local verification, commit, push, CI, packaging, signing, publication, installation, activation, health, served version, and live acceptance are not interchangeable; current guidance explicitly separates the first six and live acceptance ([CLAUDE.md:362-366](../../CLAUDE.md#L362-L366)).
 
-During the `pandamux-app` build, `build.rs` embeds the Windows icon and version metadata into `pandamux.exe` using `winresource`, setting `ProductName`, `FileDescription`, `CompanyName`, `InternalName`, `OriginalFilename`, and `LegalCopyright` (build.rs:14-27). `FileVersion`/`ProductVersion` are derived automatically from `CARGO_PKG_VERSION`, so the workspace `Cargo.toml` version is the single source driving both the running app's reported version and the embedded exe metadata (build.rs:1-8). A missing resource compiler is non-fatal locally: `res.compile()` failure only emits a `cargo:warning`, since a dev box without the Windows SDK should still build; CI (`windows-latest`) has `rc.exe` and embeds for real (build.rs:10-12, build.rs:25-27).
-
-| Metadata field | Value | Source |
+| Evidence statement | Minimum proof | Current repository status |
 |---|---|---|
-| ProductName | `"PandaMUX"` | (build.rs:19) |
-| FileDescription | `"PandaMUX"` | (build.rs:20) |
-| CompanyName | `"BoardPandas"` | (build.rs:21) |
-| InternalName | `"pandamux"` | (build.rs:22) |
-| OriginalFilename | `"pandamux.exe"` | (build.rs:23) |
-| LegalCopyright | `"Copyright (c) 2026 BoardPandas"` | (build.rs:24) |
-| FileVersion / ProductVersion | `CARGO_PKG_VERSION` (implicit) | (build.rs:7-8) |
+| Implemented | Source exists at a pinned commit | GPUI implementation exists |
+| Locally verified | Exact commands and exit results | Must be established per change; commands are documented, not presumed ([CLAUDE.md:142-165](../../CLAUDE.md#L142-L165)) |
+| CI passed | Exact commit has successful required jobs | Not established by these documentation files |
+| Packaged and signed | Exact current-workspace artifacts plus signature verification | Not established; historical workflow is not valid evidence ([CLAUDE.md:362-366](../../CLAUDE.md#L362-L366)) |
+| Published | Exact release/tag and assets exist | Not established; release workflow is disabled ([release.yml:31-37](../../.github/workflows/release.yml#L31-L37)) |
+| Distributed through winget | Matching winget-pkgs update accepted | Not established; workflow job is disabled ([winget.yml:25-39](../../.github/workflows/winget.yml#L25-L39)) |
+| Remote artifact accepted | Both binaries have exact commit/version/size/hash and pass required lifecycle checks | Placeholder manifest cannot establish this ([manifest.json:1-29](../../resources/remote-binaries/manifest.json#L1-L29)) |
+| Production accepted or shipped | Entire acceptance matrix closed on exact artifacts | Not established; R0.5 remains open ([CLAUDE.md:362-366](../../CLAUDE.md#L362-L366)) |
 
-Sources: [build.rs:1-29](../../crates/pandamux-app/build.rs#L1-L29), [release.yml:60-65](../../.github/workflows/release.yml#L60-L65)
-<!-- END:AUTOGEN pandamux_14_release_build -->
+The recommended interpretation is therefore conservative: source and test progress may be reported on their own merits, but PandaMUX must not currently be described as released, deployed, production-accepted, or shipped.
 
----
-
-<!-- BEGIN:AUTOGEN pandamux_14_release_signing -->
-## Signing and Packaging
-
-Signing secrets are fetched from Doppler via `dopplerhq/secrets-fetch-action`, gated by the single `DOPPLER_TOKEN` repo secret, and injected as environment variables (release.yml:71-75). Both `pandamux.exe` and `pandamux-cli.exe` are then signed in one pass with `azure/trusted-signing-action`, pointed at every `.exe` in `target\release` (`files-folder-filter: exe`), using SHA256 file and timestamp digests against Microsoft's RFC3161 timestamp authority (release.yml:77-91). The signing account, tenant, client, and certificate profile name all come from the injected Doppler `AZURE_*` variables; the `pandamux-ci-signing` service principal holds the Artifact Signing Certificate Profile Signer role on the `SupportForge` profile (Wellforce `HDBtrustedsigning` account) per CLAUDE.md (CLAUDE.md:87).
-
-Packaging happens only after signing. `cargo packager --release --formats nsis` reads `[package.metadata.packager]` in `crates/pandamux-app/Cargo.toml`, which lists the single `pandamux` binary plus the bundled resources (themes, sounds, icons, shell-integration, the orchestrator plugin, and `pandamux-cli.exe` copied in alongside) (Cargo.toml:50-68). Because there is no `before-packaging-command`, cargo-packager bundles the already-signed `pandamux.exe` unchanged rather than rebuilding it, so the Azure signature on the exe survives packaging intact (Cargo.toml:44-49, release.yml:93-99). The packaging step retries up to 4 times with backoff to absorb transient TLS resets when cargo-packager downloads NSIS and its plugin from GitHub (release.yml:100-121). NSIS is configured for a current-user install with app data under `$LOCALAPPDATA/pandamux` (Cargo.toml:70-72).
-
-After the installer is located and renamed to `PandaMUX-Setup-<version>.exe` (release.yml:122-140), it is signed a second time with the same Azure Trusted Signing action, so signing is the last mutation of any shipped binary before it is uploaded (release.yml:143-155).
-
-| Resource | Target inside install dir | Source |
-|---|---|---|
-| `resources/themes` | `resources/themes` | (Cargo.toml:62) |
-| `resources/sounds` | `resources/sounds` | (Cargo.toml:63) |
-| `resources/icons` | `resources/icons` | (Cargo.toml:64) |
-| `resources/shell-integration` | `resources/shell-integration` | (Cargo.toml:65) |
-| `resources/pandamux-orchestrator` | `resources/pandamux-orchestrator` | (Cargo.toml:66) |
-| `target/release/pandamux-cli.exe` | `pandamux-cli.exe` | (Cargo.toml:67) |
-
-Sources: [release.yml:67-155](../../.github/workflows/release.yml#L67-L155), [Cargo.toml:44-73](../../crates/pandamux-app/Cargo.toml#L44-L73)
-<!-- END:AUTOGEN pandamux_14_release_signing -->
-
----
-
-<!-- BEGIN:AUTOGEN pandamux_14_release_updater -->
-## In-App Update Discovery
-
-Because the GitHub Release carries only the signed `Setup.exe`, the running app discovers updates itself against the GitHub Releases API rather than a generated feed file (updater.rs:1-7). `RELEASES_LATEST_URL` points at `https://api.github.com/repos/BoardPandas/Pandamux/releases/latest` (updater.rs:18-19), and `parse_latest_release` distills the response into a `ReleaseInfo`, rejecting drafts and prereleases and picking the first asset whose name ends in `.exe` as the installer URL (updater.rs:65-82).
-
-Version comparison ignores any leading `v` and any pre-release/build suffix, comparing only the numeric major/minor/patch triple (`is_newer`, `semver_key`) (updater.rs:88-104). The periodic check additionally enforces a quarantine window (`DEFAULT_QUARANTINE_SECS = 6 * 60 * 60`, i.e. 6 hours) so a just-published release is not offered to everyone immediately; `should_offer` requires both a newer version and that the release's `published_at` timestamp is at least `quarantine_secs` old (updater.rs:21-24, 109-125). The Settings "Check for updates" button instead calls `check_latest`, which ignores the quarantine and returns one of `UpToDate` / `Newer(ReleaseInfo)` / `Failed(String)` (updater.rs:177-207).
-
-On Install, `download_and_launch_installer` downloads the installer URL to `PandaMUX-Setup.exe` in the OS temp directory and spawns it detached before the caller closes the running app so NSIS can replace the files (updater.rs:209-245).
-
-| Function | Purpose |
-|---|---|
-| `parse_latest_release` | Parse the GitHub API JSON into `ReleaseInfo`, filtering drafts/prereleases ([updater.rs:65-82](../../crates/pandamux-app/src/updater.rs#L65-L82)) |
-| `is_newer` | Strict semver compare ignoring pre-release/build suffixes ([updater.rs:91-93](../../crates/pandamux-app/src/updater.rs#L91-L93)) |
-| `should_offer` | Newer AND past the quarantine window ([updater.rs:109-125](../../crates/pandamux-app/src/updater.rs#L109-L125)) |
-| `check_for_update` | Periodic/background check, quarantine-gated ([updater.rs:166-175](../../crates/pandamux-app/src/updater.rs#L166-L175)) |
-| `check_latest` | On-demand check, quarantine-ignored ([updater.rs:196-207](../../crates/pandamux-app/src/updater.rs#L196-L207)) |
-| `download_and_launch_installer` | Fetch + spawn the installer ([updater.rs:213-245](../../crates/pandamux-app/src/updater.rs#L213-L245)) |
-
-Sources: [updater.rs:1-262](../../crates/pandamux-app/src/updater.rs#L1-L262)
-<!-- END:AUTOGEN pandamux_14_release_updater -->
-
----
-
-<!-- BEGIN:AUTOGEN pandamux_14_release_distribution -->
-## Distribution and winget
-
-A second workflow, `winget`, runs on `release: types: [released]` (or manual dispatch) and publishes each release to the Windows Package Manager for Issue #32's low-friction distribution channel (winget.yml:1-3, 18-24). It is scoped to `BoardPandas/Pandamux` and skips silently (no noisy failure) if `WINGET_TOKEN` has not been configured (winget.yml:26-32). `vedantmgoyal9/winget-releaser` is invoked with `identifier: BoardPandas.PandaMUX` and `installers-regex: 'PandaMUX-Setup-.*\.exe$'`, matching the renamed installer asset produced by the release workflow (winget.yml:33-39).
-
-Because the native app ships a signed NSIS installer rather than the old portable zip, the winget-pkgs package (originally bootstrapped as `InstallerType: zip`) needs a one-time manual re-bootstrap PR with `InstallerType: nsis` before `winget-releaser` can auto-update it going forward; after that one-time PR, every published GitHub Release auto-opens a winget-pkgs update PR (winget.yml:4-17).
-
-Sources: [winget.yml:1-40](../../.github/workflows/winget.yml#L1-L40)
-<!-- END:AUTOGEN pandamux_14_release_distribution -->
-
----
-
-<!-- BEGIN:AUTOGEN pandamux_14_release_checklist -->
-## Release Checklist
-
-To cut a release, follow the numbered steps documented in CLAUDE.md's Release Process section (CLAUDE.md:79-83):
-
-1. Update `CHANGELOG.md` and bump `[workspace.package] version` in the root `Cargo.toml` (see `.claude/rules/commit-changelog.md` for the SemVer bump rules) (CLAUDE.md:80).
-2. Commit the changes, then tag: `git tag -a v<VERSION> -m "PandaMUX v<VERSION>"` and `git push origin v<VERSION>` (CLAUDE.md:81).
-3. The workflow builds, signs, packages, signs the installer, and publishes the Release (CLAUDE.md:82).
-
-The version is a single source of truth: `[workspace.package] version` in the root `Cargo.toml`; every crate inherits it via `version.workspace = true`, and it drives `CARGO_PKG_VERSION` which both the embedded exe metadata (see [Build and Metadata Embedding](#build-and-metadata-embedding)) and the in-app updater's version comparison rely on (CLAUDE.md:9). Every commit bumps at least the Patch segment; Major bumps are never made autonomously and require explicit user sign-off (.claude/rules/commit-changelog.md:24-31).
-
-For local packaging validation without signing (optional, no `gh release`), CLAUDE.md documents building both binaries and running `cargo packager --release --formats nsis --out-dir dist` directly (CLAUDE.md:85-92).
-
-Sources: [CLAUDE.md:75-92](../../CLAUDE.md#L75-L92), [.claude/rules/commit-changelog.md:1-49](../../.claude/rules/commit-changelog.md#L1-L49)
-<!-- END:AUTOGEN pandamux_14_release_checklist -->
+Sources: [CLAUDE.md:142-165](../../CLAUDE.md#L142-L165), [CLAUDE.md:362-366](../../CLAUDE.md#L362-L366), [release.yml:31-37](../../.github/workflows/release.yml#L31-L37), [winget.yml:25-39](../../.github/workflows/winget.yml#L25-L39), [manifest.json:1-29](../../resources/remote-binaries/manifest.json#L1-L29)
+<!-- END:AUTOGEN pandamux_14_release_evidence -->
 
 ---

@@ -56,6 +56,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Rebuilt the maintained wiki for the current GPUI architecture.** The
+  generated documentation now maps all 142 Rust source modules across the nine
+  active crates, documents provider routing and explicit login behavior, and
+  separates current implementation authority from archived Iced material.
+  Root contributor guidance now routes readers to the current docs without
+  implying that Phase 4 production acceptance has completed. Version 0.60.58
+  records documentation and release-metadata changes only; it adds no new
+  executable behavior or release claim.
+
 - **Recorded the real external-service interruption Pass for P4-C5.** The
   unchanged exact 0.60.52 Galahad server opened one disposable Webhook.site
   HTTPS endpoint and organization policy selected real `claude-default` plus

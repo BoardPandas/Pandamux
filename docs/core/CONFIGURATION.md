@@ -4,238 +4,172 @@
 
 The following files were used as evidence for this page:
 
-- [crates/pandamux-core/src/config.rs:1-361](../../crates/pandamux-core/src/config.rs#L1-L361)
-- [crates/pandamux-core/src/settings.rs:1-241](../../crates/pandamux-core/src/settings.rs#L1-L241)
-- [crates/pandamux-core/src/keymap.rs:1-838](../../crates/pandamux-core/src/keymap.rs#L1-L838)
-- [crates/pandamux-core/src/home.rs:1-188](../../crates/pandamux-core/src/home.rs#L1-L188)
-- [crates/pandamux-core/src/i18n.rs:1-135](../../crates/pandamux-core/src/i18n.rs#L1-L135)
-- [crates/pandamux-core/src/state.rs:1-40](../../crates/pandamux-core/src/state.rs#L1-L40)
-- [crates/pandamux-ui/src/theme.rs:1-480](../../crates/pandamux-ui/src/theme.rs#L1-L480)
-- [crates/pandamux-app/src/persistence.rs:1-806](../../crates/pandamux-app/src/persistence.rs#L1-L806)
-- [crates/pandamux-app/src/iced_runtime.rs:383-403](../../crates/pandamux-app/src/iced_runtime.rs#L383-L403)
-- [crates/pandamux-app/src/iced_runtime.rs:4436-4461](../../crates/pandamux-app/src/iced_runtime.rs#L4436-L4461)
-- [crates/pandamux-app/src/backend.rs:826-842](../../crates/pandamux-app/src/backend.rs#L826-L842)
-- [resources/shell-integration/pandamux-bash-integration.sh:1-67](../../resources/shell-integration/pandamux-bash-integration.sh#L1-L67)
+- [crates/pandamux-core/src/settings.rs:1-440](../../crates/pandamux-core/src/settings.rs#L1-L440)
+- [crates/pandamux-core/src/organization.rs:8-194](../../crates/pandamux-core/src/organization.rs#L8-L194)
+- [crates/pandamux-core/src/environment.rs:1-68](../../crates/pandamux-core/src/environment.rs#L1-L68)
+- [crates/pandamux-core/src/provider_config.rs:1-149](../../crates/pandamux-core/src/provider_config.rs#L1-L149)
+- [crates/pandamux-core/src/ssh.rs:1-341](../../crates/pandamux-core/src/ssh.rs#L1-L341)
+- [crates/pandamux-providers/src/profiles.rs:1-145](../../crates/pandamux-providers/src/profiles.rs#L1-L145)
+- [crates/pandamux-remote/src/config.rs:1-93](../../crates/pandamux-remote/src/config.rs#L1-L93)
+- [crates/pandamux-server/src/runtime.rs:1-127](../../crates/pandamux-server/src/runtime.rs#L1-L127)
 
 </details>
 
 # Configuration
 
-> **Related Pages**: [Core Domain and State](CORE_DOMAIN.md), [Shell Integration and Status](../features/SHELL_INTEGRATION.md)
+> **Related Pages**: [Core Domain](CORE_DOMAIN.md), [SSH Remote Nodes](../features/SSH_REMOTE.md), [Provider Routing and Capacity](../features/PROVIDER_ROUTING.md)
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_08_configuration_layers -->
-## Configuration Sources
+<!-- BEGIN:AUTOGEN pandamux_08_configuration_storage -->
+## Configuration and Runtime Storage
 
-PandaMUX's shipping runtime configuration is JSON. [`UserSettings`](../../crates/pandamux-core/src/settings.rs#L22-L27) is persisted as `config/settings.json` under the app's per-user data directory. That directory is resolved by [`SessionStore::default_dir`](../../crates/pandamux-app/src/persistence.rs#L397-L405): `%APPDATA%/pandamux` when `APPDATA` is set (Windows), else `$HOME/.pandamux`, else the OS temp directory as a last resort (crates/pandamux-app/src/persistence.rs:397-405). `SettingsStore`, `SshProfileStore`, and `LauncherPrefsStore` all place their files under a `config/` subfolder of that same base directory (their `default_dir()` methods delegate to `SessionStore::default_dir().join("config")`) (crates/pandamux-app/src/persistence.rs:127-129,264-266,341-343).
+PandaMUX separates durable user configuration from the short-lived runtime discovery record. `UserSettings` is the camelCase schema shared by the Settings UI and settings RPC helpers, while `server.json` tells clients where and how to authenticate to a running server ([settings.rs:1-8](../../crates/pandamux-core/src/settings.rs#L1-L8), [runtime.rs:7-27](../../crates/pandamux-server/src/runtime.rs#L7-L27)).
 
-`SettingsStore::load` returns `UserSettings::default()` when `config/settings.json` is missing, so a fresh install has no file to create until the first explicit save (crates/pandamux-app/src/persistence.rs:360-368). Every field on `UserSettings` and its nested structs carries `#[serde(default)]`, so a file written by an older build (or a hand-edited partial file) still loads: missing keys silently take their compiled-in default (crates/pandamux-core/src/settings.rs:20-27).
-
-Settings persistence is versioned and defensive: on load, if the on-disk `version` is older than `SETTINGS_SCHEMA_VERSION`, the store copies the original file to `settings.v<old>.bak.json` before rewriting it at the current version; a *newer* on-disk version is rejected outright as `SettingsStoreError::UnsupportedVersion`; and a file that fails to parse is reported as `SettingsStoreError::Corrupt` and left untouched on disk rather than being clobbered (crates/pandamux-app/src/persistence.rs:358-388). The `SshProfileStore` (`ssh-profiles.json`) and the session store follow the identical backup-then-migrate policy (crates/pandamux-app/src/persistence.rs:144-173).
-
-Configuration is distinct from session **state**: the Home dashboard layout ([`HomeLayout`](../../crates/pandamux-core/src/home.rs#L18-L23), an ordered arrangement of pinned live-session panes) is a field of `AppState` (crates/pandamux-core/src/state.rs:30) and round-trips through `session.json` / named-session files, not through `config/settings.json`; it is user *state*, not a settings knob.
-
-| Location | Contents | Resolved by |
+| Record | Contents | Lifecycle and protection |
 |---|---|---|
-| `<default_dir>/config/settings.json` | `UserSettings` (UI, terminal, keyboard) | [`SettingsStore`](../../crates/pandamux-app/src/persistence.rs#L332-L389) |
-| `<default_dir>/config/ssh-profiles.json` | Saved SSH host profiles (secretless) | [`SshProfileStore`](../../crates/pandamux-app/src/persistence.rs#L118-L174) |
-| `<default_dir>/config/launcher.json` | Pinned favorites + recent launches | [`LauncherPrefsStore`](../../crates/pandamux-app/src/persistence.rs#L255-L292) |
-| `<default_dir>/sessions/session.json` | Auto-restored workspace/pane tree + `HomeLayout` | [`SessionStore`](../../crates/pandamux-app/src/persistence.rs#L391-L531) |
-| `resources/themes/*.theme` | Bundled Ghostty-style terminal color schemes | [`themes_dir`](../../crates/pandamux-app/src/iced_runtime.rs#L4439-L4461) |
+| `UserSettings` | UI, terminal, keyboard, organizations, failover pools, tier mapping, provider instances, environments, and advanced settings ([settings.rs:20-39](../../crates/pandamux-core/src/settings.rs#L20-L39)) | Versioned and normalized after loading or mutation ([settings.rs:14-18](../../crates/pandamux-core/src/settings.rs#L14-L18), [settings.rs:222-292](../../crates/pandamux-core/src/settings.rs#L222-L292)) |
+| `server.json` | PID, role, protocol and server versions, environment, endpoint, optional proxy path, control token, MCP token, ownership flag, and start time ([runtime.rs:9-27](../../crates/pandamux-server/src/runtime.rs#L9-L27)) | Atomically replaced, read only after validation, and removed on shutdown ([runtime.rs:29-80](../../crates/pandamux-server/src/runtime.rs#L29-L80)) |
+| Provider profile directory | Per-instance provider login and tool state | Relative configured paths resolve beneath the PandaMUX base directory; absolute configured paths remain authoritative ([profiles.rs:16-39](../../crates/pandamux-providers/src/profiles.rs#L16-L39)) |
 
-Sources: [persistence.rs:1-19](../../crates/pandamux-app/src/persistence.rs#L1-L19), [persistence.rs:391-405](../../crates/pandamux-app/src/persistence.rs#L391-L405), [settings.rs:1-27](../../crates/pandamux-core/src/settings.rs#L1-L27), [home.rs:1-23](../../crates/pandamux-core/src/home.rs#L1-L23), [state.rs:30](../../crates/pandamux-core/src/state.rs#L30)
-<!-- END:AUTOGEN pandamux_08_configuration_layers -->
+On Unix, runtime directories are created with mode `0700`, runtime records with mode `0600`, and reads reject symlinks, non-files, unsafe ownership, or group/other permission bits ([runtime.rs:31-59](../../crates/pandamux-server/src/runtime.rs#L31-L59), [runtime.rs:83-126](../../crates/pandamux-server/src/runtime.rs#L83-L126)).
 
----
-
-<!-- BEGIN:AUTOGEN pandamux_08_configuration_config-toml -->
-## Settings File Format
-
-`<default_dir>/config/settings.json` is a pretty-printed JSON serialization of [`UserSettings`](../../crates/pandamux-core/src/settings.rs#L20-L37). The file is optional: when it is absent, PandaMUX uses compiled defaults, and the first explicit settings save creates it atomically ([persistence.rs:341-365](../../crates/pandamux-app/src/persistence.rs#L341-L365)). A complete default file has this shape:
-
-```json
-{
-  "version": 1,
-  "ui": {
-    "theme": "dark",
-    "accent": "teal",
-    "showStatusBar": true
-  },
-  "terminal": {
-    "scrollbackLines": 10000,
-    "welcomePromptEnabled": true,
-    "rightClickPasteOptin": false,
-    "confirmCloseOnRunning": true
-  },
-  "keyboard": {
-    "passThrough": [],
-    "overrides": {}
-  }
-}
-```
-
-All structs use camelCase keys and `#[serde(default)]`, so partial older files inherit defaults for omitted fields ([settings.rs:20-27](../../crates/pandamux-core/src/settings.rs#L20-L27), [settings.rs:53-106](../../crates/pandamux-core/src/settings.rs#L53-L106)). On load, older schema versions are backed up and migrated, newer versions are rejected, and invalid JSON is preserved untouched ([persistence.rs:358-387](../../crates/pandamux-app/src/persistence.rs#L358-L387)). The superseded TOML proposal is retained only as historical context in [`docs/archive/CONFIG_TOML_LEGACY.md`](../archive/CONFIG_TOML_LEGACY.md).
-
-Sources: [settings.rs:14-106](../../crates/pandamux-core/src/settings.rs#L14-L106), [persistence.rs:327-388](../../crates/pandamux-app/src/persistence.rs#L327-L388)
-<!-- END:AUTOGEN pandamux_08_configuration_config-toml -->
+Sources: [settings.rs:1-39](../../crates/pandamux-core/src/settings.rs#L1-L39), [runtime.rs:7-126](../../crates/pandamux-server/src/runtime.rs#L7-L126), [profiles.rs:16-39](../../crates/pandamux-providers/src/profiles.rs#L16-L39)
+<!-- END:AUTOGEN pandamux_08_configuration_storage -->
 
 ---
 
 <!-- BEGIN:AUTOGEN pandamux_08_configuration_settings -->
-## Settings Model
+## Application Settings
 
-[`UserSettings`](../../crates/pandamux-core/src/settings.rs#L22-L27) is the single schema behind `config/settings.json`, the Settings UI, and the `config.get` / `config.set` pipe RPC methods (crates/pandamux-core/src/settings.rs:1-8). It is versioned (`SETTINGS_SCHEMA_VERSION = 1`) and every field defaults via `#[serde(default)]` so older files keep loading (crates/pandamux-core/src/settings.rs:14,20-27). `UserSettings::normalize` clamps `terminal.scrollbackLines` into `[SCROLLBACK_LINES_MIN, SCROLLBACK_LINES_MAX]` (1,000-200,000) after every load and every `settings_set` call (crates/pandamux-core/src/settings.rs:16-18,41-47,152-157).
+The settings schema is at version 7. Every top-level field participates in Serde defaults, allowing older or partial serialized settings to gain current defaults before normalization ([settings.rs:14-39](../../crates/pandamux-core/src/settings.rs#L14-L39), [settings.rs:205-220](../../crates/pandamux-core/src/settings.rs#L205-L220)).
 
-| Field (dotted, camelCase) | Type | Default | Meaning |
-|---|---|---|---|
-| `version` | `u32` | `1` | Schema version; not settable via `config.set` (crates/pandamux-core/src/settings.rs#L23,L130-L132) |
-| `ui.theme` | `String` | `"dark"` | Chrome theme name (`"dark"` \| `"light"`); unknown values fall back at the mapping layer (crates/pandamux-core/src/settings.rs#L56-L67) |
-| `ui.accent` | `String` | `"teal"` | Accent color name (`"teal"` \| `"gold"` \| `"blue"` \| `"mauve"`) (crates/pandamux-core/src/settings.rs#L58,L66) |
-| `ui.showStatusBar` | `bool` | `true` | Show the status bar (crates/pandamux-core/src/settings.rs#L60,L68) |
-| `terminal.scrollbackLines` | `u32` | `10,000` | Scrollback history per session, clamped to 1,000-200,000 (crates/pandamux-core/src/settings.rs#L77,L90,L16-L18) |
-| `terminal.welcomePromptEnabled` | `bool` | `true` | Show the tool chooser on fresh bare terminals (spec 2.7) (crates/pandamux-core/src/settings.rs#L78-L79,L91) |
-| `terminal.rightClickPasteOptin` | `bool` | `false` | Opt-in classic right-click paste; off by default so right-click opens the context menu (crates/pandamux-core/src/settings.rs#L80-L82,L92) |
-| `terminal.confirmCloseOnRunning` | `bool` | `true` | Confirm closing a tab whose shell is still running (crates/pandamux-core/src/settings.rs#L83-L84,L93) |
-| `keyboard.passThrough` | `Vec<String>` | `[]` | Chords always forwarded to the terminal even when bound (crates/pandamux-core/src/settings.rs#L101-L103) |
-| `keyboard.overrides` | `BTreeMap<String, Option<String>>` | `{}` | Action id → chord string, or `null` to unbind; unknown ids/unparseable chords warn and keep the default (crates/pandamux-core/src/settings.rs#L104-L106) |
+| Group | Important fields | Defaults and validation |
+|---|---|---|
+| `ui` | `theme`, `accent`, `showStatusBar`, sounds, notifications | Dark theme, teal accent, and all three booleans enabled ([settings.rs:295-320](../../crates/pandamux-core/src/settings.rs#L295-L320)) |
+| `terminal` | Scrollback, welcome chooser, right-click paste, close confirmation, preferred shell | 10,000 lines, chooser enabled, right-click paste disabled, confirmation enabled, no preferred shell ([settings.rs:322-348](../../crates/pandamux-core/src/settings.rs#L322-L348)) |
+| `keyboard` | `passThrough`, `overrides` | Empty collections; overrides map action IDs to a chord or `null` to unbind ([settings.rs:381-390](../../crates/pandamux-core/src/settings.rs#L381-L390)) |
+| `advanced` | Global concurrency, checkpoint and attachment limits, usage scanning/sync, capacity routing, failover | Concurrency 8, 50 checkpoints, and all four Phase 4 switches enabled ([settings.rs:350-378](../../crates/pandamux-core/src/settings.rs#L350-L378)) |
 
-`settings_get`/`settings_set` (crates/pandamux-core/src/settings.rs:111-158) operate on dotted camelCase paths against the serialized JSON tree: `settings_get` walks `serde_json::Value::get` segment by segment and errors on an unknown key (crates/pandamux-core/src/settings.rs:111-123); `settings_set` rejects an empty path or `"version"` outright, requires every path segment to already exist as an object key (except under `keyboard.overrides`, where insertion is allowed), and re-deserializes the whole tree back into `UserSettings` so a type mismatch is rejected with the serde error rather than silently corrupting the struct (crates/pandamux-core/src/settings.rs:129-158).
+`terminal.scrollbackLines` is clamped to 1,000 through 200,000. Zero global concurrency becomes 1, and zero checkpoint retention becomes 10 during normalization ([settings.rs:16-18](../../crates/pandamux-core/src/settings.rs#L16-L18), [settings.rs:282-291](../../crates/pandamux-core/src/settings.rs#L282-L291)).
+
+Settings RPCs use dotted camelCase paths. Reads reject unknown segments; writes reject an empty key, the `version` field, unknown paths, and values that cannot deserialize back into the full schema. Only `keyboard.overrides` permits insertion of a new leaf ([settings.rs:392-440](../../crates/pandamux-core/src/settings.rs#L392-L440)).
 
 ```rust
-// crates/pandamux-core/src/settings.rs:109-123
-pub fn settings_get(settings: &UserSettings, key: &str) -> Result<Value, String> {
-    let root = serde_json::to_value(settings).map_err(|error| error.to_string())?;
-    if key.is_empty() {
-        return Ok(root);
-    }
-    let mut node = &root;
-    for segment in key.split('.') {
-        node = node
-            .get(segment)
-            .ok_or_else(|| format!("unknown settings key: {key}"))?;
-    }
-    Ok(node.clone())
-}
+let value = settings_get(&settings, "terminal.scrollbackLines")?;
+settings_set(&mut settings, "ui.theme", serde_json::json!("light"))?;
 ```
 
-Sources: [settings.rs:1-241](../../crates/pandamux-core/src/settings.rs#L1-L241), [persistence.rs:294-389](../../crates/pandamux-app/src/persistence.rs#L294-L389)
+Sources: [settings.rs:14-39](../../crates/pandamux-core/src/settings.rs#L14-L39), [settings.rs:205-220](../../crates/pandamux-core/src/settings.rs#L205-L220), [settings.rs:282-440](../../crates/pandamux-core/src/settings.rs#L282-L440)
 <!-- END:AUTOGEN pandamux_08_configuration_settings -->
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_08_configuration_keymap -->
-## Keymap
+<!-- BEGIN:AUTOGEN pandamux_08_configuration_organizations -->
+## Organizations and Environments
 
-[`Keymap`](../../crates/pandamux-core/src/keymap.rs#L420-L423) is a single, framework-agnostic table of `(KeyChord, Action)` bindings that drives both the Iced key-event decoder and every display surface (Settings Keyboard tab, cheat sheet, palette hints), so the label list can never drift from the decode table (crates/pandamux-core/src/keymap.rs:1-12). `Keymap::defaults()` builds the built-in table (crates/pandamux-core/src/keymap.rs:434-481); `Keymap::with_settings` layers the user's `keyboard.overrides` and `keyboard.passThrough` on top, warning (and keeping the default) on an unknown action id or an unparseable chord string (crates/pandamux-core/src/keymap.rs:483-519). An override with a `null` chord unbinds the action entirely; a chord override both replaces every default chord for that action and steals the chord away from any other action bound to it (crates/pandamux-core/src/keymap.rs:493-509).
+Organizations define policy and budget boundaries, while environments identify the machine on which threads, worktrees, and schedules run. Both live inside `UserSettings` ([settings.rs:27-38](../../crates/pandamux-core/src/settings.rs#L27-L38)).
 
-Each `Action` variant carries a stable `id()` string (the key used in `keyboard.overrides`), a display `label()`, and a `category()` for cheat-sheet grouping (crates/pandamux-core/src/keymap.rs:258-363,375-408). `allowed_with_overlay()` marks the handful of actions (command palette, settings, cheat sheet) that still fire while a centered overlay is open; every other action is swallowed instead of acting behind the overlay's back, e.g. so Ctrl+W typed into the palette does not close a pane (crates/pandamux-core/src/keymap.rs:365-373).
-
-| Chord | Action | Category |
+| Model | Key fields | Enforcement |
 |---|---|---|
-| `Ctrl+K` / `Ctrl+Shift+P` | `commandPalette` | General (crates/pandamux-core/src/keymap.rs#L445-L446) |
-| `Ctrl+T` | `newSession` | General (crates/pandamux-core/src/keymap.rs#L447) |
-| `Ctrl+,` | `openSettings` | General (crates/pandamux-core/src/keymap.rs#L448) |
-| `Ctrl+F` | `find` | General (crates/pandamux-core/src/keymap.rs#L449) |
-| `Ctrl+/` / `F1` | `cheatSheet` | General (crates/pandamux-core/src/keymap.rs#L454-L455) |
-| `Ctrl+D` | `splitRight` | Panes & tabs (crates/pandamux-core/src/keymap.rs#L456) |
-| `Ctrl+Shift+D` | `splitDown` | Panes & tabs (crates/pandamux-core/src/keymap.rs#L457) |
-| `Ctrl+W` | `closeTab` | Panes & tabs (crates/pandamux-core/src/keymap.rs#L458) |
-| `Ctrl+Enter` | `zoomPane` | Panes & tabs (crates/pandamux-core/src/keymap.rs#L459) |
-| `Ctrl+Tab` / `Ctrl+Shift+Tab` | `nextTab` / `prevTab` | Panes & tabs (crates/pandamux-core/src/keymap.rs#L460-L461) |
-| `Ctrl+0` / `Ctrl+Home` | `goHome` | Projects (crates/pandamux-core/src/keymap.rs#L462-L463) |
-| `Ctrl+1`..`Ctrl+9` | `focusProject{n}` | Projects (crates/pandamux-core/src/keymap.rs#L474-L476) |
-| `Ctrl+C` | `copyOrInterrupt` | Terminal (crates/pandamux-core/src/keymap.rs#L464) |
-| `Ctrl+Shift+C` | `copy` | Terminal (crates/pandamux-core/src/keymap.rs#L465) |
-| `Ctrl+V` / `Ctrl+Shift+V` | `paste` | Terminal (crates/pandamux-core/src/keymap.rs#L466-L467) |
-| `Shift+PageUp` / `Shift+PageDown` | `scrollPageUp` / `scrollPageDown` | Terminal (crates/pandamux-core/src/keymap.rs#L468-L472) |
+| `OrganizationPolicy` | Projects, allowed provider instances, allowed subscriptions, failover pools, tier mapping, concurrency, daily budget, Broadside policy, revision | Requires identifiers, display name, nonzero revision, nonempty provider and subscription allowlists, unique references, and valid tier targets ([organization.rs:168-194](../../crates/pandamux-core/src/organization.rs#L168-L194), [organization.rs:360-419](../../crates/pandamux-core/src/organization.rs#L360-L419)) |
+| `FailoverPool` | Members, capability requirements, revision | Rejects empty pools, duplicate instances, missing models, preferences above 1,000, and capability mismatches ([organization.rs:36-62](../../crates/pandamux-core/src/organization.rs#L36-L62), [organization.rs:112-165](../../crates/pandamux-core/src/organization.rs#L112-L165)) |
+| `Environment` | Kind, display name, status, platform, server version, schedule count, last error, provider overrides | Local and SSH environments share one routing record ([environment.rs:4-24](../../crates/pandamux-core/src/environment.rs#L4-L24)) |
 
-Digit chords match by *physical* scan position (`KeySpec::Digit`), not the shifted character, so `Ctrl+1`..`Ctrl+9` resolve correctly on layouts (e.g. AZERTY) where the digit row requires Shift (crates/pandamux-core/src/keymap.rs:121-124,521-536). `Keymap::resolve` checks pass-through chords first (returning `None` so the press reaches the terminal), then the physical digit, then the lowercased character, then the named key, in that order (crates/pandamux-core/src/keymap.rs:524-571).
+The default environment is `env_local`, named `Local Machine`, with ready status, detected OS and architecture, current server version, and no provider overrides ([environment.rs:26-43](../../crates/pandamux-core/src/environment.rs#L26-L43)). Environment kinds are `local` or `ssh` with a stable SSH profile ID; status distinguishes connecting, bootstrapping, ready, degraded, offline, disconnected, unreachable, and explicit error states ([environment.rs:46-68](../../crates/pandamux-core/src/environment.rs#L46-L68)).
 
-Sources: [keymap.rs:1-838](../../crates/pandamux-core/src/keymap.rs#L1-L838)
-<!-- END:AUTOGEN pandamux_08_configuration_keymap -->
+Organization authorization is fail closed: provider instances and subscription keys must be allowlisted before routing, and failover candidates are hard-filtered by those allowlists before scoring ([organization.rs:421-492](../../crates/pandamux-core/src/organization.rs#L421-L492)).
+
+Sources: [settings.rs:27-38](../../crates/pandamux-core/src/settings.rs#L27-L38), [organization.rs:36-194](../../crates/pandamux-core/src/organization.rs#L36-L194), [organization.rs:360-492](../../crates/pandamux-core/src/organization.rs#L360-L492), [environment.rs:4-68](../../crates/pandamux-core/src/environment.rs#L4-L68)
+<!-- END:AUTOGEN pandamux_08_configuration_organizations -->
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_08_configuration_themes -->
-## Themes and Localization
+<!-- BEGIN:AUTOGEN pandamux_08_configuration_providers -->
+## Provider Instances and Profiles
 
-Terminal color themes are modeled by [`Theme`](../../crates/pandamux-core/src/config.rs#L20-L30) in `pandamux-core::config` (background, foreground, cursor, selection background, and up to a 16-entry ANSI palette) and loaded either from a bundled Ghostty-style `.theme` file via `parse_ghostty_theme` (line-oriented `key = value`, `#` comments, unknown keys ignored) or imported from a Windows Terminal `settings.json` via `import_windows_terminal` (crates/pandamux-core/src/config.rs#L61-L114,L137-L192). [`ThemeStore`](../../crates/pandamux-core/src/config.rs#L196-L248) holds the loaded set plus which theme is active, inserting by name (replacing any existing theme of the same name) and refusing to activate an unknown name (crates/pandamux-core/src/config.rs#L206-L239). 29 bundled schemes ship under `resources/themes/*.theme` (e.g. `Dracula.theme`, `Nord.theme`, `Tokyo Night.theme`, `Catppuccin Mocha.theme`).
+A provider instance names one concrete provider configuration. Its identity is separate from the provider kind, enabling multiple profiles, environment-specific overrides, independent concurrency limits, and explicit disabled reasons ([provider_config.rs:6-27](../../crates/pandamux-core/src/provider_config.rs#L6-L27), [provider_config.rs:59-81](../../crates/pandamux-core/src/provider_config.rs#L59-L81)).
 
-At startup, `PandaMuxRuntime::load_bundled_themes` resolves the themes directory via `themes_dir()` and inserts one `Theme` per `.theme` file it finds, keyed by file stem (crates/pandamux-app/src/iced_runtime.rs#L383-L403). `themes_dir()` checks, in order: the `PANDAMUX_THEMES_DIR` environment variable, `<exe dir>/resources/themes`, then walks up from the current working directory looking for a `resources/themes` folder (the dev-checkout case); it returns `None` if none is found (crates/pandamux-app/src/iced_runtime.rs#L4436-L4461).
+The built-in Codex default illustrates the serialized shape ([settings.rs:109-123](../../crates/pandamux-core/src/settings.rs#L109-L123)):
 
-```rust
-// crates/pandamux-app/src/iced_runtime.rs:4436-4461
-fn themes_dir() -> Option<std::path::PathBuf> {
-    if let Ok(dir) = std::env::var("PANDAMUX_THEMES_DIR") {
-        return Some(std::path::PathBuf::from(dir));
-    }
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(parent) = exe.parent()
-    {
-        let candidate = parent.join("resources").join("themes");
-        if candidate.is_dir() {
-            return Some(candidate);
-        }
-    }
-    let mut dir = std::env::current_dir().ok()?;
-    loop {
-        let candidate = dir.join("resources").join("themes");
-        if candidate.is_dir() {
-            return Some(candidate);
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
+```json
+{
+  "id": "codex-default",
+  "provider": "codex",
+  "displayName": "Codex CLI",
+  "profileDir": "profiles/codex/default",
+  "concurrencyLimit": 3,
+  "settings": { "defaultModel": "default" },
+  "enabled": true
 }
 ```
 
-The Iced UI layer's own `pandamux-ui::theme` module is a *different* concept: chrome design tokens ([`UiTheme`](../../crates/pandamux-ui/src/theme.rs#L19-L23) dark/light, [`Accent`](../../crates/pandamux-ui/src/theme.rs#L37-L43) teal/gold/blue/mauve, layout/typography constants, and the [`Palette`](../../crates/pandamux-ui/src/theme.rs#L281-L304) of chrome colors), independent of the terminal color scheme (crates/pandamux-ui/src/theme.rs#L1-L23). [`TermScheme::from_theme`](../../crates/pandamux-ui/src/theme.rs#L246-L267) bridges the two: it maps a loaded core `Theme`'s background/foreground/cursor/palette hex strings onto the fixed-dark terminal scheme's color slots, falling back to the built-in default for any missing or unparseable color (crates/pandamux-ui/src/theme.rs#L242-L267).
+| Field | Meaning |
+|---|---|
+| `id` and `provider` | Stable instance identity and backend kind |
+| `displayName` | User-facing instance label |
+| `profileDir` | Relative-to-base or absolute isolated provider state directory |
+| `environmentId` | Optional environment binding |
+| `binaryPath` | Optional executable override |
+| `concurrencyLimit` | Per-instance process limit, defaulting to 2 in the generic schema |
+| `envOverrides` and `settings` | Provider-specific environment and JSON settings |
+| `enabled` and `disabledReason` | Explicit availability plus persisted remediation context |
 
-Localization is handled by [`Locale`](../../crates/pandamux-core/src/i18n.rs#L11-L17) (`En`/`Fr`/`Ar`/`Ja`) and [`Localizer`](../../crates/pandamux-core/src/i18n.rs#L71-L102), a minimal in-binary catalog ported from the Electron `site/i18n.js` language switching (crates/pandamux-core/src/i18n.rs#L1-L4). `Localizer::t` looks up a key in the active locale's catalog, falls back to English, and finally falls back to the key itself when no translation exists at all (crates/pandamux-core/src/i18n.rs#L94-L102). Coverage is intentionally partial today: English and French have entries for all six catalog keys (`new_session`, `settings`, `notifications`, `find`, `sessions`, `command_palette`), while Arabic and Japanese only cover `settings` and `notifications` (crates/pandamux-core/src/i18n.rs#L44-L67).
+Environment overrides may replace enabled state, binary path, concurrency, environment variables, and provider settings. Resolution clones the base instance, layers the override, and binds the result to the requested environment ([provider_config.rs:43-57](../../crates/pandamux-core/src/provider_config.rs#L43-L57), [provider_config.rs:83-113](../../crates/pandamux-core/src/provider_config.rs#L83-L113)).
 
-| Locale | Code | Catalog coverage |
-|---|---|---|
-| English | `en` | All 6 keys (default) (crates/pandamux-core/src/i18n.rs#L45-L50) |
-| French | `fr` | All 6 keys (crates/pandamux-core/src/i18n.rs#L52-L57) |
-| Arabic | `ar` | `settings`, `notifications` only; rest fall back to English (crates/pandamux-core/src/i18n.rs#L59-L61) |
-| Japanese | `ja` | `settings`, `notifications` only; rest fall back to English (crates/pandamux-core/src/i18n.rs#L62-L63) |
+Profile environment variables are provider-specific:
 
-Sources: [config.rs:1-248](../../crates/pandamux-core/src/config.rs#L1-L248), [i18n.rs:1-135](../../crates/pandamux-core/src/i18n.rs#L1-L135), [theme.rs (ui):1-267](../../crates/pandamux-ui/src/theme.rs#L1-L267), [iced_runtime.rs:383-403,4436-4461](../../crates/pandamux-app/src/iced_runtime.rs#L383-L403)
-<!-- END:AUTOGEN pandamux_08_configuration_themes -->
+| Provider | Isolated directory variable |
+|---|---|
+| Claude | `CLAUDE_CONFIG_DIR` |
+| Codex | `CODEX_HOME` |
+| Antigravity | `GEMINI_HOME` |
+| Cursor | `CURSOR_CONFIG_DIR` |
+| Grok | `GROK_HOME` |
+| OpenCode | `OPENCODE_CONFIG_DIR` |
+
+Antigravity additionally forces file storage and removes ambient Google credential variables before applying explicit instance overrides ([profiles.rs:49-89](../../crates/pandamux-providers/src/profiles.rs#L49-L89)).
+
+Sources: [provider_config.rs:6-149](../../crates/pandamux-core/src/provider_config.rs#L6-L149), [profiles.rs:8-89](../../crates/pandamux-providers/src/profiles.rs#L8-L89)
+<!-- END:AUTOGEN pandamux_08_configuration_providers -->
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_08_configuration_env -->
-## Environment Variables
+<!-- BEGIN:AUTOGEN pandamux_08_configuration_remote -->
+## Remote Nodes
 
-`pandamux_env` builds the `PANDAMUX_*` environment injected into every spawned shell/agent PTY so shell-integration scripts, the CLI, and orchestrator hooks can find the pipe and identify their surface/agent; it is a direct port of the env vars the Electron build set on spawned shells (crates/pandamux-app/src/backend.rs#L826-L842).
+Saved SSH profiles are secretless connection descriptions. A profile records its stable ID, alias, host, port, user, authentication mode, and optional ProxyJump alias, but password mode records only that a prompt is required ([ssh.rs:1-24](../../crates/pandamux-core/src/ssh.rs#L1-L24), [ssh.rs:26-64](../../crates/pandamux-core/src/ssh.rs#L26-L64)).
 
-```rust
-// crates/pandamux-app/src/backend.rs:831-842
-pub(crate) fn pandamux_env(surface_id: &str, agent_id: Option<&str>) -> Vec<(String, String)> {
-    let pipe = std::env::var("PANDAMUX_PIPE").unwrap_or_else(|_| r"\\.\pipe\pandamux".to_string());
-    let mut env = vec![
-        ("PANDAMUX".to_string(), "1".to_string()),
-        ("PANDAMUX_SURFACE_ID".to_string(), surface_id.to_string()),
-        ("PANDAMUX_PIPE".to_string(), pipe),
-    ];
-    if let Some(agent_id) = agent_id {
-        env.push(("PANDAMUX_AGENT_ID".to_string(), agent_id.to_string()));
-    }
-    env
-}
-```
-
-| Variable | Meaning | Source |
+| Saved auth mode | Persisted material | Runtime form |
 |---|---|---|
-| `PANDAMUX` | Set to `"1"` on every spawned shell/agent so scripts can detect they are running inside PandaMUX (crates/pandamux-app/src/backend.rs#L834); the bash integration script also exports it unconditionally on load ([pandamux-bash-integration.sh:5](../../resources/shell-integration/pandamux-bash-integration.sh#L5)) |
-| `PANDAMUX_SURFACE_ID` | The id of the terminal surface the shell is running in; read by shell-integration hooks to tag `report_pwd`/`report_git_branch`/`report_shell_state`/`ports_kick` messages (crates/pandamux-app/src/backend.rs#L835; [pandamux-bash-integration.sh:16,22,41,43,45,50](../../resources/shell-integration/pandamux-bash-integration.sh#L16-L50)) |
-| `PANDAMUX_PIPE` | Named-pipe path the CLI/hooks connect to; defaults to `\\.\pipe\pandamux` if the parent process did not already set `PANDAMUX_PIPE` (crates/pandamux-app/src/backend.rs#L832,L836) |
-| `PANDAMUX_AGENT_ID` | Present only for agent-spawned surfaces; minted before the PTY spawns so the orchestrator's on-agent-stop / on-tool-use hooks can key per-agent state on it (crates/pandamux-app/src/backend.rs#L802-L804,L838-L839) |
+| Agent | No key or password | Agent pipe or socket path ([ssh.rs:15-23](../../crates/pandamux-core/src/ssh.rs#L15-L23), [config.rs:11-14](../../crates/pandamux-remote/src/config.rs#L11-L14)) |
+| Key file | Identity-file path | Key path plus an optional in-memory passphrase ([ssh.rs:20-21](../../crates/pandamux-core/src/ssh.rs#L20-L21), [config.rs:6-10](../../crates/pandamux-remote/src/config.rs#L6-L10)) |
+| Password | No password | Password supplied to the runtime connection object ([ssh.rs:22-23](../../crates/pandamux-core/src/ssh.rs#L22-L23), [config.rs:15-17](../../crates/pandamux-remote/src/config.rs#L15-L17)) |
 
-Sources: [backend.rs:826-842](../../crates/pandamux-app/src/backend.rs#L826-L842), [pandamux-bash-integration.sh:1-67](../../resources/shell-integration/pandamux-bash-integration.sh#L1-L67)
-<!-- END:AUTOGEN pandamux_08_configuration_env -->
+OpenSSH import accepts both `key value` and `key=value`, skips wildcard hosts, recognizes `HostName`, `User`, `Port`, `IdentityFile`, and `ProxyJump`, and defaults imported profiles to agent authentication when no identity file is present ([ssh.rs:129-200](../../crates/pandamux-core/src/ssh.rs#L129-L200)). Import into environments preserves existing records with the same display name or generated environment ID and creates new SSH environments in `Disconnected` state ([ssh.rs:281-341](../../crates/pandamux-core/src/ssh.rs#L281-L341)).
+
+The runtime `SshConfig` adds connection-only state such as optional remote working directory, unknown-host trust, and a recursively configured jump host. New runtime configs default to port 22 and do not trust unknown hosts ([config.rs:20-63](../../crates/pandamux-remote/src/config.rs#L20-L63)).
+
+Sources: [ssh.rs:1-200](../../crates/pandamux-core/src/ssh.rs#L1-L200), [ssh.rs:281-341](../../crates/pandamux-core/src/ssh.rs#L281-L341), [config.rs:3-63](../../crates/pandamux-remote/src/config.rs#L3-L63)
+<!-- END:AUTOGEN pandamux_08_configuration_remote -->
+
+---
+
+<!-- BEGIN:AUTOGEN pandamux_08_configuration_security -->
+## Secrets and Security Boundaries
+
+Configuration records intentionally minimize persisted secrets, but they do not turn same-user provider execution into a hostile-process sandbox.
+
+- Password SSH profiles persist only the authentication mode; the connect path must prompt for the secret ([ssh.rs:11-24](../../crates/pandamux-core/src/ssh.rs#L11-L24)).
+- Provider login state is isolated by instance-specific directories and provider-specific environment variables ([profiles.rs:16-39](../../crates/pandamux-providers/src/profiles.rs#L16-L39), [profiles.rs:49-89](../../crates/pandamux-providers/src/profiles.rs#L49-L89)).
+- The runtime record contains separate control and MCP tokens, so it must remain inside the private runtime directory ([runtime.rs:9-27](../../crates/pandamux-server/src/runtime.rs#L9-L27)).
+- Unix runtime record reads reject symlinks, non-files, owner mismatches, and group/other access ([runtime.rs:100-126](../../crates/pandamux-server/src/runtime.rs#L100-L126)).
+- Remote host-key failures distinguish unknown keys from changed keys and can carry fingerprints and known-hosts line numbers for explicit handling ([config.rs:66-93](../../crates/pandamux-remote/src/config.rs#L66-L93)).
+- Remote clipboard reads are deny-by-default per host, while clipboard writes have a one MiB default cap ([ssh.rs:236-268](../../crates/pandamux-core/src/ssh.rs#L236-L268)).
+
+Do not place raw credentials in `envOverrides` merely because the schema accepts strings. Those values are applied directly to provider child processes after isolation-specific variables are prepared ([profiles.rs:49-89](../../crates/pandamux-providers/src/profiles.rs#L49-L89)).
+
+Sources: [ssh.rs:11-24](../../crates/pandamux-core/src/ssh.rs#L11-L24), [ssh.rs:236-268](../../crates/pandamux-core/src/ssh.rs#L236-L268), [profiles.rs:16-89](../../crates/pandamux-providers/src/profiles.rs#L16-L89), [runtime.rs:9-126](../../crates/pandamux-server/src/runtime.rs#L9-L126), [config.rs:66-93](../../crates/pandamux-remote/src/config.rs#L66-L93)
+<!-- END:AUTOGEN pandamux_08_configuration_security -->
 
 ---

@@ -4,206 +4,175 @@
 
 The following files were used as evidence for this page:
 
-- [ssh.rs:1-346](../../crates/pandamux-core/src/ssh.rs#L1-L346)
-- [ssh.rs:1-1585](../../crates/pandamux-term/src/ssh.rs#L1-L1585)
-- [clipboard.rs:1-97](../../crates/pandamux-term/src/clipboard.rs#L1-L97)
-- [session_launcher.rs:1-129](../../crates/pandamux-ui/src/session_launcher.rs#L1-L129)
-- [session_launcher.rs:324-561](../../crates/pandamux-ui/src/session_launcher.rs#L324-L561)
-- [session_launcher.rs:563-680](../../crates/pandamux-ui/src/session_launcher.rs#L563-L680)
-- [backend.rs:1157-1359](../../crates/pandamux-app/src/backend.rs#L1157-L1359)
-- [backend.rs:1412-1471](../../crates/pandamux-app/src/backend.rs#L1412-L1471)
-- [backend.rs:135-178](../../crates/pandamux-app/src/backend.rs#L135-L178)
+- [crates/pandamux-core/src/ssh.rs:1-457](../../crates/pandamux-core/src/ssh.rs#L1-L457)
+- [crates/pandamux-core/src/remote_manifest.rs:1-266](../../crates/pandamux-core/src/remote_manifest.rs#L1-L266)
+- [crates/pandamux-remote/src/lib.rs:1-22](../../crates/pandamux-remote/src/lib.rs#L1-L22)
+- [crates/pandamux-remote/src/bootstrap.rs:1-617](../../crates/pandamux-remote/src/bootstrap.rs#L1-L617)
+- [crates/pandamux-remote/src/exec.rs:1-117](../../crates/pandamux-remote/src/exec.rs#L1-L117)
+- [crates/pandamux-remote/src/pool.rs:1-553](../../crates/pandamux-remote/src/pool.rs#L1-L553)
+- [crates/pandamux-remote/src/proxy.rs:1-109](../../crates/pandamux-remote/src/proxy.rs#L1-L109)
+- [crates/pandamux-remote/src/sftp.rs:1-269](../../crates/pandamux-remote/src/sftp.rs#L1-L269)
+- [crates/pandamux-remote/src/worktree_sync.rs:1-191](../../crates/pandamux-remote/src/worktree_sync.rs#L1-L191)
+- [crates/pandamux-protocol/src/environment_rpc.rs:1-41](../../crates/pandamux-protocol/src/environment_rpc.rs#L1-L41)
+- [crates/pandamux-protocol/src/fs_rpc.rs:1-96](../../crates/pandamux-protocol/src/fs_rpc.rs#L1-L96)
+- [crates/pandamux-protocol/src/git_rpc.rs:1-117](../../crates/pandamux-protocol/src/git_rpc.rs#L1-L117)
+- [crates/pandamux-protocol/src/proxy.rs:1-106](../../crates/pandamux-protocol/src/proxy.rs#L1-L106)
+- [crates/pandamux-protocol/src/worktree_rpc.rs:1-30](../../crates/pandamux-protocol/src/worktree_rpc.rs#L1-L30)
+- [crates/pandamux-server/src/environment_router.rs:1-442](../../crates/pandamux-server/src/environment_router.rs#L1-L442)
+- [crates/pandamux-server/src/proxy_connection.rs:1-408](../../crates/pandamux-server/src/proxy_connection.rs#L1-L408)
+- [crates/pandamux-server/src/proxy_transport.rs:1-555](../../crates/pandamux-server/src/proxy_transport.rs#L1-L555)
 
 </details>
 
-# SSH Remote Surfaces
+# SSH Remote Nodes
 
-> **Related Pages**: [Terminal Engine](../core/TERMINAL_ENGINE.md), [Named Pipe Control Plane](NAMED_PIPE_IPC.md)
-
----
-
-<!-- BEGIN:AUTOGEN pandamux_11_ssh-remote_overview -->
-## Overview
-
-A "remote surface" is a terminal surface whose byte source is an SSH channel instead of a local PTY; architecturally it mirrors a local surface exactly, since bytes flow into the same `TerminalGrid`, input flows back out the same way, and resize forwards as an SSH `window-change` (([ssh.rs:1-8](../../crates/pandamux-term/src/ssh.rs#L1-L8))). `RemoteSessionManager` deliberately mirrors `PtySessionManager`'s synchronous API so the backend dispatcher does not need to know which kind of session a surface has (([ssh.rs:6-19](../../crates/pandamux-term/src/ssh.rs#L6-L19))).
-
-Durability comes from wrapping the remote login shell in `tmux new -A -s pandamux-<surface>`, so a long-running process (Claude Code included) survives a dropped connection; on reconnect the driver re-attaches and resets the local grid before the server's repaint lands, so the view reconciles cleanly instead of appending to stale state (([ssh.rs:10-15](../../crates/pandamux-term/src/ssh.rs#L10-L15))). Connection reuse (spec 1.6) keeps one authenticated `russh` connection per host/port/user/auth identity in a `SshConnectionPool`; every surface opens its own channel on the shared handle, so a second session on an already-connected host skips TCP, key exchange, and auth entirely, and folder browsing / git-hint SFTP reads draw from the same pool to pre-warm the connection while the user is still picking a folder (([ssh.rs:21-28](../../crates/pandamux-term/src/ssh.rs#L21-L28))).
-
-The secretless, UI-facing description of a connection (host profiles, `~/.ssh/config` import, clipboard policy) lives in `pandamux-core::ssh`; the actual `russh` work, including secrets, lives entirely in `pandamux-term::ssh` (([ssh.rs:1-5](../../crates/pandamux-core/src/ssh.rs#L1-L5))). OSC 52 clipboard traffic (copy-over-SSH) and SFTP-based image paste piggyback on this same remote-surface machinery rather than needing their own transport (([clipboard.rs:1-8](../../crates/pandamux-term/src/clipboard.rs#L1-L8))).
-
-Sources: [ssh.rs:1-28](../../crates/pandamux-term/src/ssh.rs#L1-L28), [ssh.rs:1-5](../../crates/pandamux-core/src/ssh.rs#L1-L5), [clipboard.rs:1-8](../../crates/pandamux-term/src/clipboard.rs#L1-L8)
-<!-- END:AUTOGEN pandamux_11_ssh-remote_overview -->
+> **Related Pages**: [Configuration](../core/CONFIGURATION.md), [Local IPC and Security](NAMED_PIPE_IPC.md), [Provider Routing](PROVIDER_ROUTING.md)
 
 ---
 
 <!-- BEGIN:AUTOGEN pandamux_11_ssh-remote_model -->
-## SSH Connection Model
+## Remote Node Model
 
-`pandamux-core::ssh` defines the persistent, secretless description of a connection: a `Password` profile records only that a prompt is needed at connect time, it never stores the secret itself (([ssh.rs:1-5](../../crates/pandamux-core/src/ssh.rs#L1-L5))).
+A remote environment is a Linux PandaMUX node reached through an SSH-authenticated channel from the Hub. Persistent host profiles are secretless: they store address, user, port, auth kind, and optional ProxyJump target, while password profiles record only that an interactive secret is required ([ssh.rs:1-24](../../crates/pandamux-core/src/ssh.rs#L1-L24), [ssh.rs:26-43](../../crates/pandamux-core/src/ssh.rs#L26-L43)).
 
-`SshAuthConfig` is the saved auth kind for a host profile (([ssh.rs:13-24](../../crates/pandamux-core/src/ssh.rs#L13-L24))):
-
-| Variant | Fields | Notes |
+| Model | Purpose | Key fields or behavior |
 |---|---|---|
-| `Agent` (default) | none | The Windows OpenSSH-compatible agent named pipe; needs no stored material (([ssh.rs:16-19](../../crates/pandamux-core/src/ssh.rs#L16-L19))) |
-| `KeyFile` | `path: String` | An `IdentityFile` path, tilde-expanded on import (([ssh.rs:20-21](../../crates/pandamux-core/src/ssh.rs#L20-L21), [ssh.rs:215-222](../../crates/pandamux-core/src/ssh.rs#L215-L222))) |
-| `Password` | none | Secret is prompted for at connect time, never stored (([ssh.rs:22-23](../../crates/pandamux-core/src/ssh.rs#L22-L23))) |
+| `SshHostProfile` | Stable saved connection identity | Generated id, editable display name, host, port 22 default, user, auth kind, optional jump host ([ssh.rs:26-57](../../crates/pandamux-core/src/ssh.rs#L26-L57)) |
+| `SshProfiles` | Registry keyed by stable id | Upsert/remove by id; compatibility helpers match names case-insensitively ([ssh.rs:59-127](../../crates/pandamux-core/src/ssh.rs#L59-L127)) |
+| `RemotePlatform` | Supported execution target | Linux on x86_64 or aarch64, parsed from `uname -sm` ([remote_manifest.rs:5-58](../../crates/pandamux-core/src/remote_manifest.rs#L5-L58)) |
+| `RemoteBinaryManifest` | Versioned server/CLI artifact metadata | Maps architecture to filenames, SHA-256, and byte size ([remote_manifest.rs:60-99](../../crates/pandamux-core/src/remote_manifest.rs#L60-L99)) |
+| `EnvironmentRouter` | Hub registry of local and remote transports | Distinguishes local routing, connected remote state, forwarding, uploads, and shutdown ([environment_router.rs:20-62](../../crates/pandamux-server/src/environment_router.rs#L20-L62), [environment_router.rs:73-101](../../crates/pandamux-server/src/environment_router.rs#L73-L101)) |
 
-`SshHostProfile` is the saved host record, imported from `~/.ssh/config` or entered by the user in the launcher (([ssh.rs:27-43](../../crates/pandamux-core/src/ssh.rs#L27-L43))):
+OpenSSH config import skips wildcard aliases, accepts both `key value` and `key=value`, maps `IdentityFile` to key-file auth, preserves `ProxyJump`, and reuses an existing stable id when merging a matching name ([ssh.rs:114-195](../../crates/pandamux-core/src/ssh.rs#L114-L195)). Environment import and list requests have dedicated protocol contracts rather than passing untyped configuration blobs ([environment_rpc.rs:1-41](../../crates/pandamux-protocol/src/environment_rpc.rs#L1-L41)).
 
-| Field | Type | Purpose |
-|---|---|---|
-| `id` | `SshProfileId` | Stable identity used by Projects; friendly names can be edited safely (([ssh.rs:30-32](../../crates/pandamux-core/src/ssh.rs#L30-L32))) |
-| `name` | `String` | Display name (the `Host` alias) (([ssh.rs:33-34](../../crates/pandamux-core/src/ssh.rs#L33-L34))) |
-| `host` | `String` | Target hostname or address ([ssh.rs:35](../../crates/pandamux-core/src/ssh.rs#L35)) |
-| `port` | `u16` | Defaults to 22 via `SshHostProfile::new` (([ssh.rs:46-56](../../crates/pandamux-core/src/ssh.rs#L46-L56))) |
-| `user` | `String` | Remote login user ([ssh.rs:37](../../crates/pandamux-core/src/ssh.rs#L37)) |
-| `auth` | `SshAuthConfig` | Saved auth kind (see above) ([ssh.rs:38](../../crates/pandamux-core/src/ssh.rs#L38)) |
-| `jump` | `Option<String>` | `ProxyJump` target alias; recorded on import so nothing is lost, but dialing through it is deferred glue work (([ssh.rs:39-42](../../crates/pandamux-core/src/ssh.rs#L39-L42))) |
-
-`SshProfiles` is a registry of profiles keyed by stable id, with name-based compatibility helpers for the historical RPC surface (([ssh.rs:59-127](../../crates/pandamux-core/src/ssh.rs#L59-L127))):
-
-| Method | Behavior |
-|---|---|
-| `upsert` | Insert or replace by `id` (([ssh.rs:72-78](../../crates/pandamux-core/src/ssh.rs#L72-L78))) |
-| `get` / `get_by_name` | Case-insensitive name lookup or id lookup (([ssh.rs:80-88](../../crates/pandamux-core/src/ssh.rs#L80-L88))) |
-| `has_duplicate_name` | Case-insensitive collision check, excluding one id (([ssh.rs:90-94](../../crates/pandamux-core/src/ssh.rs#L90-L94))) |
-| `remove` / `remove_by_name` | Remove by id, or resolve a name to an id first (([ssh.rs:96-108](../../crates/pandamux-core/src/ssh.rs#L96-L108))) |
-| `import_config` | Parses `~/.ssh/config` text and upserts by name, preserving existing ids (([ssh.rs:114-126](../../crates/pandamux-core/src/ssh.rs#L114-L126))) |
-
-`parse_ssh_config` walks an OpenSSH config file line by line, tracking one `current` profile per `Host` block; wildcard hosts (`Host *`) are skipped since they are defaults, not connectable targets, and `IdentityFile` switches the profile to key-file auth while everything else assumes the agent (([ssh.rs:129-196](../../crates/pandamux-core/src/ssh.rs#L129-L196))):
-
-```rust
-"identityfile" => {
-    if let Some(profile) = current.as_mut() {
-        profile.auth = SshAuthConfig::KeyFile {
-            path: expand_tilde(&value),
-        };
-    }
-}
-"proxyjump" => {
-    if let Some(profile) = current.as_mut() {
-        profile.jump = Some(value.to_string());
-    }
-}
-```
-
-`ClipboardConfig` is the persistent half of the OSC 52 clipboard policy: a `max_store_bytes` cap plus a deny-by-default `load_allowed_hosts` set (a host must be added explicitly before it may read the local clipboard) (([ssh.rs:236-268](../../crates/pandamux-core/src/ssh.rs#L236-L268))).
-
-Sources: [ssh.rs:1-346](../../crates/pandamux-core/src/ssh.rs#L1-L346)
+Sources: [ssh.rs:1-195](../../crates/pandamux-core/src/ssh.rs#L1-L195), [remote_manifest.rs:5-99](../../crates/pandamux-core/src/remote_manifest.rs#L5-L99), [environment_rpc.rs:1-41](../../crates/pandamux-protocol/src/environment_rpc.rs#L1-L41), [environment_router.rs:20-101](../../crates/pandamux-server/src/environment_router.rs#L20-L101)
 <!-- END:AUTOGEN pandamux_11_ssh-remote_model -->
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_11_ssh-remote_transport -->
-## Remote PTY and Connection Pool
+<!-- BEGIN:AUTOGEN pandamux_11_ssh-remote_pool -->
+## SSH Pool and Host Verification
 
-`pandamux-term::ssh::SshConfig` is the runtime connect target (host, port, user, `SshAuth`, an optional explicit `remote_cwd`, and a one-shot `trust_unknown_host` flag for host-key confirmation) (([ssh.rs:63-104](../../crates/pandamux-term/src/ssh.rs#L63-L104))). `SshAuth` carries the actual secret material at runtime: a key file plus optional passphrase, the agent named-pipe path, or a plaintext password (([ssh.rs:47-61](../../crates/pandamux-term/src/ssh.rs#L47-L61))).
-
-`SshConnectionPool` holds one `client::Handle` per `HostKey` (host, port, user, and the auth *identity*, never a secret), shared by every consumer: terminal drivers, SFTP uploads, folder browsing, and git-identity hints (([ssh.rs:162-202](../../crates/pandamux-term/src/ssh.rs#L162-L202))). `acquire` is single-flight per host: the per-key `tokio::sync::Mutex` is held across the dial, so concurrent acquires of the same host await one connection while dials to different hosts proceed in parallel; a closed handle is detected via `is_closed()` and replaced on next use (([ssh.rs:209-231](../../crates/pandamux-term/src/ssh.rs#L209-L231))):
+`SshConnectionPool` keeps one authenticated handle per `HostKey`, where the key includes host, port, user, auth identity, and the recursive ProxyJump identity. Secrets are deliberately not part of the pool key ([pool.rs:15-45](../../crates/pandamux-remote/src/pool.rs#L15-L45)).
 
 ```rust
-async fn acquire(&self, config: &SshConfig) -> Result<PooledHandle, SshFailure> {
-    let slot = { /* lock the pool just long enough to get/insert this host's slot */ };
-    let mut guard = slot.lock().await;
-    if let Some(handle) = guard.as_ref() {
-        if !handle.is_closed() {
-            return Ok(Arc::clone(handle));
-        }
-        *guard = None;
-    }
-    let handle = Arc::new(connect_client(config).await?);
-    *guard = Some(Arc::clone(&handle));
-    Ok(handle)
+pub struct HostKey {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub auth: String,
+    pub proxy_jump: Option<Box<HostKey>>,
 }
 ```
 
-`RemoteSessionManager` owns sessions keyed by surface id over an internally-owned multi-thread tokio runtime, exposing a synchronous API the same shape as `PtySessionManager` (([ssh.rs:271-295](../../crates/pandamux-term/src/ssh.rs#L271-L295))). `connect` spawns a `RemoteDriver` task and returns immediately; `connect_ready` additionally blocks (with a timeout) until the driver reports `RemoteStatus::Ready`, removing the prestarted session on any failure so callers can commit canonical state transactionally (([ssh.rs:321-364](../../crates/pandamux-term/src/ssh.rs#L321-L364), [ssh.rs:429-484](../../crates/pandamux-term/src/ssh.rs#L429-L484))).
+The pool shares slots across clones and serializes acquisition per host. A live handle is reused; a closed one is discarded and redialed, while a ProxyJump connection is itself acquired from the same pool before the target connection is established ([pool.rs:48-105](../../crates/pandamux-remote/src/pool.rs#L48-L105)).
+
+Host verification is fail-closed:
+
+- A known key is accepted through the normal `known_hosts` check ([pool.rs:120-140](../../crates/pandamux-remote/src/pool.rs#L120-L140)).
+- An unknown key is learned only when the one-shot trust flag is present; otherwise the failure includes a confirmation fingerprint ([pool.rs:141-180](../../crates/pandamux-remote/src/pool.rs#L141-L180)).
+- A changed key is rejected and reports the offending `known_hosts` line for repair outside PandaMUX ([pool.rs:181-205](../../crates/pandamux-remote/src/pool.rs#L181-L205)).
+- ProxyJump failures are categorized separately and remain visible to the caller ([pool.rs:61-99](../../crates/pandamux-remote/src/pool.rs#L61-L99)).
+
+Sources: [pool.rs:15-105](../../crates/pandamux-remote/src/pool.rs#L15-L105), [pool.rs:120-245](../../crates/pandamux-remote/src/pool.rs#L120-L245)
+<!-- END:AUTOGEN pandamux_11_ssh-remote_pool -->
+
+---
+
+<!-- BEGIN:AUTOGEN pandamux_11_ssh-remote_bootstrap -->
+## Bootstrap and Manifest Verification
+
+Bootstrap detects the remote OS/architecture and home directory, verifies or installs the versioned server and CLI artifacts, then discovers a compatible daemon or launches a new node for the requested environment ([bootstrap.rs:113-150](../../crates/pandamux-remote/src/bootstrap.rs#L113-L150), [bootstrap.rs:492-525](../../crates/pandamux-remote/src/bootstrap.rs#L492-L525)).
+
+| Stage | Implementation behavior | Failure boundary |
+|---|---|---|
+| Detect | Runs `uname -sm` and reads `$HOME` ([bootstrap.rs:113-150](../../crates/pandamux-remote/src/bootstrap.rs#L113-L150)) | Unsupported platform or empty home fails bootstrap |
+| Select | Looks up the exact target architecture in the manifest ([bootstrap.rs:150-170](../../crates/pandamux-remote/src/bootstrap.rs#L150-L170)) | Missing architecture entry fails closed |
+| Verify/install | Compares SHA-256, uploads to a temporary path, re-verifies remotely, chmods, and atomically moves into the version directory ([remote_manifest.rs:120-171](../../crates/pandamux-core/src/remote_manifest.rs#L120-L171), [bootstrap.rs:200-252](../../crates/pandamux-remote/src/bootstrap.rs#L200-L252)) | Verification failure removes the temporary artifact and stops installation |
+| Discover/start | Reads the remote runtime record and checks the PID, environment, version, protocol, and ownership ([bootstrap.rs:254-321](../../crates/pandamux-remote/src/bootstrap.rs#L254-L321)) | Environment mismatch is terminal; active discovered daemons are not replaced |
+| Launch | Starts a launcher-owned daemon with its own node database and waits for a matching runtime record ([bootstrap.rs:323-372](../../crates/pandamux-remote/src/bootstrap.rs#L323-L372)) | A timeout is returned instead of assuming readiness |
+
+The checked-in `embedded_remote_manifest()` at this commit contains zero-byte placeholder metadata with the empty-file SHA-256 for both architectures ([remote_manifest.rs:174-208](../../crates/pandamux-core/src/remote_manifest.rs#L174-L208)). Therefore the source tree demonstrates the verification and bootstrap mechanism, but these lines alone are not evidence of populated release artifacts or production acceptance.
+
+Sources: [remote_manifest.rs:120-208](../../crates/pandamux-core/src/remote_manifest.rs#L120-L208), [bootstrap.rs:113-252](../../crates/pandamux-remote/src/bootstrap.rs#L113-L252), [bootstrap.rs:254-372](../../crates/pandamux-remote/src/bootstrap.rs#L254-L372), [bootstrap.rs:492-525](../../crates/pandamux-remote/src/bootstrap.rs#L492-L525)
+<!-- END:AUTOGEN pandamux_11_ssh-remote_bootstrap -->
+
+---
+
+<!-- BEGIN:AUTOGEN pandamux_11_ssh-remote_proxy -->
+## Exec Proxy Transport
+
+The Hub opens an SSH session channel and executes the remote proxy command, usually `pandamux-server proxy`. The resulting channel stream implements async read/write and carries bounded newline-delimited proxy frames without requiring SSH port-forwarding configuration ([proxy.rs:9-55](../../crates/pandamux-remote/src/proxy.rs#L9-L55), [proxy.rs:55-86](../../crates/pandamux-remote/src/proxy.rs#L55-L86)).
 
 ```mermaid
 sequenceDiagram
-    participant UI as "Launcher UI"
-    participant Manager as "RemoteSessionManager"
-    participant Driver as "RemoteDriver"
-    participant Pool as "SshConnectionPool"
-    participant Host as "Remote sshd"
+    participant H as Hub
+    participant S as SSH pool
+    participant P as Node proxy
+    participant N as Node router
 
-    UI->>Manager: connect_ready surface config size
-    activate Manager
-    Manager->>Driver: spawn driver task
-    activate Driver
-    Driver->>Pool: acquire config
-    activate Pool
-    alt "pooled handle open"
-        Pool-->>Driver: cached handle
-    else "no live handle"
-        Pool->>Host: dial and authenticate
-        activate Host
-        Host-->>Pool: authenticated handle
-        deactivate Host
-        Pool-->>Driver: fresh handle
-    end
-    deactivate Pool
-    Driver->>Host: channel_open_session
-    activate Host
-    Driver->>Host: request_pty then exec tmux
-    Host-->>Driver: pty ready
-    deactivate Host
-    Driver-->>Manager: Status Ready event
-    deactivate Driver
-    Manager-->>UI: connect_ready returns Ok
-    deactivate Manager
+    H->>S: acquire authenticated handle
+    activate S
+    H->>S: open session and exec proxy
+    S-->>H: bidirectional tunnel
+    deactivate S
+    H->>P: hello with versions environment cursor
+    activate P
+    P-->>H: hello_ack with current cursor
+    H->>P: request frame
+    P->>N: authenticated environment request
+    activate N
+    N-->>P: response and events
+    deactivate N
+    P-->>H: response and ordered event frames
+    deactivate P
 ```
 
-Inside `RemoteDriver::run`, a failure on the very first connection attempt is terminal (bad host or auth, do not retry forever), while a failure after the session was once ready triggers exponential backoff (500ms doubling to a 10s cap) and a reconnect attempt (([ssh.rs:869-930](../../crates/pandamux-term/src/ssh.rs#L869-L930))). `session_loop` opens a channel, requests a PTY, execs the tmux-wrapped launch command, and then `tokio::select!`s over channel data, the manager's `Write`/`Resize`/`Kill` control messages, and pending SFTP requests until the channel closes or is killed (([ssh.rs:948-1030](../../crates/pandamux-term/src/ssh.rs#L948-L1030))). A `Kill` closes only that surface's own channel, not the shared pooled connection, since other surfaces on the same host may still be using it (([ssh.rs:1013-1019](../../crates/pandamux-term/src/ssh.rs#L1013-L1019))).
+`ProxyMessage` is a tagged protocol containing hello/ack, request/response, cancellation, ordered event, goodbye, and structured error frames. The hello carries both proxy and RPC versions, client version, environment id, and `resume_after_event_seq`; the ack returns the current durable event sequence ([proxy.rs:6-48](../../crates/pandamux-protocol/src/proxy.rs#L6-L48)).
 
-`ClientHandler::check_server_key` implements host-key verification against `~/.ssh/known_hosts`: an unknown key is rejected unless `trust_unknown_host` is set (in which case it is learned), and a *changed* key is always rejected as non-retryable, since a changed host key must be resolved outside PandaMUX (([ssh.rs:790-866](../../crates/pandamux-term/src/ssh.rs#L790-L866))). Pooled connections use no inactivity timeout and a 15-second keepalive, so idle connections stay open by design (v1 policy) rather than being reaped (([ssh.rs:1038-1045](../../crates/pandamux-term/src/ssh.rs#L1038-L1045))).
+The Hub transport sends hello and waits with a bounded handshake timeout, correlates pending request ids, publishes events, and exposes connected/disconnected/error state through `EnvironmentTransport` ([proxy_transport.rs:61-112](../../crates/pandamux-server/src/proxy_transport.rs#L61-L112), [proxy_transport.rs:241-325](../../crates/pandamux-server/src/proxy_transport.rs#L241-L325), [proxy_transport.rs:366-446](../../crates/pandamux-server/src/proxy_transport.rs#L366-L446)). The node requires hello as the first frame and rejects version or environment mismatches before routing ([proxy_connection.rs:23-122](../../crates/pandamux-server/src/proxy_connection.rs#L23-L122)).
 
-Sources: [ssh.rs:47-104](../../crates/pandamux-term/src/ssh.rs#L47-L104), [ssh.rs:162-232](../../crates/pandamux-term/src/ssh.rs#L162-L232), [ssh.rs:271-364](../../crates/pandamux-term/src/ssh.rs#L271-L364), [ssh.rs:429-484](../../crates/pandamux-term/src/ssh.rs#L429-L484), [ssh.rs:869-1085](../../crates/pandamux-term/src/ssh.rs#L869-L1085)
-<!-- END:AUTOGEN pandamux_11_ssh-remote_transport -->
-
----
-
-<!-- BEGIN:AUTOGEN pandamux_11_ssh-remote_sftp -->
-## SFTP, OSC 52, and Image Paste
-
-Folder browsing and small remote-file reads run over the shared pool rather than opening a dedicated connection. `browse_remote_folders` acquires a pooled handle, opens an SFTP subsystem channel, canonicalizes the requested path, and lists only directories (each re-canonicalized so symlinked entries resolve correctly); only the SFTP channel is closed afterward, the underlying connection stays in the pool (([ssh.rs:1091-1156](../../crates/pandamux-term/src/ssh.rs#L1091-L1156))). `read_remote_file` does the equivalent for a single small file (capped at `max_bytes`), used for the git-remote project-identity hint by reading `<project>/.git/config` cheaply during launch (([ssh.rs:1272-1329](../../crates/pandamux-term/src/ssh.rs#L1272-L1329))).
-
-Image paste (plan F3) uploads a local file to the remote host over SFTP and returns the remote path so it can be injected into the shell prompt. `RemoteSessionManager::upload_image` names the destination `/tmp/pandamux-paste-<uuid>.<ext>`, sends an `SftpRequest` on a channel owned by the same runtime as the connection, and blocks on the oneshot response (([ssh.rs:662-686](../../crates/pandamux-term/src/ssh.rs#L662-L686))). The request is actually serviced inside `session_loop`'s `tokio::select!` so it never races the terminal channel for the connection, and `upload_via_sftp` opens its own SFTP subsystem channel, creates the remote file, and streams the bytes (([ssh.rs:1022-1027](../../crates/pandamux-term/src/ssh.rs#L1022-L1027), [ssh.rs:1331-1370](../../crates/pandamux-term/src/ssh.rs#L1331-L1370))). The app layer's `surface.paste_image` dispatches to `upload_image` for a remote surface (a local surface just injects the path directly), then writes `"<path> "` to the target so Claude Code can accept it as an image argument (([backend.rs:1452-1471](../../crates/pandamux-app/src/backend.rs#L1452-L1471))).
-
-OSC 52 clipboard traffic is decoded identically whether the byte source is a local PTY or an SSH channel: alacritty surfaces a `ClipboardStore { kind, text }`, which the app layer forwards to the OS clipboard (([clipboard.rs:1-8](../../crates/pandamux-term/src/clipboard.rs#L1-L8), [clipboard.rs:19-24](../../crates/pandamux-term/src/clipboard.rs#L19-L24))). `ClipboardPolicy` is secure by default: writes (copy) are allowed up to a 1 MiB `max_store_bytes` cap so a remote cannot flood the local clipboard, and reads (a remote *loading* the local clipboard) are denied unless explicitly opted in per host (([clipboard.rs:26-54](../../crates/pandamux-term/src/clipboard.rs#L26-L54))). `RemoteSessionManager::take_clipboard_stores` drains captured OSC 52 events from a remote surface's grid (([ssh.rs:557-564](../../crates/pandamux-term/src/ssh.rs#L557-L564))), and `drain_clipboard_stores` polls every local and remote session, keeping the most recent store within the size cap before writing it to the OS clipboard (([backend.rs:147-172](../../crates/pandamux-app/src/backend.rs#L147-L172))). The per-host load opt-in itself is exposed through `clipboard.policy`, which toggles `ClipboardConfig::allow_load` / `deny_load` for a given host (([backend.rs:1382-1403](../../crates/pandamux-app/src/backend.rs#L1382-L1403))).
-
-Bracketed-paste-aware text paste also treats local and remote surfaces uniformly: `surface.paste` checks `bracketed_paste_active` on whichever target is in play and wraps the payload in `ESC[200~ / ESC[201~` markers only when the terminal has requested that mode (([clipboard.rs:56-74](../../crates/pandamux-term/src/clipboard.rs#L56-L74), [backend.rs:1439-1451](../../crates/pandamux-app/src/backend.rs#L1439-L1451))).
-
-Sources: [ssh.rs:557-686](../../crates/pandamux-term/src/ssh.rs#L557-L686), [ssh.rs:1091-1370](../../crates/pandamux-term/src/ssh.rs#L1091-L1370), [clipboard.rs:1-97](../../crates/pandamux-term/src/clipboard.rs#L1-L97), [backend.rs:135-178](../../crates/pandamux-app/src/backend.rs#L135-L178), [backend.rs:1412-1471](../../crates/pandamux-app/src/backend.rs#L1412-L1471)
-<!-- END:AUTOGEN pandamux_11_ssh-remote_sftp -->
+Sources: [proxy.rs:9-109](../../crates/pandamux-remote/src/proxy.rs#L9-L109), [proxy.rs:6-48](../../crates/pandamux-protocol/src/proxy.rs#L6-L48), [proxy_transport.rs:61-446](../../crates/pandamux-server/src/proxy_transport.rs#L61-L446), [proxy_connection.rs:23-122](../../crates/pandamux-server/src/proxy_connection.rs#L23-L122)
+<!-- END:AUTOGEN pandamux_11_ssh-remote_proxy -->
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_11_ssh-remote_ui -->
-## Launcher UI and Pipe Methods
+<!-- BEGIN:AUTOGEN pandamux_11_ssh-remote_files -->
+## Files and Worktree Synchronization
 
-`session_launcher.rs` renders the staged Project session launcher; every step shares the overlay chrome from the command palette and consumes theme tokens so it matches the shell in both themes (([session_launcher.rs:1-5](../../crates/pandamux-ui/src/session_launcher.rs#L1-L5))). `LauncherStep` enumerates the flow: `Project` → `SessionType` → `Connection` (choose Local or a saved SSH profile) → `ProfileForm` (add/edit) → `Credential` (password/passphrase prompt) → `HostConfirmation` (unknown host-key fingerprint) → `Folder` (local or remote browse) → `Launching` (([session_launcher.rs:15-30](../../crates/pandamux-ui/src/session_launcher.rs#L15-L30))).
+Remote filesystem and Git operations remain typed RPC surfaces. File reads/listings carry explicit root and relative paths, Git methods carry thread identity and operation-specific fields, and worktree sync carries a base64 bundle plus target project/branch rather than an arbitrary command string ([fs_rpc.rs:4-68](../../crates/pandamux-protocol/src/fs_rpc.rs#L4-L68), [git_rpc.rs:4-94](../../crates/pandamux-protocol/src/git_rpc.rs#L4-L94), [worktree_rpc.rs:4-30](../../crates/pandamux-protocol/src/worktree_rpc.rs#L4-L30)).
 
-`SshProfileForm` is the editable UI state for a saved profile; `is_valid` requires a non-empty name and host, a parseable non-zero port, and (only for key-file auth) a non-empty identity file path before the Save button activates (([session_launcher.rs:47-100](../../crates/pandamux-ui/src/session_launcher.rs#L47-L100))). The `Connection` step lists Local first, then every saved profile, flagging `ProxyJump` profiles as unsupported and disabling their row rather than letting a launch fail deep in the connect path (([session_launcher.rs:324-390](../../crates/pandamux-ui/src/session_launcher.rs#L324-L390))). The `ProfileForm` step offers three auth pills (OpenSSH agent, identity file, password) and only shows the identity-file input when key-file auth is selected (([session_launcher.rs:392-477](../../crates/pandamux-ui/src/session_launcher.rs#L392-L477))). `HostConfirmation` renders the server's fingerprint in a monospace panel and requires an explicit "Trust and Continue" click before an unknown host key is learned (([session_launcher.rs:519-561](../../crates/pandamux-ui/src/session_launcher.rs#L519-L561))).
+| Operation | Transport/mechanism | Safety behavior |
+|---|---|---|
+| Browse folders | SFTP subsystem over pooled SSH | Canonicalizes the requested path and returns directory entries ([sftp.rs:32-90](../../crates/pandamux-remote/src/sftp.rs#L32-L90)) |
+| Read remote file | SFTP with caller-provided maximum bytes | Rejects oversized reads rather than buffering unbounded content ([sftp.rs:92-134](../../crates/pandamux-remote/src/sftp.rs#L92-L134)) |
+| Upload bytes/file | SFTP create/write with private attributes | Upload helper isolates channel errors as structured SSH failures ([sftp.rs:136-269](../../crates/pandamux-remote/src/sftp.rs#L136-L269)) |
+| Execute command | Pooled SSH session channel | Captures exit status/stdout/stderr or streams output events ([exec.rs:6-117](../../crates/pandamux-remote/src/exec.rs#L6-L117)) |
+| Create delta bundle | Local `git bundle create` into a temporary file | Removes the temporary bundle on success and failure ([worktree_sync.rs:4-30](../../crates/pandamux-remote/src/worktree_sync.rs#L4-L30)) |
+| Apply delta bundle | Verify bundle, then fetch into the requested branch ref | Verification precedes fetch; temporary input is removed ([worktree_sync.rs:33-101](../../crates/pandamux-remote/src/worktree_sync.rs#L33-L101)) |
 
-The pipe-side `ssh.*` methods are dispatched from `dispatch_ssh`, all routed uniformly through `pandamux-app::backend::handle_line` (([backend.rs:1157-1296](../../crates/pandamux-app/src/backend.rs#L1157-L1296))):
+`EnvironmentRouter::upload_file` forwards uploads only through a registered environment transport; the proxy transport reports a structured error if no authenticated SFTP side channel exists ([environment_router.rs:220-267](../../crates/pandamux-server/src/environment_router.rs#L220-L267), [proxy_transport.rs:446-478](../../crates/pandamux-server/src/proxy_transport.rs#L446-L478)).
 
-| Method | Params | Behavior | Source |
-|---|---|---|---|
-| `ssh.connect` | `host`, `user`, `port?`, `auth?`, plus auth-specific fields | Prestarts the remote session (via `connect_ready` when `spawn_ptys` is set), then creates the surface in canonical state; kills the prestarted session if the core mutation fails | ([backend.rs:1166-1217](../../crates/pandamux-app/src/backend.rs#L1166-L1217)) |
-| `ssh.disconnect` | `surfaceId` / `id` | Kills the remote session, drops the tracked `SshConfig`, closes the surface | ([backend.rs:1218-1229](../../crates/pandamux-app/src/backend.rs#L1218-L1229)) |
-| `ssh.list` | none | Lists tracked remote surfaces with host/port/user and whether the session is still running | ([backend.rs:1230-1244](../../crates/pandamux-app/src/backend.rs#L1230-L1244)) |
-| `ssh.profiles` / `ssh.profile.list` | none | Returns all saved host profiles | ([backend.rs:1245](../../crates/pandamux-app/src/backend.rs#L1245)) |
-| `ssh.save_profile` / `ssh.profile.save` | `name?`, `host`, `user`, `port?`, `auth?`, `profileId?` / `id?` | Upserts a profile by id, matching by name only for the legacy `ssh.save_profile` alias; rejects duplicate names | ([backend.rs:1246-1265](../../crates/pandamux-app/src/backend.rs#L1246-L1265)) |
-| `ssh.remove_profile` | `name` | Legacy name-based removal | ([backend.rs:1266-1271](../../crates/pandamux-app/src/backend.rs#L1266-L1271)) |
-| `ssh.profile.remove` | `profileId` / `id` | Id-based removal | ([backend.rs:1272-1276](../../crates/pandamux-app/src/backend.rs#L1272-L1276)) |
-| `ssh.import_config` / `ssh.profile.import_config` | `content` or `path` | Parses OpenSSH config text (or reads it from `path`) and upserts by name | ([backend.rs:1277-1293](../../crates/pandamux-app/src/backend.rs#L1277-L1293)) |
-| `ssh.folder.list` | `profileId` / `id`, `path?`, `trustUnknownHost?` | Browses remote directories over the pool with a 30s timeout, returning canonical path, parent, breadcrumbs, and directory entries | ([backend.rs:1036-1075](../../crates/pandamux-app/src/backend.rs#L1036-L1075)) |
+Sources: [fs_rpc.rs:4-68](../../crates/pandamux-protocol/src/fs_rpc.rs#L4-L68), [git_rpc.rs:4-94](../../crates/pandamux-protocol/src/git_rpc.rs#L4-L94), [worktree_rpc.rs:4-30](../../crates/pandamux-protocol/src/worktree_rpc.rs#L4-L30), [sftp.rs:32-269](../../crates/pandamux-remote/src/sftp.rs#L32-L269), [exec.rs:6-117](../../crates/pandamux-remote/src/exec.rs#L6-L117), [worktree_sync.rs:4-101](../../crates/pandamux-remote/src/worktree_sync.rs#L4-L101)
+<!-- END:AUTOGEN pandamux_11_ssh-remote_files -->
 
-`ssh_config_from_params` and `ssh_auth_from_params` translate raw RPC params into the runtime `SshConfig`/`SshAuth`, defaulting to agent auth over `\\.\pipe\openssh-ssh-agent` when no `auth` field is given (([backend.rs:1298-1332](../../crates/pandamux-app/src/backend.rs#L1298-L1332))); `ssh_profile_from_params` performs the equivalent parse for the secretless `SshHostProfile` saved by `ssh.save_profile` (([backend.rs:1334-1359](../../crates/pandamux-app/src/backend.rs#L1334-L1359))).
+---
 
-Sources: [session_launcher.rs:1-130](../../crates/pandamux-ui/src/session_launcher.rs#L1-L130), [session_launcher.rs:324-561](../../crates/pandamux-ui/src/session_launcher.rs#L324-L561), [backend.rs:1036-1359](../../crates/pandamux-app/src/backend.rs#L1036-L1359)
-<!-- END:AUTOGEN pandamux_11_ssh-remote_ui -->
+<!-- BEGIN:AUTOGEN pandamux_11_ssh-remote_recovery -->
+## Reconnect and Cleanup
+
+Proxy recovery is cursor-based rather than request replay. The Hub retains the last observed durable event sequence, includes it in the next hello, and the node streams committed events after that cursor through the sequence captured at handshake ([proxy_transport.rs:264-277](../../crates/pandamux-server/src/proxy_transport.rs#L264-L277), [proxy_connection.rs:135-173](../../crates/pandamux-server/src/proxy_connection.rs#L135-L173)).
+
+- Replacing a registered environment transport stops the old event-forwarding task and awaits transport shutdown before the new registration becomes authoritative ([environment_router.rs:101-164](../../crates/pandamux-server/src/environment_router.rs#L101-L164), [environment_router.rs:269-276](../../crates/pandamux-server/src/environment_router.rs#L269-L276)).
+- A dropped in-flight request sends a best-effort proxy cancellation, and transport shutdown sends `Goodbye` before closing owned I/O tasks ([proxy_transport.rs:325-331](../../crates/pandamux-server/src/proxy_transport.rs#L325-L331), [proxy_transport.rs:500-524](../../crates/pandamux-server/src/proxy_transport.rs#L500-L524)).
+- Pending requests are failed when the proxy reader terminates, preventing callers from hanging across disconnect ([proxy_transport.rs:178-237](../../crates/pandamux-server/src/proxy_transport.rs#L178-L237), [proxy_transport.rs:541-555](../../crates/pandamux-server/src/proxy_transport.rs#L541-L555)).
+- A launcher-owned daemon is stopped for upgrade only after the remote activity probe finds no child processes and no active Unix-socket clients; otherwise upgrade is deferred ([bootstrap.rs:375-453](../../crates/pandamux-remote/src/bootstrap.rs#L375-L453)).
+- Explicit teardown sends `SIGTERM`, polls for exit, and removes the runtime record only after the process is gone ([bootstrap.rs:456-490](../../crates/pandamux-remote/src/bootstrap.rs#L456-L490)).
+- A discovered daemon is not treated as launcher-owned, so normal disconnect cleanup does not claim ownership of a pre-existing service ([bootstrap.rs:292-317](../../crates/pandamux-remote/src/bootstrap.rs#L292-L317)).
+
+This code defines recovery mechanics but is not, by itself, evidence that the repository's still-open Phase 4 physical disconnect, sleep, capacity exhaustion, release, or production-acceptance gates have passed.
+
+Sources: [proxy_transport.rs:178-331](../../crates/pandamux-server/src/proxy_transport.rs#L178-L331), [proxy_transport.rs:500-555](../../crates/pandamux-server/src/proxy_transport.rs#L500-L555), [proxy_connection.rs:135-173](../../crates/pandamux-server/src/proxy_connection.rs#L135-L173), [environment_router.rs:101-276](../../crates/pandamux-server/src/environment_router.rs#L101-L276), [bootstrap.rs:292-490](../../crates/pandamux-remote/src/bootstrap.rs#L292-L490)
+<!-- END:AUTOGEN pandamux_11_ssh-remote_recovery -->
 
 ---

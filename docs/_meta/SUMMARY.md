@@ -1,39 +1,42 @@
 # Documentation Generation Summary
 
-## Incremental Update - 2026-09-24
+## Full Active-Wiki Refresh - 2026-10-08
 
-- **Mode:** update (accuracy, onboarding, history labels, and citation repair)
-- **Source snapshot:** `bd341e05acc22a0cea49d98ec041a358eb789a47` on `master`
-- **Previous documentation snapshot:** `3accc145c64c10d86785466dbe59b344f6100665`
-- **Working tree:** modified by this documentation update; the snapshot identifies the source baseline, not a documentation commit
-- **Scope:** 15 maintained pages and 79 generated sections
+- **Mode:** full active-wiki refresh for the current GPUI architecture
+- **Source baseline:** `4b8db04c2d6ce9e2fe9b5406937c1d9479b98507` on `codex/recovery-r0`
+- **Previous documentation snapshot:** `bd341e05acc22a0cea49d98ec041a358eb789a47`
+- **Working tree:** modified by this documentation update; the source baseline is not the documentation commit
+- **Scope:** 15 maintained pages and 90 generated sections
 
 ### Outcomes
 
-- Added an AI fast path and an explicit authority order to `AGENTS.md`, with `CLAUDE.md` as the detailed contributor guide and `docs/README.md` as the wiki index.
-- Reconciled current behavior across root guidance and generated docs: JSON settings, complete rewrite and release phases, manual orchestrator-plugin installation, V1 `ping` and `report_pwd`, and the currently unvalidated V2 token field.
-- Moved the obsolete TOML configuration note to `docs/archive/CONFIG_TOML_LEGACY.md` and labeled all archived or historical design records so agents do not treat them as current implementation guidance.
-- Repaired 872 Markdown targets so source citations resolve relative to each documentation page, then updated the doc-sync citation policy and template to preserve that behavior on future runs.
-- Added six missing source mappings to `_toc.yaml`: the commit rule, term and UI manifests, UI metrics, app latency, and the OS clipboard bridge.
-- Replaced 15 dead shared-template path globs in the LL-G and BP rules with live PandaMUX paths, including the Rust crates, repository tooling, release configuration, and agent configuration.
+- Replaced the removed five-crate Iced model with the implemented nine-crate GPUI client and local-server architecture.
+- Mapped all 142 current Rust source modules into `_toc.yaml` and rebuilt every generated page from that map.
+- Added a current provider-routing page covering health evidence, explicit login, organization policy, usage state, failover, and continuation behavior.
+- Rewrote the active documentation index and corrected root routing language so current implementation, maintained acceptance evidence, and historical material are clearly separated.
+- Archived the obsolete Iced shell-integration page under `docs/archive/iced-multiplexer/` instead of deleting the historical record.
+- Preserved the hand-maintained Phase 4 acceptance and usage-observability pages because they already state the current evidence and open gates.
 
 ### Coverage and known boundaries
 
-- **Crate source coverage:** 52 of 52 `crates/*/src/*.rs` files are cited (100%).
-- **Source-map additions:** 6 of 6 previously omitted sources are now represented in `_toc.yaml`.
-- **Explicit gaps:** 0 `_TBD_` markers remain in maintained generated pages. Historical documents are excluded from current-accuracy validation.
-- **Protocol boundary:** the CLI supplies `PANDAMUX_PIPE_TOKEN`, but the server does not validate it; the local V2 pipe is not described as authenticated.
-- **Plugin boundary:** PandaMUX bundles the orchestrator plugin but does not write to `~/.claude` or install the plugin automatically.
+- **Rust source coverage:** 142 of 142 `crates/*/src/**/*.rs` files are represented in `_toc.yaml` and cited by the generated wiki.
+- **Explicit gaps:** 0 `_TBD_` markers remain in maintained generated pages.
+- **Historical scope:** archived and historical documents are labeled and excluded from active-accuracy validation; their links were not rewritten as current architecture claims.
+- **Release boundary:** the release workflow and bundled remote-binary manifest are documented as dormant or placeholder infrastructure, not as a working release path.
+- **Acceptance boundary:** this is interim P4-C7 preparation. Real pre-output provider-capacity failover and physical-laptop disconnect and sleep evidence remain open.
 
 ### Validation
 
-- **YAML:** `_toc.yaml` parses successfully with 15 pages.
-- **Structure:** 15 of 15 pages have first-line PAGE_ID markers; all 79 BEGIN/END AUTOGEN pairs match `_toc.yaml`, with no missing or orphan sections.
-- **Links:** 1,155 local links across active documentation resolve from their containing pages, with 0 broken targets.
-- **Citations:** 1,083 line-linked citations resolve to existing files and valid line ranges.
-- **Mermaid:** 13 diagram blocks pass static opening checks. `mmdc` is unavailable in this environment, so rendered-diagram validation was not performed.
-- **Claude wiring:** `node scripts/check-claude-wiring.mjs` passes; all path-scoped rule globs resolve and hook matchers are functional.
+- **YAML and structure:** `_toc.yaml` parses with 15 pages; all 15 PAGE_ID markers and all 90 ordered BEGIN/END AUTOGEN pairs match.
+- **Links:** 1,292 local links across active documentation resolve with 0 broken targets; 1,245 are in generated pages.
+- **Citations:** 1,197 line-linked citations resolve to existing files, valid anchors, and valid line ranges.
+- **Source map:** all 142 current Rust source files are mapped, with 0 missing modules.
+- **Mermaid:** 17 blocks pass static type and delimiter checks. `mmdc` is unavailable, so renderer-level validation was not performed.
+- **Semantic review:** each generated page group was reviewed against current implementation and the repository authority order separately from the structural validator.
 
 ## Historical context
 
-The July 2026 full regeneration replaced the Electron-oriented wiki with documentation for the five-crate Rust workspace. Electron-only pages remain in `docs/archive/` for history, and `docs/superpowers/` retains older plans and specifications as design records rather than current authority.
+The previous generated wiki described the removed Iced multiplexer architecture.
+Electron and Iced documents retained under `docs/archive/` and older records under
+`docs/superpowers/` remain design history rather than current implementation
+authority.

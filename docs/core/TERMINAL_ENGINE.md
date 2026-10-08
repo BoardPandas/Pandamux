@@ -4,192 +4,149 @@
 
 The following files were used as evidence for this page:
 
-- [lib.rs:1-25](../../crates/pandamux-term/src/lib.rs#L1-L25)
-- [grid.rs:1-866](../../crates/pandamux-term/src/grid.rs#L1-L866)
-- [pty.rs:1-239](../../crates/pandamux-term/src/pty.rs#L1-L239)
-- [session.rs:1-510](../../crates/pandamux-term/src/session.rs#L1-L510)
-- [shell.rs:1-273](../../crates/pandamux-term/src/shell.rs#L1-L273)
-- [search.rs:1-192](../../crates/pandamux-term/src/search.rs#L1-L192)
-- [links.rs:1-159](../../crates/pandamux-term/src/links.rs#L1-L159)
+- [Cargo.toml:1-19](../../crates/pandamux-term/Cargo.toml#L1-L19)
+- [lib.rs:1-36](../../crates/pandamux-term/src/lib.rs#L1-L36)
+- [byte_session.rs:1-231](../../crates/pandamux-term/src/byte_session.rs#L1-L231)
 - [clipboard.rs:1-97](../../crates/pandamux-term/src/clipboard.rs#L1-L97)
 - [cwd.rs:1-199](../../crates/pandamux-term/src/cwd.rs#L1-L199)
+- [grid.rs:14-561](../../crates/pandamux-term/src/grid.rs#L14-L561)
+- [links.rs:1-159](../../crates/pandamux-term/src/links.rs#L1-L159)
+- [pty.rs:16-202](../../crates/pandamux-term/src/pty.rs#L16-L202)
+- [ring_buffer.rs:1-134](../../crates/pandamux-term/src/ring_buffer.rs#L1-L134)
+- [search.rs:1-192](../../crates/pandamux-term/src/search.rs#L1-L192)
+- [session.rs:14-485](../../crates/pandamux-term/src/session.rs#L14-L485)
+- [shell.rs:1-273](../../crates/pandamux-term/src/shell.rs#L1-L273)
+- [size.rs:1-11](../../crates/pandamux-term/src/size.rs#L1-L11)
 
 </details>
 
 # Terminal Engine
 
-> **Related Pages**: [SSH Remote Surfaces](../features/SSH_REMOTE.md), [Shell Integration and Status](../features/SHELL_INTEGRATION.md)
+> **Related Pages**: [GPUI Desktop](UI_SHELL.md), [Application Runtime](APP_RUNTIME.md)
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_05_terminal-engine_overview -->
-## Overview and Isolation
+<!-- BEGIN:AUTOGEN pandamux_05_terminal-engine_features -->
+## Feature Boundary
 
-`pandamux-term` is the terminal engine crate: it wraps `alacritty_terminal` for grid/ANSI parsing, `portable-pty` for local PTYs, and hand-built search/link/clipboard/cwd logic, and exposes only PandaMUX's own types across its public API (`alacritty_terminal` types never leak out, per the crate-isolation invariant) ([lib.rs:1-25](../../crates/pandamux-term/src/lib.rs#L1-L25)).
+`pandamux-term` separates terminal parsing from pseudoterminal ownership with two optional Cargo features. The default enables both, while production consumers can select only `grid` or `pty` ([Cargo.toml:9-19](../../crates/pandamux-term/Cargo.toml#L9-L19)).
 
-The crate root declares nine modules and re-exports their public surface; `ssh.rs` (remote PTY/SFTP over russh) is part of this crate but is documented separately since it is large enough to warrant its own page (see [SSH Remote Surfaces](../features/SSH_REMOTE.md)) ([lib.rs:1-25](../../crates/pandamux-term/src/lib.rs#L1-L25)).
+| Feature | Optional dependency | Exported responsibility |
+|---|---|---|
+| `grid` | `alacritty_terminal` | ANSI parsing, styled cells, selection, scrollback, search, and link projection ([lib.rs:5-6](../../crates/pandamux-term/src/lib.rs#L5-L6), [lib.rs:21-25](../../crates/pandamux-term/src/lib.rs#L21-L25)) |
+| `pty` | `portable-pty` | Byte sessions, shell commands, and server-owned PTY processes ([lib.rs:1-2](../../crates/pandamux-term/src/lib.rs#L1-L2), [lib.rs:8-9](../../crates/pandamux-term/src/lib.rs#L8-L9), [lib.rs:17-18](../../crates/pandamux-term/src/lib.rs#L17-L18)) |
+| `grid` + `pty` | both | Combined capture and `PtySessionManager` APIs used when one process owns both the PTY and rendered grid ([lib.rs:12-13](../../crates/pandamux-term/src/lib.rs#L12-L13), [lib.rs:27-34](../../crates/pandamux-term/src/lib.rs#L27-L34)) |
+| always available | none | Clipboard policy, cwd scanning, links, ring buffers, search, shell helpers, and `GridSize` ([lib.rs:3-15](../../crates/pandamux-term/src/lib.rs#L3-L15)) |
 
-| Module | Purpose |
-|---|---|
-| `clipboard` | OSC 52 clipboard policy and bracketed-paste wrapping ([lib.rs:11](../../crates/pandamux-term/src/lib.rs#L11)) |
-| `cwd` | Incremental OSC 7 / OSC 9;9 cwd scanner ([lib.rs:12](../../crates/pandamux-term/src/lib.rs#L12)) |
-| `grid` | `TerminalGrid`, the wrapper over `alacritty_terminal::Term` exposing PandaMUX's own cell/screen types ([lib.rs:13-16](../../crates/pandamux-term/src/lib.rs#L13-L16)) |
-| `links` | Hand-built URL detection over rendered lines ([lib.rs:17](../../crates/pandamux-term/src/lib.rs#L17)) |
-| `pty` | One-shot PTY command capture (marker-based shell probing) ([lib.rs:18](../../crates/pandamux-term/src/lib.rs#L18)) |
-| `search` | Hand-built terminal search over serialized grid lines ([lib.rs:19](../../crates/pandamux-term/src/lib.rs#L19)) |
-| `session` | `PtySessionManager`, the long-lived local PTY + grid registry ([lib.rs:20](../../crates/pandamux-term/src/lib.rs#L20)) |
-| `shell` | Shell resolution, write chunking, DA1/CPR interception, POSIX-path handling ([lib.rs:21](../../crates/pandamux-term/src/lib.rs#L21)) |
-| `ssh` | Remote PTY/SFTP over russh (see [SSH Remote Surfaces](../features/SSH_REMOTE.md)) ([lib.rs:22-25](../../crates/pandamux-term/src/lib.rs#L22-L25)) |
+This split is the ownership boundary used by the wider workspace: the server can own PTYs without linking the renderer, while the desktop can render terminal bytes without spawning processes. Public exports use PandaMUX-owned types such as `GridSize`, `ScreenCells`, and `TerminalRingBuffer` instead of leaking implementation types ([lib.rs:17-36](../../crates/pandamux-term/src/lib.rs#L17-L36)).
 
-Sources: [lib.rs:1-25](../../crates/pandamux-term/src/lib.rs#L1-L25)
-<!-- END:AUTOGEN pandamux_05_terminal-engine_overview -->
+Sources: [Cargo.toml:9-19](../../crates/pandamux-term/Cargo.toml#L9-L19), [lib.rs:1-36](../../crates/pandamux-term/src/lib.rs#L1-L36)
+<!-- END:AUTOGEN pandamux_05_terminal-engine_features -->
 
 ---
 
 <!-- BEGIN:AUTOGEN pandamux_05_terminal-engine_grid -->
-## Terminal Grid
+## Grid and Rendering Data
 
-`TerminalGrid` is the single type through which the rest of the workspace touches a terminal buffer; it owns an ANSI parser and an `alacritty_terminal::Term`, plus a shared clipboard-store buffer fed by the terminal's event listener ([grid.rs:198-202](../../crates/pandamux-term/src/grid.rs#L198-L202)).
+`TerminalGrid` owns an Alacritty ANSI processor, terminal state, and a synchronized queue of OSC 52 clipboard-store requests ([grid.rs:169-202](../../crates/pandamux-term/src/grid.rs#L169-L202)). Its default viewport is 120 by 30 cells with 10,000 scrollback lines, and resize delegates to Alacritty reflow so content and history remain intact ([grid.rs:14-20](../../crates/pandamux-term/src/grid.rs#L14-L20), [grid.rs:204-241](../../crates/pandamux-term/src/grid.rs#L204-L241)).
 
-Cell colors and styled cells are PandaMUX's own theme-independent types rather than raw alacritty colors: `CellColor` keeps default/background/indexed colors symbolic so the UI can re-resolve them against the active theme, while explicit RGB passes through unchanged, and `StyledCell` has reverse-video already applied by swapping `fg`/`bg` so the UI never special-cases `INVERSE` ([grid.rs:21-45](../../crates/pandamux-term/src/grid.rs#L21-L45)). `ScreenCells` is the full per-poll snapshot handed to the renderer: one `Vec<StyledCell>` row per visible line, the cursor position and visibility, the scrollback `display_offset`/`history_size`, selection spans, and terminal mode flags ([grid.rs:91-119](../../crates/pandamux-term/src/grid.rs#L91-L119)).
+| Projection | Contents | Consumer behavior |
+|---|---|---|
+| `StyledCell` | Character, symbolic foreground/background color, bold flag | Reverse video is normalized by swapping colors before the UI sees the cell ([grid.rs:38-46](../../crates/pandamux-term/src/grid.rs#L38-L46), [grid.rs:473-484](../../crates/pandamux-term/src/grid.rs#L473-L484)) |
+| `ScreenCells` | Visible rows, cursor, cursor visibility, scroll offset, history size, selection spans, terminal modes | Rows retain their width so line-ending backgrounds render correctly ([grid.rs:88-106](../../crates/pandamux-term/src/grid.rs#L88-L106), [grid.rs:434-505](../../crates/pandamux-term/src/grid.rs#L434-L505)) |
+| `TermModes` | Alternate screen, mouse reporting, alternate scroll, application cursor, bracketed paste | Lets the UI route input without importing Alacritty mode types ([grid.rs:58-67](../../crates/pandamux-term/src/grid.rs#L58-L67)) |
+| Serialized text | Scrollback followed by the visible screen | Supports screen reads and full-buffer search ([grid.rs:520-557](../../crates/pandamux-term/src/grid.rs#L520-L557)) |
 
-Every grid runs with `Osc52::OnlyCopy`, PandaMUX's secure default: a remote's OSC 52 clipboard-store is accepted, but an OSC 52 clipboard-load (a remote reading the local clipboard) is denied at the alacritty config layer (plan F1) ([grid.rs:204-213](../../crates/pandamux-term/src/grid.rs#L204-L213)).
+Incoming bytes advance the parser; visible text collapses wide-character spacer cells, while `visible_cells` additionally resolves colors, selection spans, cursor state, and terminal modes ([grid.rs:403-431](../../crates/pandamux-term/src/grid.rs#L403-L431), [grid.rs:434-505](../../crates/pandamux-term/src/grid.rs#L434-L505)). Grid configuration permits OSC 52 copy requests but denies clipboard-load queries with `Osc52::OnlyCopy` ([grid.rs:193-202](../../crates/pandamux-term/src/grid.rs#L193-L202)).
 
-```rust
-/// The alacritty config PandaMUX runs every grid with. OnlyCopy is the secure
-/// default and exactly F1's policy: accept a remote's OSC 52 copy, deny its
-/// clipboard-read (load) query.
-fn grid_config(scrollback_lines: usize) -> Config {
-    Config {
-        scrolling_history: scrollback_lines,
-        osc52: Osc52::OnlyCopy,
-        ..Config::default()
-    }
-}
-```
-
-Sources: [grid.rs:204-213](../../crates/pandamux-term/src/grid.rs#L204-L213)
-
-Resizing is content-preserving: `TerminalGrid::resize` calls into alacritty's own reflow rather than recreating the grid, so both the visible screen and scrollback survive a resize (the caller is responsible for resizing the underlying PTY or SSH channel to match) ([grid.rs:238-243](../../crates/pandamux-term/src/grid.rs#L238-L243)). There is no incremental damage tracking: every poll recomputes the full visible cell grid from scratch in `visible_cells`, which also collapses wide-char spacer cells, resolves colors, applies reverse-video, and reports selection spans in the same rendered-cell index space ([grid.rs:441-505](../../crates/pandamux-term/src/grid.rs#L441-L505)). Scrollback defaults to 10,000 lines and is configurable per grid via `with_scrollback`/`set_scrollback` ([grid.rs:13,220-236](../../crates/pandamux-term/src/grid.rs#L13-L236)); `serialize`/`serialize_lines` produce the full scrollback-plus-visible text used by search, link detection, and the pipe's `read-screen`-equivalent surface calls ([grid.rs:520-534](../../crates/pandamux-term/src/grid.rs#L520-L534)).
-
-| Type | Role |
-|---|---|
-| `CellColor` | Theme-independent fg/bg color (`Default`, `Background`, `Indexed(u8)`, `Rgb(u8,u8,u8)`) ([grid.rs:24-35](../../crates/pandamux-term/src/grid.rs#L24-L35)) |
-| `StyledCell` | One rendered cell (`char`, resolved `fg`/`bg`, `bold`) ([grid.rs:39-45](../../crates/pandamux-term/src/grid.rs#L39-L45)) |
-| `ScreenCells` | Full visible-screen snapshot: rows, cursor, scroll state, selection, modes ([grid.rs:91-105](../../crates/pandamux-term/src/grid.rs#L91-L105)) |
-| `TermModes` | UI input-routing flags: alt screen, mouse reporting, app cursor, bracketed paste ([grid.rs:59-66](../../crates/pandamux-term/src/grid.rs#L59-L66)) |
-
-Sources: [grid.rs:1-866](../../crates/pandamux-term/src/grid.rs#L1-L866)
+Sources: [grid.rs:14-119](../../crates/pandamux-term/src/grid.rs#L14-L119), [grid.rs:169-259](../../crates/pandamux-term/src/grid.rs#L169-L259), [grid.rs:403-561](../../crates/pandamux-term/src/grid.rs#L403-L561)
 <!-- END:AUTOGEN pandamux_05_terminal-engine_grid -->
 
 ---
 
 <!-- BEGIN:AUTOGEN pandamux_05_terminal-engine_pty -->
-## Local PTY
+## Local PTY Lifecycle
 
-`pty.rs` implements one-shot PTY command capture: spawn a command under `portable-pty`, feed its output into a fresh `TerminalGrid`, and wait for a caller-supplied marker string to appear before returning both the raw output and the rendered screen text ([pty.rs:82-95](../../crates/pandamux-term/src/pty.rs#L82-L95)). This is the mechanism the app layer uses to probe a shell (e.g. detect which PowerShell/cmd is actually usable) without keeping a session alive.
+The crate provides three PTY shapes: one-shot marker capture, a byte-only session manager, and a combined PTY-plus-grid session manager. All open a `portable-pty` pair, move blocking reads to a dedicated thread, and pass chunks back through an `mpsc` channel ([pty.rs:91-146](../../crates/pandamux-term/src/pty.rs#L91-L146), [byte_session.rs:34-90](../../crates/pandamux-term/src/byte_session.rs#L34-L90), [session.rs:48-105](../../crates/pandamux-term/src/session.rs#L48-L105)).
 
-`PtyCommand` is the shared command description across this module and `session.rs`: a program, args, optional cwd, and injected environment variables (the `PANDAMUX_*` set that shell integration, the CLI, and orchestrator hooks read), converted to a `portable_pty::CommandBuilder` via `to_builder` ([pty.rs:11-65](../../crates/pandamux-term/src/pty.rs#L11-L65)).
+```mermaid
+sequenceDiagram
+    participant Owner
+    participant PTY
+    participant Reader
+    participant Grid
 
-`capture_output` opens a PTY pair sized to the caller's `GridSize`, spawns the child, and reads its output on a background thread into an `mpsc` channel while the calling thread polls for the marker with a 20 ms sleep loop and a hard `timeout` deadline; if the marker never appears the child is killed and an error is returned ([pty.rs:97-192](../../crates/pandamux-term/src/pty.rs#L97-L192)). While waiting, it also answers a Cursor Position Report (`ESC [ 6 n`) probe exactly once by writing `ESC [ 1 ; 1 R` back to the PTY, so a shell that blocks on CPR during startup does not hang the capture ([pty.rs:151-155](../../crates/pandamux-term/src/pty.rs#L151-L155)).
+    Owner->>PTY: Open and spawn
+    PTY-->>Reader: Output bytes
+    Reader-->>Owner: Channel chunk
+    Owner->>Grid: Advance bytes
+    Owner->>PTY: Input or resize
+    Owner->>PTY: Kill session
+```
 
-`pty.rs` intentionally does not implement resize, ongoing writes, or tree-kill: those belong to a long-lived interactive session and are owned by `PtySessionManager` in `session.rs`, covered next ([session.rs:133-154](../../crates/pandamux-term/src/session.rs#L133-L154), [session.rs:357-370](../../crates/pandamux-term/src/session.rs#L357-L370)).
+| API | Intended use | Important behavior |
+|---|---|---|
+| `capture_pty_command` | Bounded shell probing | Waits for an exact marker, answers the first CPR query, kills on timeout, and rejects unsuccessful exit status ([pty.rs:91-202](../../crates/pandamux-term/src/pty.rs#L91-L202)) |
+| `PtyByteSessionManager` | Server-side terminal byte ownership | Drains only bytes not previously returned and omits a rendering grid ([byte_session.rs:11-25](../../crates/pandamux-term/src/byte_session.rs#L11-L25), [byte_session.rs:131-144](../../crates/pandamux-term/src/byte_session.rs#L131-L144)) |
+| `PtySessionManager` | Combined PTY and local grid | Polls before text/cell projections and performs content-preserving grid resize with the PTY ([session.rs:14-30](../../crates/pandamux-term/src/session.rs#L14-L30), [session.rs:134-182](../../crates/pandamux-term/src/session.rs#L134-L182)) |
 
-Sources: [pty.rs:1-239](../../crates/pandamux-term/src/pty.rs#L1-L239)
+Large writes are split and flushed in bounded chunks; same-size resize requests are ignored to avoid unnecessary prompt redraws ([byte_session.rs:93-129](../../crates/pandamux-term/src/byte_session.rs#L93-L129), [session.rs:114-154](../../crates/pandamux-term/src/session.rs#L114-L154)). Both long-lived managers tree-kill child processes on Windows before killing the PTY child, and their `Drop` implementations clean up remaining sessions ([byte_session.rs:146-181](../../crates/pandamux-term/src/byte_session.rs#L146-L181), [byte_session.rs:208-231](../../crates/pandamux-term/src/byte_session.rs#L208-L231), [session.rs:374-385](../../crates/pandamux-term/src/session.rs#L374-L385), [session.rs:466-485](../../crates/pandamux-term/src/session.rs#L466-L485)).
+
+Sources: [pty.rs:91-202](../../crates/pandamux-term/src/pty.rs#L91-L202), [byte_session.rs:11-231](../../crates/pandamux-term/src/byte_session.rs#L11-L231), [session.rs:14-182](../../crates/pandamux-term/src/session.rs#L14-L182)
 <!-- END:AUTOGEN pandamux_05_terminal-engine_pty -->
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_05_terminal-engine_session -->
-## Session and Shell Lifecycle
+<!-- BEGIN:AUTOGEN pandamux_05_terminal-engine_replay -->
+## Byte Replay and Ring Buffers
 
-`PtySessionManager` (`session.rs`) is the registry of every live local PTY surface: it maps a session id to a `PtySession` bundling the `TerminalGrid`, the PTY master/writer/child handles, the background reader channel, accumulated raw output, and a `CwdScanner` ([session.rs:15-30](../../crates/pandamux-term/src/session.rs#L15-L30)). `spawn` opens a `portable-pty` pair sized to the requested `GridSize`, starts a background read thread that forwards chunks over an `mpsc` channel, and rejects a duplicate session id outright ([session.rs:48-105](../../crates/pandamux-term/src/session.rs#L48-L105)).
+`TerminalRingBuffer` is a bounded circular byte buffer addressed by monotonically increasing offsets. Its default capacity is 4 MiB; writes evict the oldest bytes while preserving `head_offset` as the next global byte position and advancing `tail_offset` to the oldest retained byte ([ring_buffer.rs:3-19](../../crates/pandamux-term/src/ring_buffer.rs#L3-L19), [ring_buffer.rs:64-88](../../crates/pandamux-term/src/ring_buffer.rs#L64-L88)).
 
-Writes are chunked through `shell::chunk_write` above a 1024-byte threshold, because ConPTY's input pipe silently drops bytes when a single write outruns the foreground process ([session.rs:111-131](../../crates/pandamux-term/src/session.rs#L111-L131), [shell.rs:112-130](../../crates/pandamux-term/src/shell.rs#L112-L130)). `resize` is a no-op when the requested size matches the current size (forwarding a same-size resize still makes the shell redraw its prompt, a doubled-prompt bug), and otherwise resizes the PTY and reflows the grid content-preservingly ([session.rs:133-154](../../crates/pandamux-term/src/session.rs#L133-L154)).
-
-`PtySession::poll` is the per-session pump: it drains the reader channel, advances the grid, feeds the `CwdScanner`, and answers two escape-sequence probes in-process so they never reach the visible screen or stall the shell ([session.rs:409-436](../../crates/pandamux-term/src/session.rs#L409-L436)):
-
-```rust
-// Answer DA1 (Primary Device Attributes) probes in-process so
-// oh-my-posh / PSReadLine never stall or leak the reply onto
-// the prompt.
-if shell::contains_da1_query(&chunk) {
-    self.writer.write_all(shell::DA1_REPLY)?;
-    self.writer.flush()?;
-}
-// Answer the first CPR query so a bounded probe does not hang.
-if !self.cpr_answered && shell::contains_cpr_query(&self.output) {
-    self.writer.write_all(shell::CPR_REPLY)?;
-    self.writer.flush()?;
-    self.cpr_answered = true;
-}
-```
-
-Sources: [session.rs:417-429](../../crates/pandamux-term/src/session.rs#L417-L429)
-
-`shell.rs` supplies the pure logic `session.rs` calls into: `shell_type` classifies a shell string into `PowerShell`/`Cmd`/`Wsl`/`Unknown` ([shell.rs:9-30](../../crates/pandamux-term/src/shell.rs#L9-L30)); `resolve_shell` falls back through `pwsh.exe` -> `powershell.exe` -> `cmd.exe` on Windows (or `$SHELL` -> `/bin/sh` elsewhere) when the preferred shell is missing ([shell.rs:39-72](../../crates/pandamux-term/src/shell.rs#L39-L72)); `contains_da1_query`/`contains_cpr_query` recognize the two probe escape sequences while rejecting DA1 replies and DA2/DA3 forms ([shell.rs:136-165](../../crates/pandamux-term/src/shell.rs#L136-L165)); and `win32_spawn_cwd` rewrites a POSIX/WSL cwd (which fails Win32 `spawn` with error 267) to the Windows home directory ([shell.rs:167-186](../../crates/pandamux-term/src/shell.rs#L167-L186)).
-
-`PtySessionManager::kill` tree-kills the shell's whole process subtree before terminating the child, so grandchildren (e.g. Claude Code's persistent backend process) do not orphan when the pseudoconsole closes; on Windows this shells out to `taskkill /PID <pid> /T /F` spawned detached with `CREATE_NO_WINDOW`, and is a no-op on other platforms because `portable-pty`'s own kill already signals the process group there ([session.rs:357-370](../../crates/pandamux-term/src/session.rs#L357-L370), [session.rs:438-467](../../crates/pandamux-term/src/session.rs#L438-L467)).
-
-```mermaid
-stateDiagram-v2
-    [*] --> Resolving
-    Resolving --> Spawned : shell resolved
-    Spawned --> Running : read thread started
-    Running --> Running : poll advances grid
-    Running --> ProbeAnswered : DA1 or CPR seen
-    ProbeAnswered --> Running : reply written
-    Running --> Resized : viewport changed
-    Resized --> Running : grid reflowed
-    Running --> Killed : kill requested
-    Killed --> [*]
-```
-
-Sources: [session.rs:1-510](../../crates/pandamux-term/src/session.rs#L1-L510), [shell.rs:1-273](../../crates/pandamux-term/src/shell.rs#L1-L273)
-<!-- END:AUTOGEN pandamux_05_terminal-engine_session -->
-
----
-
-<!-- BEGIN:AUTOGEN pandamux_05_terminal-engine_search -->
-## Search, Links, and Serialization
-
-Both `search.rs` and `links.rs` are dependency-free, hand-built replacements for xterm.js addons (the find addon and the web-links addon respectively), operating on character offsets rather than byte offsets so results line up with rendered grid columns; both are driven from `TerminalGrid::serialize_lines`/`visible_lines` (see [Terminal Grid](#terminal-grid)) ([search.rs:1-8](../../crates/pandamux-term/src/search.rs#L1-L8), [links.rs:1-7](../../crates/pandamux-term/src/links.rs#L1-L7), [grid.rs:527-534](../../crates/pandamux-term/src/grid.rs#L527-L534)).
-
-`search_lines` finds every non-overlapping, left-to-right, top-to-bottom occurrence of a query across a line vector, honoring `SearchOptions`'s `case_sensitive` and `whole_word` toggles; `is_word_boundary` treats any non-alphanumeric/underscore character (including a hyphen) as a boundary, so `cargo-watch` still matches a whole-word search for `cargo` ([search.rs:9-90](../../crates/pandamux-term/src/search.rs#L9-L90)).
-
-`detect_links` scans each rendered line for a fixed set of schemes plus bare `www.` hosts, extends the match to the end of the URL body, and trims trailing sentence punctuation (`.`, `,`, `;`, `:`, `!`, `?`, closing brackets, a right double quote) so a URL at a sentence's end does not swallow the period; a bare `www.` match is normalized to an `http://`-prefixed URL ([links.rs:19-67](../../crates/pandamux-term/src/links.rs#L19-L67), [links.rs:103-107](../../crates/pandamux-term/src/links.rs#L103-L107)).
-
-| Recognized scheme | Notes |
-|---|---|
-| `https://` | ([links.rs:19](../../crates/pandamux-term/src/links.rs#L19)) |
-| `http://` | ([links.rs:19](../../crates/pandamux-term/src/links.rs#L19)) |
-| `file://` | ([links.rs:19](../../crates/pandamux-term/src/links.rs#L19)) |
-| `ftp://` | ([links.rs:19](../../crates/pandamux-term/src/links.rs#L19)) |
-| bare `www.` | normalized to `http://www...` ([links.rs:82-84](../../crates/pandamux-term/src/links.rs#L82-L84)) |
-
-Both modules expose their results back through `TerminalGrid`: `TerminalGrid::search` runs `search_lines` over the full serialized buffer, and `TerminalGrid::links` runs `detect_links` over only the visible lines ([grid.rs:545-558](../../crates/pandamux-term/src/grid.rs#L545-L558)).
-
-Sources: [search.rs:1-192](../../crates/pandamux-term/src/search.rs#L1-L192), [links.rs:1-159](../../crates/pandamux-term/src/links.rs#L1-L159)
-<!-- END:AUTOGEN pandamux_05_terminal-engine_search -->
-
----
-
-<!-- BEGIN:AUTOGEN pandamux_05_terminal-engine_clipboard -->
-## Clipboard and CWD Tracking
-
-`clipboard.rs` implements the OSC 52 clipboard policy from plan F1: `ClipboardStore` is a captured, already base64-decoded OSC 52 write (`ClipboardKind::Clipboard` or `Selection`), and `ClipboardPolicy` is secure by default, accepting stores up to a 1 MiB cap while denying OSC 52 loads (a remote reading the local clipboard) unless explicitly opted in per host ([clipboard.rs:10-54](../../crates/pandamux-term/src/clipboard.rs#L10-L54)). Because the grid's alacritty `Config` is built with `Osc52::OnlyCopy` (see [Terminal Grid](#terminal-grid)), the load-deny half of the policy is actually enforced one layer down, in `grid.rs` ([grid.rs:204-213](../../crates/pandamux-term/src/grid.rs#L204-L213)).
-
-`wrap_paste` brackets outgoing paste bytes in `ESC [ 200 ~` / `ESC [ 201 ~` only when the terminal has requested bracketed-paste mode (DECSET 2004), leaving bytes untouched otherwise; callers pass `TerminalGrid::bracketed_paste_active` as the `bracketed` flag ([clipboard.rs:56-74](../../crates/pandamux-term/src/clipboard.rs#L56-L74)).
-
-`cwd.rs`'s `CwdScanner` tracks a session's working directory purely from the PTY byte stream, recognizing cmd's OSC 9;9 (`ESC ] 9 ; 9 ; <path> ST`) and the standard OSC 7 (`ESC ] 7 ; file://<host><path> ST`); bash/pwsh instead report cwd over the named pipe via `report_pwd`, which calls `PtySessionManager::set_cwd` directly and bypasses the scanner ([cwd.rs:1-12](../../crates/pandamux-term/src/cwd.rs#L1-L12), [session.rs:385-391](../../crates/pandamux-term/src/session.rs#L385-L391)). The scanner is a small incremental state machine (`Ground` -> `Esc` -> `Osc`) so an OSC split across PTY reads still parses correctly, with a bounded 4096-byte payload buffer and a terminator on BEL or ST (`ESC \`) ([cwd.rs:14-104](../../crates/pandamux-term/src/cwd.rs#L14-L104)). `parse_cwd_osc` also percent-decodes OSC 7 URIs and normalizes a Windows-style OSC 7 path (`/C:/Users/x`) to `C:/Users/x` ([cwd.rs:108-157](../../crates/pandamux-term/src/cwd.rs#L108-L157)).
-
-| OSC form | Emitted by | Parsed as |
+| Client cursor | Result from `read_since` | Meaning |
 |---|---|---|
-| `9;9;<path>` | cmd / Windows Terminal | Path used verbatim after percent-decoding ([cwd.rs:110-113](../../crates/pandamux-term/src/cwd.rs#L110-L113)) |
-| `7;file://<host><path>` | Many POSIX shells | Host stripped, path percent-decoded and normalized ([cwd.rs:114-127](../../crates/pandamux-term/src/cwd.rs#L114-L127)) |
-| (none, pipe `report_pwd`) | bash / pwsh shell integration | Set directly via `CwdScanner::set` ([cwd.rs:49-52](../../crates/pandamux-term/src/cwd.rs#L49-L52)) |
+| Below `tail_offset` | All retained bytes, `truncated = true` | The client must reset its grid because requested history was evicted ([ring_buffer.rs:90-106](../../crates/pandamux-term/src/ring_buffer.rs#L90-L106)) |
+| Between tail and head | Only bytes after the cursor, `truncated = false` | Normal incremental replay ([ring_buffer.rs:107-122](../../crates/pandamux-term/src/ring_buffer.rs#L107-L122)) |
+| Above `head_offset` | Empty bytes, `truncated = false` | The supplied client cursor is ahead of available output ([ring_buffer.rs:123-125](../../crates/pandamux-term/src/ring_buffer.rs#L123-L125)) |
 
-Sources: [clipboard.rs:1-97](../../crates/pandamux-term/src/clipboard.rs#L1-L97), [cwd.rs:1-199](../../crates/pandamux-term/src/cwd.rs#L1-L199)
-<!-- END:AUTOGEN pandamux_05_terminal-engine_clipboard -->
+Writes larger than the capacity retain only their trailing slice but advance the head by the complete input length, so offsets continue to describe the original byte stream rather than the retained window ([ring_buffer.rs:64-77](../../crates/pandamux-term/src/ring_buffer.rs#L64-L77)). `clear` resets both storage and offsets to zero; callers must therefore treat it as a new replay epoch ([ring_buffer.rs:128-133](../../crates/pandamux-term/src/ring_buffer.rs#L128-L133)).
+
+Sources: [ring_buffer.rs:1-134](../../crates/pandamux-term/src/ring_buffer.rs#L1-L134)
+<!-- END:AUTOGEN pandamux_05_terminal-engine_replay -->
+
+---
+
+<!-- BEGIN:AUTOGEN pandamux_05_terminal-engine_interaction -->
+## Input, Search, Links, and Clipboard
+
+The grid exposes the interaction state required by a terminal surface without owning desktop events. Selection maps simple, word, and line gestures into Alacritty selection types, supports drag updates and whole-buffer selection, and returns selected text through a PandaMUX API ([grid.rs:276-329](../../crates/pandamux-term/src/grid.rs#L276-L329)).
+
+| Interaction | Terminal API | Scope |
+|---|---|---|
+| Scroll | `scroll_display` | Lines, pages, top, or bottom within retained history ([grid.rs:245-259](../../crates/pandamux-term/src/grid.rs#L245-L259)) |
+| Search | `search` | Full serialized scrollback plus visible screen ([grid.rs:520-553](../../crates/pandamux-term/src/grid.rs#L520-L553)) |
+| Link detection | `links` | Current visible rows ([grid.rs:555-557](../../crates/pandamux-term/src/grid.rs#L555-L557)) |
+| Clipboard store | `take_clipboard_stores` | Drains captured OSC 52 writes for the caller to apply under policy ([grid.rs:351-359](../../crates/pandamux-term/src/grid.rs#L351-L359)) |
+| Paste mode | `bracketed_paste_active` | Reports DECSET 2004 for caller-side paste wrapping ([grid.rs:361-365](../../crates/pandamux-term/src/grid.rs#L361-L365)) |
+
+`PtySessionManager` polls before searching or extracting selection text, making those results reflect all channel data already available at the time of the call ([session.rs:232-253](../../crates/pandamux-term/src/session.rs#L232-L253), [session.rs:343-356](../../crates/pandamux-term/src/session.rs#L343-L356)). The manager also exposes modes, clipboard-store events, cursor, viewport scrolling, clear-buffer behavior, and cwd updates without exposing its internal session objects ([session.rs:256-286](../../crates/pandamux-term/src/session.rs#L256-L286), [session.rs:359-407](../../crates/pandamux-term/src/session.rs#L359-L407)).
+
+Sources: [grid.rs:245-371](../../crates/pandamux-term/src/grid.rs#L245-L371), [grid.rs:520-557](../../crates/pandamux-term/src/grid.rs#L520-L557), [session.rs:232-407](../../crates/pandamux-term/src/session.rs#L232-L407)
+<!-- END:AUTOGEN pandamux_05_terminal-engine_interaction -->
+
+---
+
+<!-- BEGIN:AUTOGEN pandamux_05_terminal-engine_boundaries -->
+## Ownership and Safety Boundaries
+
+Terminal parsing, process ownership, replay, and OS integration remain deliberately separate. The crate captures OSC 52 store requests but the app layer decides whether to write them to the OS clipboard; the grid rejects clipboard reads at the parser configuration boundary ([grid.rs:193-202](../../crates/pandamux-term/src/grid.rs#L193-L202), [grid.rs:351-359](../../crates/pandamux-term/src/grid.rs#L351-L359)).
+
+- PTY reader threads only send owned byte chunks or error strings; state mutation stays with the manager on its owning thread ([byte_session.rs:57-74](../../crates/pandamux-term/src/byte_session.rs#L57-L74), [session.rs:71-88](../../crates/pandamux-term/src/session.rs#L71-L88)).
+- DA1 and the first CPR probe are answered in-process during polling so startup tooling does not stall or paint protocol replies into the visible terminal ([byte_session.rs:184-205](../../crates/pandamux-term/src/byte_session.rs#L184-L205), [session.rs:437-463](../../crates/pandamux-term/src/session.rs#L437-L463)).
+- Unknown byte-session ids produce errors, while dying-grid interaction methods such as scrolling are intentionally safe no-ops ([byte_session.rs:93-97](../../crates/pandamux-term/src/byte_session.rs#L93-L97), [session.rs:284-286](../../crates/pandamux-term/src/session.rs#L284-L286)).
+- Per-session PTY dimensions and grid dimensions change together only in the combined manager; the byte-only manager leaves rendering to its consumer ([byte_session.rs:113-129](../../crates/pandamux-term/src/byte_session.rs#L113-L129), [session.rs:134-154](../../crates/pandamux-term/src/session.rs#L134-L154)).
+- Offset truncation is explicit rather than silent, so a remote renderer can discard invalid incremental state before replaying retained bytes ([ring_buffer.rs:90-106](../../crates/pandamux-term/src/ring_buffer.rs#L90-L106)).
+
+Sources: [byte_session.rs:57-231](../../crates/pandamux-term/src/byte_session.rs#L57-L231), [grid.rs:193-202](../../crates/pandamux-term/src/grid.rs#L193-L202), [ring_buffer.rs:90-106](../../crates/pandamux-term/src/ring_buffer.rs#L90-L106), [session.rs:134-154](../../crates/pandamux-term/src/session.rs#L134-L154), [session.rs:437-485](../../crates/pandamux-term/src/session.rs#L437-L485)
+<!-- END:AUTOGEN pandamux_05_terminal-engine_boundaries -->
 
 ---

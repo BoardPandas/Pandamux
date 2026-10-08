@@ -1,34 +1,33 @@
 project:
   name: "PandaMUX"
-  description: "Native Windows terminal multiplexer for AI agents. A Rust workspace pairing a GPU-accelerated Iced UI, an alacritty_terminal grid, local (portable-pty) and remote (russh) PTYs, a named-pipe control plane, and a pandamux CLI."
+  description: "Native chat-first desktop for supervising local and remote AI coding agents through a GPUI client, authenticated JSON-RPC Hub, provider drivers, durable SQLite state, and SSH-connected Linux nodes."
   repo_base_url: "https://github.com/BoardPandas/Pandamux/blob"
-  ref_commit_hash: "bd341e05acc22a0cea49d98ec041a358eb789a47"
-  branch: "master"
-  updated_at: "2026-09-24"
+  ref_commit_hash: "4b8db04c2d6ce9e2fe9b5406937c1d9479b98507"
+  branch: "codex/recovery-r0"
+  updated_at: "2026-10-08"
 
 pages:
   - id: pandamux_01_overview
     title: "Overview"
     folder: ""
     filename: "OVERVIEW.md"
-    description: "What PandaMUX is, its Rust workspace stack, crate layout, binaries, and where to start reading."
+    description: "Product purpose, active architecture, workspace layout, binaries, and documentation paths."
     category: overview
     source_files:
       - "README.md"
       - "CLAUDE.md"
       - "Cargo.toml"
-      - "CHANGELOG.md"
-      - "crates/pandamux-app/src/main.rs"
-      - "crates/pandamux-term/Cargo.toml"
-      - "crates/pandamux-ui/Cargo.toml"
+      - "crates/pandamux-desktop/src/main.rs"
+      - "crates/pandamux-server/src/main.rs"
+      - "crates/pandamux-cli/src/main.rs"
     sections:
       - id: pandamux_01_overview_introduction
         title: "Introduction"
         autogen: true
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_01_overview_purpose
-        title: "Purpose and History"
+      - id: pandamux_01_overview_product
+        title: "Product Model"
         autogen: true
         diagrams_needed: false
         diagram_types: []
@@ -45,9 +44,6 @@ pages:
       - id: pandamux_01_overview_binaries
         title: "Binaries and Entry Points"
         autogen: true
-        source_files:
-          - "crates/pandamux-app/src/main.rs"
-          - "crates/pandamux-cli/src/main.rs"
         diagrams_needed: false
         diagram_types: []
       - id: pandamux_01_overview_navigate
@@ -63,19 +59,15 @@ pages:
     title: "Getting Started"
     folder: ""
     filename: "GETTING_STARTED.md"
-    description: "Toolchain prerequisites, build and run commands for the GUI and CLI, tests, and the crate-boundary check."
+    description: "Prerequisites, build and run commands, verification gates, platform notes, and contribution workflow."
     category: guide
     source_files:
       - "CLAUDE.md"
       - "Cargo.toml"
-      - "README.md"
+      - ".github/workflows/rust.yml"
       - "scripts/check-rust-boundaries.ps1"
       - "scripts/check-claude-wiring.mjs"
-      - ".github/workflows/rust.yml"
       - ".claude/rules/commit-changelog.md"
-      - ".claude/rules/llg-check.md"
-      - ".claude/rules/bp-check.md"
-      - "crates/pandamux-app/Cargo.toml"
     sections:
       - id: pandamux_02_getting-started_prerequisites
         title: "Prerequisites"
@@ -83,28 +75,22 @@ pages:
         diagrams_needed: false
         diagram_types: []
       - id: pandamux_02_getting-started_build
-        title: "Building and Running"
+        title: "Building the Workspace"
         autogen: true
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_02_getting-started_features
-        title: "Cargo Features and Binaries"
+      - id: pandamux_02_getting-started_run
+        title: "Running PandaMUX"
         autogen: true
-        source_files:
-          - "crates/pandamux-app/Cargo.toml"
         diagrams_needed: false
         diagram_types: []
       - id: pandamux_02_getting-started_testing
         title: "Checks and Tests"
         autogen: true
-        source_files:
-          - ".github/workflows/rust.yml"
-          - "scripts/check-rust-boundaries.ps1"
-          - "scripts/check-claude-wiring.mjs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_02_getting-started_native
-        title: "Native Dependencies and Gotchas"
+      - id: pandamux_02_getting-started_platforms
+        title: "Platform Notes"
         autogen: true
         diagrams_needed: false
         diagram_types: []
@@ -121,739 +107,731 @@ pages:
     title: "Architecture"
     folder: "core"
     filename: "ARCHITECTURE.md"
-    description: "The crate-isolation invariant, backend-owned state (intent-in, delta-out), the immutable split tree, and PTY=Surface keep-alive."
+    description: "Nine-crate boundaries, client-server ownership, local and remote transport, persistence, and runtime data flow."
     category: architecture
     source_files:
+      - "Cargo.toml"
       - "CLAUDE.md"
-      - "crates/pandamux-core/src/lib.rs"
-      - "crates/pandamux-core/src/state.rs"
-      - "crates/pandamux-core/src/split_tree.rs"
-      - "crates/pandamux-app/src/backend.rs"
-      - "crates/pandamux-app/src/iced_runtime.rs"
-      - "crates/pandamux-ui/src/lib.rs"
+      - "crates/pandamux-client/src/lib.rs"
+      - "crates/pandamux-desktop/src/lib.rs"
+      - "crates/pandamux-protocol/src/lib.rs"
+      - "crates/pandamux-server/src/lib.rs"
       - "scripts/check-rust-boundaries.ps1"
     sections:
       - id: pandamux_03_architecture_crates
         title: "Workspace and Crate Boundaries"
         autogen: true
-        source_files:
-          - "scripts/check-rust-boundaries.ps1"
-          - "crates/pandamux-core/src/lib.rs"
         diagrams_needed: true
         diagram_types: ["flowchart"]
-      - id: pandamux_03_architecture_state
-        title: "Backend-Owned State"
+      - id: pandamux_03_architecture_ownership
+        title: "State and Process Ownership"
         autogen: true
-        source_files:
-          - "crates/pandamux-core/src/state.rs"
-          - "crates/pandamux-app/src/backend.rs"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_03_architecture_local-flow
+        title: "Local Request and Event Flow"
+        autogen: true
         diagrams_needed: true
         diagram_types: ["sequence"]
-      - id: pandamux_03_architecture_intents
-        title: "Intent Dispatch and Deltas"
+      - id: pandamux_03_architecture_remote-flow
+        title: "Remote Node Flow"
         autogen: true
-        source_files:
-          - "crates/pandamux-app/src/backend.rs"
+        diagrams_needed: true
+        diagram_types: ["sequence"]
+      - id: pandamux_03_architecture_persistence
+        title: "Durability and Replay"
+        autogen: true
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_03_architecture_split-tree
-        title: "Immutable Split Tree"
+      - id: pandamux_03_architecture_invariants
+        title: "Architectural Invariants"
         autogen: true
-        source_files:
-          - "crates/pandamux-core/src/split_tree.rs"
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_03_architecture_surfaces
-        title: "Surfaces and Keep-Alive"
-        autogen: true
-        source_files:
-          - "crates/pandamux-core/src/surface_content.rs"
-          - "crates/pandamux-app/src/iced_runtime.rs"
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_03_architecture_runtime
-        title: "Runtime Composition"
-        autogen: true
-        source_files:
-          - "crates/pandamux-app/src/iced_runtime.rs"
         diagrams_needed: false
         diagram_types: []
     related_pages:
       - pandamux_04_core-domain
       - pandamux_07_app-runtime
-      - pandamux_10_named-pipe-ipc
+      - pandamux_10_local-ipc
 
   - id: pandamux_04_core-domain
-    title: "Core Domain and State"
+    title: "Core Domain"
     folder: "core"
     filename: "CORE_DOMAIN.md"
-    description: "pandamux-core: the canonical state model, split tree, projects, sessions, agents, sidebar, notifications, and branded IDs. Zero Iced."
+    description: "Framework-free domain types for threads, events, organizations, providers, routing, projects, settings, and usage."
     category: data-model
     source_files:
-      - "crates/pandamux-core/src/state.rs"
-      - "crates/pandamux-core/src/split_tree.rs"
-      - "crates/pandamux-core/src/project.rs"
-      - "crates/pandamux-core/src/project_registry.rs"
-      - "crates/pandamux-core/src/agent.rs"
-      - "crates/pandamux-core/src/sidebar.rs"
-      - "crates/pandamux-core/src/notification.rs"
+      - "crates/pandamux-core/src/lib.rs"
+      - "crates/pandamux-core/src/thread.rs"
+      - "crates/pandamux-core/src/event.rs"
+      - "crates/pandamux-core/src/agent_def.rs"
+      - "crates/pandamux-core/src/ast_diff.rs"
+      - "crates/pandamux-core/src/attachment.rs"
+      - "crates/pandamux-core/src/home.rs"
+      - "crates/pandamux-core/src/i18n.rs"
       - "crates/pandamux-core/src/ids.rs"
-      - "crates/pandamux-core/src/surface_content.rs"
+      - "crates/pandamux-core/src/notification.rs"
+      - "crates/pandamux-core/src/organization.rs"
+      - "crates/pandamux-core/src/provider_config.rs"
+      - "crates/pandamux-core/src/project_registry.rs"
+      - "crates/pandamux-core/src/routing.rs"
+      - "crates/pandamux-core/src/run.rs"
+      - "crates/pandamux-core/src/schedule.rs"
+      - "crates/pandamux-core/src/secrets.rs"
+      - "crates/pandamux-core/src/terminal.rs"
+      - "crates/pandamux-core/src/usage.rs"
+      - "crates/pandamux-core/src/project.rs"
     sections:
-      - id: pandamux_04_core-domain_overview
-        title: "Overview and Module Map"
+      - id: pandamux_04_core-domain_modules
+        title: "Module Map"
         autogen: true
-        source_files:
-          - "crates/pandamux-core/src/lib.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_04_core-domain_ids
-        title: "Branded IDs"
+      - id: pandamux_04_core-domain_threads
+        title: "Threads, Turns, and Events"
         autogen: true
-        source_files:
-          - "crates/pandamux-core/src/ids.rs"
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_04_core-domain_state
-        title: "Workspace State Model"
-        autogen: true
-        source_files:
-          - "crates/pandamux-core/src/state.rs"
-          - "crates/pandamux-core/src/surface_content.rs"
         diagrams_needed: true
         diagram_types: ["class"]
-      - id: pandamux_04_core-domain_split
-        title: "Split Tree"
+      - id: pandamux_04_core-domain_orgs
+        title: "Organizations and Environments"
         autogen: true
-        source_files:
-          - "crates/pandamux-core/src/split_tree.rs"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_04_core-domain_providers
+        title: "Provider Instances and Routing"
+        autogen: true
         diagrams_needed: false
         diagram_types: []
       - id: pandamux_04_core-domain_projects
-        title: "Projects and Registry"
+        title: "Projects and Workspaces"
         autogen: true
-        source_files:
-          - "crates/pandamux-core/src/project.rs"
-          - "crates/pandamux-core/src/project_registry.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_04_core-domain_peripherals
-        title: "Agents, Sidebar, and Notifications"
+      - id: pandamux_04_core-domain_usage
+        title: "Usage and Capacity Types"
         autogen: true
-        source_files:
-          - "crates/pandamux-core/src/agent.rs"
-          - "crates/pandamux-core/src/sidebar.rs"
-          - "crates/pandamux-core/src/notification.rs"
         diagrams_needed: false
         diagram_types: []
     related_pages:
       - pandamux_03_architecture
-      - pandamux_08_configuration
+      - pandamux_12_agent-orchestration
+      - pandamux_13_provider-routing
 
   - id: pandamux_05_terminal-engine
     title: "Terminal Engine"
     folder: "core"
     filename: "TERMINAL_ENGINE.md"
-    description: "pandamux-term: the alacritty_terminal grid, local PTY, shell lifecycle, search/serialize/link detection, clipboard policy, and cwd tracking."
-    category: module
+    description: "Feature-split terminal grid and PTY primitives, replay buffers, input, resizing, search, and clipboard behavior."
+    category: architecture
     source_files:
+      - "crates/pandamux-term/Cargo.toml"
       - "crates/pandamux-term/src/lib.rs"
-      - "crates/pandamux-term/src/grid.rs"
-      - "crates/pandamux-term/src/pty.rs"
-      - "crates/pandamux-term/src/session.rs"
-      - "crates/pandamux-term/src/shell.rs"
-      - "crates/pandamux-term/src/search.rs"
-      - "crates/pandamux-term/src/links.rs"
+      - "crates/pandamux-term/src/byte_session.rs"
       - "crates/pandamux-term/src/clipboard.rs"
       - "crates/pandamux-term/src/cwd.rs"
+      - "crates/pandamux-term/src/grid.rs"
+      - "crates/pandamux-term/src/links.rs"
+      - "crates/pandamux-term/src/pty.rs"
+      - "crates/pandamux-term/src/ring_buffer.rs"
+      - "crates/pandamux-term/src/search.rs"
+      - "crates/pandamux-term/src/session.rs"
+      - "crates/pandamux-term/src/shell.rs"
+      - "crates/pandamux-term/src/size.rs"
     sections:
-      - id: pandamux_05_terminal-engine_overview
-        title: "Overview and Isolation"
+      - id: pandamux_05_terminal-engine_features
+        title: "Feature Boundary"
         autogen: true
-        source_files:
-          - "crates/pandamux-term/src/lib.rs"
         diagrams_needed: false
         diagram_types: []
       - id: pandamux_05_terminal-engine_grid
-        title: "Terminal Grid"
+        title: "Grid and Rendering Data"
         autogen: true
-        source_files:
-          - "crates/pandamux-term/src/grid.rs"
         diagrams_needed: false
         diagram_types: []
       - id: pandamux_05_terminal-engine_pty
-        title: "Local PTY"
+        title: "Local PTY Lifecycle"
         autogen: true
-        source_files:
-          - "crates/pandamux-term/src/pty.rs"
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_05_terminal-engine_session
-        title: "Session and Shell Lifecycle"
-        autogen: true
-        source_files:
-          - "crates/pandamux-term/src/session.rs"
-          - "crates/pandamux-term/src/shell.rs"
         diagrams_needed: true
-        diagram_types: ["state"]
-      - id: pandamux_05_terminal-engine_search
-        title: "Search, Links, and Serialization"
+        diagram_types: ["sequence"]
+      - id: pandamux_05_terminal-engine_replay
+        title: "Byte Replay and Ring Buffers"
         autogen: true
-        source_files:
-          - "crates/pandamux-term/src/search.rs"
-          - "crates/pandamux-term/src/links.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_05_terminal-engine_clipboard
-        title: "Clipboard and CWD Tracking"
+      - id: pandamux_05_terminal-engine_interaction
+        title: "Input, Search, Links, and Clipboard"
         autogen: true
-        source_files:
-          - "crates/pandamux-term/src/clipboard.rs"
-          - "crates/pandamux-term/src/cwd.rs"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_05_terminal-engine_boundaries
+        title: "Ownership and Safety Boundaries"
+        autogen: true
         diagrams_needed: false
         diagram_types: []
     related_pages:
-      - pandamux_11_ssh-remote
-      - pandamux_13_shell-integration
+      - pandamux_06_ui-shell
+      - pandamux_07_app-runtime
 
   - id: pandamux_06_ui-shell
-    title: "UI Shell"
+    title: "GPUI Desktop"
     folder: "core"
     filename: "UI_SHELL.md"
-    description: "pandamux-ui: the Iced shell, canvas terminal viewport, chrome, session panel/launcher, command palette, overlays, settings, theming, and the read-projection."
-    category: module
+    description: "Chat-first GPUI shell, composer, timeline, surfaces, terminal rendering, settings, usage, and accessibility behavior."
+    category: architecture
     source_files:
-      - "crates/pandamux-ui/src/lib.rs"
-      - "crates/pandamux-ui/src/iced_shell.rs"
-      - "crates/pandamux-ui/src/chrome.rs"
-      - "crates/pandamux-ui/src/session_panel.rs"
-      - "crates/pandamux-ui/src/session_launcher.rs"
-      - "crates/pandamux-ui/src/command_palette.rs"
-      - "crates/pandamux-ui/src/overlays.rs"
-      - "crates/pandamux-ui/src/settings.rs"
-      - "crates/pandamux-ui/src/theme.rs"
-      - "crates/pandamux-ui/src/shell_projection.rs"
-      - "crates/pandamux-ui/src/metrics.rs"
+      - "crates/pandamux-desktop/src/lib.rs"
+      - "crates/pandamux-desktop/src/app_view.rs"
+      - "crates/pandamux-desktop/src/command_palette.rs"
+      - "crates/pandamux-desktop/src/composer.rs"
+      - "crates/pandamux-desktop/src/diff_view.rs"
+      - "crates/pandamux-desktop/src/notification.rs"
+      - "crates/pandamux-desktop/src/picker.rs"
+      - "crates/pandamux-desktop/src/scratchpad.rs"
+      - "crates/pandamux-desktop/src/sidebar.rs"
+      - "crates/pandamux-desktop/src/timeline.rs"
+      - "crates/pandamux-desktop/src/surfaces_panel.rs"
+      - "crates/pandamux-desktop/src/terminal_view.rs"
+      - "crates/pandamux-desktop/src/settings_view.rs"
+      - "crates/pandamux-desktop/src/theme.rs"
+      - "crates/pandamux-desktop/src/titlebar.rs"
+      - "crates/pandamux-desktop/src/tray.rs"
+      - "crates/pandamux-desktop/src/usage_view.rs"
     sections:
-      - id: pandamux_06_ui-shell_overview
-        title: "Overview and Iced Isolation"
+      - id: pandamux_06_ui-shell_composition
+        title: "Window Composition"
         autogen: true
-        source_files:
-          - "crates/pandamux-ui/src/lib.rs"
+        diagrams_needed: true
+        diagram_types: ["flowchart"]
+      - id: pandamux_06_ui-shell_threads
+        title: "Threads, Composer, and Timeline"
+        autogen: true
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_06_ui-shell_shell
-        title: "The Iced Shell"
+      - id: pandamux_06_ui-shell_surfaces
+        title: "Surfaces and Terminal"
         autogen: true
-        source_files:
-          - "crates/pandamux-ui/src/iced_shell.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_06_ui-shell_projection
-        title: "Read-Projection"
+      - id: pandamux_06_ui-shell_settings
+        title: "Settings and Provider Controls"
         autogen: true
-        source_files:
-          - "crates/pandamux-ui/src/shell_projection.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_06_ui-shell_chrome
-        title: "Chrome and Content Views"
+      - id: pandamux_06_ui-shell_usage
+        title: "Usage and Capacity Views"
         autogen: true
-        source_files:
-          - "crates/pandamux-ui/src/chrome.rs"
-          - "crates/pandamux-ui/src/content_views.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_06_ui-shell_panels
-        title: "Session Panel, Launcher, and Palette"
+      - id: pandamux_06_ui-shell_accessibility
+        title: "Focus and Accessibility"
         autogen: true
-        source_files:
-          - "crates/pandamux-ui/src/session_panel.rs"
-          - "crates/pandamux-ui/src/session_launcher.rs"
-          - "crates/pandamux-ui/src/command_palette.rs"
-          - "crates/pandamux-ui/src/context_menu.rs"
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_06_ui-shell_theme
-        title: "Overlays, Settings, and Theming"
-        autogen: true
-        source_files:
-          - "crates/pandamux-ui/src/overlays.rs"
-          - "crates/pandamux-ui/src/settings.rs"
-          - "crates/pandamux-ui/src/theme.rs"
-          - "crates/pandamux-ui/src/icons.rs"
         diagrams_needed: false
         diagram_types: []
     related_pages:
-      - pandamux_03_architecture
+      - pandamux_05_terminal-engine
       - pandamux_07_app-runtime
+      - pandamux_13_provider-routing
 
   - id: pandamux_07_app-runtime
     title: "Application Runtime"
     folder: "core"
     filename: "APP_RUNTIME.md"
-    description: "pandamux-app: the composition root and tokio runtime, intent dispatcher, pipe server, pollers, session persistence, project launcher, and updater."
-    category: module
+    description: "Hub composition, server lifecycle, routing, client projections, durable store, thread management, and desktop bridge."
+    category: architecture
     source_files:
-      - "crates/pandamux-app/src/main.rs"
-      - "crates/pandamux-app/src/iced_runtime.rs"
-      - "crates/pandamux-app/src/backend.rs"
-      - "crates/pandamux-app/src/persistence.rs"
-      - "crates/pandamux-app/src/pollers.rs"
-      - "crates/pandamux-app/src/project_launcher.rs"
-      - "crates/pandamux-app/src/updater.rs"
-      - "crates/pandamux-app/src/pipe_server.rs"
-      - "crates/pandamux-app/src/latency.rs"
-      - "crates/pandamux-app/src/clipboard_os.rs"
+      - "crates/pandamux-server/src/lib.rs"
+      - "crates/pandamux-server/src/runtime.rs"
+      - "crates/pandamux-server/src/server.rs"
+      - "crates/pandamux-server/src/router.rs"
+      - "crates/pandamux-server/src/attachment.rs"
+      - "crates/pandamux-server/src/checkpoint.rs"
+      - "crates/pandamux-server/src/fs.rs"
+      - "crates/pandamux-server/src/git.rs"
+      - "crates/pandamux-server/src/hark.rs"
+      - "crates/pandamux-server/src/mcp_server.rs"
+      - "crates/pandamux-server/src/store/migrations.rs"
+      - "crates/pandamux-server/src/terminal.rs"
+      - "crates/pandamux-server/src/thread_manager.rs"
+      - "crates/pandamux-server/src/store/mod.rs"
+      - "crates/pandamux-server/src/worktree.rs"
+      - "crates/pandamux-client/src/client.rs"
+      - "crates/pandamux-client/src/projections.rs"
+      - "crates/pandamux-client/src/token_queue.rs"
+      - "crates/pandamux-client/src/transport.rs"
+      - "crates/pandamux-client/src/usage.rs"
+      - "crates/pandamux-desktop/src/server_bridge.rs"
+      - "crates/pandamux-protocol/src/hark_rpc.rs"
+      - "crates/pandamux-protocol/src/schedule_rpc.rs"
+      - "crates/pandamux-protocol/src/settings_rpc.rs"
+      - "crates/pandamux-protocol/src/subscription.rs"
+      - "crates/pandamux-protocol/src/terminal_rpc.rs"
     sections:
-      - id: pandamux_07_app-runtime_entry
-        title: "Entry Point and Modes"
+      - id: pandamux_07_app-runtime_composition
+        title: "Composition Roots"
         autogen: true
-        source_files:
-          - "crates/pandamux-app/src/main.rs"
         diagrams_needed: true
         diagram_types: ["flowchart"]
-      - id: pandamux_07_app-runtime_iced
-        title: "Iced Runtime and Subscriptions"
+      - id: pandamux_07_app-runtime_server
+        title: "Server Lifecycle"
         autogen: true
-        source_files:
-          - "crates/pandamux-app/src/iced_runtime.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_07_app-runtime_backend
-        title: "Intent Dispatcher"
+      - id: pandamux_07_app-runtime_routing
+        title: "RPC Routing"
         autogen: true
-        source_files:
-          - "crates/pandamux-app/src/backend.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_07_app-runtime_persistence
-        title: "Session Persistence"
+      - id: pandamux_07_app-runtime_threads
+        title: "Thread and Provider Execution"
         autogen: true
-        source_files:
-          - "crates/pandamux-app/src/persistence.rs"
+        diagrams_needed: true
+        diagram_types: ["sequence"]
+      - id: pandamux_07_app-runtime_store
+        title: "Durable Store"
+        autogen: true
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_07_app-runtime_pollers
-        title: "Pollers and Project Launcher"
+      - id: pandamux_07_app-runtime_clients
+        title: "Client Projection and Desktop Bridge"
         autogen: true
-        source_files:
-          - "crates/pandamux-app/src/pollers.rs"
-          - "crates/pandamux-app/src/project_launcher.rs"
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_07_app-runtime_updater
-        title: "In-App Updater"
-        autogen: true
-        source_files:
-          - "crates/pandamux-app/src/updater.rs"
         diagrams_needed: false
         diagram_types: []
     related_pages:
       - pandamux_03_architecture
-      - pandamux_10_named-pipe-ipc
-      - pandamux_14_release
+      - pandamux_10_local-ipc
+      - pandamux_12_agent-orchestration
 
   - id: pandamux_08_configuration
     title: "Configuration"
     folder: "core"
     filename: "CONFIGURATION.md"
-    description: "The JSON settings format, settings model, keymap, home/path resolution, bundled themes, and environment variables set in spawned shells."
-    category: configuration
+    description: "Runtime directories, settings, organizations, environments, provider instances, profiles, and remote-node configuration."
+    category: reference
     source_files:
-      - "crates/pandamux-core/src/config.rs"
       - "crates/pandamux-core/src/settings.rs"
-      - "crates/pandamux-core/src/keymap.rs"
-      - "crates/pandamux-core/src/home.rs"
-      - "crates/pandamux-core/src/i18n.rs"
-      - "crates/pandamux-app/src/persistence.rs"
-      - "crates/pandamux-app/src/backend.rs"
+      - "crates/pandamux-core/src/organization.rs"
+      - "crates/pandamux-core/src/environment.rs"
+      - "crates/pandamux-core/src/provider_config.rs"
+      - "crates/pandamux-core/src/ssh.rs"
+      - "crates/pandamux-providers/src/profiles.rs"
+      - "crates/pandamux-remote/src/config.rs"
+      - "crates/pandamux-server/src/runtime.rs"
     sections:
-      - id: pandamux_08_configuration_layers
-        title: "Configuration Sources"
+      - id: pandamux_08_configuration_storage
+        title: "Configuration and Runtime Storage"
         autogen: true
-        source_files:
-          - "crates/pandamux-core/src/config.rs"
-          - "crates/pandamux-core/src/home.rs"
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_08_configuration_config-toml
-        title: "Settings File Format"
-        autogen: true
-        source_files:
-          - "crates/pandamux-core/src/settings.rs"
-          - "crates/pandamux-app/src/persistence.rs"
         diagrams_needed: false
         diagram_types: []
       - id: pandamux_08_configuration_settings
-        title: "Settings Model"
+        title: "Application Settings"
         autogen: true
-        source_files:
-          - "crates/pandamux-core/src/settings.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_08_configuration_keymap
-        title: "Keymap"
+      - id: pandamux_08_configuration_organizations
+        title: "Organizations and Environments"
         autogen: true
-        source_files:
-          - "crates/pandamux-core/src/keymap.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_08_configuration_themes
-        title: "Themes and Localization"
+      - id: pandamux_08_configuration_providers
+        title: "Provider Instances and Profiles"
         autogen: true
-        source_files:
-          - "crates/pandamux-core/src/i18n.rs"
-          - "crates/pandamux-ui/src/theme.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_08_configuration_env
-        title: "Environment Variables"
+      - id: pandamux_08_configuration_remote
+        title: "Remote Nodes"
         autogen: true
-        source_files:
-          - "resources/shell-integration/pandamux-bash-integration.sh"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_08_configuration_security
+        title: "Secrets and Security Boundaries"
+        autogen: true
         diagrams_needed: false
         diagram_types: []
     related_pages:
       - pandamux_04_core-domain
-      - pandamux_13_shell-integration
+      - pandamux_11_ssh-remote
+      - pandamux_13_provider-routing
 
   - id: pandamux_09_cli-reference
     title: "CLI Reference"
     folder: "api"
     filename: "CLI_REFERENCE.md"
-    description: "The pandamux CLI: every command group, its arguments, and how it maps onto V2 JSON-RPC pipe methods."
+    description: "Authenticated command-line client, command groups, output behavior, exit handling, and restricted MCP adapter."
     category: api
     source_files:
       - "crates/pandamux-cli/src/main.rs"
-      - "crates/pandamux-core/src/protocol.rs"
+      - "crates/pandamux-cli/src/lib.rs"
+      - "crates/pandamux-cli/src/commands.rs"
+      - "crates/pandamux-cli/src/ipc.rs"
+      - "crates/pandamux-cli/tests/cli_contract_tests.rs"
+      - "crates/pandamux-protocol/src/mcp.rs"
     sections:
-      - id: pandamux_09_cli-reference_overview
-        title: "Invocation and Transport"
+      - id: pandamux_09_cli-reference_invocation
+        title: "Invocation and Discovery"
         autogen: true
-        source_files:
-          - "crates/pandamux-cli/src/main.rs"
-          - "crates/pandamux-core/src/protocol.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_09_cli-reference_system-workspace
-        title: "System and Workspace Commands"
+      - id: pandamux_09_cli-reference_system
+        title: "System and Thread Commands"
         autogen: true
-        source_files:
-          - "crates/pandamux-cli/src/main.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_09_cli-reference_pane-surface
-        title: "Pane and Surface Commands"
+      - id: pandamux_09_cli-reference_terminal
+        title: "Terminal and Notification Commands"
         autogen: true
-        source_files:
-          - "crates/pandamux-cli/src/main.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_09_cli-reference_io
-        title: "Terminal I/O and Content Commands"
+      - id: pandamux_09_cli-reference_output
+        title: "Output and Errors"
         autogen: true
-        source_files:
-          - "crates/pandamux-cli/src/main.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_09_cli-reference_agent-ssh
-        title: "Agent, SSH, and Peripheral Commands"
+      - id: pandamux_09_cli-reference_mcp
+        title: "Restricted MCP Adapter"
         autogen: true
-        source_files:
-          - "crates/pandamux-cli/src/main.rs"
+        diagrams_needed: true
+        diagram_types: ["sequence"]
+      - id: pandamux_09_cli-reference_examples
+        title: "Examples"
+        autogen: true
         diagrams_needed: false
         diagram_types: []
     related_pages:
-      - pandamux_10_named-pipe-ipc
-      - pandamux_12_agent-orchestration
+      - pandamux_02_getting-started
+      - pandamux_10_local-ipc
 
-  - id: pandamux_10_named-pipe-ipc
-    title: "Named Pipe Control Plane"
+  - id: pandamux_10_local-ipc
+    title: "Local IPC and Security"
     folder: "features"
     filename: "NAMED_PIPE_IPC.md"
-    description: "The \\\\.\\pipe\\pandamux server: V1 text hooks, currently unauthenticated V2 JSON-RPC, the shared intent dispatcher, and the method catalog."
-    category: feature
+    description: "Local endpoint discovery, hello authentication, capability scopes, request contexts, Windows identity checks, and MCP isolation."
+    category: security
     source_files:
-      - "crates/pandamux-app/src/pipe_server.rs"
-      - "crates/pandamux-app/src/backend.rs"
-      - "crates/pandamux-core/src/protocol.rs"
+      - "crates/pandamux-protocol/src/jsonrpc.rs"
+      - "crates/pandamux-protocol/src/system.rs"
+      - "crates/pandamux-protocol/src/windows_security.rs"
+      - "crates/pandamux-protocol/src/mcp.rs"
+      - "crates/pandamux-server/src/request_context.rs"
+      - "crates/pandamux-server/src/windows_security.rs"
+      - "crates/pandamux-server/src/server.rs"
+      - "crates/pandamux-cli/src/ipc.rs"
     sections:
-      - id: pandamux_10_named-pipe-ipc_overview
-        title: "Overview"
+      - id: pandamux_10_local-ipc_transport
+        title: "Endpoint and Transport"
         autogen: true
-        source_files:
-          - "crates/pandamux-app/src/pipe_server.rs"
-        diagrams_needed: true
-        diagram_types: ["flowchart"]
-      - id: pandamux_10_named-pipe-ipc_v1
-        title: "V1 Text Protocol"
-        autogen: true
-        source_files:
-          - "crates/pandamux-app/src/backend.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_10_named-pipe-ipc_v2
-        title: "V2 JSON-RPC Protocol"
+      - id: pandamux_10_local-ipc_handshake
+        title: "Hello and Capability Handshake"
         autogen: true
-        source_files:
-          - "crates/pandamux-core/src/protocol.rs"
-          - "crates/pandamux-app/src/backend.rs"
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_10_named-pipe-ipc_methods
-        title: "Method Catalog"
-        autogen: true
-        source_files:
-          - "crates/pandamux-app/src/backend.rs"
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_10_named-pipe-ipc_dispatch
-        title: "Shared Dispatch and Deltas"
-        autogen: true
-        source_files:
-          - "crates/pandamux-app/src/backend.rs"
         diagrams_needed: true
         diagram_types: ["sequence"]
+      - id: pandamux_10_local-ipc_context
+        title: "Server-Owned Request Context"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_10_local-ipc_scopes
+        title: "Capability Scopes"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_10_local-ipc_windows
+        title: "Windows Identity Enforcement"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_10_local-ipc_mcp
+        title: "MCP Isolation and Redaction"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
     related_pages:
+      - pandamux_03_architecture
       - pandamux_09_cli-reference
-      - pandamux_07_app-runtime
+      - pandamux_11_ssh-remote
 
   - id: pandamux_11_ssh-remote
-    title: "SSH Remote Surfaces"
+    title: "SSH Remote Nodes"
     folder: "features"
     filename: "SSH_REMOTE.md"
-    description: "russh-backed remote PTYs and SFTP: the connection model, per-host pool, OSC 52 clipboard, SFTP image paste, and the launcher UI."
+    description: "Remote manifests, SSH pooling, bootstrap, proxy transport, SFTP, worktree sync, reconnect, and cleanup."
     category: feature
     source_files:
-      - "crates/pandamux-term/src/ssh.rs"
       - "crates/pandamux-core/src/ssh.rs"
-      - "crates/pandamux-ui/src/session_launcher.rs"
-      - "crates/pandamux-app/src/backend.rs"
+      - "crates/pandamux-core/src/remote_manifest.rs"
+      - "crates/pandamux-remote/src/lib.rs"
+      - "crates/pandamux-remote/src/bootstrap.rs"
+      - "crates/pandamux-remote/src/exec.rs"
+      - "crates/pandamux-remote/src/pool.rs"
+      - "crates/pandamux-remote/src/proxy.rs"
+      - "crates/pandamux-remote/src/sftp.rs"
+      - "crates/pandamux-remote/src/worktree_sync.rs"
+      - "crates/pandamux-protocol/src/environment_rpc.rs"
+      - "crates/pandamux-protocol/src/fs_rpc.rs"
+      - "crates/pandamux-protocol/src/git_rpc.rs"
+      - "crates/pandamux-protocol/src/proxy.rs"
+      - "crates/pandamux-protocol/src/worktree_rpc.rs"
+      - "crates/pandamux-server/src/environment_router.rs"
+      - "crates/pandamux-server/src/proxy_connection.rs"
+      - "crates/pandamux-server/src/proxy_transport.rs"
     sections:
-      - id: pandamux_11_ssh-remote_overview
-        title: "Overview"
-        autogen: true
-        source_files:
-          - "crates/pandamux-core/src/ssh.rs"
-        diagrams_needed: false
-        diagram_types: []
       - id: pandamux_11_ssh-remote_model
-        title: "SSH Connection Model"
+        title: "Remote Node Model"
         autogen: true
-        source_files:
-          - "crates/pandamux-core/src/ssh.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_11_ssh-remote_transport
-        title: "Remote PTY and Connection Pool"
+      - id: pandamux_11_ssh-remote_pool
+        title: "SSH Pool and Host Verification"
         autogen: true
-        source_files:
-          - "crates/pandamux-term/src/ssh.rs"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_11_ssh-remote_bootstrap
+        title: "Bootstrap and Manifest Verification"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_11_ssh-remote_proxy
+        title: "Exec Proxy Transport"
+        autogen: true
         diagrams_needed: true
         diagram_types: ["sequence"]
-      - id: pandamux_11_ssh-remote_sftp
-        title: "SFTP, OSC 52, and Image Paste"
+      - id: pandamux_11_ssh-remote_files
+        title: "Files and Worktree Synchronization"
         autogen: true
-        source_files:
-          - "crates/pandamux-term/src/ssh.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_11_ssh-remote_ui
-        title: "Launcher UI and Pipe Methods"
+      - id: pandamux_11_ssh-remote_recovery
+        title: "Reconnect and Cleanup"
         autogen: true
-        source_files:
-          - "crates/pandamux-ui/src/session_launcher.rs"
-          - "crates/pandamux-app/src/backend.rs"
         diagrams_needed: false
         diagram_types: []
     related_pages:
-      - pandamux_05_terminal-engine
-      - pandamux_10_named-pipe-ipc
+      - pandamux_08_configuration
+      - pandamux_10_local-ipc
+      - pandamux_13_provider-routing
 
   - id: pandamux_12_agent-orchestration
     title: "Agent Orchestration"
     folder: "features"
     filename: "AGENT_ORCHESTRATION.md"
-    description: "Agent surfaces in visible panes, the agent state model and pipe methods, and the manually installed bundled orchestrator plugin."
+    description: "Thread lifecycle, provider sessions, streaming events, tools and approvals, subagents, cancellation, and recovery."
     category: feature
     source_files:
-      - "crates/pandamux-core/src/agent.rs"
-      - "crates/pandamux-app/src/backend.rs"
-      - "crates/pandamux-app/Cargo.toml"
-      - "CHANGELOG.md"
-      - "resources/pandamux-orchestrator/README.md"
+      - "crates/pandamux-core/src/thread.rs"
+      - "crates/pandamux-core/src/event.rs"
+      - "crates/pandamux-core/src/agent_def.rs"
+      - "crates/pandamux-protocol/src/thread_rpc.rs"
+      - "crates/pandamux-protocol/src/subagent_rpc.rs"
+      - "crates/pandamux-protocol/src/attachment_rpc.rs"
+      - "crates/pandamux-protocol/src/checkpoint_rpc.rs"
+      - "crates/pandamux-providers/src/traits.rs"
+      - "crates/pandamux-providers/src/models.rs"
+      - "crates/pandamux-server/src/thread_manager.rs"
     sections:
-      - id: pandamux_12_agent-orchestration_overview
-        title: "Overview"
+      - id: pandamux_12_agent-orchestration_threads
+        title: "Thread and Turn Lifecycle"
         autogen: true
-        source_files:
-          - "crates/pandamux-core/src/agent.rs"
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_12_agent-orchestration_model
-        title: "Agent State Model"
-        autogen: true
-        source_files:
-          - "crates/pandamux-core/src/agent.rs"
         diagrams_needed: true
         diagram_types: ["state"]
-      - id: pandamux_12_agent-orchestration_methods
-        title: "Agent Pipe Methods"
+      - id: pandamux_12_agent-orchestration_sessions
+        title: "Provider Sessions"
         autogen: true
-        source_files:
-          - "crates/pandamux-app/src/backend.rs"
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_12_agent-orchestration_context
-        title: "Plugin Installation and Startup Behavior"
+      - id: pandamux_12_agent-orchestration_streaming
+        title: "Streaming Events"
         autogen: true
-        source_files:
-          - "CHANGELOG.md"
-          - "crates/pandamux-app/Cargo.toml"
-          - "resources/pandamux-orchestrator/README.md"
+        diagrams_needed: true
+        diagram_types: ["sequence"]
+      - id: pandamux_12_agent-orchestration_tools
+        title: "Tools and Approvals"
+        autogen: true
         diagrams_needed: false
         diagram_types: []
-      - id: pandamux_12_agent-orchestration_plugin
-        title: "Orchestrator Plugin"
+      - id: pandamux_12_agent-orchestration_subagents
+        title: "Subagents and Definitions"
         autogen: true
-        source_files:
-          - "resources/pandamux-orchestrator/README.md"
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_12_agent-orchestration_recovery
+        title: "Cancellation and Recovery"
+        autogen: true
         diagrams_needed: false
         diagram_types: []
     related_pages:
-      - pandamux_09_cli-reference
-      - pandamux_10_named-pipe-ipc
+      - pandamux_04_core-domain
+      - pandamux_07_app-runtime
+      - pandamux_13_provider-routing
 
-  - id: pandamux_13_shell-integration
-    title: "Shell Integration and Status"
+  - id: pandamux_13_provider-routing
+    title: "Provider Routing and Capacity"
     folder: "features"
-    filename: "SHELL_INTEGRATION.md"
-    description: "Shell hook scripts (bash/zsh/PowerShell/cmd), OSC 7 / OSC 9;9 cwd tracking, the V1 report_pwd hook, and git/port status pollers."
+    filename: "PROVIDER_ROUTING.md"
+    description: "Provider drivers, discovery, profiles, health, usage evidence, capacity projection, deterministic routing, and bounded failover."
     category: feature
     source_files:
-      - "resources/shell-integration/pandamux-bash-integration.sh"
-      - "resources/shell-integration/pandamux-powershell-integration.ps1"
-      - "resources/shell-integration/pandamux-cmd-integration.cmd"
-      - "crates/pandamux-term/src/cwd.rs"
-      - "crates/pandamux-app/src/pollers.rs"
-      - "crates/pandamux-app/src/backend.rs"
+      - "crates/pandamux-core/src/routing.rs"
+      - "crates/pandamux-core/src/usage.rs"
+      - "crates/pandamux-providers/src/lib.rs"
+      - "crates/pandamux-providers/src/acp.rs"
+      - "crates/pandamux-providers/src/antigravity.rs"
+      - "crates/pandamux-providers/src/antigravity_auth.rs"
+      - "crates/pandamux-providers/src/antigravity_release.rs"
+      - "crates/pandamux-providers/src/claude.rs"
+      - "crates/pandamux-providers/src/codex.rs"
+      - "crates/pandamux-providers/src/cursor.rs"
+      - "crates/pandamux-providers/src/error.rs"
+      - "crates/pandamux-providers/src/grok.rs"
+      - "crates/pandamux-providers/src/mock.rs"
+      - "crates/pandamux-providers/src/opencode.rs"
+      - "crates/pandamux-providers/src/shim_resolver.rs"
+      - "crates/pandamux-providers/src/supervision.rs"
+      - "crates/pandamux-providers/src/usage_transcript.rs"
+      - "crates/pandamux-providers/src/traits.rs"
+      - "crates/pandamux-providers/src/models.rs"
+      - "crates/pandamux-protocol/src/antigravity_rpc.rs"
+      - "crates/pandamux-protocol/src/provider_rpc.rs"
+      - "crates/pandamux-protocol/src/usage_rpc.rs"
+      - "crates/pandamux-server/src/driver_registry.rs"
+      - "crates/pandamux-server/src/provider_resolver.rs"
+      - "crates/pandamux-server/src/store/capacity_phase4d.rs"
+      - "crates/pandamux-server/src/store/failover_phase4f.rs"
+      - "crates/pandamux-server/src/store/usage_phase4c.rs"
+      - "crates/pandamux-server/src/store/usage_query_phase4c.rs"
+      - "crates/pandamux-server/src/usage_scanner.rs"
+      - "crates/pandamux-server/src/usage_sync.rs"
     sections:
-      - id: pandamux_13_shell-integration_overview
-        title: "Overview"
+      - id: pandamux_13_provider-routing_drivers
+        title: "Drivers and Provider Instances"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_13_provider-routing_discovery
+        title: "Health and Model Discovery"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_13_provider-routing_usage
+        title: "Usage Evidence"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_13_provider-routing_capacity
+        title: "Capacity Projection"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_13_provider-routing_selection
+        title: "Deterministic Route Selection"
         autogen: true
         diagrams_needed: true
         diagram_types: ["flowchart"]
-      - id: pandamux_13_shell-integration_scripts
-        title: "Shell Hook Scripts"
+      - id: pandamux_13_provider-routing_failover
+        title: "Failover and Side-Effect Boundaries"
         autogen: true
-        source_files:
-          - "resources/shell-integration/pandamux-bash-integration.sh"
-          - "resources/shell-integration/pandamux-powershell-integration.ps1"
-          - "resources/shell-integration/pandamux-cmd-integration.cmd"
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_13_shell-integration_cwd
-        title: "CWD Tracking and report_pwd"
-        autogen: true
-        source_files:
-          - "crates/pandamux-term/src/cwd.rs"
-          - "crates/pandamux-app/src/backend.rs"
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_13_shell-integration_pollers
-        title: "Git and Port Pollers"
-        autogen: true
-        source_files:
-          - "crates/pandamux-app/src/pollers.rs"
-        diagrams_needed: false
-        diagram_types: []
+        diagrams_needed: true
+        diagram_types: ["state"]
     related_pages:
       - pandamux_08_configuration
-      - pandamux_05_terminal-engine
+      - pandamux_11_ssh-remote
+      - pandamux_12_agent-orchestration
 
   - id: pandamux_14_release
     title: "Release and Packaging"
     folder: "operations"
     filename: "RELEASE.md"
-    description: "The tag-driven GitHub Actions release: build, Azure Trusted Signing, cargo-packager NSIS installer, in-app updater discovery, and winget publish."
-    category: runbook
+    description: "Versioning, validation, Windows packaging, remote artifacts, tag workflow, release publication, and evidence boundaries."
+    category: operations
     source_files:
       - "CLAUDE.md"
+      - "Cargo.toml"
+      - "CHANGELOG.md"
       - ".github/workflows/release.yml"
       - ".github/workflows/winget.yml"
-      - "crates/pandamux-app/Cargo.toml"
-      - "crates/pandamux-app/src/updater.rs"
-      - "crates/pandamux-app/build.rs"
+      - "scripts/build-remote-musl.sh"
+      - "scripts/smoke-built-artifacts.ps1"
+      - "resources/remote-binaries/manifest.json"
     sections:
-      - id: pandamux_14_release_overview
-        title: "Overview"
+      - id: pandamux_14_release_versioning
+        title: "Version and Changelog"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_14_release_gates
+        title: "Pre-Release Gates"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_14_release_windows
+        title: "Windows Packaging"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_14_release_remote
+        title: "Remote Linux Artifacts"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_14_release_pipeline
+        title: "Tag and Publication Pipeline"
         autogen: true
         diagrams_needed: true
         diagram_types: ["flowchart"]
-      - id: pandamux_14_release_build
-        title: "Build and Metadata Embedding"
+      - id: pandamux_14_release_evidence
+        title: "Acceptance and Evidence Boundaries"
         autogen: true
-        source_files:
-          - "crates/pandamux-app/build.rs"
-          - ".github/workflows/release.yml"
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_14_release_signing
-        title: "Signing and Packaging"
-        autogen: true
-        source_files:
-          - ".github/workflows/release.yml"
-          - "crates/pandamux-app/Cargo.toml"
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_14_release_updater
-        title: "In-App Update Discovery"
-        autogen: true
-        source_files:
-          - "crates/pandamux-app/src/updater.rs"
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_14_release_distribution
-        title: "Distribution and winget"
-        autogen: true
-        source_files:
-          - ".github/workflows/winget.yml"
-        diagrams_needed: false
-        diagram_types: []
-      - id: pandamux_14_release_checklist
-        title: "Release Checklist"
-        autogen: true
-        source_files:
-          - "CLAUDE.md"
         diagrams_needed: false
         diagram_types: []
     related_pages:
       - pandamux_02_getting-started
-      - pandamux_07_app-runtime
+      - pandamux_11_ssh-remote
 
   - id: pandamux_15_glossary
     title: "Glossary"
     folder: ""
     filename: "GLOSSARY.md"
-    description: "Domain terms, branded ID types, and architecture vocabulary used across the PandaMUX workspace."
-    category: glossary
+    description: "Canonical terms for the product, runtime, protocols, providers, usage, capacity, security, and release evidence."
+    category: reference
     source_files:
-      - "crates/pandamux-core/src/ids.rs"
-      - "crates/pandamux-core/src/state.rs"
+      - "README.md"
       - "CLAUDE.md"
+      - "crates/pandamux-core/src/lib.rs"
+      - "crates/pandamux-protocol/src/lib.rs"
+      - "crates/pandamux-providers/src/lib.rs"
+      - "crates/pandamux-server/src/lib.rs"
+      - "crates/pandamux-remote/src/lib.rs"
+      - "crates/pandamux-desktop/src/lib.rs"
     sections:
-      - id: pandamux_15_glossary_terms
-        title: "Terms"
+      - id: pandamux_15_glossary_product
+        title: "Product Terms"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_15_glossary_runtime
+        title: "Runtime Terms"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_15_glossary_protocol
+        title: "Protocol and Security Terms"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_15_glossary_provider
+        title: "Provider and Routing Terms"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_15_glossary_usage
+        title: "Usage and Capacity Terms"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_15_glossary_release
+        title: "Release and Evidence Terms"
         autogen: true
         diagrams_needed: false
         diagram_types: []
     related_pages:
       - pandamux_01_overview
       - pandamux_03_architecture
-
-notes:
-  - "This TOC was rebuilt at commit 3accc14 after the full Electron-to-Rust rewrite (commits between 0ab9e64 and 3accc14). The prior Electron-oriented pages (MAIN_PROCESS, RENDERER_AND_STATE, BROWSER_CDP, AI_INTEGRATION) were moved to docs/archive/ because they have no successor in the Rust workspace (the browser/CDP pane was intentionally dropped)."
-  - "docs/superpowers/plans and docs/superpowers/specs are manually maintained historical design records; each carries a banner directing readers to current implementation guidance."
-  - "The obsolete docs/config.md TOML proposal was moved to docs/archive/CONFIG_TOML_LEGACY.md; shipping settings are persisted as config/settings.json."
-  - "The app does not write to ~/.claude or auto-install the bundled orchestrator plugin; installation is manual."

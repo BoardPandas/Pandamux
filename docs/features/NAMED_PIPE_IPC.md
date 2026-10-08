@@ -1,189 +1,151 @@
-<!-- PAGE_ID: pandamux_10_named-pipe-ipc -->
+<!-- PAGE_ID: pandamux_10_local-ipc -->
 <details>
 <summary>Relevant source files</summary>
 
 The following files were used as evidence for this page:
 
-- [pipe_server.rs:1-59](../../crates/pandamux-app/src/pipe_server.rs#L1-L59)
-- [backend.rs:1-336](../../crates/pandamux-app/src/backend.rs#L1-L336)
-- [backend.rs:342-408](../../crates/pandamux-app/src/backend.rs#L342-L408)
-- [backend.rs:1412-1520](../../crates/pandamux-app/src/backend.rs#L1412-L1520)
-- [backend.rs:1573-1610](../../crates/pandamux-app/src/backend.rs#L1573-L1610)
-- [backend.rs:1651-1746](../../crates/pandamux-app/src/backend.rs#L1651-L1746)
-- [backend.rs:1942-2056](../../crates/pandamux-app/src/backend.rs#L1942-L2056)
-- [backend.rs:2237-2243](../../crates/pandamux-app/src/backend.rs#L2237-L2243)
-- [backend.rs:2696-2735](../../crates/pandamux-app/src/backend.rs#L2696-L2735)
-- [protocol.rs:1-49](../../crates/pandamux-core/src/protocol.rs#L1-L49)
-- [state.rs:59-65](../../crates/pandamux-core/src/state.rs#L59-L65)
-- [state.rs:522-535](../../crates/pandamux-core/src/state.rs#L522-L535)
-- [iced_runtime.rs:2509-2565](../../crates/pandamux-app/src/iced_runtime.rs#L2509-L2565)
-- [iced_runtime.rs:3843-3903](../../crates/pandamux-app/src/iced_runtime.rs#L3843-L3903)
-- [main.rs:1070-1113](../../crates/pandamux-cli/src/main.rs#L1070-L1113)
+- [crates/pandamux-protocol/src/jsonrpc.rs:1-160](../../crates/pandamux-protocol/src/jsonrpc.rs#L1-L160)
+- [crates/pandamux-protocol/src/system.rs:1-60](../../crates/pandamux-protocol/src/system.rs#L1-L60)
+- [crates/pandamux-protocol/src/windows_security.rs:1-111](../../crates/pandamux-protocol/src/windows_security.rs#L1-L111)
+- [crates/pandamux-protocol/src/mcp.rs:1-41](../../crates/pandamux-protocol/src/mcp.rs#L1-L41)
+- [crates/pandamux-server/src/request_context.rs:1-364](../../crates/pandamux-server/src/request_context.rs#L1-L364)
+- [crates/pandamux-server/src/windows_security.rs:1-253](../../crates/pandamux-server/src/windows_security.rs#L1-L253)
+- [crates/pandamux-server/src/server.rs:1-735](../../crates/pandamux-server/src/server.rs#L1-L735)
+- [crates/pandamux-cli/src/ipc.rs:1-289](../../crates/pandamux-cli/src/ipc.rs#L1-L289)
 
 </details>
 
-# Named Pipe Control Plane
+# Local IPC and Security
 
-> **Related Pages**: [CLI Reference](../api/CLI_REFERENCE.md), [Application Runtime](../core/APP_RUNTIME.md)
-
----
-
-<!-- BEGIN:AUTOGEN pandamux_10_named-pipe-ipc_overview -->
-## Overview
-
-`\\.\pipe\pandamux` is the single transport used by the `pandamux` CLI, Claude Code agents, and the `pandamux-orchestrator` plugin to drive PandaMUX; it carries two protocols on the same connection: a legacy V1 text protocol and a V2 JSON-RPC protocol (backend.rs:1-13, backend.rs:192-210).
-
-The pipe is accepted in two places depending on how the app is running. The headless build spawns a standalone accept loop in `pipe_server::run` that owns its own `Backend` and hands each connection's line to `Backend::handle_line` (pipe_server.rs:14-33, pipe_server.rs:40-59). The GUI build instead embeds an equivalent accept loop as an Iced subscription (`pipe_subscription` / `run_embedded_pipe_server`) so the live window is the one process binding the pipe (iced_runtime.rs:3848-3859, iced_runtime.rs:3895-3903). Both paths end up calling the same free function, `backend::handle_line`, so a CLI request and a UI-originated mutation are dispatched identically.
-
-```mermaid
-graph TD
-    CLI["pandamux CLI"] --> Pipe["Named Pipe"]
-    Agent["Claude Code Agent"] --> Pipe
-    Orchestrator["pandamux-orchestrator"] --> Pipe
-    UI["Live Iced UI"] --> Dispatcher["handle_line dispatcher"]
-    Pipe --> Dispatcher
-    Dispatcher --> State["Canonical AppState"]
-```
-
-Sources: [pipe_server.rs:1-59](../../crates/pandamux-app/src/pipe_server.rs#L1-L59), [backend.rs:1-13](../../crates/pandamux-app/src/backend.rs#L1-L13), [backend.rs:192-210](../../crates/pandamux-app/src/backend.rs#L192-L210), [iced_runtime.rs:3843-3903](../../crates/pandamux-app/src/iced_runtime.rs#L3843-L3903)
-<!-- END:AUTOGEN pandamux_10_named-pipe-ipc_overview -->
+> **Related Pages**: [Architecture](../core/ARCHITECTURE.md), [CLI Reference](../api/CLI_REFERENCE.md), [SSH Remote Nodes](SSH_REMOTE.md)
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_10_named-pipe-ipc_v1 -->
-## V1 Text Protocol
+<!-- BEGIN:AUTOGEN pandamux_10_local-ipc_transport -->
+## Endpoint and Transport
 
-The V1 protocol predates the JSON-RPC envelope and is kept for shell-integration hooks that write a single plain-text line rather than JSON. `handle_line` checks for it before attempting to parse JSON: a bare `ping` line replies `pong`, and a line prefixed `report_pwd <surfaceId> <path>` updates that surface's tracked working directory and returns an empty reply (backend.rs:192-206).
+Local control is newline-delimited JSON-RPC 2.0 over a Windows named pipe or Unix domain socket. Requests carry an optional number/string id, method, and JSON params; notifications omit the id, while responses contain either a result or a structured error ([jsonrpc.rs:4-65](../../crates/pandamux-protocol/src/jsonrpc.rs#L4-L65), [jsonrpc.rs:67-110](../../crates/pandamux-protocol/src/jsonrpc.rs#L67-L110)).
 
-```rust
-// backend.rs:194-206
-if message == "ping" {
-    return "pong".to_string();
-}
-
-if let Some(rest) = message.strip_prefix("report_pwd ") {
-    let mut parts = rest.splitn(2, ' ');
-    if let (Some(surface_id), Some(path)) = (parts.next(), parts.next()) {
-        ctx.ptys.set_cwd(surface_id, path.trim());
-    }
-    return String::new();
-}
-```
-
-`report_pwd` is the cwd-reporting half of the shell-integration scripts (bash/zsh/PowerShell report over the pipe this way; `cmd.exe` reports inline via OSC instead, parsed in the terminal layer) (backend.rs:198-200). Any line that is not `ping`, not a `report_pwd` line, and does not start with `{` is silently dropped, returning an empty string, which the regression test `non_json_line_returns_empty` pins down (backend.rs:208-210, backend.rs:2723-2727). A hermetic `Backend` with no live PTY session still accepts a `report_pwd` line as a no-op, which `report_pwd_v1_line_is_accepted` verifies (backend.rs:2729-2735).
-
-There is no `hook.event` method in the current dispatcher. Hook-style integrations must use the implemented V1 `report_pwd` message or an appropriate V2 method such as `sidebar.log`; all other non-JSON V1 lines are ignored ([backend.rs:192-210](../../crates/pandamux-app/src/backend.rs#L192-L210)).
-
-Sources: [backend.rs:192-210](../../crates/pandamux-app/src/backend.rs#L192-L210), [backend.rs:2723-2735](../../crates/pandamux-app/src/backend.rs#L2723-L2735)
-<!-- END:AUTOGEN pandamux_10_named-pipe-ipc_v1 -->
-
----
-
-<!-- BEGIN:AUTOGEN pandamux_10_named-pipe-ipc_v2 -->
-## V2 JSON-RPC Protocol
-
-Any line starting with `{` is parsed as an `RpcRequest`: `{ method: String, params: Value, id: Value, token: Option<String> }` (protocol.rs:4-13). Parse failures reply with a JSON-RPC `-32700` "parse error" envelope rather than dropping the connection (backend.rs:212-221).
-
-```rust
-// protocol.rs:4-22
-pub struct RpcRequest {
-    pub method: String,
-    #[serde(default)]
-    pub params: Value,
-    #[serde(default)]
-    pub id: Value,
-    #[serde(default)]
-    pub token: Option<String>,
-}
-
-pub struct RpcResponse {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub result: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<RpcError>,
-    pub id: Value,
-}
-```
-
-Every successful dispatch replies `RpcResponse::result(id, result)`; every failure replies `RpcResponse::error(id, code, message)`, and both are serialized with `serialize_response`, which falls back to a hand-written `-32603` envelope if `serde_json` itself fails (backend.rs:223-227, backend.rs:2237-2243).
-
-The `token` field is a reserved request-envelope slot: the CLI populates it from the `PANDAMUX_PIPE_TOKEN` environment variable on every V2 call (`read_pipe_token`), sending an empty string when unset (main.rs:1070-1076, main.rs:1109-1113). The current server does not read or validate `request.token`, so the local pipe is not authenticated and must not be documented as token-authenticated.
-
-This V2 surface is wire-compatible with the historical (pre-Rust-rewrite) prototype's pipe protocol, per the crate-level documentation on `handle_line`: the CLI, agents, and the orchestrator plugin all talk the same request/response shape regardless of which pandamux backend (Electron-era or native) is on the other end (backend.rs:1-13, backend.rs:188-191).
-
-Sources: [protocol.rs:1-49](../../crates/pandamux-core/src/protocol.rs#L1-L49), [backend.rs:212-227](../../crates/pandamux-app/src/backend.rs#L212-L227), [backend.rs:2237-2243](../../crates/pandamux-app/src/backend.rs#L2237-L2243), [main.rs:1070-1113](../../crates/pandamux-cli/src/main.rs#L1070-L1113)
-<!-- END:AUTOGEN pandamux_10_named-pipe-ipc_v2 -->
-
----
-
-<!-- BEGIN:AUTOGEN pandamux_10_named-pipe-ipc_methods -->
-## Method Catalog
-
-`dispatch` tries a sequence of namespace-specific sub-dispatchers before falling through to the intent-based `AppIntent`/`AppDelta` path; each sub-dispatcher returns `Ok(None)` to fall through to the next one, or `Ok(Some(value))`/`Err` to short-circuit (backend.rs:230-336).
-
-| Namespace | Sample methods | Purpose |
+| Platform | Endpoint discovery | Client verification |
 |---|---|---|
-| `system.*` | `system.identify`, `system.capabilities`, `system.tree` | Identify the running binary/version, report capability flags, and dump a workspace's split tree ([backend.rs:1653-1657](../../crates/pandamux-app/src/backend.rs#L1653-L1657)) |
-| `workspace.*` | `workspace.create`, `workspace.close`, `workspace.select`, `workspace.rename`, `workspace.list`, `workspace.close_all` | Create/select/rename/close top-level workspaces (each with its own split tree and shell) ([backend.rs:1658-1673](../../crates/pandamux-app/src/backend.rs#L1658-L1673), [backend.rs:1728-1730](../../crates/pandamux-app/src/backend.rs#L1728-L1730)) |
-| `pane.*` / `layout.grid` | `pane.split`, `pane.close`, `pane.focus`, `pane.zoom`, `pane.list`, `layout.grid` | Mutate the immutable `SplitNode` tree: split/close/focus/zoom a pane, or lay out N panes in a grid in one call ([backend.rs:1674-1694](../../crates/pandamux-app/src/backend.rs#L1674-L1694)) |
-| `surface.*` | `surface.create`, `surface.focus`, `surface.close`, `surface.move`, `surface.list`, `surface.rename`, `surface.set_session_type`, `surface.send_text`, `surface.send_key`, `surface.paste`, `surface.paste_image`, `surface.read_text`, `surface.resize`/`pty.resize`, `surface.kill`/`pty.kill`, `surface.set_color_scheme`, `surface.trigger_flash` | Structural surface CRUD (`surface.create`/`focus`/`close`/`move`/`list`/`rename`) plus terminal I/O against the surface's PTY or SSH channel (send/paste/read/resize) ([backend.rs:1695-1727](../../crates/pandamux-app/src/backend.rs#L1695-L1727), [backend.rs:1421-1490](../../crates/pandamux-app/src/backend.rs#L1421-L1490)) |
-| `markdown.*` / `diff.*` | `markdown.set_content`/`diff.set_content`, `markdown.load_file`/`diff.refresh` | Push inline content into a markdown or diff surface, or load it from a client-supplied path (a small one-shot blocking read on the sync dispatch path) ([backend.rs:1579-1602](../../crates/pandamux-app/src/backend.rs#L1579-L1602)) |
-| `notification.*` | `notification.raise`/`notification.fire`, `notification.list`, `notification.clear` | Raise/list/clear the sidebar notification feed ([backend.rs:349-375](../../crates/pandamux-app/src/backend.rs#L349-L375)) |
-| `sidebar.*` | `sidebar.set_status`, `sidebar.set_progress`, `sidebar.log`, `sidebar.get_state` | Update the status-bar/progress/log fields agents use to report activity ([backend.rs:408-431](../../crates/pandamux-app/src/backend.rs#L408-L431)) |
-| `agent.*` | `agent.spawn`, `agent.spawn_batch`, `agent.status`, `agent.list`, `agent.kill` | Spawn/query/kill orchestrator-managed agent processes attached to panes ([backend.rs:648-725](../../crates/pandamux-app/src/backend.rs#L648-L725)) |
-| `clipboard.*` | `clipboard.copy`, `clipboard.get`, `clipboard.policy` | Read/write the OS clipboard and configure the OSC 52 clipboard policy (size cap, per-host load opt-in) ([backend.rs:1370-1410](../../crates/pandamux-app/src/backend.rs#L1370-L1410)) |
-| `ssh.*` | `ssh.connect`, `ssh.disconnect`, `ssh.list`, `ssh.profiles`/`ssh.profile.list`, `ssh.save_profile`/`ssh.profile.save`, `ssh.remove_profile`/`ssh.profile.remove`, `ssh.import_config`/`ssh.profile.import_config` | Manage remote PTY sessions and saved SSH host profiles ([backend.rs:1166-1284](../../crates/pandamux-app/src/backend.rs#L1166-L1284)) |
-| `window.*` | `window.list`, `window.focus` | Enumerate/focus OS-level app windows ([backend.rs:571-578](../../crates/pandamux-app/src/backend.rs#L571-L578)) |
-| `config.*` / `theme.*` | `config.get`, `config.set`, `config.show`, `config.path`, `config.reload`, `config.import_windows_terminal`, `config.import_ghostty`, `theme.list`, `theme.select`, `theme.get` | Read/write persisted user settings and import/select terminal color themes ([backend.rs:449-543](../../crates/pandamux-app/src/backend.rs#L449-L543)) |
+| Windows | `server.json` supplies `pipePath`, capabilities, and expected PID; `PANDAMUX_PIPE` can override only the path lookup ([ipc.rs:143-220](../../crates/pandamux-cli/src/ipc.rs#L143-L220)) | The opened pipe's kernel-reported server PID must match the runtime record when available, and the image must be `pandamux-server.exe` ([windows_security.rs:34-96](../../crates/pandamux-protocol/src/windows_security.rs#L34-L96)) |
+| Unix | `server.json` is sought under `~/.pandamux` and `~/.pandamux/run`; the endpoint is opened as a Unix socket ([ipc.rs:223-259](../../crates/pandamux-cli/src/ipc.rs#L223-L259), [ipc.rs:281-288](../../crates/pandamux-cli/src/ipc.rs#L281-L288)) | The runtime record and socket are protected by the server runtime directory policy |
 
-Browser/CDP methods are intentionally rejected rather than routed: any `browser.*` method or the bare `cdp` method, and `layout.grid`/`surface.create` requests with `"type":"browser"`, return a `-32601`/`-32602` error whose message tells the caller to use Claude Code's own browser tooling instead (backend.rs:316-324, backend.rs:1812). `system.capabilities` reports `browser: false` in its `Capabilities` struct, so callers can detect this without triggering the rejection path (state.rs:59-65, state.rs:529-535). Both behaviors are pinned by tests: `rejects_browser_methods_with_clear_message` and `rejects_browser_grid_surface` (backend.rs:2697-2721).
+`IpcClient` splits the stream into a line reader and writer, assigns monotonically increasing request ids, flushes one serialized request per line, and waits until it receives the matching response id ([ipc.rs:15-20](../../crates/pandamux-cli/src/ipc.rs#L15-L20), [ipc.rs:68-104](../../crates/pandamux-cli/src/ipc.rs#L68-L104)).
 
-Sources: [backend.rs:230-336](../../crates/pandamux-app/src/backend.rs#L230-L336), [backend.rs:1651-1746](../../crates/pandamux-app/src/backend.rs#L1651-L1746), [state.rs:59-65](../../crates/pandamux-core/src/state.rs#L59-L65), [state.rs:522-535](../../crates/pandamux-core/src/state.rs#L522-L535)
-<!-- END:AUTOGEN pandamux_10_named-pipe-ipc_methods -->
+```json
+{"jsonrpc":"2.0","id":1,"method":"system.ping"}
+```
+
+Sources: [jsonrpc.rs:4-110](../../crates/pandamux-protocol/src/jsonrpc.rs#L4-L110), [ipc.rs:15-104](../../crates/pandamux-cli/src/ipc.rs#L15-L104), [ipc.rs:143-289](../../crates/pandamux-cli/src/ipc.rs#L143-L289), [windows_security.rs:34-96](../../crates/pandamux-protocol/src/windows_security.rs#L34-L96)
+<!-- END:AUTOGEN pandamux_10_local-ipc_transport -->
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_10_named-pipe-ipc_dispatch -->
-## Shared Dispatch and Deltas
+<!-- BEGIN:AUTOGEN pandamux_10_local-ipc_handshake -->
+## Hello and Capability Handshake
 
-`handle_line` is the single synchronous dispatch code path shared by both clients of canonical state: the standalone pipe server and the live Iced runtime's `update` loop. It borrows `AppState`, `PtySessionManager`, and `Notifications` (bundled with the rest of the mutable backend fields into `DispatchCtx`) by mutable reference and never awaits, so a CLI-driven pane split and a UI-driven pane split are indistinguishable once they reach this function (backend.rs:1-12, backend.rs:36-63).
-
-For methods not claimed by a namespace sub-dispatcher, `dispatch` converts the request into an `AppIntent` (`intent_for_request`), applies it against canonical `AppState` (`app.apply(intent)`), reconciles PTY/remote sessions, prunes surface content/color-scheme overrides for anything the mutation closed, and finally converts the resulting `AppDelta` into the JSON `result` via `delta_to_result` (backend.rs:326-336, backend.rs:1942-2056). This is the intent-in, delta-out shape: the request supplies intent, and the only state mutation channel back out is the typed delta.
-
-The Iced runtime's `ShellMessage::PipeRequest` handler builds an equivalent `DispatchCtx` from its own live fields and calls the same free `backend::handle_line`, then performs side effects the pipe server doesn't need (persisting SSH profiles, live-applying `config.set`, saving sessions after `project.create`) before returning the reply to the waiting pipe connection through a registry channel (iced_runtime.rs:2509-2565). The embedded accept loop that feeds it runs as an `iced::Subscription` only when the app has live PTYs, which is what lets a CLI/agent/orchestrator line repaint the same window the user is looking at (iced_runtime.rs:3848-3859, iced_runtime.rs:3895-3903).
+Protocol version 3 requires the first request on a local connection to be `system.hello`. `HelloParams` carries protocol version, client kind/version, and an optional capability token; the reply reports server version, negotiated protocol, Hub/node role, and feature flags ([system.rs:3-24](../../crates/pandamux-protocol/src/system.rs#L3-L24), [system.rs:26-41](../../crates/pandamux-protocol/src/system.rs#L26-L41)).
 
 ```mermaid
 sequenceDiagram
-    participant CLI as "CLI Client"
-    participant Pipe as "Named Pipe"
-    participant Dispatch as "handle_line"
-    participant State as "AppState"
-    participant UI as "Live Iced UI"
+    participant C as Local client
+    participant I as IPC acceptor
+    participant A as Capability authority
+    participant R as RPC router
 
-    CLI->>Pipe: "JSON-RPC request line"
-    activate Pipe
-    Pipe->>Dispatch: "handle_line(line, ctx)"
-    activate Dispatch
-    Dispatch->>State: "app.apply(intent)"
-    activate State
-    State-->>Dispatch: "AppDelta"
-    deactivate State
-    Dispatch-->>Pipe: "serialized RpcResponse"
-    deactivate Dispatch
-    Pipe-->>CLI: "reply line"
-    deactivate Pipe
-    Dispatch->>UI: "delta reflected in shared AppState"
-    activate UI
-    UI-->>UI: "next repaint renders new state"
-    deactivate UI
+    C->>I: system.hello with capability
+    activate I
+    I->>A: authenticate token and peer identity
+    activate A
+    A-->>I: server-owned request context
+    deactivate A
+    I->>I: remove capability from params
+    I->>R: hello with authenticated context
+    R-->>I: hello result
+    I-->>C: JSON-RPC response
+    deactivate I
 ```
 
-1. The client (CLI, agent, or orchestrator script) writes one JSON-RPC line to the pipe and reads back exactly one reply line (pipe_server.rs:40-59, main.rs:1090-1107).
-2. The accept loop (standalone `handle_connection` or the embedded subscription) hands the trimmed line to `Backend::handle_line`, which builds a `DispatchCtx` over the canonical fields and calls the free `handle_line` (backend.rs:112-133, iced_runtime.rs:2509-2534).
-3. `dispatch` resolves the method to either a namespace sub-dispatcher's `Ok(Some(value))` or an `AppIntent` applied via `app.apply`, producing an `AppDelta` that `delta_to_result` renders back into the JSON `result` field of the reply (backend.rs:230-336, backend.rs:1942-1953).
-4. Because the embedded (GUI) path mutates the exact same `AppState`/`PtySessionManager` the live window renders from, the next repaint shows the CLI-driven change with no separate sync step (iced_runtime.rs:2509-2534).
+The acceptor rejects any other first method, missing capability params, invalid/expired grants, or authentication failure, then closes the connection. On success it removes the capability from request params and routes every subsequent request with the authenticated context ([server.rs:376-460](../../crates/pandamux-server/src/server.rs#L376-L460)). The CLI performs this handshake automatically after discovery, selecting the control or MCP token and client kind for the requested scope ([ipc.rs:23-65](../../crates/pandamux-cli/src/ipc.rs#L23-L65)).
 
-Sources: [backend.rs:1-13](../../crates/pandamux-app/src/backend.rs#L1-L13), [backend.rs:112-145](../../crates/pandamux-app/src/backend.rs#L112-L145), [backend.rs:230-336](../../crates/pandamux-app/src/backend.rs#L230-L336), [iced_runtime.rs:2509-2565](../../crates/pandamux-app/src/iced_runtime.rs#L2509-L2565)
-<!-- END:AUTOGEN pandamux_10_named-pipe-ipc_dispatch -->
+Sources: [system.rs:3-41](../../crates/pandamux-protocol/src/system.rs#L3-L41), [server.rs:376-460](../../crates/pandamux-server/src/server.rs#L376-L460), [ipc.rs:23-65](../../crates/pandamux-cli/src/ipc.rs#L23-L65)
+<!-- END:AUTOGEN pandamux_10_local-ipc_handshake -->
+
+---
+
+<!-- BEGIN:AUTOGEN pandamux_10_local-ipc_context -->
+## Server-Owned Request Context
+
+The accepting transport constructs `RequestContext`; callers cannot select these fields in request JSON. It binds a peer role, authenticated environment, kernel/process-derived client identity, and capability scope ([request_context.rs:9-45](../../crates/pandamux-server/src/request_context.rs#L9-L45)).
+
+| Context field | Source of truth | Security use |
+|---|---|---|
+| `peer_role` | Capability grant or explicit in-process construction | Distinguishes internal, control, MCP, provider-child, and node-proxy callers ([request_context.rs:9-16](../../crates/pandamux-server/src/request_context.rs#L9-L16)) |
+| `authenticated_environment_id` | Server capability authority or proxy connection | Prevents a request from upgrading its environment by parameters ([request_context.rs:40-45](../../crates/pandamux-server/src/request_context.rs#L40-L45)) |
+| `client_identity` | Accepting transport | Retains description, process id, user id, and executable evidence ([request_context.rs:18-24](../../crates/pandamux-server/src/request_context.rs#L18-L24)) |
+| `capability_scope` | Token lookup in `CapabilityAuthority` | Drives method- and resource-level authorization ([request_context.rs:26-37](../../crates/pandamux-server/src/request_context.rs#L26-L37)) |
+
+`CapabilityAuthority` stores opaque-token grants and replaces local control/MCP grants when a runtime endpoint is configured. Authentication clones the grant and attaches the observed client identity; expired provider-child grants are revoked during authentication ([request_context.rs:120-192](../../crates/pandamux-server/src/request_context.rs#L120-L192)).
+
+Sources: [request_context.rs:9-45](../../crates/pandamux-server/src/request_context.rs#L9-L45), [request_context.rs:120-192](../../crates/pandamux-server/src/request_context.rs#L120-L192), [server.rs:400-456](../../crates/pandamux-server/src/server.rs#L400-L456)
+<!-- END:AUTOGEN pandamux_10_local-ipc_context -->
+
+---
+
+<!-- BEGIN:AUTOGEN pandamux_10_local-ipc_scopes -->
+## Capability Scopes
+
+Authorization is fail-closed per scope. The method and relevant resource identity are checked against the authenticated context before routing ([request_context.rs:69-117](../../crates/pandamux-server/src/request_context.rs#L69-L117)).
+
+| Scope | Allowed boundary | Explicit restriction |
+|---|---|---|
+| `Internal` | All methods | Constructed only in-process ([request_context.rs:47-58](../../crates/pandamux-server/src/request_context.rs#L47-L58)) |
+| `Control` | Local control methods | Excludes all `mcp.*` methods and Hub usage export/backfill/ack methods ([request_context.rs:70-75](../../crates/pandamux-server/src/request_context.rs#L70-L75)) |
+| `Mcp` | `system.hello`, `system.ping`, `mcp.list_tools`, `mcp.call_tool` | Cannot invoke ordinary control mutations ([request_context.rs:76-79](../../crates/pandamux-server/src/request_context.rs#L76-L79)) |
+| `ProviderChild` | `system.hello` plus an issued method set | Must be unexpired and every allowed call must carry the exact bound thread id ([request_context.rs:80-93](../../crates/pandamux-server/src/request_context.rs#L80-L93)) |
+| `NodeProxy` | Non-MCP methods for its authenticated environment | Any supplied environment id must equal the context environment ([request_context.rs:94-103](../../crates/pandamux-server/src/request_context.rs#L94-L103)) |
+
+Provider-child tokens are random, time-limited grants issued for one thread and a caller-specific method set; they can be revoked explicitly ([request_context.rs:194-229](../../crates/pandamux-server/src/request_context.rs#L194-L229)). Denials use JSON-RPC code `-32001` with a machine-readable `capability_scope_denied` reason ([request_context.rs:104-116](../../crates/pandamux-server/src/request_context.rs#L104-L116)).
+
+Sources: [request_context.rs:47-117](../../crates/pandamux-server/src/request_context.rs#L47-L117), [request_context.rs:194-229](../../crates/pandamux-server/src/request_context.rs#L194-L229), [jsonrpc.rs:129-159](../../crates/pandamux-protocol/src/jsonrpc.rs#L129-L159)
+<!-- END:AUTOGEN pandamux_10_local-ipc_scopes -->
+
+---
+
+<!-- BEGIN:AUTOGEN pandamux_10_local-ipc_windows -->
+## Windows Identity Enforcement
+
+Windows adds kernel-backed checks around the capability handshake. The server derives a role-specific pipe name from the current user's SID and constructs a protected DACL granting access only to that SID ([windows_security.rs:43-82](../../crates/pandamux-server/src/windows_security.rs#L43-L82), [windows_security.rs:95-147](../../crates/pandamux-server/src/windows_security.rs#L95-L147)).
+
+- The server queries the connecting client's PID from the pipe handle, opens that process, resolves its image, and permits only `pandamux.exe` or `pandamux-cli.exe` ([windows_security.rs:149-197](../../crates/pandamux-server/src/windows_security.rs#L149-L197)).
+- The client independently queries the named-pipe server PID, compares it with the signed runtime record when present, and permits only `pandamux-server.exe` ([windows_security.rs:34-96](../../crates/pandamux-protocol/src/windows_security.rs#L34-L96)).
+- Server options use first-instance ownership and remote-client rejection; a second first-instance creation must fail, preventing a later process from silently acquiring the protected name ([windows_security.rs:220-252](../../crates/pandamux-server/src/windows_security.rs#L220-L252)).
+- The DACL security descriptor is non-inheritable and releases its native allocation on drop ([windows_security.rs:54-92](../../crates/pandamux-server/src/windows_security.rs#L54-L92)).
+
+These checks establish a per-user local boundary and product-image allowlist. They do not turn a full-access provider process into a hostile same-user sandbox.
+
+Sources: [windows_security.rs:43-197](../../crates/pandamux-server/src/windows_security.rs#L43-L197), [windows_security.rs:220-252](../../crates/pandamux-server/src/windows_security.rs#L220-L252), [windows_security.rs:34-96](../../crates/pandamux-protocol/src/windows_security.rs#L34-L96)
+<!-- END:AUTOGEN pandamux_10_local-ipc_windows -->
+
+---
+
+<!-- BEGIN:AUTOGEN pandamux_10_local-ipc_mcp -->
+## MCP Isolation and Redaction
+
+MCP uses a capability distinct from ordinary control. The CLI selects `mcpToken` from the runtime record, advertises `pandamux-mcp` as its client kind, and otherwise follows the same authenticated hello sequence ([ipc.rs:28-64](../../crates/pandamux-cli/src/ipc.rs#L28-L64), [ipc.rs:209-220](../../crates/pandamux-cli/src/ipc.rs#L209-L220)).
+
+The isolation boundary is intentionally narrow:
+
+- An MCP-scoped context can call only hello, ping, tool discovery, and tool execution ([request_context.rs:76-79](../../crates/pandamux-server/src/request_context.rs#L76-L79)).
+- A control token cannot call `mcp.*`, so control and tool-adapter identities are not interchangeable ([request_context.rs:70-79](../../crates/pandamux-server/src/request_context.rs#L70-L79)).
+- MCP tool definitions expose only a name, description, and JSON input schema ([mcp.rs:3-10](../../crates/pandamux-protocol/src/mcp.rs#L3-L10)).
+- Tool calls carry only a tool name and JSON arguments, and results are explicit text/resource items plus an error flag ([mcp.rs:12-41](../../crates/pandamux-protocol/src/mcp.rs#L12-L41)).
+- The wire types do not perform redaction themselves; producers must construct purpose-built result content before it crosses this boundary. Arbitrary server methods remain inaccessible even if a caller places method-like fields inside MCP arguments ([request_context.rs:69-117](../../crates/pandamux-server/src/request_context.rs#L69-L117)).
+
+Because capability authorization happens before dispatch, MCP arguments cannot promote the connection to control, provider-child, internal, or node-proxy scope.
+
+Sources: [request_context.rs:69-117](../../crates/pandamux-server/src/request_context.rs#L69-L117), [mcp.rs:3-41](../../crates/pandamux-protocol/src/mcp.rs#L3-L41), [ipc.rs:28-64](../../crates/pandamux-cli/src/ipc.rs#L28-L64), [ipc.rs:209-220](../../crates/pandamux-cli/src/ipc.rs#L209-L220)
+<!-- END:AUTOGEN pandamux_10_local-ipc_mcp -->
 
 ---

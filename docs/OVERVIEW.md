@@ -4,21 +4,12 @@
 
 The following files were used as evidence for this page:
 
-- [README.md:1-8](../README.md#L1-L8)
-- [README.md:16-22](../README.md#L16-L22)
-- [README.md:139-155](../README.md#L139-L155)
-- [CLAUDE.md:1-11](../CLAUDE.md#L1-L11)
-- [CLAUDE.md:15-27](../CLAUDE.md#L15-L27)
-- [Cargo.toml:1-23](../Cargo.toml#L1-L23)
-- [CHANGELOG.md:8-23](../CHANGELOG.md#L8-L23)
-- [main.rs:1-66](../crates/pandamux-app/src/main.rs#L1-L66)
-- [main.rs:1-20](../crates/pandamux-cli/src/main.rs#L1-L20)
-- [lib.rs:1-16](../crates/pandamux-core/src/lib.rs#L1-L16)
-- [lib.rs:1-9](../crates/pandamux-term/src/lib.rs#L1-L9)
-- [lib.rs:1-26](../crates/pandamux-ui/src/lib.rs#L1-L26)
-- [Cargo.toml:1-72](../crates/pandamux-app/Cargo.toml#L1-L72)
-- [Cargo.toml:1-18](../crates/pandamux-term/Cargo.toml#L1-L18)
-- [Cargo.toml:1-16](../crates/pandamux-ui/Cargo.toml#L1-L16)
+- [README.md:1-260](../README.md#L1-L260)
+- [CLAUDE.md:1-215](../CLAUDE.md#L1-L215)
+- [Cargo.toml:1-40](../Cargo.toml#L1-L40)
+- [crates/pandamux-desktop/src/main.rs:1-63](../crates/pandamux-desktop/src/main.rs#L1-L63)
+- [crates/pandamux-server/src/main.rs:27-300](../crates/pandamux-server/src/main.rs#L27-L300)
+- [crates/pandamux-cli/src/main.rs:1-85](../crates/pandamux-cli/src/main.rs#L1-L85)
 
 </details>
 
@@ -31,51 +22,55 @@ The following files were used as evidence for this page:
 <!-- BEGIN:AUTOGEN pandamux_01_overview_introduction -->
 ## Introduction
 
-PandaMUX is a native, GPU-rendered Windows terminal multiplexer built in Rust (Iced + alacritty_terminal + portable-pty + russh), whose named-pipe protocol lineage traces to [cmux](https://github.com/manaflow-ai/cmux) ([README.md:1-8](../README.md#L1-L8)). It is built for running many Claude Code (and other CLI) agents in parallel, each in its own visible pane ([README.md:16-22](../README.md#L16-L22)).
+PandaMUX is a native, chat-first desktop for supervising local and remote AI coding agents. Its active implementation is a Rust workspace in which a GPUI desktop and an authenticated CLI consume one server-owned JSON-RPC control plane ([README.md:1-6](../README.md#L1-L6)).
 
-It exposes AI tools in visible terminal surfaces and combines shell integration, agent state, and native polling to surface project context and attention signals without changing the tools themselves ([README.md:16-26](../README.md#L16-L26)). The app has no web view; the terminal grid is GPU-rendered, and the GUI, CLI, shell integration, and optional orchestrator plugin coordinate through a single named-pipe API ([README.md:16-35](../README.md#L16-L35)). `CLAUDE.md` provides the matching contributor-oriented summary and architecture guide ([CLAUDE.md:1-11](../CLAUDE.md#L1-L11)).
+The server is authoritative for durable state and provider execution, while the desktop presents client projections and renders terminal grids. The repository's former Electron and Iced implementations are not part of the active workspace ([README.md:4-6](../README.md#L4-L6)).
 
-Sources: [README.md:1-8](../README.md#L1-L8), [README.md:16-22](../README.md#L16-L22), [CLAUDE.md:1-11](../CLAUDE.md#L1-L11)
+Sources: [README.md:1-6](../README.md#L1-L6)
 <!-- END:AUTOGEN pandamux_01_overview_introduction -->
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_01_overview_purpose -->
-## Purpose and History
+<!-- BEGIN:AUTOGEN pandamux_01_overview_product -->
+## Product Model
 
-PandaMUX began as an Electron/TypeScript prototype and was rewritten into a fully native Rust workspace; the Electron build was a never-shipped fork pull and has since been deleted from the repo ([CLAUDE.md:1-11](../CLAUDE.md#L1-L11)). The rewrite plan lives in `tasks/plan-repo.md`, and the in-app CDP browser pane from the prototype was intentionally dropped: agents now use Claude Code's own browser tooling instead ([README.md:16-22](../README.md#L16-L22)).
+PandaMUX centers work on durable chat threads and visible terminal sessions rather than embedding provider state in the desktop process. This separation lets the same Hub serve the GPUI desktop, the interactive CLI, and a separately scoped MCP adapter ([CLAUDE.md:189-207](../CLAUDE.md#L189-L207)).
 
-- **Phases 1-7 are complete**: native terminal engine, the Iced shell, pipe/CLI parity, peripheral UI, SSH remote surfaces, and the signed installer and release pipeline ([CLAUDE.md:9-11](../CLAUDE.md#L9-L11)).
-- Signed releases have published through the tag workflow since v0.37, while `.claude/` remains the source of truth for repository workflow rules ([CLAUDE.md:9-11](../CLAUDE.md#L9-L11)).
-- The current `[Unreleased]` changelog records the in-app update flow and refreshed `.claude/` automation; these are current work items, not unfinished rewrite phases ([CHANGELOG.md:8-40](../CHANGELOG.md#L8-L40)).
+| Concern | Owning component | Practical result |
+|---|---|---|
+| Threads, turns, events, settings, provider processes, PTYs | `pandamux-server` | Work survives desktop projection changes and clients submit intents rather than mutating canonical state ([CLAUDE.md:194-201](../CLAUDE.md#L194-L201)) |
+| Chat, settings, side surfaces, timeline, terminal grid | `pandamux-desktop` | The native UI renders server state and terminal bytes with GPUI ([CLAUDE.md:180-184](../CLAUDE.md#L180-L184)) |
+| Local automation and inspection | `pandamux-cli` | Commands use the same authenticated protocol as the desktop ([CLAUDE.md:183-206](../CLAUDE.md#L183-L206)) |
+| Remote Linux execution | Hub plus node daemon | A Hub reaches the node through SSH and a private proxy rather than a public node listener ([README.md:258-260](../README.md#L258-L260)) |
 
-Sources: [CLAUDE.md:1-11](../CLAUDE.md#L1-L11), [README.md:16-22](../README.md#L16-L22), [CHANGELOG.md:8-40](../CHANGELOG.md#L8-L40)
-<!-- END:AUTOGEN pandamux_01_overview_purpose -->
+- Provider instances are stored configurations, not interchangeable provider kinds.
+- Local and remote execution environments are explicit routing targets.
+- The MCP adapter receives a distinct read-only capability surface.
+- FullAccess providers have host-user authority and are not process-isolated ([CLAUDE.md:205-215](../CLAUDE.md#L205-L215)).
+
+Sources: [CLAUDE.md:172-215](../CLAUDE.md#L172-L215), [README.md:258-260](../README.md#L258-L260)
+<!-- END:AUTOGEN pandamux_01_overview_product -->
 
 ---
 
 <!-- BEGIN:AUTOGEN pandamux_01_overview_stack -->
 ## Technology Stack
 
-PandaMUX is a Rust workspace (edition 2024, `rust-version = "1.88"`) split across five crates, with core dependencies pinned to exact versions at the workspace level so the whole tree upgrades deliberately ([Cargo.toml:1-23](../Cargo.toml#L1-L23)).
+The workspace uses Rust 2024 with Rust 1.89 as its declared minimum and inherits one workspace version across all crates ([Cargo.toml:23-28](../Cargo.toml#L23-L28)).
 
-| Layer | Technology | Version | Source |
-|---|---|---|---|
-| GUI framework | Iced (GPU UI: canvas viewport, cosmic-text/glyphon, wgpu) | `=0.14.0` | ([Cargo.toml:9-11](../crates/pandamux-ui/Cargo.toml#L9-L11)) |
-| Terminal grid | alacritty_terminal | `=0.26.0` | ([Cargo.toml:9-11](../crates/pandamux-term/Cargo.toml#L9-L11)) |
-| Local PTY | portable-pty | `=0.9.0` | ([Cargo.toml:9-11](../crates/pandamux-term/Cargo.toml#L9-L11)) |
-| Remote PTY / SSH | russh (`ring` crypto backend) | `=0.62.2` | ([Cargo.toml:14-16](../crates/pandamux-term/Cargo.toml#L14-L16)) |
-| Remote SFTP (image paste) | russh-sftp | `=2.3.0` | ([Cargo.toml:17](../crates/pandamux-term/Cargo.toml#L17)) |
-| Async runtime | tokio (`io-util`, `macros`, `net`, `rt-multi-thread`, `sync`, plus per-crate features) | `=1.52.3` | ([Cargo.toml:22](../Cargo.toml#L22)) |
-| Serialization | serde / serde_json | `=1.0.228` / `=1.0.150` | ([Cargo.toml:20-21](../Cargo.toml#L20-L21)) |
-| IDs | uuid (`v4`) | `=1.23.4` | ([Cargo.toml:23](../Cargo.toml#L23)) |
-| OS clipboard | arboard | `=3.6.1` | ([Cargo.toml:17](../crates/pandamux-app/Cargo.toml#L17)) |
-| In-app update check (Phase 7) | reqwest (`default-tls`, feature-gated behind `iced-runtime`) | `=0.13.4` | ([Cargo.toml:26-28](../crates/pandamux-app/Cargo.toml#L26-L28)) |
-| Windows resource embedding | winresource (build-dependency, Windows only) | `=0.1.31` | ([Cargo.toml:42](../crates/pandamux-app/Cargo.toml#L42)) |
+| Layer | Technology | Evidence |
+|---|---|---|
+| Desktop UI | GPUI through `gpui-kit` | The desktop entry point initializes GPUI Kit and opens the PandaMUX window ([main.rs:3-5](../crates/pandamux-desktop/src/main.rs#L3-L5), [main.rs:26-61](../crates/pandamux-desktop/src/main.rs#L26-L61)) |
+| Terminal grid | `alacritty_terminal` | The desktop owns grid rendering rather than PTY processes ([CLAUDE.md:1-3](../CLAUDE.md#L1-L3), [CLAUDE.md:187-195](../CLAUDE.md#L187-L195)) |
+| Local PTYs | `portable-pty` | PTY ownership stays behind the server ([CLAUDE.md:1-3](../CLAUDE.md#L1-L3), [CLAUDE.md:187-199](../CLAUDE.md#L187-L199)) |
+| Durable store | SQLite through bundled `rusqlite` 0.33 | The shared manifest declares the database dependency and the server owns durable state ([Cargo.toml:30-40](../Cargo.toml#L30-L40), [CLAUDE.md:194-201](../CLAUDE.md#L194-L201)) |
+| Remote composition | `russh` | The server composes SSH-connected Linux nodes through the remote crate ([CLAUDE.md:1-3](../CLAUDE.md#L1-L3), [CLAUDE.md:187-193](../CLAUDE.md#L187-L193)) |
+| Async runtime | Tokio 1.52.3 | Shared workspace dependency with per-crate features ([Cargo.toml:35-39](../Cargo.toml#L35-L39)) |
+| Wire format | Serde and JSON | Shared serialization dependencies back the protocol and runtime records ([Cargo.toml:35-36](../Cargo.toml#L35-L36)) |
 
-All native dependencies are pinned with `=x.y.z` exact-version requirements rather than caret ranges, a deliberate convention documented in `CLAUDE.md` so a dependency refresh is always an explicit, reviewed bump ([CLAUDE.md:1-11](../CLAUDE.md#L1-L11)).
+The dependency boundary is intentional: the server owns PTYs and remote composition, while the desktop owns grid rendering and projections ([CLAUDE.md:187-195](../CLAUDE.md#L187-L195)).
 
-Sources: [Cargo.toml:1-23](../Cargo.toml#L1-L23), [Cargo.toml:1-72](../crates/pandamux-app/Cargo.toml#L1-L72), [Cargo.toml:1-18](../crates/pandamux-term/Cargo.toml#L1-L18)
+Sources: [Cargo.toml:23-40](../Cargo.toml#L23-L40), [CLAUDE.md:1-3](../CLAUDE.md#L1-L3), [CLAUDE.md:187-201](../CLAUDE.md#L187-L201), [main.rs:3-61](../crates/pandamux-desktop/src/main.rs#L3-L61)
 <!-- END:AUTOGEN pandamux_01_overview_stack -->
 
 ---
@@ -83,36 +78,39 @@ Sources: [Cargo.toml:1-23](../Cargo.toml#L1-L23), [Cargo.toml:1-72](../crates/pa
 <!-- BEGIN:AUTOGEN pandamux_01_overview_layout -->
 ## Workspace Layout
 
-The Cargo workspace declares five member crates, each with a single, hard-enforced responsibility: `pandamux-core` and `pandamux-term` never import Iced, and `pandamux-ui` is the only crate that does, an invariant CI enforces via `scripts/check-rust-boundaries.ps1` ([Cargo.toml:1-8](../Cargo.toml#L1-L8)).
+The root manifest declares nine active crates and excludes the Phase 0 spikes from the workspace ([Cargo.toml:1-21](../Cargo.toml#L1-L21)).
 
-| Crate | Purpose |
+| Crate | Responsibility |
 |---|---|
-| `pandamux-core` | Shared domain types: split tree, session/agent/notification/sidebar/ssh models, keymap, settings, protocol types. Zero Iced dependency ([lib.rs:1-16](../crates/pandamux-core/src/lib.rs#L1-L16)). |
-| `pandamux-term` | Terminal engine: alacritty_terminal grid, portable-pty local PTY, russh remote PTY + SFTP, clipboard policy, search/link detection, shell lifecycle ([lib.rs:1-9](../crates/pandamux-term/src/lib.rs#L1-L9)). |
-| `pandamux-ui` | The Iced app: canvas terminal viewport, chrome, panes/splits/tabs, session panel, command palette, settings, theming. The only crate importing Iced ([lib.rs:1-26](../crates/pandamux-ui/src/lib.rs#L1-L26)). |
-| `pandamux-app` | Binary `pandamux.exe`: composition root + tokio runtime, canonical mutable state, named-pipe server, pollers, persistence, updater ([Cargo.toml:1-15](../crates/pandamux-app/Cargo.toml#L1-L15)). |
-| `pandamux-cli` | Binary `pandamux-cli.exe`: the `pandamux` CLI, a pipe client wire-compatible with the V2 JSON-RPC protocol ([main.rs:1-20](../crates/pandamux-cli/src/main.rs#L1-L20)). |
+| `pandamux-core` | Framework-free domain types, policies, IDs, settings, threads, turns, and events |
+| `pandamux-protocol` | Versioned JSON-RPC, subscriptions, terminal contracts, settings contracts, and proxy wire types |
+| `pandamux-client` | Client-side event projections and rendering-oriented state |
+| `pandamux-providers` | Provider drivers, profiles, parsing, and process supervision |
+| `pandamux-remote` | SSH authentication, pooling, exec, SFTP, bootstrap, and tunnels |
+| `pandamux-server` | SQLite single writer, routing, provider execution, PTYs, Hub runtime, and node runtime |
+| `pandamux-term` | Feature-split terminal grid and local PTY primitives |
+| `pandamux-cli` | Authenticated command client and MCP stdio adapter |
+| `pandamux-desktop` | GPUI chat shell, timeline, settings, side surfaces, and terminal rendering |
 
-Non-crate top-level directories referenced from the README's architecture section: `resources/` (runtime assets: themes, sounds, shell-integration, icons, the pandamux-orchestrator plugin), `site/` (the Netlify-deployed landing page), and `tasks/plan-repo.md` (the master rewrite plan) ([README.md:139-155](../README.md#L139-L155)).
+These responsibilities and their hard dependency boundaries are defined by the development guide and manifests ([CLAUDE.md:172-195](../CLAUDE.md#L172-L195)).
 
 ```mermaid
 graph TD
-    Core["pandamux-core"]
-    Term["pandamux-term"]
-    Ui["pandamux-ui"]
-    App["pandamux-app (pandamux.exe)"]
-    Cli["pandamux-cli (pandamux-cli.exe)"]
-
-    Term --> Core
-    Ui --> Core
-    Ui --> Term
-    App --> Core
-    App --> Term
-    App --> Ui
-    Cli --> Core
+    Core["Core domain"] --> Protocol["Wire contracts"]
+    Core --> Providers["Provider drivers"]
+    Core --> Remote["SSH mechanics"]
+    Protocol --> Client["Client projections"]
+    Protocol --> Server["State owner"]
+    Providers --> Server
+    Remote --> Server
+    Server --> Desktop["GPUI desktop"]
+    Protocol --> CLI["CLI and MCP"]
+    Client --> Desktop
+    Grid["Terminal grid"] --> Desktop
+    PTY["Local PTY"] --> Server
 ```
 
-Sources: [Cargo.toml:1-8](../Cargo.toml#L1-L8), [lib.rs:1-16](../crates/pandamux-core/src/lib.rs#L1-L16), [lib.rs:1-9](../crates/pandamux-term/src/lib.rs#L1-L9), [lib.rs:1-26](../crates/pandamux-ui/src/lib.rs#L1-L26), [README.md:139-155](../README.md#L139-L155)
+Sources: [Cargo.toml:1-21](../Cargo.toml#L1-L21), [CLAUDE.md:172-195](../CLAUDE.md#L172-L195)
 <!-- END:AUTOGEN pandamux_01_overview_layout -->
 
 ---
@@ -120,45 +118,25 @@ Sources: [Cargo.toml:1-8](../Cargo.toml#L1-L8), [lib.rs:1-16](../crates/pandamux
 <!-- BEGIN:AUTOGEN pandamux_01_overview_binaries -->
 ## Binaries and Entry Points
 
-The workspace produces two executables. `pandamux-app`'s package declares `[[bin]] name = "pandamux"` so the release artifact is `target/release/pandamux.exe`, while the cargo package itself stays `pandamux-app` (so `-p pandamux-app` invocations and CI smokes are unchanged) ([Cargo.toml:12-14](../crates/pandamux-app/Cargo.toml#L12-L14)).
+Three user-facing binaries form the active runtime. Each exposes a deliberately different entry point rather than combining UI, server ownership, and automation into one process.
 
-`pandamux.exe`'s `main()` checks command-line flags in a fixed order before falling through to the default GUI path ([main.rs:28-64](../crates/pandamux-app/src/main.rs#L28-L64)):
-
-```rust
-// Noninteractive CI smoke: build the shell view once and exit. Must be
-// checked before the default-GUI launch below.
-#[cfg(feature = "iced-runtime")]
-if has_flag("--iced-shell-smoke") {
-    iced_runtime::run_iced_shell_smoke()?;
-    return Ok(());
-}
-...
-// In the GUI build, open the window by DEFAULT. The installed Start Menu
-// shortcut runs `pandamux.exe` with no arguments (cargo-packager's NSIS
-// config cannot pass shortcut args), so the argument-less path must be the
-// GUI, not the headless pipe server. `--iced-shell` is kept for backward
-// compatibility; `--headless`/`--pipe-server` forces the standalone server.
-#[cfg(feature = "iced-runtime")]
-if !has_flag("--headless") && !has_flag("--pipe-server") {
-    iced_runtime::run_iced_shell()?;
-    return Ok(());
-}
+```bash
+cargo run -p pandamux-server
+cargo run -p pandamux-desktop
+cargo run -p pandamux-cli -- ping
 ```
 
-| Flag / condition | Requires `iced-runtime` | Effect |
+These are the documented development entry points for the Hub, GPUI desktop, and command client ([CLAUDE.md:119-137](../CLAUDE.md#L119-L137)).
+
+| Binary | Cargo package | Entry behavior |
 |---|---|---|
-| (no args, default) | yes | Opens the Iced GUI window ([main.rs:48-57](../crates/pandamux-app/src/main.rs#L48-L57)) |
-| `--iced-shell` | yes | Same as no args; kept for back-compat ([main.rs:48-57](../crates/pandamux-app/src/main.rs#L48-L57)) |
-| `--iced-shell-smoke` | yes | Builds the shell view once and exits, for CI ([main.rs:35-39](../crates/pandamux-app/src/main.rs#L35-L39)) |
-| `--headless` / `--pipe-server` | no (forces it in a GUI build) | Runs only the tokio-backed named-pipe server, no window ([main.rs:53-65](../crates/pandamux-app/src/main.rs#L53-L65)) |
-| `--ssh-smoke` | no | Opt-in live SSH validation against a real host via `RemoteSessionManager`, never run in CI ([main.rs:41-46](../crates/pandamux-app/src/main.rs#L41-L46)) |
-| (no `iced-runtime` feature at all) | n/a | Binary is headless by construction: only the pipe server path compiles ([main.rs:59-65](../crates/pandamux-app/src/main.rs#L59-L65)) |
+| `pandamux` | `pandamux-desktop` | Opens the GPUI window by default; `--headless` performs a noninteractive theme check and `--smoke` opens, renders, then exits ([main.rs:7-24](../crates/pandamux-desktop/src/main.rs#L7-L24), [main.rs:26-61](../crates/pandamux-desktop/src/main.rs#L26-L61)) |
+| `pandamux-server` | `pandamux-server` | Starts a Hub by default, a node with `daemon --role node`, or a Linux stdio bridge with `proxy` ([main.rs:27-57](../crates/pandamux-server/src/main.rs#L27-L57), [main.rs:141-232](../crates/pandamux-server/src/main.rs#L141-L232)) |
+| `pandamux-cli` | `pandamux-cli` | Parses connectivity, identification, thread, notification, MCP, help, and version actions; command failures exit with status 1 ([main.rs:6-84](../crates/pandamux-cli/src/main.rs#L6-L84)) |
 
-Without the `iced-runtime` feature, the headless build binds `\\.\pipe\pandamux` (or `$PANDAMUX_PIPE`) and blocks on a multi-thread tokio runtime running `pipe_server::run` ([main.rs:59-65](../crates/pandamux-app/src/main.rs#L59-L65)). The GUI build is compiled with `windows_subsystem = "windows"` so double-clicking the exe never pops a console, while the headless build stays a console app so stdout/stderr keep working for pipe/CLI-style invocations ([main.rs:1-6](../crates/pandamux-app/src/main.rs#L1-L6)).
+The server creates `data/hub.db` or `data/node.db` beside its runtime directory unless `--db` supplies an explicit database path ([main.rs:49-69](../crates/pandamux-server/src/main.rs#L49-L69)). It also writes discovery metadata before starting its IPC listeners and removes that runtime state during graceful shutdown ([main.rs:72-120](../crates/pandamux-server/src/main.rs#L72-L120)).
 
-`pandamux-cli.exe` is a plain `#[tokio::main]` binary: it reads `std::env::args()`, dispatches on the first argument (e.g. `ping`, `identify`, `new-workspace`, `split`, `send`), and either sends a V1 text line or a V2 JSON-RPC request over the pipe ([main.rs:1-20](../crates/pandamux-cli/src/main.rs#L1-L20)).
-
-Sources: [main.rs:1-66](../crates/pandamux-app/src/main.rs#L1-L66), [main.rs:1-20](../crates/pandamux-cli/src/main.rs#L1-L20), [Cargo.toml:1-15](../crates/pandamux-app/Cargo.toml#L1-L15)
+Sources: [main.rs:7-63](../crates/pandamux-desktop/src/main.rs#L7-L63), [main.rs:27-123](../crates/pandamux-server/src/main.rs#L27-L123), [main.rs:6-84](../crates/pandamux-cli/src/main.rs#L6-L84)
 <!-- END:AUTOGEN pandamux_01_overview_binaries -->
 
 ---
@@ -166,16 +144,23 @@ Sources: [main.rs:1-66](../crates/pandamux-app/src/main.rs#L1-L66), [main.rs:1-2
 <!-- BEGIN:AUTOGEN pandamux_01_overview_navigate -->
 ## Where to Start
 
-| Goal | Start Here |
-|---|---|
-| Run it locally, build the GUI/CLI, run tests | [Getting Started](GETTING_STARTED.md) |
-| Understand the crate-isolation invariant, state ownership, and split tree | [Architecture](core/ARCHITECTURE.md) |
-| Look up every `pandamux` CLI command | [CLI Reference](api/CLI_REFERENCE.md) |
-| Understand the named-pipe V1/V2 protocol | [Named Pipe IPC](features/NAMED_PIPE_IPC.md) |
-| Learn the shell-integration hooks (cwd, git branch, shell state) | [Shell Integration](features/SHELL_INTEGRATION.md) |
-| Learn the pandamux-orchestrator plugin | [Agent Orchestration](features/AGENT_ORCHESTRATION.md) |
+Use the page that matches the boundary you need to change or operate.
 
-Sources: navigation curated by doc-sync
+| Goal | Start here |
+|---|---|
+| Build, run, or validate the workspace | [Getting Started](GETTING_STARTED.md) |
+| Understand ownership and request flow | [Architecture](core/ARCHITECTURE.md) |
+| Work with domain records and lifecycle states | [Core Domain](core/CORE_DOMAIN.md) |
+| Configure settings, providers, organizations, or environments | [Configuration](core/CONFIGURATION.md) |
+| Automate through the implemented command surface | [CLI Reference](api/CLI_REFERENCE.md) |
+| Diagnose local authentication and IPC | [Local IPC and Security](features/NAMED_PIPE_IPC.md) |
+| Operate remote Linux nodes | [SSH Remote Nodes](features/SSH_REMOTE.md) |
+| Understand provider selection and failover | [Provider Routing and Capacity](features/PROVIDER_ROUTING.md) |
+| Prepare artifacts or reason about release gates | [Release and Packaging](operations/RELEASE.md) |
+
+Current implementation facts come from code and manifests first. The development guide then provides the authoritative workflow and boundary summary ([CLAUDE.md:172-215](../CLAUDE.md#L172-L215)).
+
+Sources: [CLAUDE.md:172-215](../CLAUDE.md#L172-L215)
 <!-- END:AUTOGEN pandamux_01_overview_navigate -->
 
 ---
