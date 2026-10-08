@@ -5420,7 +5420,7 @@ dependencies = [
 
 [[package]]
 name = "pandamux-cli"
-version = "0.60.54"
+version = "0.60.55"
 dependencies = [
  "pandamux-core",
  "pandamux-protocol",
@@ -5433,7 +5433,7 @@ dependencies = [
 
 [[package]]
 name = "pandamux-client"
-version = "0.60.54"
+version = "0.60.55"
 dependencies = [
  "pandamux-core",
  "pandamux-protocol",
@@ -5444,7 +5444,7 @@ dependencies = [
 
 [[package]]
 name = "pandamux-core"
-version = "0.60.54"
+version = "0.60.55"
 dependencies = [
  "serde",
  "serde_json",
@@ -5454,7 +5454,7 @@ dependencies = [
 
 [[package]]
 name = "pandamux-desktop"
-version = "0.60.54"
+version = "0.60.55"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -5472,7 +5472,7 @@ dependencies = [
 
 [[package]]
 name = "pandamux-protocol"
-version = "0.60.54"
+version = "0.60.55"
 dependencies = [
  "pandamux-core",
  "serde",
@@ -5482,7 +5482,7 @@ dependencies = [
 
 [[package]]
 name = "pandamux-providers"
-version = "0.60.54"
+version = "0.60.55"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -5504,7 +5504,7 @@ dependencies = [
 
 [[package]]
 name = "pandamux-remote"
-version = "0.60.54"
+version = "0.60.55"
 dependencies = [
  "anyhow",
  "pandamux-core",
@@ -5520,7 +5520,7 @@ dependencies = [
 
 [[package]]
 name = "pandamux-server"
-version = "0.60.54"
+version = "0.60.55"
 dependencies = [
  "base64 0.22.1",
  "pandamux-core",
@@ -5540,7 +5540,7 @@ dependencies = [
 
 [[package]]
 name = "pandamux-term"
-version = "0.60.54"
+version = "0.60.55"
 dependencies = [
  "alacritty_terminal",
  "portable-pty",

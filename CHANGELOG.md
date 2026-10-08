@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Honor authoritative Codex serviceability during capacity routing.** Codex
+  account snapshots now keep reported utilization separate from whether the
+  backend permits ordinary usage. A 100 percent window no longer becomes a
+  hard limit by itself; explicit `ordinaryUsageAllowed`,
+  `spendControlReached`, and `rateLimitReachedType` values decide the hard
+  block. Terminal structured `usageLimitExceeded` and `rateLimitExceeded`
+  errors request failover only when the app server will not retry them.
+  Structured non-capacity errors remain nonrecoverable, with message matching
+  retained only for older payloads that lack a discriminator. A retained
+  exact 0.60.52 live diagnostic was correctly rejected after Codex completed
+  the turn instead of failing over, which exposed the old false hard-limit
+  projection. Version 0.60.55 contains the correction and regressions; exact
+  live proof of the repaired serviceable-at-100-percent route is still pending,
+  and the separate real provider-capacity failover row remains open.
+
 - **Persist continuation provider handoffs on the thread.** Existing thread
   upserts now store the provider instance and model selected for a continuation
   instead of silently retaining the interrupted source route. This prevents a

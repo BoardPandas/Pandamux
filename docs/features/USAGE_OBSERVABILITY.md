@@ -406,13 +406,30 @@ quota or capacity exhaustion. The unchanged exact server subsequently passed
 the real external HTTPS interruption row: organization policy selected
 real Claude, exactly one marked request committed before the full provider
 process tree was killed, and restart produced no replay or invented result.
-P4-C5 remains Partial only because the real pre-output capacity-failure row is
-still open.
+A later exact 0.60.52 diagnostic deliberately made Codex the preferred route
+for the remaining pre-output capacity row. Codex completed the turn, so the run
+is retained and rejected rather than misreported as failover evidence. The
+successful turn proved ordinary usage remained serviceable, and the update
+reported credits available with no reached-type or spend-control signal. No
+terminal capacity event appeared. The diagnostic instead found that
+PandaMUX had treated the 100 percent utilization display as a hard limit.
+Version 0.60.55 separates utilization from serviceability: explicit backend
+permission and structured block fields control snapshot hard limits, and only
+terminal structured Codex usage or rate-limit errors request failover. Errors
+that the app server will retry remain under its ownership. This follows the
+upstream
+[`GetAccountRateLimitsResponse`](https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/schema/typescript/v2/GetAccountRateLimitsResponse.ts)
+and
+[`ErrorNotification`](https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/src/protocol/v2/notification.rs)
+contracts. Exact live proof of the repaired serviceable-at-100-percent route is
+still pending. P4-C5 remains Partial because the real pre-output
+capacity-failure row is still open.
 A supporting Hyper-V rehearsal on the same exact runtime later passed a real
 30-minute provider-network interruption and full-screen terminal saved-state
 recovery with exact event, usage, offset, replay, and cleanup evidence. It does
 not replace the required physical laptop disconnect and sleep rows.
-The open real provider-capacity row, the deferred physical R0.5 laptop
+The pending 0.60.55 live correction proof, the open real provider-capacity row,
+the deferred physical R0.5 laptop
 disconnect and sleep rows, the final archive after those results stabilize,
 and later release gates still
 block Phase 4 exit, production acceptance, and release. Exact results and

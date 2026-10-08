@@ -11,7 +11,10 @@ approval plus loopback-network recovery evidence on exact 0.60.47, atomic
 tool-result source evidence, a live pending-approval restart Pass, and an exact
 tool-result process-crash restart Pass on exact 0.60.49, plus a live
 pending-continuation restart Pass and a real external-service interruption Pass
-on repaired exact 0.60.52; P4-C6 has
+on repaired exact 0.60.52; a later real-capacity diagnostic on that runtime was
+correctly rejected when Codex completed instead of failing over, and version
+0.60.55 contains the resulting capacity-interpretation correction awaiting
+exact live proof; P4-C6 has
 supporting Hyper-V rehearsal evidence but its physical rows remain open; and
 Phase 4 acceptance is incomplete.** Exact 0.60.15 commit
 `3a77382` passed the P4-C1 implementation, P4-C2 local candidate, and P4-C4
@@ -52,6 +55,11 @@ endpoint. Organization policy selected real Claude, one marked POST committed,
 and restart after the full provider process tree was killed produced no replay
 or invented terminal result. P4-C5 remains Partial because real pre-output
 provider capacity exhaustion and failover under that condition are still open.
+The rejected capacity diagnostic also exposed a false hard-limit projection
+from a 100 percent Codex utilization window. Version 0.60.55 separates that
+utilization from backend serviceability and handles terminal structured Codex
+capacity errors without preempting app-server retries. This source correction
+has focused local verification but no exact live acceptance in this record yet.
 The later supporting Hyper-V rehearsal passed real 30-minute provider-network
 and full-screen-terminal recovery paths, but neither a Windows guest nor
 `Save-VM` substitutes for the required physical laptop disconnect and sleep
@@ -250,6 +258,14 @@ activation, or release occurred.
   Workspace version `0.60.54` records the resulting evidence only. No 0.60.54
   executable, native, provider-capacity, production, push, deployment,
   activation, or release result is claimed.
+- Rejected P4-C5 real-capacity diagnostic source: the same exact 0.60.52
+  runtime and server hash above, run from
+  `/home/brandon/.pandamux/acceptance/phase4-5d8b77d-0.60.52-p4-c5-real-capacity-failover-live`.
+  Codex completed the requested turn, so the retained root is diagnostic
+  evidence only and closes no acceptance row. Workspace version 0.60.55
+  contains the resulting source correction. No exact 0.60.55 live, native,
+  production, push, deployment, activation, or release result is claimed in
+  this record yet.
 - The intermediate 0.60.2 commit `8a52d2a21da1d5d0f69540864a6162d2b30375bc`
   repaired direct UI Automation activation for Save and Cancel. The 0.60.3
   follow-up exposed the editor text fields on semantic nodes tied to their real
@@ -2673,6 +2689,68 @@ pre-output failover under that condition. P4-C5 remains Partial and Phase 4
 remains open. No new executable, native, push, CI, signing, packaging,
 deployment, production activation, or release is claimed.
 
+## Rejected exact 0.60.52 real-capacity diagnostic and 0.60.55 correction
+
+Result: **Rejected for the P4-C5 capacity-failover row; accepted as diagnostic
+evidence for the 0.60.55 source correction.** The retained Galahad root is
+`/home/brandon/.pandamux/acceptance/phase4-5d8b77d-0.60.52-p4-c5-real-capacity-failover-live`.
+It reused exact clean commit
+`5d8b77d7086a7a266251cd3106e5f124d6cd2aec`, version 0.60.52, and the
+17,829,288-byte server at SHA-256
+`3dc889a78245e628ec9cfbfc38bee0073b5b64add7fe9856f067659da485f3e3`.
+
+The isolated organization policy and failover pool deliberately scored
+`codex-default` at 1,750 and `claude-default` at 750. Capacity-aware routing was
+disabled for the diagnostic so a stale stored hard limit could not prevent the
+real Codex attempt, while automatic failover remained enabled. Thread
+`thread-69583673-ea1c-462e-9419-ab522614bd0f`, turn
+`turn-935745f7-d737-4f5c-9487-eaf8d2fe2c3b`, and attempt
+`attempt-7bb950c4-457c-4900-be66-03d9c2ef26e7` selected Codex and completed
+with the controlled response `P4C5_REAL_CAPACITY_FAILOVER_OK`. Exactly one
+attempt completed at `visible_output_begun`; no capacity-exhausted event,
+pre-output failure, retry, or Claude fallback occurred. The run therefore
+cannot satisfy the required row.
+
+A separate sanitized account probe and the successful turn explained the
+result. The current account remained serviceable, credits were available, the
+primary utilization window reported 100 percent, and the live rate-limit update
+reported null reached-type and spend-control fields. The old PandaMUX parser
+incorrectly made any 100 percent window a hard limit. Upstream Codex instead
+defines `ordinaryUsageAllowed` as the backend serviceability decision and says
+that a missing decision must not be reconstructed from percentages or reset
+times. Its error notification also marks whether the app server will retry a
+failure. See the upstream
+[`GetAccountRateLimitsResponse`](https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/schema/typescript/v2/GetAccountRateLimitsResponse.ts),
+[`ErrorNotification`](https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/src/protocol/v2/notification.rs),
+and
+[`CodexErrorInfo` mapping](https://github.com/openai/codex/blob/main/codex-rs/protocol/src/error.rs).
+
+Version 0.60.55 now preserves the reported utilization value while deriving a
+hard block only from an explicit ordinary-usage denial, reached-type value, or
+spend-control signal. Terminal structured `usageLimitExceeded` and
+`rateLimitExceeded` errors become recoverable PandaMUX capacity events only
+when `willRetry` is false. Structured non-capacity errors remain terminal, and
+message matching is only a compatibility fallback when no discriminator is
+present. Focused provider tests and the existing server failover regression
+pass, but an exact built 0.60.55 server has not yet supplied live proof in this
+record.
+
+Cleanup stopped the exact server cleanly with no forced kill, removed the
+isolated socket and runtime records, restored the cloned Codex authentication,
+and left no staged remote credential. SQLite integrity passed. The source
+rehearsal database remained at SHA-256
+`0a64a5d92f53725525f409e98434c25799157591e5369cb495591ac641100c0a`,
+and the retained P4-C4 database remained at SHA-256
+`5f45008d32b07e3c8491f2ad45361482e16cfa66a7f42bae7c5408c96350b323`.
+The isolated clone has SHA-256
+`d6c49a997930aa84e60627756006824b7a2f1403c76d63ce2043f2f60df4c1b3`.
+The retained manifest has SHA-256
+`3ace48bb18b4e342373d3900f65e9e43b179a76b1ad7a0b05a852d9c091f4901`,
+and the final audit has SHA-256
+`5df68ebbcae75d6bc3c1a67cc2a05b61c8f6cc56865cfb77a68e5268a772fa1d`.
+No push, CI, signing, packaging, deployment, production activation, or release
+occurred.
+
 ## Exact 0.60.43 P4-C6 supporting Hyper-V rehearsal
 
 This is a **supporting Hyper-V rehearsal Pass, not a P4-C6 physical Pass**.
@@ -3023,7 +3101,10 @@ Phase 4 cannot yet be marked exited under `tasks/plan-rewrite.md`:
    while a real Codex continuation is pending after a controlled source
    interruption. The unchanged exact 0.60.52 server also closes the real
    external-service interruption row with one marked disposable HTTPS request
-   and no replay. None substitutes for the remaining real capacity row.
+   and no replay. The later exact 0.60.52 capacity diagnostic completed on
+   Codex and is therefore rejected for this row. Version 0.60.55 corrects the
+   false hard-limit projection, but still requires an exact live repair check.
+   None substitutes for the remaining real capacity row.
 2. Complete the P4-C7 archive and maintained-document synchronization after the
    remaining P4-C5 and P4-C6 live rows stabilize. This record already reflects
    the complete P4-C3 Pass and the P4-C5 Partial result.

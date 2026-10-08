@@ -1,8 +1,8 @@
 # PandaMUX Rewrite: Chat-First Agent Client with Remote Environments, Multi-Repo Fleet Orchestration, Agents, Schedules, Full MCP Settings Control, and Broadside Sharing
 
-Date: 2026-09-25 (Approved 2026-09-26; recovery rewrite 2026-09-28; Phase 4 closure rewrite 2026-10-06; accounting and native acceptance 2026-10-07; continuation restart and external-service acceptance 2026-10-08)
-Status: **Phases 0 to 3 and Phase 4A through 4F implementation are recorded; P4-C1, P4-C2, and P4-C4 passed on exact 0.60.15; the terminal, Narrator, visual, scaling, and IPC rows passed on exact 0.60.41; the provider/model routing row passed local, live, and native Windows acceptance on exact 0.60.43; exact 0.60.43 passed supporting post-side-effect proxy-loss and Hyper-V recovery rehearsals; exact 0.60.47 repaired unresolved-tool false success and passed supporting approval plus loopback-network recovery; exact 0.60.49 made tool-result projection atomic and passed the live pending-approval plus exact tool-result process-crash restart rows; exact 0.60.52 repaired continuation route persistence, passed the pending-continuation restart row, and then passed the real external-service interruption row; and P4-C5 remains Partial, so real pre-output capacity, final documentation, and physical acceptance gates keep Phase 4 open**
-Baseline: The preserved original checkout remains PandaMUX v0.53.44 at `9511d0e22d44`; active recovery work is isolated on `codex/recovery-r0`, with exact 0.60.15 accounting evidence at `3a77382`, exact 0.60.41 native Windows evidence at `c6a20ff4f768747d0dadd59b88b40d3e20f7674d`, exact 0.60.43 local, live, and native provider-routing plus supporting recovery evidence at `372f2ae83e67a62cd3b382e5db52af96d00a85ce`, exact 0.60.47 fail-closed plus supporting approval/network evidence at `1822486b4f7d98ba6026bbfd7224e97f09e447c9`, exact 0.60.49 atomic tool-result, pending-approval restart, and exact process-crash evidence at `d09641e86cd06d72d7312ceb1fa3b20e5931ff5f`, and exact 0.60.52 continuation-route, pending-continuation restart, and real external-service interruption evidence at `5d8b77d7086a7a266251cd3106e5f124d6cd2aec`
+Date: 2026-09-25 (Approved 2026-09-26; recovery rewrite 2026-09-28; Phase 4 closure rewrite 2026-10-06; accounting and native acceptance 2026-10-07; continuation restart, external-service acceptance, and capacity interpretation correction 2026-10-08)
+Status: **Phases 0 to 3 and Phase 4A through 4F implementation are recorded; P4-C1, P4-C2, and P4-C4 passed on exact 0.60.15; the terminal, Narrator, visual, scaling, and IPC rows passed on exact 0.60.41; the provider/model routing row passed local, live, and native Windows acceptance on exact 0.60.43; exact 0.60.43 passed supporting post-side-effect proxy-loss and Hyper-V recovery rehearsals; exact 0.60.47 repaired unresolved-tool false success and passed supporting approval plus loopback-network recovery; exact 0.60.49 made tool-result projection atomic and passed the live pending-approval plus exact tool-result process-crash restart rows; exact 0.60.52 repaired continuation route persistence, passed the pending-continuation restart row, and then passed the real external-service interruption row; a later exact 0.60.52 capacity diagnostic was rejected when Codex remained serviceable and exposed a false hard-limit projection now corrected in the 0.60.55 source candidate; and P4-C5 remains Partial, so exact live repair proof, real pre-output capacity, final documentation, and physical acceptance gates keep Phase 4 open**
+Baseline: The preserved original checkout remains PandaMUX v0.53.44 at `9511d0e22d44`; active recovery work is isolated on `codex/recovery-r0`, with exact 0.60.15 accounting evidence at `3a77382`, exact 0.60.41 native Windows evidence at `c6a20ff4f768747d0dadd59b88b40d3e20f7674d`, exact 0.60.43 local, live, and native provider-routing plus supporting recovery evidence at `372f2ae83e67a62cd3b382e5db52af96d00a85ce`, exact 0.60.47 fail-closed plus supporting approval/network evidence at `1822486b4f7d98ba6026bbfd7224e97f09e447c9`, exact 0.60.49 atomic tool-result, pending-approval restart, and exact process-crash evidence at `d09641e86cd06d72d7312ceb1fa3b20e5931ff5f`, and exact 0.60.52 continuation-route, pending-continuation restart, real external-service interruption, and rejected capacity-diagnostic evidence at `5d8b77d7086a7a266251cd3106e5f124d6cd2aec`. Workspace version 0.60.55 is the unaccepted source correction for the diagnostic finding.
 
 Relationship to `tasks/plan-repo.md`: that file is the **historical** record of the Electron to native Rust rewrite (Phases 1 to 7, complete). This plan supersedes its product direction (terminal multiplexer) but keeps its engineering posture: backend-owned state, single writer, intent-in/delta-out, deliberate dependency pins, crate isolation, and tag-driven signed releases. Its Section 12 design tokens carry over where they still apply (Section 8). UI history: Iced is removed. An earlier draft of this plan chose Tauri 2 + React; the user replaced that with **GPUI + gpui-kit** (all Rust) on 2026-09-25, and Tauri 2 remains only as the documented fallback if the Phase 0 GPUI spike fails. `plan-repo.md` rejected GPUI for three reasons, each now handled explicitly: GPL contamination (zed#55470, still open; tracked as a license gate in S6 and Risks), "not built for external consumption" (gpui-kit publishes exact-pinned `gpui-pre` snapshots and ships in production in Longbridge Pro on Windows, macOS, and Linux), and weak accessibility. Phase 0 treated accessibility as exploratory; the rewritten Phase 4 and Phase 7 criteria make the defined v1 accessibility matrix release-gating.
 
@@ -186,6 +186,15 @@ Terminology used throughout:
   result, continuation, or delivery. Cleanup revoked the endpoint and restored
   isolated authentication. Only real pre-output provider capacity exhaustion
   remains open within P4-C5.
+- A later exact 0.60.52 diagnostic deliberately preferred Codex for that
+  remaining row. Codex completed instead of producing a capacity failure, so
+  the run is retained and rejected. Its sanitized rate-limit update reported
+  available credits, 100 percent primary utilization, and no reached-type or
+  spend-control signal. This exposed a PandaMUX defect that promoted
+  utilization alone to a hard limit. Workspace version 0.60.55 now uses the
+  backend ordinary-usage decision and terminal structured capacity errors,
+  while leaving app-server retries under Codex ownership. Exact live proof of
+  this correction and real provider capacity exhaustion both remain open.
 - Exact 0.60.22 commit `fee9e02` passed every P4-C3 row that was
   executed. The limited-user build and smoke, actionable Offline path,
   recorded 100 and 200 percent keyboard and scroll
@@ -265,8 +274,9 @@ Terminology used throughout:
   no-route picker rows, so P4-C3 is Pass again. Version 0.60.42 was the
   documentation-only accounting follow-up and has no executable or native
   claim.
-- Phase 4 remains open on real pre-output capacity exhaustion and the final
-  documentation archive after the remaining P4-C5 row stabilizes. The
+- Phase 4 remains open on exact live proof of the 0.60.55 capacity correction,
+  real pre-output capacity exhaustion, and the final documentation archive
+  after the remaining P4-C5 row stabilizes. The
   re-scoped physical laptop
   disconnect and sleep rows remain production-acceptance and release blockers.
 - Phase 5 implementation has not started. The next development work is the
@@ -2602,6 +2612,45 @@ pre-output failover under that condition. P4-C5 therefore remains Partial and
 Phase 4 remains open. Workspace version 0.60.54 records this evidence only; no
 new executable, native, push, CI, signing, packaging, deployment, production
 activation, or release is claimed.
+
+Supporting result recorded 2026-10-08: **Rejected for the real pre-output
+capacity-failover row; accepted as diagnostic evidence for the 0.60.55 source
+correction.** The retained Galahad root is
+`/home/brandon/.pandamux/acceptance/phase4-5d8b77d-0.60.52-p4-c5-real-capacity-failover-live`.
+It reused clean commit `5d8b77d7086a7a266251cd3106e5f124d6cd2aec`
+and the exact 0.60.52 server at SHA-256
+`3dc889a78245e628ec9cfbfc38bee0073b5b64add7fe9856f067659da485f3e3`.
+The isolated policy scored `codex-default` at 1,750 and `claude-default` at
+750, disabled capacity-aware routing so a stale stored hard limit could not
+block the real attempt, and left automatic failover enabled. The selected
+Codex attempt completed with `P4C5_REAL_CAPACITY_FAILOVER_OK` at
+`visible_output_begun`; no capacity event, pre-output failure, retry, or Claude
+fallback occurred. The run therefore closes no acceptance row.
+
+The successful turn and a sanitized account probe showed that the account was
+still serviceable. Credits were available, the primary window reported 100
+percent utilization, and the live update carried no reached-type or
+spend-control signal. The old parser incorrectly converted that utilization
+value into a hard block. Version 0.60.55 keeps utilization as reported but
+derives a hard block only from explicit ordinary-usage denial, a reached-type
+value, or a spend-control signal. Terminal structured `usageLimitExceeded` and
+`rateLimitExceeded` errors request PandaMUX failover only when the app server
+will not retry them. This follows the upstream
+[`GetAccountRateLimitsResponse`](https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/schema/typescript/v2/GetAccountRateLimitsResponse.ts),
+[`ErrorNotification`](https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/src/protocol/v2/notification.rs),
+and
+[`CodexErrorInfo` mapping](https://github.com/openai/codex/blob/main/codex-rs/protocol/src/error.rs).
+
+Cleanup stopped the isolated server cleanly, removed its socket and runtime
+records, restored cloned authentication, left no staged credential, and passed
+SQLite integrity. The source rehearsal and retained P4-C4 database hashes were
+unchanged. The retained manifest has SHA-256
+`3ace48bb18b4e342373d3900f65e9e43b179a76b1ad7a0b05a852d9c091f4901`;
+the final audit has SHA-256
+`5df68ebbcae75d6bc3c1a67cc2a05b61c8f6cc56865cfb77a68e5268a772fa1d`.
+The 0.60.55 source correction still needs an exact build and live route proof,
+and real provider capacity exhaustion remains open. No push, CI, signing,
+packaging, deployment, production activation, or release occurred.
 
 ##### P4-C6: close the physical R0.5 rows
 

@@ -311,7 +311,7 @@ fn capacity_exhaustion_details(event: &ProviderEvent) -> Option<serde_json::Valu
     }
 }
 
-fn message_is_capacity_exhaustion(message: &str) -> bool {
+pub(crate) fn message_is_capacity_exhaustion(message: &str) -> bool {
     let message = message.to_ascii_lowercase();
     [
         "rate limit",
@@ -329,6 +329,31 @@ fn message_is_capacity_exhaustion(message: &str) -> bool {
 }
 
 fn details_indicate_capacity_exhaustion(details: &serde_json::Value) -> bool {
+    if details
+        .get("ordinaryUsageAllowed")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+    {
+        return false;
+    }
+    if details
+        .get("ordinaryUsageAllowed")
+        .and_then(serde_json::Value::as_bool)
+        == Some(false)
+    {
+        return true;
+    }
+    let limits = details.get("rateLimits").unwrap_or(details);
+    if limits
+        .get("spendControlReached")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+        || limits
+            .get("rateLimitReachedType")
+            .is_some_and(|value| !value.is_null())
+    {
+        return true;
+    }
     let text = details.to_string().to_ascii_lowercase();
     (text.contains("\"hardlimit\":true") || text.contains("\"hard_limit\":true"))
         && (text.contains("\"remainingmillionths\":0")
@@ -385,6 +410,64 @@ mod tests {
                 recoverable: true,
                 ..
             })
+        ));
+    }
+
+    #[tokio::test]
+    async fn serviceable_full_window_is_not_promoted_to_capacity_exhaustion() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        let details = serde_json::json!({
+            "primary": {
+                "usedPercent": 100,
+                "windowDurationMins": 10080,
+                "resetsAt": 1791948542
+            },
+            "credits": {
+                "hasCredits": true,
+                "unlimited": false,
+                "balance": "100"
+            },
+            "spendControlReached": null,
+            "rateLimitReachedType": null
+        });
+        forward_provider_event(
+            &tx,
+            ProviderEvent::RateLimitObserved {
+                details: details.clone(),
+            },
+        )
+        .await
+        .expect("forward event");
+        assert!(matches!(
+            rx.recv().await,
+            Some(ProviderEvent::RateLimitObserved { details: observed }) if observed == details
+        ));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn explicit_backend_block_is_promoted_before_rate_limit_observation() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        let details = serde_json::json!({
+            "primary": { "usedPercent": 100 },
+            "spendControlReached": true,
+            "rateLimitReachedType": "workspace_owner_usage_limit_reached"
+        });
+        forward_provider_event(
+            &tx,
+            ProviderEvent::RateLimitObserved {
+                details: details.clone(),
+            },
+        )
+        .await
+        .expect("forward event");
+        assert!(matches!(
+            rx.recv().await,
+            Some(ProviderEvent::CapacityExhausted { .. })
+        ));
+        assert!(matches!(
+            rx.recv().await,
+            Some(ProviderEvent::RateLimitObserved { details: observed }) if observed == details
         ));
     }
 }

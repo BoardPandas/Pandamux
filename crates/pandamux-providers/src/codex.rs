@@ -309,11 +309,25 @@ pub fn parse_rate_limits_response(
             message: "Missing 'rateLimits' in result".into(),
         })?;
 
-    parse_rate_limits_value(limits)
+    parse_rate_limits_value_with_permission(
+        limits,
+        result.get("ordinaryUsageAllowed").and_then(Value::as_bool),
+    )
 }
 
 /// Parses a Codex rate-limit snapshot with exact integer fraction conversion.
 pub fn parse_rate_limits_value(limits: &Value) -> Result<Vec<RateLimitEntry>, ProviderError> {
+    parse_rate_limits_value_with_permission(limits, None)
+}
+
+fn parse_rate_limits_value_with_permission(
+    limits: &Value,
+    ordinary_usage_allowed: Option<bool>,
+) -> Result<Vec<RateLimitEntry>, ProviderError> {
+    let explicitly_blocked = match ordinary_usage_allowed {
+        Some(allowed) => !allowed,
+        None => rate_limit_snapshot_reports_block(limits),
+    };
     let mut entries = Vec::new();
     if let Some(legacy_limits) = limits.as_array() {
         for item in legacy_limits {
@@ -322,6 +336,7 @@ pub fn parse_rate_limits_value(limits: &Value) -> Result<Vec<RateLimitEntry>, Pr
                     .and_then(Value::as_str)
                     .unwrap_or("unknown"),
                 item,
+                explicitly_blocked,
             )?);
         }
     } else if limits.is_object() {
@@ -334,6 +349,7 @@ pub fn parse_rate_limits_value(limits: &Value) -> Result<Vec<RateLimitEntry>, Pr
                 entries.push(parse_rate_limit_window(
                     &format!("{name} {window_name}"),
                     window,
+                    explicitly_blocked,
                 )?);
             }
         }
@@ -349,12 +365,20 @@ pub fn parse_rate_limits_value(limits: &Value) -> Result<Vec<RateLimitEntry>, Pr
 fn parse_rate_limit_window(
     limit_name: &str,
     window: &Value,
+    explicitly_blocked: bool,
 ) -> Result<RateLimitEntry, ProviderError> {
-    let used_millionths = window
+    let reported_used_millionths = window
         .get("usedPercent")
         .map(parse_percent_millionths)
         .transpose()?;
-    let remaining_millionths = used_millionths.map(|used| 1_000_000_u32.saturating_sub(used));
+    let (used_millionths, remaining_millionths) = if explicitly_blocked {
+        (Some(1_000_000), Some(0))
+    } else {
+        (
+            reported_used_millionths,
+            reported_used_millionths.map(|used| 1_000_000_u32.saturating_sub(used)),
+        )
+    };
     Ok(RateLimitEntry {
         limit_name: limit_name.to_string(),
         used_millionths,
@@ -366,8 +390,43 @@ fn parse_rate_limit_window(
             .try_into()
             .unwrap_or(u32::MAX),
         resets_at_ms: window.get("resetsAt").and_then(parse_epoch_ms),
-        hard_limit: remaining_millionths == Some(0),
+        hard_limit: explicitly_blocked,
     })
+}
+
+fn rate_limit_snapshot_reports_block(limits: &Value) -> bool {
+    limits.get("spendControlReached").and_then(Value::as_bool) == Some(true)
+        || limits
+            .get("rateLimitReachedType")
+            .is_some_and(|value| !value.is_null())
+}
+
+fn codex_error_capacity_details(params: &Value, message: &str) -> Option<Value> {
+    if params
+        .get("willRetry")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    let structured = params
+        .get("error")
+        .and_then(|error| error.get("codexErrorInfo"));
+    let is_capacity = match structured {
+        Some(Value::String(code)) => {
+            matches!(code.as_str(), "usageLimitExceeded" | "rateLimitExceeded")
+        }
+        Some(Value::Null) | None => crate::models::message_is_capacity_exhaustion(message),
+        Some(_) => false,
+    };
+    if !is_capacity {
+        return None;
+    }
+    Some(serde_json::json!({
+        "source": "codex_error",
+        "message": message,
+        "codexErrorInfo": structured.cloned().unwrap_or(Value::Null),
+    }))
 }
 
 fn parse_percent_millionths(value: &Value) -> Result<u32, ProviderError> {
@@ -1014,15 +1073,22 @@ async fn run_codex_reader(
                     .unwrap_or("Codex reported a warning")
                     .to_string(),
             }),
-            "error" => Some(ProviderEvent::Error {
-                message: params
+            "error" => {
+                let message = params
                     .get("error")
                     .and_then(|error| error.get("message"))
                     .and_then(Value::as_str)
                     .unwrap_or("Codex turn failed")
-                    .to_string(),
-                recoverable: false,
-            }),
+                    .to_string();
+                if let Some(details) = codex_error_capacity_details(&params, &message) {
+                    Some(ProviderEvent::CapacityExhausted { details })
+                } else {
+                    Some(ProviderEvent::Error {
+                        message,
+                        recoverable: false,
+                    })
+                }
+            }
             "turn/completed" => {
                 let completed_turn_id = usage_state.current_turn_id.lock().await.take();
                 pending_approvals.lock().await.clear();
@@ -1430,5 +1496,73 @@ impl ProviderSession for CodexSession {
                 let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_codex_usage_errors_request_capacity_failover() {
+        let usage_limit = serde_json::json!({
+            "error": {
+                "message": "You have hit your usage limit",
+                "codexErrorInfo": "usageLimitExceeded"
+            },
+            "willRetry": false
+        });
+        assert!(
+            codex_error_capacity_details(&usage_limit, "A localized terminal failure").is_some()
+        );
+
+        let transient_rate_limit = serde_json::json!({
+            "error": {
+                "message": "rate limit exceeded",
+                "codexErrorInfo": "rateLimitExceeded"
+            },
+            "willRetry": true
+        });
+        assert!(
+            codex_error_capacity_details(&transient_rate_limit, "rate limit exceeded").is_none()
+        );
+
+        let unauthorized = serde_json::json!({
+            "error": {
+                "message": "usage limit text from a non-capacity error",
+                "codexErrorInfo": "unauthorized"
+            },
+            "willRetry": false
+        });
+        assert!(
+            codex_error_capacity_details(
+                &unauthorized,
+                "usage limit text from a non-capacity error"
+            )
+            .is_none()
+        );
+
+        let connection_failure = serde_json::json!({
+            "error": {
+                "message": "usage limit text from a connection error",
+                "codexErrorInfo": {
+                    "httpConnectionFailed": { "httpStatusCode": 502 }
+                }
+            },
+            "willRetry": false
+        });
+        assert!(
+            codex_error_capacity_details(
+                &connection_failure,
+                "usage limit text from a connection error"
+            )
+            .is_none()
+        );
+
+        let legacy_usage_limit = serde_json::json!({
+            "error": { "message": "usage limit reached" },
+            "willRetry": false
+        });
+        assert!(codex_error_capacity_details(&legacy_usage_limit, "usage limit reached").is_some());
     }
 }

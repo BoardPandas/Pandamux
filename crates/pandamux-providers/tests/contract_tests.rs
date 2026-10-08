@@ -740,6 +740,86 @@ fn test_codex_rate_limit_fraction_conversion_is_exact_and_bounded() {
 }
 
 #[test]
+fn test_codex_backend_permission_controls_hard_limit() {
+    let allowed = JsonRpcResponse {
+        jsonrpc: None,
+        id: 5,
+        result: Some(serde_json::json!({
+            "ordinaryUsageAllowed": true,
+            "rateLimits": {
+                "limitId": "codex",
+                "primary": {
+                    "usedPercent": 100,
+                    "windowDurationMins": 10080,
+                    "resetsAt": 1791948542
+                },
+                "credits": {
+                    "hasCredits": true,
+                    "unlimited": false,
+                    "balance": "100"
+                },
+                "spendControlReached": null,
+                "rateLimitReachedType": null
+            }
+        })),
+        error: None,
+    };
+    let allowed_limits = parse_rate_limits_response(&allowed).expect("parse allowed limits");
+    assert_eq!(allowed_limits.len(), 1);
+    assert_eq!(allowed_limits[0].used_millionths, Some(1_000_000));
+    assert_eq!(allowed_limits[0].remaining_millionths, Some(0));
+    assert!(!allowed_limits[0].hard_limit);
+
+    let blocked = JsonRpcResponse {
+        result: Some(serde_json::json!({
+            "ordinaryUsageAllowed": false,
+            "rateLimits": {
+                "limitId": "codex",
+                "primary": {
+                    "usedPercent": 42,
+                    "windowDurationMins": 10080,
+                    "resetsAt": 1791948542
+                }
+            }
+        })),
+        ..allowed
+    };
+    let blocked_limits = parse_rate_limits_response(&blocked).expect("parse blocked limits");
+    assert_eq!(blocked_limits[0].used_millionths, Some(1_000_000));
+    assert_eq!(blocked_limits[0].remaining_millionths, Some(0));
+    assert!(blocked_limits[0].hard_limit);
+}
+
+#[test]
+fn test_codex_snapshot_requires_explicit_block_for_hard_limit() {
+    let observed = parse_rate_limits_value(&serde_json::json!({
+        "limitId": "codex",
+        "primary": {
+            "usedPercent": 100,
+            "windowDurationMins": 10080,
+            "resetsAt": 1791948542
+        },
+        "spendControlReached": null,
+        "rateLimitReachedType": null
+    }))
+    .expect("parse serviceable observation");
+    assert!(!observed[0].hard_limit);
+
+    let blocked = parse_rate_limits_value(&serde_json::json!({
+        "limitId": "codex",
+        "primary": {
+            "usedPercent": 100,
+            "windowDurationMins": 10080,
+            "resetsAt": 1791948542
+        },
+        "spendControlReached": false,
+        "rateLimitReachedType": "rate_limit_reached"
+    }))
+    .expect("parse blocked observation");
+    assert!(blocked[0].hard_limit);
+}
+
+#[test]
 fn test_multi_instance_profile_isolation() {
     let base = Path::new("/var/pandamux");
     let instance_1 = ProviderInstanceId::from("inst-1");

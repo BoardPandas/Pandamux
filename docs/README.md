@@ -134,14 +134,22 @@ against one disposable Webhook.site HTTPS endpoint. Organization policy routed
 the turn to real Claude, exactly one marked request committed before the full
 five-process tree was killed, and restart did not replay the request or invent
 a terminal result. The endpoint was revoked and isolated authentication was
-restored during cleanup. A supporting Hyper-V rehearsal on exact 0.60.43
+restored during cleanup. A later exact 0.60.52 capacity diagnostic is retained
+and rejected because Codex remained serviceable and completed the turn instead
+of producing the required capacity failure and failover. The diagnostic exposed
+a false PandaMUX hard limit derived from a 100 percent utilization window.
+Version 0.60.55 now honors the backend ordinary-usage decision and terminal
+structured Codex capacity errors while leaving app-server retries alone. Exact
+live proof of that correction remains pending. A supporting Hyper-V rehearsal
+on exact 0.60.43
 also passed a real 30-minute provider-network interruption and full-screen
 terminal saved-state recovery with exact event, usage, offset, replay, and
 cleanup evidence. It does not replace the required physical laptop disconnect
 and sleep rows. Exact 0.60.17 partially passed P4-C5 with live scanner and Hub
 durability, conservative capacity and route decisions, and independent
 rollback controls. The real external-service interruption row is now closed;
-real pre-output provider capacity exhaustion, the final archive after the
+real pre-output provider capacity exhaustion, exact live proof of the 0.60.55
+correction, the final archive after the
 remaining rows stabilize, and the deferred physical
 checks remain open. The complete
 current contract is in
