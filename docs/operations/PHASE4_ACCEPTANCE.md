@@ -9,9 +9,10 @@ live, and native Windows acceptance on exact 0.60.43; P4-C5 remains Partial
 with supporting live post-side-effect proxy-loss evidence on exact 0.60.43 and
 approval plus loopback-network recovery evidence on exact 0.60.47, atomic
 tool-result source evidence, a live pending-approval restart Pass, and an exact
-tool-result process-crash restart Pass on exact 0.60.49; P4-C6 has supporting
-Hyper-V rehearsal evidence but its physical rows remain open; and Phase 4
-acceptance is incomplete.** Exact 0.60.15 commit
+tool-result process-crash restart Pass on exact 0.60.49, plus a live
+pending-continuation restart Pass on repaired exact 0.60.52; P4-C6 has
+supporting Hyper-V rehearsal evidence but its physical rows remain open; and
+Phase 4 acceptance is incomplete.** Exact 0.60.15 commit
 `3a77382` passed the P4-C1 implementation, P4-C2 local candidate, and P4-C4
 cloned-store reconciliation gates. Exact 0.60.41 commit
 `c6a20ff4f768747d0dadd59b88b40d3e20f7674d` passed P4-C3 after the expanded
@@ -42,9 +43,11 @@ plus one loopback HTTP POST across abrupt proxy loss. Exact 0.60.49 then made
 terminal tool-result projection atomic and passed restart with a real approval
 result durably Pending. Its exact server then passed a controlled process crash
 inside a real terminal tool-result transaction and reopened without a partial
-projection or replay. These are not provider quota exhaustion, external
-capacity interruption, an external-service network action, or pending
-continuation restart. P4-C5 therefore remains Partial.
+projection or replay. Exact 0.60.52 repaired continuation-route persistence and
+then passed a controlled-source, real-Codex continuation restart without
+redispatch or replay. These results are not provider quota exhaustion, external
+capacity interruption, or an external-service network action. P4-C5 therefore
+remains Partial.
 The later supporting Hyper-V rehearsal passed real 30-minute provider-network
 and full-screen-terminal recovery paths, but neither a Windows guest nor
 `Save-VM` substitutes for the required physical laptop disconnect and sleep
@@ -226,6 +229,15 @@ activation, or release occurred.
   Both are documentation-only snapshots. No 0.60.50 or 0.60.51 executable,
   native, provider-capacity, external-service, production, push, deployment,
   activation, or release result is claimed.
+- Supporting P4-C5 continuation-route and pending-continuation restart source:
+  clean commit `5d8b77d7086a7a266251cd3106e5f124d6cd2aec`, version
+  `0.60.52`. It persists continuation provider and model handoffs, passes the
+  complete local source gate, and supplies the exact release server used by the
+  accepted Galahad restart rehearsal at SHA-256
+  `3dc889a78245e628ec9cfbfc38bee0073b5b64add7fe9856f067659da485f3e3`.
+  Workspace version `0.60.53` records the resulting evidence only. No 0.60.53
+  executable, native, provider-capacity, external-service, production, push,
+  deployment, activation, or release result is claimed.
 - The intermediate 0.60.2 commit `8a52d2a21da1d5d0f69540864a6162d2b30375bc`
   repaired direct UI Automation activation for Save and Cancel. The 0.60.3
   follow-up exposed the editor text fields on semantic nodes tied to their real
@@ -2057,9 +2069,9 @@ used for this row; the read-only SupportForge session was disconnected.
 This run did not produce provider quota exhaustion or a capacity interruption.
 It also did not exercise a network side effect, approval result, pending
 continuation restart, pending approval-result restart, or pending tool-result
-restart. Those live P4-C5 rows remain required. P4-C5 is still Partial, Phase 4
-remains open, and no push, CI, signing, packaging, deployment, production
-activation, or release occurred.
+restart. At that point, those live P4-C5 rows remained required. P4-C5 was
+still Partial, Phase 4 remained open, and no push, CI, signing, packaging,
+deployment, production activation, or release occurred.
 
 ## Exact 0.60.47 P4-C5 supporting approval and loopback-network recovery
 
@@ -2313,9 +2325,9 @@ rollback and reopen regressions pass, and the subsequent exact process-crash
 rehearsal below now closes the remaining tool-result process boundary. This
 pending-approval run does not prove provider quota or capacity exhaustion,
 pre-output failover under that condition, interruption of an external service,
-or restart while a continuation is pending. P4-C5 remains Partial, Phase 4
-remains open, and no push, CI, signing, packaging, deployment, production
-activation, or release occurred.
+or restart while a continuation is pending. At that point P4-C5 remained
+Partial and Phase 4 remained open. No push, CI, signing, packaging, deployment,
+production activation, or release occurred.
 
 ## Exact 0.60.49 P4-C5 atomic tool-result process crash
 
@@ -2409,10 +2421,126 @@ the final audit has SHA-256
 This closes the exact tool-result process-boundary part of P4-C5 row 6. It does
 not prove real provider quota or capacity exhaustion, pre-output failover under
 that condition, interruption of an external service, or restart while a
-continuation is pending. P4-C5 remains Partial, Phase 4 remains open, and no
-push, CI, signing, packaging, deployment, production activation, or release
-occurred. Workspace version 0.60.51 records this evidence only and supplies no
-new executable claim.
+continuation is pending. At that point P4-C5 remained Partial and Phase 4
+remained open. No push, CI, signing, packaging, deployment, production
+activation, or release occurred. Workspace version 0.60.51 records this
+evidence only and supplies no new executable claim.
+
+## Exact 0.60.52 P4-C5 pending-continuation restart
+
+This is a **live restart Pass while one real Codex continuation was Running,
+not a complete P4-C5 Pass**. Exact clean commit
+`5d8b77d7086a7a266251cd3106e5f124d6cd2aec`, version `0.60.52`, updates an
+existing thread's provider instance and model when an accepted continuation
+hands execution to a different route. This repairs the stale-source reload
+defect exposed by the first live diagnostics.
+
+Locked metadata, formatting, both source guards, strict workspace Clippy for
+all targets and features, all 445 workspace tests with zero failures and two
+intentional real-shell ignores, desktop headless verification, dependency
+policy, and diff hygiene passed before the release build. The added store and
+lifecycle regressions require the selected continuation route to survive a
+SQLite reload and manager restart. The exact musl release server was
+17,829,288 bytes at SHA-256
+`3dc889a78245e628ec9cfbfc38bee0073b5b64add7fe9856f067659da485f3e3`.
+`cargo deny` passed advisories, bans, licenses, and sources with the existing
+duplicate, unmatched-license, and transitive-yanked warnings.
+
+### Controlled source and real target
+
+The accepted Galahad root is
+`/home/brandon/.pandamux/acceptance/phase4-5d8b77d-0.60.52-p4-c5-continuation-restart-live`.
+It used a separately cloned database, remapped profile paths, a temporary copy
+of the current Codex credential, an isolated clean Git repository, and the
+dedicated loopback receiver. The source interruption was a controlled fixture,
+not a forced provider quota event. It created one interrupted source attempt
+and offered continuation `continuation-p4c5-continuation-live` with checkpoint
+`HEAD`. Existing explicit organization policy `org-phase4-live` and failover
+pool `pool-phase4-live` allowed only the requested continuation target.
+
+The production continuation path routed the thread to real provider instance
+`codex-default` and model `default`. Thread persistence retained that route.
+The target turn was
+`turn-b3275d67-5abd-4ecc-824a-f26d347afbe0`, its only attempt was
+`attempt-de393c0f-445c-457c-856b-20eef8c5ac4e`, and its provider tool item was
+`exec-0b8b4f95-c77a-400e-acb4-b1c86f2747a2`. Before the crash, the
+continuation, turn, and attempt were Running. The attempt had reached durable
+boundary `tool_side_effect_begun`, its one ledger row was Started, and the
+receiver had durably recorded exactly one loopback HTTP POST. No terminal tool
+event or delivery existed.
+
+### Exact process-tree crash and restart
+
+The harness waited for the complete durable state and the executing provider
+event before freezing the exact process tree. It recorded server PID 1400530,
+Codex PID 1400965, code-mode host PID 1402156, shell PID 1402180, and sleeping
+command PID 1402225. It then intentionally sent `SIGKILL` to every captured
+process. No captured PID survived. SQLite integrity remained `ok`, and the
+database still exposed the complete pre-result state with one request.
+
+Exact server PID 1403338 reopened the same database and artifact. Startup
+reconciliation changed the target turn to Interrupted, the target attempt to
+Failed, the continuation to Failed, and the thread to Idle. It preserved the
+ambiguous Started ledger at `tool_side_effect_begun`, two total turns, two total
+attempts, zero terminal tool-result events, zero deliveries, and the single
+external request. One snake-case and one camel-case duplicate continuation RPC
+both returned `This capacity continuation has already failed`. Neither call
+created a turn, attempt, provider session, tool, delivery, or second request.
+The restarted server and receiver then stopped cleanly without a forced kill.
+
+### Evidence, rejected diagnostics, cleanup, and limitations
+
+The phase-one, phase-two, crash-intent, and purpose-built harness SHA-256 values
+are respectively
+`eb3d30f6fe961423892675ab1a9ea7e292f5337440601caa501bbaae6950f821`,
+`169672949e26a29e1fc0ab696e4626d834e220c8a13def7cd5cfc6f6ca018985`,
+`08f856f5cef8622d2cd9db053fbb583af72b6ff61dc540978d50deeb9053e41c`,
+and `d49d035eca1f8e1c43025f68c52a2f75fc8bdc412d92471bc1fdecbf6975dddc`.
+The receiver receipt, ledger, and request-log hashes match the earlier
+one-request contract:
+`73ae5dd652ecf595b79117a2245d8b888cfe9da55cb9330c61256c9a994b6087`,
+`0ae33c79f99f21e96a3ab4d08b9ed945d7e7a97d9ece31f16ccfc451248d5db6`,
+and `1c9108d289f03623ded8d6193ef8d8b2475618ebdcc41c46206ddcda9098dfe1`.
+
+Three exact 0.60.49 roots remain retained and rejected. The first lacked the
+required explicit failover pool, the second encountered an existing historical
+Codex hard-limit revision before dispatch, and the third exposed the product
+defect where thread persistence retained the stale source route. A first exact
+0.60.52 instrumentation root also remains retained and rejected because it
+sampled SQLite before the executing event caught up and tracked only one
+process group. That run led to the corrected event wait and complete descendant
+tree capture used by the accepted rehearsal. The rejected roots are:
+
+- `/home/brandon/.pandamux/acceptance/phase4-d09641e-0.60.49-p4-c5-continuation-restart-live-rejected-no-failover-pool`
+- `/home/brandon/.pandamux/acceptance/phase4-d09641e-0.60.49-p4-c5-continuation-restart-live-rejected-capacity-hard-limit`
+- `/home/brandon/.pandamux/acceptance/phase4-d09641e-0.60.49-p4-c5-continuation-restart-live-rejected-thread-route-not-persisted`
+- `/home/brandon/.pandamux/acceptance/phase4-5d8b77d-0.60.52-p4-c5-continuation-restart-live-rejected-event-lag-process-tree`
+
+Cleanup checkpointed the accepted clone, verified integrity, restored the
+cloned credential to SHA-256
+`c113c08e486e8c8825ccb288395593131699f5d1511e52d81309334d01f1c4e4`
+and mode 600, deleted the temporary active credential and exact staging
+directory, and found zero matching processes or runtime sockets. The final
+clone has SHA-256
+`07fdb032ac5bc30ca615e0c94e30b9fd2157e1fb13ecfd53317d32fd7828e3b6`.
+The source rehearsal database and retained P4-C4 database remained unchanged
+at SHA-256
+`0a64a5d92f53725525f409e98434c25799157591e5369cb495591ac641100c0a`
+and `5f45008d32b07e3c8491f2ad45361482e16cfa66a7f42bae7c5408c96350b323`.
+
+An independent check passed all 24 authoritative manifest entries. The
+manifest has SHA-256
+`94ab5856a6a4d6050e22c3dfa6f8d2a88e73d389f2a6fe7fdf63561c22dbb2fe`;
+the final audit has SHA-256
+`4f2b0de204403a668168559a32f89297a5ef62fdbb7ab3f578e647a6ff59f3c1`.
+
+This closes the pending-continuation restart portion of P4-C5 row 6. The
+controlled source fixture does not prove real provider quota or capacity
+exhaustion, pre-output failover under that real condition, or interruption of
+a real external-service action. P4-C5 remains Partial, Phase 4 remains open,
+and no push, CI, signing, packaging, deployment, production activation, or
+release occurred. Workspace version 0.60.53 records this evidence only and
+supplies no new executable claim.
 
 ## Exact 0.60.43 P4-C6 supporting Hyper-V rehearsal
 
@@ -2686,6 +2814,39 @@ not create an executable, native, provider-capacity, external-service,
 physical-laptop, production, push, deployment, activation, or release claim
 for 0.60.48.
 
+Exact 0.60.49 commit
+`d09641e86cd06d72d7312ceb1fa3b20e5931ff5f` passed locked metadata,
+formatting, strict all-target and all-feature workspace Clippy, 444 workspace
+tests with zero failures and two intentional real-shell ignores, the Rust
+boundary guard, the Claude wiring guard, desktop headless verification,
+dependency policy, and diff hygiene. Its exact release server supplied the
+accepted pending-approval and atomic tool-result process-crash restart runs
+recorded above. Documentation-only versions 0.60.50 and 0.60.51 archive those
+two results and make no separate executable, native, production, push,
+deployment, activation, or release claim.
+
+Exact 0.60.52 commit
+`5d8b77d7086a7a266251cd3106e5f124d6cd2aec` passed locked metadata,
+formatting, strict all-target and all-feature workspace Clippy, 445 workspace
+tests with zero failures and two intentional real-shell ignores, the Rust
+boundary guard, the Claude wiring guard, desktop headless verification,
+dependency policy, and diff hygiene. Its exact release server supplied the
+accepted pending-continuation restart run recorded above.
+
+The documentation-only 0.60.53 workspace passed locked metadata, formatting,
+strict all-target and all-feature workspace Clippy, 445 workspace tests with
+zero failures and two intentional real-shell ignores, the Rust boundary guard,
+the Claude wiring guard, desktop headless verification with `ALL CHECKS PASSED`,
+dependency policy, and diff hygiene. A final read-only preservation audit
+reverified the original checkout at
+`9511d0e22d44192f106e2f84a7c96b96d76734b6` with its pre-existing changes
+intact, left all eleven historical recovery bundles untouched, and independently
+reverified the accepted continuation root's 24-entry manifest at SHA-256
+`94ab5856a6a4d6050e22c3dfa6f8d2a88e73d389f2a6fe7fdf63561c22dbb2fe`.
+This verification does not create a new executable acceptance, native,
+provider-capacity, external-service, physical-laptop, production, push,
+deployment, activation, or release claim for 0.60.53.
+
 `cargo-deny` 0.20.2 could not parse the old `deny.toml` syntax. The follow-up
 configuration change removed deprecated keys and scoped seven existing
 non-allowlisted transitive licenses to their exact crates and versions. With
@@ -2704,15 +2865,17 @@ especially for the scoped MPL-2.0 exceptions.
 Phase 4 cannot yet be marked exited under `tasks/plan-rewrite.md`:
 
 1. Close the remaining live P4-C5 failover rows with a real pre-output provider
-   capacity failure, an interruption of a real external-service action,
-   and restart while a real continuation is pending. Exact 0.60.17 already
+   capacity failure and an interruption of a real external-service action.
+   Exact 0.60.17 already
    passes scanner durability, reconnect and bounded backfill, capacity
    projection and route explanations, rollback controls, and the complete
    diagnostic fixture matrix. Exact 0.60.43 covers visible text plus file and
    command side effects, exact 0.60.47 covers one approval plus one isolated
    loopback HTTP side effect, and exact 0.60.49 closes the pending-approval and
-   atomic tool-result process-crash restart cases. None substitutes for the
-   remaining real capacity, external-service, or continuation rows.
+   atomic tool-result process-crash restart cases. Exact 0.60.52 closes restart
+   while a real Codex continuation is pending after a controlled source
+   interruption. None substitutes for the remaining real capacity or
+   external-service rows.
 2. Complete the P4-C7 archive and maintained-document synchronization after the
    remaining P4-C5 and P4-C6 live rows stabilize. This record already reflects
    the complete P4-C3 Pass and the P4-C5 Partial result.

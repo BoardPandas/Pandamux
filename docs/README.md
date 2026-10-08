@@ -123,15 +123,21 @@ replay. Exact 0.60.47 then repaired unresolved-tool false success and passed a
 clean supporting run with one approval plus one loopback HTTP POST across
 abrupt proxy loss. Reconnect retained one request, one terminal tool ledger
 row, one protected attempt, one settled turn, and one matching managed usage
-observation without replay. A supporting Hyper-V rehearsal on exact 0.60.43
+observation without replay. Exact 0.60.49 then made completed tool-result
+projection atomic and passed the live pending-approval plus exact tool-result
+process-crash restart rows without replay. Exact 0.60.52 repaired continuation
+route persistence and passed restart while one real Codex continuation was
+Running after a controlled source interruption. The loopback request count
+remained one, and duplicate continuation calls refused redispatch. A supporting
+Hyper-V rehearsal on exact 0.60.43
 also passed a real 30-minute provider-network interruption and full-screen
 terminal saved-state recovery with exact event, usage, offset, replay, and
 cleanup evidence. It does not replace the required physical laptop disconnect
 and sleep rows. Exact 0.60.17 partially passed P4-C5 with live scanner and Hub
 durability, conservative capacity and route decisions, and independent
 rollback controls. Real provider capacity exhaustion, external-service
-interruption, the pending-delivery restart rows, the final archive after those
-rows stabilize, and the deferred physical checks remain open. The complete
+interruption, the final archive after those rows stabilize, and the deferred
+physical checks remain open. The complete
 current contract is in
 [`features/USAGE_OBSERVABILITY.md`](features/USAGE_OBSERVABILITY.md).
 

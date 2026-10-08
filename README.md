@@ -141,13 +141,19 @@ R0 development gate:
   killed under a confirmed SQLite writer lock. The database exposed only the
   complete pre-result state, and restart reconciled the interrupted attempt
   without a second request, terminal event, or delivery row.
+  Exact 0.60.52 then repaired stale continuation-route persistence and passed
+  a controlled-source, real-Codex continuation restart. The target provider and
+  model survived persistence, exactly one loopback request occurred, the exact
+  five-process descendant tree was killed while its tool remained Started, and
+  restart reconciled the continuation and attempt without redispatch or replay.
+  Two duplicate continuation calls both refused a second dispatch.
   A supporting Hyper-V rehearsal on the same exact runtime later passed a real
   30-minute provider-network interruption and full-screen terminal saved-state
   recovery with exact event, usage, offset, replay, and cleanup evidence. It
   does not replace the required physical laptop disconnect and sleep rows.
-  Real provider capacity exhaustion, external-service interruption, the
-  pending continuation restart, and the deferred physical laptop checks keep
-  P4-C5 Partial and the Phase 4 exit matrix open.
+  Real provider capacity exhaustion, external-service interruption, and the
+  deferred physical laptop checks keep P4-C5 Partial and the Phase 4 exit
+  matrix open.
 
 See the [Phase 4 live acceptance record](docs/operations/PHASE4_ACCEPTANCE.md)
 and the completion criteria in [`tasks/plan-rewrite.md`](tasks/plan-rewrite.md).

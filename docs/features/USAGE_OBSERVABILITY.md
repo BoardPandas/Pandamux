@@ -392,15 +392,24 @@ read the same `codex-default` and `gpt-6.1-sol` values on the created thread.
 P4-C3 is Pass again.
 A separate supporting live run later killed the exact remote proxy after
 visible text and one successful file-writing shell tool. Reconnect kept one
-protected attempt and the one-line marker without replay. It did not cover
-quota or capacity exhaustion, a network side effect, approval, or the remaining
-restart rows, so P4-C5 remains Partial.
+protected attempt and the one-line marker without replay. Exact 0.60.47 then
+repaired unresolved-tool false success and passed one approval plus one
+loopback HTTP POST across proxy loss without replay. Exact 0.60.49 made
+completed tool-result projection atomic and passed restart with a real approval
+result Pending plus an exact crash inside a real tool-result transaction.
+Exact 0.60.52 repaired continuation-route persistence and passed restart while
+one real Codex continuation was Running after a controlled source interruption.
+The exact descendant tree stopped after one loopback request, restart failed
+the continuation and target attempt without replay, and duplicate continuation
+calls refused redispatch. These supporting runs do not cover real provider
+quota or capacity exhaustion or interruption of a real external service, so
+P4-C5 remains Partial.
 A supporting Hyper-V rehearsal on the same exact runtime later passed a real
 30-minute provider-network interruption and full-screen terminal saved-state
 recovery with exact event, usage, offset, replay, and cleanup evidence. It does
 not replace the required physical laptop disconnect and sleep rows.
-The open real external quota-exhaustion and post-side-effect
-interruption rows, the deferred physical R0.5 laptop disconnect and sleep rows,
-the final archive after those results stabilize, and later release gates still
+The open real external quota-exhaustion and external-service interruption rows,
+the deferred physical R0.5 laptop disconnect and sleep rows, the final archive
+after those results stabilize, and later release gates still
 block Phase 4 exit, production acceptance, and release. Exact results and
 limitations are recorded in `docs/operations/PHASE4_ACCEPTANCE.md`.

@@ -14,9 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   valid failover-pool target from being reloaded as the stale source provider
   and then rejected by organization policy before its target turn starts.
   Store and lifecycle regressions require the selected route to survive a
-  SQLite reload and manager restart. Version 0.60.52 contains this fix; the
-  live pending-continuation restart row remains open until the repaired exact
-  artifact passes the isolated Galahad rehearsal.
+  SQLite reload and manager restart. Version 0.60.52 contains this fix and its
+  exact Galahad artifact passed the pending-continuation restart rehearsal.
 
 - **Made completed tool-result projection atomic and restart-idempotent.** The
   production provider event path now gives each terminal tool result a stable
@@ -37,6 +36,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   success and verifies contiguous error, failed-completion, and settled events.
 
 ### Changed
+
+- **Recorded the repaired P4-C5 pending-continuation restart pass.** Exact
+  0.60.52 commit `5d8b77d7086a7a266251cd3106e5f124d6cd2aec` passed the
+  complete local gate with 445 tests and supplied the hash-pinned Galahad
+  server. A controlled source interruption launched one real Codex
+  continuation through the explicit organization policy and failover pool.
+  The target route survived persistence, performed exactly one loopback HTTP
+  POST, and remained Running with one Started tool when the harness killed the
+  exact five-process descendant tree. Restart reconciled the continuation and
+  target attempt to Failed without a second request, terminal result, or
+  delivery. Two duplicate continuation submissions both refused redispatch.
+  This closes the pending-continuation restart portion of P4-C5 row 6, but the
+  controlled source fixture does not prove real provider capacity exhaustion
+  or interruption of a real external service. Version 0.60.53 records this
+  evidence only and has no new executable, native, production, push,
+  deployment, activation, or release claim.
 
 - **Recorded an exact process crash inside atomic tool-result persistence.**
   The hash-pinned 0.60.49 Galahad server ran one real Codex tool call that made
@@ -80,9 +95,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   product correctly failed closed, and one proved safe resolved success but
   exposed an overly narrow harness assertion. P4-C5 remains Partial because
   real provider capacity exhaustion, an external-service interruption, and
-  the pending-delivery restart rows are still open. Version 0.60.48 is
-  documentation-only and makes no new executable, production, push,
-  deployment, activation, or release claim.
+  the pending-delivery restart rows were still open at that revision. Version
+  0.60.48 is documentation-only and makes no new executable, production,
+  push, deployment, activation, or release claim.
 
 - **Recorded supporting live P4-C5 recovery after an abrupt post-side-effect
   proxy loss.** Exact 0.60.43 runtime code completed one real Codex turn after
