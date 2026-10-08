@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Rejected unusable Windows PowerShell App Execution Aliases.** Shell
+  discovery now requires PowerShell candidates to return a real version within
+  a bounded non-interactive probe. This prevents a `pwsh.exe` Store alias from
+  winning the normal `pwsh` -> Windows PowerShell fallback and leaving provider
+  login or ordinary terminal surfaces dead on otherwise healthy Windows 11
+  systems. Exact 0.60.61 physical-laptop acceptance exposed the alias after the
+  login confirmation and Surfaces accessibility repairs passed their reopened
+  checks; version 0.60.62 carries the compatibility repair and requires fresh
+  exact-candidate native evidence.
+
 - **Exposed the Surfaces toggle state to Windows assistive technology.**
   The titlebar control now publishes its pressed state through the button's
   accessibility toggle contract in addition to retaining selected styling and
