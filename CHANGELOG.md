@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Added
 
+- **Added deterministic Phase 5 routing and approval reconciliation in version
+  0.60.73.** Task routing now hard-filters every agent and trusted environment,
+  organization, access, output, concurrency, tier, capability, capacity, and
+  provider candidate before scoring; explicit class rules outrank specialty
+  hints; and the existing provider selector remains the sole provider scorer.
+  Recorded routes are immutable, safe fallback stops after visible or ambiguous
+  effects, and one-node work uses the complete pipeline. Canonical approval
+  identity binds run, task, kind, policy revision, and action digest through one
+  Auto/Approve-first reconciler that deduplicates exact decisions and refuses
+  stale, expired, rejected, conflicting, or authority-widening authorization.
+
 - **Added deterministic Phase 5 plan and DAG validation in version 0.60.72.**
   Proposed plans now normalize into ordered task and edge maps only after fixed
   fail-closed stages for bounds, duplicate or missing identities, stable cycle

@@ -11,6 +11,7 @@ pub mod compatibility;
 pub mod dag;
 pub mod diagnostics;
 pub mod policy;
+pub mod routing;
 pub mod schema;
 
 pub use bundle::{
@@ -29,7 +30,15 @@ pub use diagnostics::{
     ConfigurationIssue, ConfigurationIssueCode, ConfigurationStage, DiagnosticSet,
     InvalidRelativeConfigPath, JsonPointer, RelativeConfigPath, SafeText,
 };
-pub use policy::{LayerGrant, TrustedBundleSettings};
+pub use policy::{
+    ApprovalAction, ApprovalDecisionIdentity, ApprovalReconciliation, ApprovalSafetyClass,
+    LayerGrant, TrustedBundleSettings, approval_identity, canonical_action_digest,
+    reconcile_approval,
+};
+pub use routing::{
+    FallbackEligibility, ProviderCandidateSnapshot, RoutingContext, RoutingFailure,
+    ValidatedAgentTask, fallback_eligibility, route_task,
+};
 pub use schema::{
     ParsedDocumentV1, SourceDocument, generated_authored_schema_json, parse_source_document,
     validate_source_set_bounds,

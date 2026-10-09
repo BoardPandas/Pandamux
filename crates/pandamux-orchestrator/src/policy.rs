@@ -1,10 +1,16 @@
 use crate::diagnostics::{
-    ConfigurationIssue, ConfigurationIssueCode, ConfigurationStage, RelativeConfigPath, issue,
+    ConfigurationIssue, ConfigurationIssueCode, ConfigurationStage, RelativeConfigPath, SafeText,
+    issue,
 };
 use pandamux_core::{
-    AccessMode, AgentDefinition, OrganizationId, ProjectId, TierMapping, ValueLayer,
+    AccessMode, AgentDefinition, ApprovalId, ApprovalRequirement, OrchestrationMode,
+    OrganizationId, ProjectId, RunApprovalKind, RunApprovalStatus, RunId, RunTaskId, TierMapping,
+    ValueLayer,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 
 /// Server-issued proof that one exact source layer may participate in compilation.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,6 +30,208 @@ pub struct LayerGrant {
 pub struct TrustedBundleSettings {
     pub revision: String,
     pub tier_mapping: TierMapping,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalSafetyClass {
+    Ordinary,
+    AccessWidening,
+    CrossOrganization,
+    HumanAgentEdit,
+    FullAccess,
+    McpMutation,
+    ProjectLayerTrust,
+    ProjectIdentityChange,
+}
+
+impl ApprovalSafetyClass {
+    const fn allows_automatic_authorization(self) -> bool {
+        matches!(self, Self::Ordinary)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalAction {
+    pub approval_id: ApprovalId,
+    pub run_id: RunId,
+    pub task_id: RunTaskId,
+    pub kind: RunApprovalKind,
+    pub policy_revision: String,
+    pub canonical_action: Value,
+    pub safe_summary: SafeText,
+    #[serde(default)]
+    pub reason_codes: Vec<String>,
+    pub expires_at_ms: u64,
+    pub safety_class: ApprovalSafetyClass,
+    pub trusted_auto_permitted: bool,
+    #[serde(default)]
+    pub hard_denial_codes: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalDecisionIdentity {
+    pub run_id: RunId,
+    pub task_id: RunTaskId,
+    pub kind: RunApprovalKind,
+    pub policy_revision: String,
+    pub action_digest: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ApprovalReconciliation {
+    Authorized {
+        identity: ApprovalDecisionIdentity,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        approval_id: Option<ApprovalId>,
+    },
+    Pending {
+        approval: ApprovalRequirement,
+    },
+    Denied {
+        identity: ApprovalDecisionIdentity,
+        reason_codes: Vec<String>,
+    },
+}
+
+pub fn reconcile_approval(
+    mode: OrchestrationMode,
+    action: &ApprovalAction,
+    existing: &BTreeMap<ApprovalId, ApprovalRequirement>,
+    now_ms: u64,
+) -> ApprovalReconciliation {
+    let identity = approval_identity(action);
+    let mut hard_denial_codes = action.hard_denial_codes.clone();
+    hard_denial_codes.sort();
+    hard_denial_codes.dedup();
+    if !hard_denial_codes.is_empty() {
+        return ApprovalReconciliation::Denied {
+            identity,
+            reason_codes: hard_denial_codes,
+        };
+    }
+
+    if existing
+        .get(&action.approval_id)
+        .is_some_and(|approval| !approval_matches_identity(approval, &identity))
+    {
+        return ApprovalReconciliation::Denied {
+            identity,
+            reason_codes: vec!["approval_identity_conflict".to_string()],
+        };
+    }
+
+    let matching = existing
+        .values()
+        .filter(|approval| approval_matches_identity(approval, &identity))
+        .collect::<Vec<_>>();
+    if matching.len() > 1 {
+        return ApprovalReconciliation::Denied {
+            identity,
+            reason_codes: vec!["approval_identity_conflict".to_string()],
+        };
+    }
+    if let Some(approval) = matching.first() {
+        if approval.expires_at_ms <= now_ms || approval.status == RunApprovalStatus::Expired {
+            return ApprovalReconciliation::Denied {
+                identity,
+                reason_codes: vec!["approval_expired".to_string()],
+            };
+        }
+        return match approval.status {
+            RunApprovalStatus::Approved => ApprovalReconciliation::Authorized {
+                identity,
+                approval_id: Some(approval.id.clone()),
+            },
+            RunApprovalStatus::Pending => ApprovalReconciliation::Pending {
+                approval: (*approval).clone(),
+            },
+            RunApprovalStatus::Rejected => ApprovalReconciliation::Denied {
+                identity,
+                reason_codes: vec!["approval_rejected".to_string()],
+            },
+            RunApprovalStatus::Expired => unreachable!("handled above"),
+        };
+    }
+
+    let mut reason_codes = action.reason_codes.clone();
+    reason_codes.sort();
+    reason_codes.dedup();
+    if mode == OrchestrationMode::Auto
+        && action.trusted_auto_permitted
+        && action.safety_class.allows_automatic_authorization()
+        && reason_codes.is_empty()
+    {
+        return ApprovalReconciliation::Authorized {
+            identity,
+            approval_id: None,
+        };
+    }
+
+    ApprovalReconciliation::Pending {
+        approval: ApprovalRequirement {
+            id: action.approval_id.clone(),
+            run_id: action.run_id.clone(),
+            task_id: action.task_id.clone(),
+            kind: action.kind,
+            policy_revision: action.policy_revision.clone(),
+            action_digest: identity.action_digest,
+            safe_summary: action.safe_summary.as_str().to_string(),
+            reason_codes,
+            expires_at_ms: action.expires_at_ms,
+            status: RunApprovalStatus::Pending,
+            decision: None,
+        },
+    }
+}
+
+pub fn approval_identity(action: &ApprovalAction) -> ApprovalDecisionIdentity {
+    ApprovalDecisionIdentity {
+        run_id: action.run_id.clone(),
+        task_id: action.task_id.clone(),
+        kind: action.kind,
+        policy_revision: action.policy_revision.clone(),
+        action_digest: canonical_action_digest(&action.canonical_action),
+    }
+}
+
+pub fn canonical_action_digest(action: &Value) -> String {
+    let canonical = canonicalize_json(action);
+    let bytes = serde_json::to_vec(&canonical).expect("JSON values are serializable");
+    let digest = Sha256::digest(bytes);
+    let mut output = String::with_capacity(64);
+    for byte in digest {
+        use std::fmt::Write as _;
+        write!(&mut output, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    output
+}
+
+fn approval_matches_identity(
+    approval: &ApprovalRequirement,
+    identity: &ApprovalDecisionIdentity,
+) -> bool {
+    approval.run_id == identity.run_id
+        && approval.task_id == identity.task_id
+        && approval.kind == identity.kind
+        && approval.policy_revision == identity.policy_revision
+        && approval.action_digest == identity.action_digest
+}
+
+fn canonicalize_json(value: &Value) -> Value {
+    match value {
+        Value::Object(object) => Value::Object(
+            object
+                .iter()
+                .map(|(key, value)| (key.clone(), canonicalize_json(value)))
+                .collect(),
+        ),
+        Value::Array(values) => Value::Array(values.iter().map(canonicalize_json).collect()),
+        other => other.clone(),
+    }
 }
 
 pub(crate) fn validate_grant_scope(
