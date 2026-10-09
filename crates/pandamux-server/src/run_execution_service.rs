@@ -1,4 +1,9 @@
+use crate::blackboard_store::{
+    ArtifactCacheRecord, BlackboardError, BlackboardStore, CompleteTaskArtifactsRequest,
+    PreparedBlackboardTransition, RecordVerificationEvidenceRequest,
+};
 use crate::bundle_store::{BundleStore, BundleStoreError};
+use crate::data_paths::DataPaths;
 use crate::environment_router::EnvironmentRouter;
 use crate::execution_admission::ExecutionAdmissionClaim;
 use crate::execution_budget::ExecutionBudgetService;
@@ -167,6 +172,7 @@ pub struct RunExecutionService {
     projections: broadcast::Sender<RunTransitionNotice>,
     local_provider: Option<LocalProviderRuntime>,
     remote_provider: Option<RemoteProviderRuntime>,
+    blackboard: Option<BlackboardStore>,
 }
 
 impl RunExecutionService {
@@ -177,6 +183,7 @@ impl RunExecutionService {
             projections,
             local_provider: None,
             remote_provider: None,
+            blackboard: None,
         }
     }
 
@@ -196,6 +203,14 @@ impl RunExecutionService {
     pub fn with_environment_router(mut self, environment_router: Arc<EnvironmentRouter>) -> Self {
         self.remote_provider = Some(RemoteProviderRuntime { environment_router });
         self
+    }
+
+    pub fn with_blackboard_data_paths(
+        mut self,
+        data_paths: DataPaths,
+    ) -> Result<Self, BlackboardError> {
+        self.blackboard = Some(BlackboardStore::new(self.store.clone(), data_paths)?);
+        Ok(self)
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<RunTransitionNotice> {
@@ -227,6 +242,144 @@ impl RunExecutionService {
 
     pub fn audit_replay(&self, run_id: &RunId) -> Result<OrchestrationReplayAudit, StoreError> {
         self.store.audit_orchestration_replay(run_id)
+    }
+
+    pub fn record_verification_evidence(
+        &self,
+        request: &RecordVerificationEvidenceRequest,
+        failpoint: Option<OrchestrationExecutionFailpoint>,
+    ) -> Result<RunTransition, BlackboardError> {
+        let record = self
+            .store
+            .load_verified_orchestration_run(&request.run_id)?
+            .ok_or(BlackboardError::Invalid("blackboard_run_missing"))?;
+        let prepared = self
+            .blackboard_store()?
+            .prepare_verification_evidence(&record.run, request)?;
+        self.commit_blackboard_transition(&record.run, prepared, failpoint)
+    }
+
+    pub fn complete_task_with_artifacts(
+        &self,
+        request: &CompleteTaskArtifactsRequest,
+        failpoint: Option<OrchestrationExecutionFailpoint>,
+    ) -> Result<RunTransition, BlackboardError> {
+        let record = self
+            .store
+            .load_verified_orchestration_run(&request.run_id)?
+            .ok_or(BlackboardError::Invalid("blackboard_run_missing"))?;
+        let prepared = self
+            .blackboard_store()?
+            .prepare_task_completion(&record.run, request)?;
+        self.commit_blackboard_transition(&record.run, prepared, failpoint)
+    }
+
+    pub fn materialize_blackboard_artifact(
+        &self,
+        run_id: &RunId,
+        entry_id: &pandamux_core::BlackboardEntryId,
+        expected_content_sha256: &str,
+    ) -> Result<ArtifactCacheRecord, BlackboardError> {
+        self.blackboard_store()?.materialize_artifact_cache(
+            run_id,
+            entry_id,
+            expected_content_sha256,
+        )
+    }
+
+    fn blackboard_store(&self) -> Result<&BlackboardStore, BlackboardError> {
+        self.blackboard.as_ref().ok_or(BlackboardError::Invalid(
+            "blackboard_runtime_not_configured",
+        ))
+    }
+
+    fn commit_blackboard_transition(
+        &self,
+        current: &pandamux_core::Run,
+        prepared: PreparedBlackboardTransition,
+        failpoint: Option<OrchestrationExecutionFailpoint>,
+    ) -> Result<RunTransition, BlackboardError> {
+        if current.id != prepared.run_id {
+            return Err(BlackboardError::Invalid(
+                "blackboard_transition_run_mismatch",
+            ));
+        }
+        if let Some(existing_event_id) = current
+            .idempotency_receipts
+            .get(&prepared.event.idempotency_key)
+        {
+            if existing_event_id != &prepared.event.event_id {
+                return Err(BlackboardError::Conflict("blackboard_idempotency_conflict"));
+            }
+            let event = self
+                .store
+                .load_orchestration_events(&prepared.run_id)?
+                .into_iter()
+                .find(|event| event.event_id == *existing_event_id)
+                .ok_or(BlackboardError::Conflict("blackboard_replay_event_missing"))?;
+            if event.idempotency_key != prepared.event.idempotency_key
+                || event.at_ms != prepared.event.at_ms
+                || event.kind != prepared.event_kind
+            {
+                return Err(BlackboardError::Conflict("blackboard_idempotency_conflict"));
+            }
+            if !prepared.rows.artifacts.is_empty() {
+                let stored = self
+                    .store
+                    .load_orchestration_runtime_records(&prepared.run_id)?;
+                if prepared
+                    .rows
+                    .artifacts
+                    .iter()
+                    .any(|artifact| !stored.artifacts.contains(artifact))
+                {
+                    return Err(BlackboardError::Conflict(
+                        "blackboard_replay_artifact_missing",
+                    ));
+                }
+            }
+            let effect_ids = self
+                .store
+                .load_orchestration_effects(&prepared.run_id)?
+                .into_iter()
+                .filter(|effect| effect.effect.source_event_id == event.event_id)
+                .map(|effect| effect.effect.id)
+                .collect();
+            return Ok(RunTransition {
+                run: current.clone(),
+                snapshot_sha256: crate::store::orchestration_snapshot_sha256(current),
+                events: vec![event],
+                effect_ids,
+                duplicate: true,
+            });
+        }
+        if current
+            .replay_receipts
+            .contains_key(&prepared.event.event_id)
+        {
+            return Err(BlackboardError::Conflict(
+                "blackboard_event_identity_conflict",
+            ));
+        }
+        let kinds = pandamux_orchestrator::decide(current, prepared.command.clone())
+            .map_err(|_| BlackboardError::Invalid("blackboard_transition_rejected"))?;
+        if kinds.as_slice() != [prepared.event_kind.clone()] {
+            return Err(BlackboardError::Invalid(
+                "blackboard_transition_shape_invalid",
+            ));
+        }
+        self.commit_transition(
+            &RunTransitionRequest {
+                run_id: prepared.run_id,
+                expected_last_seq: current.last_seq,
+                expected_snapshot_sha256: crate::store::orchestration_snapshot_sha256(current),
+                command: prepared.command,
+                assigned_events: vec![prepared.event],
+                rows: prepared.rows,
+            },
+            failpoint,
+        )
+        .map_err(BlackboardError::Store)
     }
 
     pub fn pending_effects(

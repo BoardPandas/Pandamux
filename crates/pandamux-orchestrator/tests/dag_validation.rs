@@ -490,6 +490,19 @@ fn validates_only_the_supported_deterministic_output_schema_subset() {
         .is_err(),
         "additional data must not widen the declared contract"
     );
+    let closed_empty_object = OutputContract {
+        kind: "empty_object".to_string(),
+        schema: Some(json!({
+            "type": "object",
+            "additionalProperties": false
+        })),
+    };
+    validate_output_value(&closed_empty_object, &json!({}))
+        .expect("a closed empty object accepts the empty object");
+    assert!(
+        validate_output_value(&closed_empty_object, &json!({"unexpected": true})).is_err(),
+        "additionalProperties false is authoritative even without a properties map"
+    );
 
     for schema in [
         json!({"type": "integer", "minimum": 0}),

@@ -40,6 +40,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Added typed Phase 5C blackboard artifacts and durable verification evidence
+  in version 0.60.99.** Successful tasks now atomically publish bounded,
+  canonical, content-hashed JSON artifacts before dependent tasks become ready.
+  Exact output contracts, schema digests, producer and consumer scope, immutable
+  identities, version predecessors, per-task and per-run counts, and the 16 MiB
+  run aggregate are enforced in both the pure engine and SQLite boundary.
+  Verification records are derived only from durable command events, owned
+  checkpoints and diff receipts, the existing Phase 4 tool ledger, or exact
+  budget reconciliation observations. The app-owned `run-artifacts` directory
+  remains a verified content-addressed cache rather than a second authority and
+  rejects link or reparse-point substitution. Architect, builder, and reviewer
+  fixtures cover typed dependency readiness, evidence-gated review, schema and
+  authority-injection failures, producer failure propagation, every artifact
+  bound, atomic rollback, and post-commit replay. This checkpoint contacts no
+  external provider or repository, adds no native or live-provider acceptance,
+  and does not push, run CI, deploy, activate, package, sign, publish, or
+  release.
+
 - **Added authenticated Phase 5C node execution in version 0.60.98.** Private
   NodeProxy/internal repository prepare, attempt prepare, dispatch, status,
   cancellation, ordered events, and acknowledgement now bind every request to

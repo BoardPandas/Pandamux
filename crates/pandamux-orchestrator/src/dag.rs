@@ -626,6 +626,12 @@ fn validate_schema_node(schema: &Value, depth: usize) -> Result<(), &'static str
     if object.len() > MAX_ARTIFACT_CONTAINER_ITEMS {
         return Err("schema object size");
     }
+    if object
+        .keys()
+        .any(|key| key.len() > MAX_ARTIFACT_STRING_BYTES)
+    {
+        return Err("schema key size");
+    }
     const ALLOWED: [&str; 6] = [
         "type",
         "required",
@@ -662,7 +668,10 @@ fn validate_schema_node(schema: &Value, depth: usize) -> Result<(), &'static str
         if properties.len() > MAX_ARTIFACT_CONTAINER_ITEMS {
             return Err("schema property count");
         }
-        for child in properties.values() {
+        for (name, child) in properties {
+            if name.is_empty() || name.len() > MAX_ARTIFACT_STRING_BYTES {
+                return Err("schema property name");
+            }
             validate_schema_node(child, depth + 1)?;
         }
         Ok(properties)
@@ -686,6 +695,7 @@ fn validate_schema_node(schema: &Value, depth: usize) -> Result<(), &'static str
         for value in required {
             let name = value.as_str().ok_or("required names must be strings")?;
             if name.is_empty()
+                || name.len() > MAX_ARTIFACT_STRING_BYTES
                 || !names.insert(name)
                 || properties.is_none_or(|entries| !entries.contains_key(name))
             {
@@ -738,7 +748,7 @@ fn validate_value_node(schema: &Value, value: &Value, depth: usize) -> Result<()
     {
         return Err("type mismatch");
     }
-    if let Some(properties) = object.get("properties").and_then(Value::as_object) {
+    if object.get("type").and_then(Value::as_str) == Some("object") {
         let values = value.as_object().ok_or("object mismatch")?;
         if let Some(required) = object.get("required").and_then(Value::as_array) {
             for name in required.iter().filter_map(Value::as_str) {
@@ -747,15 +757,21 @@ fn validate_value_node(schema: &Value, value: &Value, depth: usize) -> Result<()
                 }
             }
         }
-        if object.get("additionalProperties") == Some(&Value::Bool(false))
-            && values.keys().any(|key| !properties.contains_key(key))
+        if let Some(properties) = object.get("properties").and_then(Value::as_object) {
+            if object.get("additionalProperties") == Some(&Value::Bool(false))
+                && values.keys().any(|key| !properties.contains_key(key))
+            {
+                return Err("additional property");
+            }
+            for (name, child_schema) in properties {
+                if let Some(child) = values.get(name) {
+                    validate_value_node(child_schema, child, depth + 1)?;
+                }
+            }
+        } else if object.get("additionalProperties") == Some(&Value::Bool(false))
+            && !values.is_empty()
         {
             return Err("additional property");
-        }
-        for (name, child_schema) in properties {
-            if let Some(child) = values.get(name) {
-                validate_value_node(child_schema, child, depth + 1)?;
-            }
         }
     }
     if let Some(items) = object.get("items") {

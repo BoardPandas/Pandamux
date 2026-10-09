@@ -730,8 +730,21 @@ impl Store {
         for record in &records.daily_budgets {
             insert_daily_budget(&tx, record)?;
         }
+        let mut artifact_snapshots = BTreeMap::new();
         for artifact in &records.artifacts {
-            insert_artifact(&tx, artifact)?;
+            if !artifact_snapshots.contains_key(&artifact.run_id) {
+                artifact_snapshots.insert(
+                    artifact.run_id.clone(),
+                    load_snapshot(&tx, &artifact.run_id)?,
+                );
+            }
+            insert_artifact(
+                &tx,
+                artifact_snapshots
+                    .get(&artifact.run_id)
+                    .expect("artifact snapshot was inserted"),
+                artifact,
+            )?;
         }
         for progress in &records.progress {
             insert_progress(&tx, progress)?;
@@ -1832,8 +1845,17 @@ fn insert_transition_rows(
     for record in &rows.budget_reservations {
         insert_budget_reservation(tx, record)?;
     }
+    let artifact_snapshot = (!rows.artifacts.is_empty())
+        .then(|| load_snapshot(tx, run_id))
+        .transpose()?;
     for artifact in &rows.artifacts {
-        insert_artifact(tx, artifact)?;
+        insert_artifact(
+            tx,
+            artifact_snapshot
+                .as_ref()
+                .expect("nonempty artifacts have a snapshot"),
+            artifact,
+        )?;
     }
     for review in &rows.recovery_reviews {
         insert_recovery_review(tx, review)?;
@@ -3258,7 +3280,11 @@ fn insert_daily_budget(tx: &Transaction<'_>, record: &DailyBudgetRecord) -> Resu
     Ok(())
 }
 
-fn insert_artifact(tx: &Transaction<'_>, artifact: &BlackboardEntry) -> Result<(), StoreError> {
+fn insert_artifact(
+    tx: &Transaction<'_>,
+    snapshot: &Run,
+    artifact: &BlackboardEntry,
+) -> Result<(), StoreError> {
     if artifact.id.as_str().is_empty()
         || artifact.run_id.as_str().is_empty()
         || artifact.artifact_key
@@ -3282,7 +3308,6 @@ fn insert_artifact(tx: &Transaction<'_>, artifact: &BlackboardEntry) -> Result<(
     validate_json_bounds(&content, 0)?;
     pandamux_orchestrator::validate_output_value(&artifact.output_contract, &content)
         .map_err(|reason| data_error(format!("blackboard artifact contract mismatch: {reason}")))?;
-    let snapshot = load_snapshot(tx, &artifact.run_id)?;
     if snapshot.blackboard.get(&artifact.id) != Some(artifact) {
         return Err(data_error(
             "blackboard artifact differs from the canonical run snapshot",

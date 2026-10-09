@@ -1,5 +1,6 @@
 pub mod attachment;
 pub mod attempt_worktree;
+pub mod blackboard_store;
 pub mod bundle_store;
 pub mod bundle_sync;
 pub mod checkpoint;
@@ -40,6 +41,11 @@ pub use attempt_worktree::{
     AttemptWorktreeCleanupOutcome, AttemptWorktreeError, AttemptWorktreeFailpoint,
     AttemptWorktreeOutcome, AttemptWorktreeService, CleanupAttemptWorktreeRequest,
     CreateAttemptCheckpointRequest, CreateAttemptWorktreeRequest,
+};
+pub use blackboard_store::{
+    ArtifactCacheRecord, ArtifactProvenanceSource, ArtifactSubmission, BlackboardError,
+    BlackboardStore, CompleteTaskArtifactsRequest, RecordVerificationEvidenceRequest,
+    VerificationEvidenceSource,
 };
 pub use bundle_store::{
     BUNDLE_ARCHIVE_SCHEMA_VERSION, BundleMaterializationInput, BundleStore, BundleStoreError,
