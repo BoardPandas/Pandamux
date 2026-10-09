@@ -5,16 +5,12 @@ workspace. Read the root [`Cargo.toml`](../Cargo.toml) for the version;
 documentation does not duplicate it.
 
 > **Latest Updates (October 2026):**
-> - **v0.60.96:** Checked Phase 5C budget reservations, grants, usage reconciliation, and conservation diagnostics.
-> - **v0.60.95:** Durable shared execution admission, multi-scope caps, interactive reserve, and lease recovery.
-> - **v0.60.94:** Crash-safe Phase 5C attempt worktrees and private checkpoints.
-> - **v0.60.93:** Replay-safe Phase 5C run transitions and effect outbox.
-> - **v0.60.92:** Migration 14 and the durable Phase 5C execution store.
-> - **v0.60.89:** Final Phase 5B local and native Windows acceptance reconciliation.
-> - **v0.60.88:** Native terminal confirmation controls now publish their disabled UI Automation state.
-> - **v0.60.87:** Physical keyboard traversal restored for both confirmation actions.
-> - **v0.60.85:** Native Windows trusted storage, ACL, reparse, Git durability, and long-path hardening.
-> - **v0.60.84:** Phase 5B maintained documentation and exact local acceptance record.
+> - **v0.60.102:** Phase 5C maintained documentation and exact acceptance record.
+> - **v0.60.101:** Provider-progress and shutdown-cancellation clock-race repair.
+> - **v0.60.100:** Supervised watchdog, cancellation, shutdown, and crash recovery.
+> - **v0.60.99:** Typed blackboard artifacts and server-derived verification evidence.
+> - **v0.60.98:** Authenticated, replay-safe Hub-to-node attempt execution.
+> - **v0.60.97:** Durable local provider-effect execution through `ThreadManager`.
 
 ## Authority order
 
@@ -42,6 +38,7 @@ roadmap.
 | Change Rust dependencies or toolchains safely | [Toolchain and Dependency Policy](operations/DEPENDENCIES.md) |
 | Find runtime configuration and profile rules | [Configuration](core/CONFIGURATION.md) |
 | Understand trusted sources, activation, and review | [Trusted Configuration](features/TRUSTED_CONFIGURATION.md) |
+| Review Phase 5C implementation and acceptance evidence | [Phase 5C Acceptance](operations/PHASE5C_ACCEPTANCE.md) |
 | Use the command-line client | [CLI Reference](api/CLI_REFERENCE.md) |
 | Understand release gates without implying publication | [Release and Packaging](operations/RELEASE.md) |
 | Decode project terminology | [Glossary](GLOSSARY.md) |
@@ -74,6 +71,7 @@ sections with stable AUTOGEN identifiers.
 
 - [Toolchain and Dependency Policy](operations/DEPENDENCIES.md)
 - [Release and Packaging](operations/RELEASE.md)
+- [Phase 5C Execution Runtime Acceptance](operations/PHASE5C_ACCEPTANCE.md)
 - [Glossary](GLOSSARY.md)
 - [Generation Metadata](_meta/GENERATION.md)
 - [Generation Summary](_meta/SUMMARY.md)
@@ -87,7 +85,7 @@ sections with stable AUTOGEN identifiers.
 | Wire protocol | [`crates/pandamux-protocol`](../crates/pandamux-protocol) | Versioned JSON-RPC, trusted-configuration, subscriptions, capabilities, and Hub-to-node contracts |
 | Providers | [`crates/pandamux-providers`](../crates/pandamux-providers) | Provider drivers, profiles, discovery, parsing, and process supervision |
 | SSH and bootstrap | [`crates/pandamux-remote`](../crates/pandamux-remote) | SSH pool, exec, SFTP, bootstrap, worktree synchronization, and proxy tunnels |
-| Server | [`crates/pandamux-server`](../crates/pandamux-server) | Durable store, managed configuration sources, activation, distribution, mutation review, request contexts, provider execution, PTYs, Hub, and node runtime |
+| Server | [`crates/pandamux-server`](../crates/pandamux-server) | Durable store, managed configuration, orchestration effects, worktrees, admission, budgets, recovery, provider execution, PTYs, Hub, and node runtime |
 | Client projections | [`crates/pandamux-client`](../crates/pandamux-client) | Event-derived state, trusted-configuration review state, transport, usage projection, and token smoothing |
 | Desktop | [`crates/pandamux-desktop`](../crates/pandamux-desktop) | GPUI chat shell, trusted configuration, timeline, composer, settings, surfaces, terminal grid, and usage views |
 | CLI | [`crates/pandamux-cli`](../crates/pandamux-cli) | Authenticated commands and restricted MCP stdio adapter |
@@ -101,8 +99,9 @@ control listener.
 
 ## Acceptance records and current boundary
 
-Four manually maintained pages separate the ongoing Phase 4 closeout from the
-Phase 5A pure-domain checkpoint and Phase 5B local implementation evidence:
+Five manually maintained pages separate the ongoing Phase 4 closeout from the
+Phase 5A pure-domain checkpoint, Phase 5B trusted configuration, and Phase 5C
+execution-runtime evidence:
 
 - [Usage Observability and Transcript Privacy](features/USAGE_OBSERVABILITY.md)
   defines the current data, privacy, UI, capacity, and failover contracts.
@@ -117,6 +116,10 @@ Phase 5A pure-domain checkpoint and Phase 5B local implementation evidence:
   maps every AC-B01 through AC-B18 row to retained evidence, records the exact
   checkpoint and native-repair chain, and keeps external and production
   limitations explicit.
+- [Phase 5C Execution Runtime Acceptance](operations/PHASE5C_ACCEPTANCE.md)
+  maps AC-C01 through AC-C18 and CRASH-01 through CRASH-12 to retained tests,
+  records C-A through C-K, and separates portable verification and native Linux
+  evidence from unrun Windows, macOS, physical-remote, and live-provider rows.
 
 The current recovery branch includes exact evidence for accounting,
 reconciliation, provider and model discovery, native Windows accessibility and
@@ -147,9 +150,14 @@ node-distribution contracts, mutation review, and desktop controls. Exact
 storage, hidden-Git-child, atomic-recovery, keyboard, and UI Automation checks.
 No external Git/SFTP transfer or production activation was exercised. Phase 5
 evidence remains separate from exact 0.60.64 Phase 4 runtime evidence and the
-retained Galahad databases. This generated-wiki refresh remains an interim P4-C7
-synchronization; it does not claim that Phase 4 is complete, released,
-deployed, signed, published, or served.
+retained Galahad databases. Phase 5C now adds the internal durable execution
+owner through exact 0.60.101. The complete portable matrix passes on the
+documentation-only 0.60.102 follow-up tree, while exact 0.60.101 Linux
+process-group and worktree rows pass. Windows and macOS native execution, a
+physical remote node, live providers, and the controlled external-effect row
+remain unrun. This generated-wiki refresh remains an interim P4-C7
+synchronization; it does not claim that Phase 4 is complete or that PandaMUX is
+released, deployed, activated, signed, published, or served.
 
 ## Security boundary
 

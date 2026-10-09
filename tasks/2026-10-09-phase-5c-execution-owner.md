@@ -1,6 +1,14 @@
 # Phase 5C: Execution Owner, Worktrees, Budgets, and Recovery
 
-Status: **Planned. Not implemented.**
+Status: **Implemented and locally verified on exact version 0.60.101 commit
+`0b59964d46b44be67dc662d1d9483a9be00a5101`.** The complete portable matrix
+passes on the documentation-only 0.60.102 follow-up tree, and the exact 0.60.101
+native Linux process-group and worktree rows pass. Required Windows and macOS
+native rows, a physical remote Linux node, live providers, and the controlled
+external-effect row remain unrun, so complete local/native and production
+acceptance are not claimed. The checkpoint chain and evidence boundaries are
+recorded in
+[`docs/operations/PHASE5C_ACCEPTANCE.md`](../docs/operations/PHASE5C_ACCEPTANCE.md).
 
 Date: 2026-10-09
 

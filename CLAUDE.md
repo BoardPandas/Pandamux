@@ -109,6 +109,18 @@ External Git and SFTP distribution, CI, and production activation remain
 unexercised, so this is not production or release evidence and does not close
 P4-C5 or P4-C7.
 
+Phase 5C now implements the private server-owned execution runtime on exact
+0.60.101 commit `0b59964d46b44be67dc662d1d9483a9be00a5101`. Migration 14,
+replay-verified runs, the effect outbox, attempt-owned worktrees, shared
+admission, integer budgets, local and authenticated node execution, typed
+artifacts, verification evidence, watchdogs, cancellation, joined shutdown,
+and startup recovery pass the complete portable matrix on the
+documentation-only 0.60.102 follow-up tree. Exact 0.60.101 Linux tests pass
+real process-group descendant cleanup and concurrent Git worktree isolation.
+Windows and macOS native rows, a physical remote node, live providers, and the
+controlled external-effect row remain unrun. Phase 5C adds no public run RPC,
+CLI, or desktop orchestration surface and does not close P4-C5 or P4-C7.
+
 Exact 0.60.38 commit `d328ad8` supersedes the preceding source-candidate note:
 its complete local gate, native build, host smoke, remote lifecycle, and
 standard successful-login row passed, but genuine Narrator still did not speak
@@ -335,6 +347,35 @@ unknown cost as zero. Unknown dimensions retain their reservation; actual
 overage is recorded before the run pauses. Conservation diagnostics compare
 the durable ledgers without claiming to replace or certify source facts.
 
+`RunExecutionService` is the sole server adapter between pure run transitions
+and effect delivery. It persists effect intent and the dispatch marker before
+calling `ThreadManager`; `ThreadManager` remains the only provider-session
+owner and returns an exact prepared-turn owner rather than transferring the
+session. The run service retains explicit handles for completion, watchdog,
+lease-renewal, cancellation, and observer tasks. Typed not-started outcomes may
+release admission and budget only after the responsible cleanup owner verifies
+the worktree and provider boundary. Ambiguous or externally committed attempts
+retain the Phase 4 tool ledger and `AttemptBoundary` authority and cannot use
+ordinary fallback.
+
+Every orchestration attempt binds one app-owned worktree, full branch ref,
+baseline, private checkpoint index, capacity claim, budget reservation, and
+pinned bundle before provider dispatch. Authenticated remote execution uses
+separate repository prepare, attempt prepare, dispatch, status, cancel, event,
+and acknowledgement receipts on Hub and node stores. Blackboard artifacts are
+canonical, content-addressed, immutable, typed, bounded, and unable to grant
+authority; successful task settlement publishes required artifacts and
+server-derived evidence atomically.
+
+Server startup holds one private incarnation lock while recovery verifies
+replay, effects, leases, budgets, worktrees, checkpoints, cleanup state, and
+remote receipts. It reclaims only exact expired local ownership, reattaches
+only the exact live attempt, and deduplicates every ambiguity or unverifiable
+cleanup into retained human review. Shutdown closes intake, stops new claims,
+cancels active attempts concurrently through the durable cancellation path,
+joins every owner, checkpoints SQLite, and reports failure when any live owner
+or cleanup debt remains.
+
 The desktop composer never converts a provider kind into an instance ID. After bounded
 health checks, it builds its routes from enabled, authenticated stored instances and
 `provider.models` results. Model discovery uses each provider driver's current contract,
@@ -484,6 +525,10 @@ provider-capacity row and final post-P4-C5 documentation archive remain open.
 Phase 5B has complete evidence for its authorized local and required native
 Windows scope. It has no external Git/SFTP or production-distribution evidence;
 those absent claims do not reopen its authorized acceptance scope.
+Phase 5C is implemented and locally verified, with exact native Linux process
+and worktree evidence. Its Windows, macOS, physical-remote, live-provider, and
+controlled external-effect rows remain unrun, so complete local/native or
+production acceptance is not established.
 `.github/workflows/release.yml` still contains historical packaging references
 and must not be used as evidence that the current workspace is releasable.
 Phase 7 owns the final Windows packaging, signing, publication, and update

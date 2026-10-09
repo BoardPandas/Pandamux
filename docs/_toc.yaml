@@ -2,7 +2,7 @@ project:
   name: "PandaMUX"
   description: "Native chat-first desktop for supervising local and remote AI coding agents through a GPUI client, authenticated JSON-RPC Hub, provider drivers, durable SQLite state, and SSH-connected Linux nodes."
   repo_base_url: "https://github.com/BoardPandas/Pandamux/blob"
-  ref_commit_hash: "a0e6defb859ee0809737b464e90e730ff8373d05"
+  ref_commit_hash: "0b59964d46b44be67dc662d1d9483a9be00a5101"
   branch: "codex/recovery-r0"
   updated_at: "2026-10-09"
 
@@ -122,6 +122,11 @@ pages:
       - "crates/pandamux-orchestrator/src/state.rs"
       - "crates/pandamux-protocol/src/lib.rs"
       - "crates/pandamux-server/src/lib.rs"
+      - "crates/pandamux-server/src/attempt_watchdog.rs"
+      - "crates/pandamux-server/src/remote_execution.rs"
+      - "crates/pandamux-server/src/run_execution_service.rs"
+      - "crates/pandamux-server/src/run_recovery.rs"
+      - "crates/pandamux-server/src/store/orchestration_phase5c.rs"
       - "tools/pandamux-boundary-check/src/lib.rs"
     sections:
       - id: pandamux_03_architecture_crates
@@ -630,7 +635,7 @@ pages:
     title: "Agent Orchestration"
     folder: "features"
     filename: "AGENT_ORCHESTRATION.md"
-    description: "Pure Phase 5A orchestration plus the existing thread, provider-session, approval, subagent, cancellation, and recovery runtime."
+    description: "Pure Phase 5A orchestration plus the durable Phase 5C execution, worktree, admission, budget, artifact, remote-node, lifecycle, and recovery runtime."
     category: feature
     source_files:
       - "crates/pandamux-core/src/thread.rs"
@@ -661,6 +666,31 @@ pages:
         autogen: true
         diagrams_needed: true
         diagram_types: ["flowchart"]
+      - id: pandamux_12_agent-orchestration_phase5c-foundation
+        title: "Phase 5C Durable Execution Runtime"
+        autogen: true
+        source_files:
+          - "crates/pandamux-protocol/src/orchestration_execution.rs"
+          - "crates/pandamux-server/src/attempt_watchdog.rs"
+          - "crates/pandamux-server/src/attempt_worktree.rs"
+          - "crates/pandamux-server/src/blackboard_store.rs"
+          - "crates/pandamux-server/src/execution_admission.rs"
+          - "crates/pandamux-server/src/execution_budget.rs"
+          - "crates/pandamux-server/src/remote_execution.rs"
+          - "crates/pandamux-server/src/remote_execution_tests.rs"
+          - "crates/pandamux-server/src/run_execution_service.rs"
+          - "crates/pandamux-server/src/run_execution_service_tests.rs"
+          - "crates/pandamux-server/src/run_recovery.rs"
+          - "crates/pandamux-server/src/store/migrations.rs"
+          - "crates/pandamux-server/src/store/orchestration_phase5c.rs"
+          - "crates/pandamux-server/tests/attempt_worktrees.rs"
+          - "crates/pandamux-server/tests/blackboard_dag.rs"
+          - "crates/pandamux-server/tests/execution_admission.rs"
+          - "crates/pandamux-server/tests/run_recovery.rs"
+          - "crates/pandamux-server/tests/run_shutdown.rs"
+          - "tasks/2026-10-09-phase-5c-execution-owner.md"
+        diagrams_needed: true
+        diagram_types: ["flowchart"]
       - id: pandamux_12_agent-orchestration_threads
         title: "Thread and Turn Lifecycle"
         autogen: true
@@ -689,6 +719,13 @@ pages:
       - id: pandamux_12_agent-orchestration_recovery
         title: "Cancellation and Recovery"
         autogen: true
+        source_files:
+          - "crates/pandamux-server/src/attempt_watchdog.rs"
+          - "crates/pandamux-server/src/main.rs"
+          - "crates/pandamux-server/src/run_execution_service.rs"
+          - "crates/pandamux-server/src/run_recovery.rs"
+          - "crates/pandamux-server/tests/run_recovery.rs"
+          - "crates/pandamux-server/tests/run_shutdown.rs"
         diagrams_needed: false
         diagram_types: []
     related_pages:

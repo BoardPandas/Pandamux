@@ -49,6 +49,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Documented the exact Phase 5C execution-runtime acceptance boundary in
+  version 0.60.102.** The maintained architecture, orchestration, operations,
+  task, roadmap, and repository guides now map checkpoints C-A through C-K,
+  the C-J verification repair, AC-C01 through AC-C18, CRASH-01 through
+  CRASH-12, and the complete local verification matrix to retained evidence.
+  The record separates the passing portable suite and exact Linux
+  process-group and real-worktree rows from unrun Windows, macOS,
+  physical-remote, live-provider, controlled external-effect, and CI rows.
+  This documentation-only checkpoint changes no runtime behavior, keeps P4-C5
+  Partial and P4-C7 open, and does not push, deploy, activate, package, sign,
+  publish, or release.
+
 - **Added supervised Phase 5C execution lifecycle and crash recovery in version
   0.60.100.** Durable meaningful-progress records now drive independent stall
   and absolute-runtime watchdogs, while cooperative interrupt, bounded drain,

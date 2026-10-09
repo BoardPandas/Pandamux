@@ -10,8 +10,9 @@ This repository began as an Electron prototype, then had an Iced multiplexer imp
 The workspace version comes only from `[workspace.package] version` in [`Cargo.toml`](Cargo.toml). Do not infer the current version from documentation prose.
 
 The codebase retains an open provider-controlled Phase 4 acceptance row while
-implementing the explicitly authorized Phase 5A orchestrator and Phase 5B
-trusted configuration control plane after the R0 development gate:
+implementing the explicitly authorized Phase 5A orchestrator, Phase 5B trusted
+configuration control plane, and Phase 5C internal execution runtime after the
+R0 development gate:
 
 - R0.1 preserves and verifies the unfinished Phase 4 usage prototype without treating it as accepted production code.
 - R0.2 implements Hub-to-node routing through a versioned SSH exec proxy, reconnect semantics, event replay, and joined cleanup.
@@ -197,10 +198,22 @@ trusted configuration control plane after the R0 development gate:
   SFTP distribution, CI, production activation, push, deployment, packaging,
   signing, publication, and release were not exercised. This does not close
   P4-C5 or P4-C7.
+- Phase 5C adds migration 14, replay-verified run persistence, a durable effect
+  outbox, attempt-owned worktrees and checkpoints, shared admission and budget
+  enforcement, local and authenticated loopback-node provider execution,
+  bounded typed artifacts and verification evidence, watchdogs, cancellation,
+  joined shutdown, and startup recovery. Exact 0.60.101 commit `0b59964` is the
+  deciding runtime source and passes the native Linux process-group and real
+  Git worktree rows; the complete portable matrix passes on its
+  documentation-only 0.60.102 follow-up tree. Windows and macOS native rows, a
+  physical remote node, live providers, and the controlled external-effect row
+  remain unrun. Phase 5C has no public run RPC, CLI, or desktop orchestration
+  surface, and it does not close P4-C5 or P4-C7.
 
 See the [Phase 4 live acceptance record](docs/operations/PHASE4_ACCEPTANCE.md),
 the [Phase 5A pure-domain acceptance record](docs/operations/PHASE5A_ACCEPTANCE.md),
 the [Phase 5B trusted configuration acceptance record](docs/operations/PHASE5B_ACCEPTANCE.md),
+the [Phase 5C execution-runtime acceptance record](docs/operations/PHASE5C_ACCEPTANCE.md),
 and the completion criteria in [`tasks/plan-rewrite.md`](tasks/plan-rewrite.md).
 
 ## Product shape
@@ -215,6 +228,8 @@ and the completion criteria in [`tasks/plan-rewrite.md`](tasks/plan-rewrite.md).
 - Settings includes a Trusted Configuration surface for active source status,
   candidate and project-layer review, local mutation confirmation, retained
   history, and forward-only revert actions.
+- The server contains the private Phase 5C orchestration runtime, but public
+  run RPC, CLI commands, and desktop orchestration surfaces remain Phase 5D.
 - The server owns local PTYs and durable byte replay. The desktop owns only terminal grid rendering.
 - Linux nodes run `pandamux-server daemon`; the Hub reaches them through `pandamux-server proxy` over SSH. No remote TCP listener is opened.
 - The CLI supports connectivity, identification, thread listing and sending,
@@ -266,7 +281,7 @@ crates/
   pandamux-protocol/   Versioned JSON-RPC, subscription, and proxy wire contracts
   pandamux-providers/  Provider drivers, profiles, process supervision, and parsing
   pandamux-remote/     SSH pooling, exec, SFTP, bootstrap, and proxy tunnels
-  pandamux-server/     Single-writer store, router, provider execution, PTYs, Hub and node runtime
+  pandamux-server/     Store, orchestration execution and recovery, providers, PTYs, Hub and node runtime
   pandamux-client/     Client-side event and trusted-configuration projections
   pandamux-desktop/    GPUI chat-first desktop, settings controls, and terminal grid rendering
   pandamux-cli/        Authenticated CLI and restricted MCP stdio adapter
@@ -303,7 +318,9 @@ The narrow R0 artifact harness is [`scripts/r0-node-artifacts.sh`](scripts/r0-no
 - [`CLAUDE.md`](CLAUDE.md): authoritative development guide
 - [`docs/README.md`](docs/README.md): maintained documentation index
 - [`docs/features/TRUSTED_CONFIGURATION.md`](docs/features/TRUSTED_CONFIGURATION.md): Phase 5B architecture and operations
+- [`docs/features/AGENT_ORCHESTRATION.md`](docs/features/AGENT_ORCHESTRATION.md): Phase 5A and Phase 5C orchestration architecture
 - [`docs/operations/PHASE5B_ACCEPTANCE.md`](docs/operations/PHASE5B_ACCEPTANCE.md): exact Phase 5B evidence and limitations
+- [`docs/operations/PHASE5C_ACCEPTANCE.md`](docs/operations/PHASE5C_ACCEPTANCE.md): exact Phase 5C checkpoints, local evidence, and native/live gaps
 - [`tasks/plan-rewrite.md`](tasks/plan-rewrite.md): current implementation and acceptance contract
 - [`tasks/plan-repo.md`](tasks/plan-repo.md): historical rewrite record and retained UI specification
 

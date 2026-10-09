@@ -2990,6 +2990,18 @@ Acceptance:
 
 Detailed implementation contract: [`2026-10-09-phase-5c-execution-owner.md`](2026-10-09-phase-5c-execution-owner.md).
 
+Status (2026-10-09): **Implemented and locally verified on exact version
+0.60.101 commit `0b59964d46b44be67dc662d1d9483a9be00a5101`.** The complete portable
+matrix passes on the documentation-only 0.60.102 follow-up tree, and exact
+0.60.101 Linux process-group and worktree rows pass. Windows and macOS native
+execution, a physical remote Linux node, live commercial providers, and the
+controlled external-effect row remain unrun. The exact checkpoint chain,
+failpoint matrix, retained-debt statement, and separate
+implementation, verification, native/live, CI, deployment, activation, and
+release statuses are recorded in the
+[Phase 5C acceptance record](../docs/operations/PHASE5C_ACCEPTANCE.md). This
+does not pass P4-C5, close P4-C7, or expose the Phase 5D product surfaces.
+
 1. The server owns effects from the pure engine: worktree creation, provider turns, checkpoints, approvals, tools, files, commits, notifications, and event persistence. Persist intent before dispatch and outcome before the next dependent task.
 2. Allocate one isolated worktree per task attempt. Never run an agent in the user's checkout. Record repo baseline, worktree path, branch/ref, checkpoint refs, dirty-state policy, and cleanup eligibility.
 3. Implement per-agent, per-provider-instance, per-environment, and global concurrency caps with reserved interactive capacity. Queue ordering is explicit and starvation-tested.

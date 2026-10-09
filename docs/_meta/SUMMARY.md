@@ -201,6 +201,48 @@
   identical complete matrix passed on the v0.60.89 documentation tree before
   commit and is rerun at the exact documentation commit before completion.
 
+## Phase 5C Execution-Runtime Update - 2026-10-09
+
+- **Mode:** incremental update from Phase 5B documentation baseline
+  `778a164b` through exact deciding implementation repair `0b59964d`, version
+  0.60.101, plus the documentation-only 0.60.102 C-K working tree on
+  `codex/recovery-r0`
+- **Generated pages updated:** Architecture, Configuration, Agent
+  Orchestration, and Release and Packaging; the existing stable Phase 5C
+  AUTOGEN identifier is now represented in the TOC
+- **Maintained records updated:** root README and CLAUDE guide, task and
+  roadmap status, changelog, documentation index, TOC, generation metadata,
+  this summary, and the new Phase 5C acceptance record
+- **Implementation coverage:** migration 14 and verified replay, durable
+  effects, attempt worktrees and checkpoints, shared admission, budgets, local
+  and authenticated-node provider effects, typed artifacts and evidence,
+  watchdogs, cancellation, joined shutdown, and startup recovery
+- **Acceptance mapping:** AC-C01 through AC-C18 and CRASH-01 through CRASH-12
+  each name retained evidence; the checkpoint table records C-A through C-J
+  plus the C-J verification repair with exact hashes and versions while C-K is
+  the self-referential documentation commit
+- **Evidence boundary:** the complete portable matrix passes on the 0.60.102
+  documentation-only tree, and exact 0.60.101 Linux process-group and
+  real-worktree rows pass. Windows and macOS native rows, a physical remote
+  node, live providers, the controlled external-effect row, and target-specific
+  CI remain unrun. P4-C5 remains Partial and P4-C7 remains open.
+- **Documentation validation:** 17 TOC pages, 107 ordered AUTOGEN sections,
+  1,736 active local links, 1,582 valid line-range citations, all 187 current
+  Rust source files, and 22 Mermaid blocks pass with zero structural errors.
+  Two stale Configuration citations were narrowed to the current 77-line
+  source boundary. `mmdc` is unavailable, so renderer-level Mermaid validation
+  was not performed.
+- **Code-gate status:** exact 0.60.100 initially passed the complete Section 11
+  matrix; a later replay exposed a load-dependent shutdown race. Exact 0.60.101
+  repair `0b59964d` passed its deterministic regression, 30 of 30 shutdown
+  stress iterations, the complete server and boundary gates, and exact Linux
+  descendant-cleanup and 11-case real-worktree rows. The complete matrix passes
+  on the v0.60.102 documentation tree before commit and is rerun at the exact
+  documentation commit before completion.
+- **Remote status:** no push, CI, deployment, activation, package, signature,
+  publication, release, served-version check, GitHub write, pull request,
+  external provider call, or external-repository mutation occurred.
+
 ## Historical context
 
 The previous generated wiki described the removed Iced multiplexer architecture.
