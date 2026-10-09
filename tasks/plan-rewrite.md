@@ -2988,6 +2988,8 @@ Acceptance:
 
 #### Checkpoint 5C: execution owner, worktrees, budgets, and recovery
 
+Detailed implementation contract: [`2026-10-09-phase-5c-execution-owner.md`](2026-10-09-phase-5c-execution-owner.md).
+
 1. The server owns effects from the pure engine: worktree creation, provider turns, checkpoints, approvals, tools, files, commits, notifications, and event persistence. Persist intent before dispatch and outcome before the next dependent task.
 2. Allocate one isolated worktree per task attempt. Never run an agent in the user's checkout. Record repo baseline, worktree path, branch/ref, checkpoint refs, dirty-state policy, and cleanup eligibility.
 3. Implement per-agent, per-provider-instance, per-environment, and global concurrency caps with reserved interactive capacity. Queue ordering is explicit and starvation-tested.

@@ -40,6 +40,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Published the detailed Phase 5C execution-runtime contract in version
+  0.60.90.** The plan defines one server-owned effect interpreter, additive
+  migration 14, crash-safe event and outbox ordering, per-attempt app-data
+  worktrees, durable multi-scope scheduling, run and daily budget ledgers,
+  bounded typed artifacts, provider watchdogs, and conservative restart
+  recovery. This planning-only checkpoint adds no runtime dispatch, public run
+  surface, push, deployment, packaging, signing, publication, or release claim.
+
 - **Completed Phase 5B trusted-configuration acceptance in version 0.60.89.**
   The maintained guides and acceptance record now capture the full checkpoint
   chain, the exact 0.60.88 local matrix, native Windows storage hardening, and
