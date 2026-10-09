@@ -9,8 +9,9 @@ This repository began as an Electron prototype, then had an Iced multiplexer imp
 
 The workspace version comes only from `[workspace.package] version` in [`Cargo.toml`](Cargo.toml). Do not infer the current version from documentation prose.
 
-The codebase is implementing Phase 4 provider observability work after completing the
-R0 development gate:
+The codebase retains an open provider-controlled Phase 4 acceptance row while
+implementing the explicitly authorized Phase 5 dependency and boundary gate
+after the R0 development gate:
 
 - R0.1 preserves and verifies the unfinished Phase 4 usage prototype without treating it as accepted production code.
 - R0.2 implements Hub-to-node routing through a versioned SSH exec proxy, reconnect semantics, event replay, and joined cleanup.
@@ -179,6 +180,10 @@ R0 development gate:
   evidence. Real pre-output provider capacity exhaustion and the final P4-C7
   archive after that row stabilizes keep P4-C5 Partial and the Phase 4 exit
   matrix open.
+- Phase 5 dependency work proceeds as an explicit sequencing exception without
+  marking P4-C5 or P4-C7 complete. The initial slice adds only the pure
+  orchestrator ownership boundary, fail-closed legacy compatibility inputs,
+  resolved dependency enforcement, and pinned toolchain/MSRV policy.
 
 See the [Phase 4 live acceptance record](docs/operations/PHASE4_ACCEPTANCE.md)
 and the completion criteria in [`tasks/plan-rewrite.md`](tasks/plan-rewrite.md).
@@ -198,7 +203,10 @@ and the completion criteria in [`tasks/plan-rewrite.md`](tasks/plan-rewrite.md).
 
 ## Build and run
 
-Rust stable is required. Windows development uses the MSVC build tools. The workspace has no Node runtime dependency.
+Rust 1.98.1 is pinned for development and evidence. The workspace declares
+Rust 1.89 as its tested MSRV for the Windows product and Linux headless graphs.
+Windows development uses the MSVC build tools. The workspace has no Node
+runtime dependency.
 
 ```bash
 # Run the authenticated local Hub.
@@ -223,7 +231,7 @@ Common validation commands:
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-pwsh -File scripts/check-rust-boundaries.ps1
+cargo run --locked -p pandamux-boundary-check --quiet
 node scripts/check-claude-wiring.mjs
 ```
 
@@ -234,6 +242,7 @@ Cargo builds and tests should run serially in one checkout because they share th
 ```text
 crates/
   pandamux-core/       Framework-free domain types and policy data
+  pandamux-orchestrator/ Pure run-domain and policy engine boundary
   pandamux-protocol/   Versioned JSON-RPC, subscription, and proxy wire contracts
   pandamux-providers/  Provider drivers, profiles, process supervision, and parsing
   pandamux-remote/     SSH pooling, exec, SFTP, bootstrap, and proxy tunnels
@@ -242,12 +251,15 @@ crates/
   pandamux-desktop/    GPUI chat-first desktop and terminal grid rendering
   pandamux-cli/        Authenticated CLI and restricted MCP stdio adapter
   pandamux-term/       Feature-split terminal grid and local PTY primitives
+tools/
+  pandamux-boundary-check/ Target-resolved dependency and feature graph validator
 ```
 
 Important boundaries:
 
 - `pandamux-server` is the production composition owner of `pandamux-remote` and depends on `pandamux-term` with only the `pty` feature.
 - `pandamux-desktop` uses `pandamux-term` with only the `grid` feature and does not own provider processes or durable state.
+- `pandamux-orchestrator` has serializable value inputs and effects and cannot depend on runtime, storage, UI, provider, keyring, or embedding implementations.
 - `pandamux-protocol` carries wire types but does not depend on the server, desktop, terminal, or SSH implementations.
 - `pandamux-core` is framework-free.
 

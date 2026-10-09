@@ -1,0 +1,4 @@
+[package]
+name = "gpui-pre"
+version = "0.3.6"
+edition = "2024"

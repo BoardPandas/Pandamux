@@ -2,9 +2,9 @@ project:
   name: "PandaMUX"
   description: "Native chat-first desktop for supervising local and remote AI coding agents through a GPUI client, authenticated JSON-RPC Hub, provider drivers, durable SQLite state, and SSH-connected Linux nodes."
   repo_base_url: "https://github.com/BoardPandas/Pandamux/blob"
-  ref_commit_hash: "a41c5bd40861fb37de7a53252d96dcb055828362"
+  ref_commit_hash: "b0e5f744c1a76f1e6d1a90f3d8d881a869c86b7a"
   branch: "codex/recovery-r0"
-  updated_at: "2026-10-08"
+  updated_at: "2026-10-09"
 
 pages:
   - id: pandamux_01_overview
@@ -64,8 +64,10 @@ pages:
     source_files:
       - "CLAUDE.md"
       - "Cargo.toml"
+      - "rust-toolchain.toml"
       - ".github/workflows/rust.yml"
-      - "scripts/check-rust-boundaries.ps1"
+      - "tools/pandamux-boundary-check/src/lib.rs"
+      - "tools/pandamux-boundary-check/tests/fixture_workspaces.rs"
       - "scripts/check-claude-wiring.mjs"
       - ".claude/rules/commit-changelog.md"
     sections:
@@ -107,16 +109,18 @@ pages:
     title: "Architecture"
     folder: "core"
     filename: "ARCHITECTURE.md"
-    description: "Nine-crate boundaries, client-server ownership, local and remote transport, persistence, and runtime data flow."
+    description: "Product and tooling crate boundaries, client-server ownership, pure orchestration, persistence, and runtime data flow."
     category: architecture
     source_files:
       - "Cargo.toml"
       - "CLAUDE.md"
       - "crates/pandamux-client/src/lib.rs"
       - "crates/pandamux-desktop/src/lib.rs"
+      - "crates/pandamux-orchestrator/src/lib.rs"
+      - "crates/pandamux-orchestrator/src/compatibility.rs"
       - "crates/pandamux-protocol/src/lib.rs"
       - "crates/pandamux-server/src/lib.rs"
-      - "scripts/check-rust-boundaries.ps1"
+      - "tools/pandamux-boundary-check/src/lib.rs"
     sections:
       - id: pandamux_03_architecture_crates
         title: "Workspace and Crate Boundaries"
@@ -164,6 +168,9 @@ pages:
       - "crates/pandamux-core/src/thread.rs"
       - "crates/pandamux-core/src/event.rs"
       - "crates/pandamux-core/src/agent_def.rs"
+      - "crates/pandamux-orchestrator/src/lib.rs"
+      - "crates/pandamux-orchestrator/src/compatibility.rs"
+      - "crates/pandamux-orchestrator/tests/compatibility_fixtures.rs"
       - "crates/pandamux-core/src/ast_diff.rs"
       - "crates/pandamux-core/src/attachment.rs"
       - "crates/pandamux-core/src/home.rs"
@@ -746,7 +753,9 @@ pages:
     source_files:
       - "CLAUDE.md"
       - "Cargo.toml"
+      - "rust-toolchain.toml"
       - "CHANGELOG.md"
+      - ".github/workflows/rust.yml"
       - ".github/workflows/release.yml"
       - ".github/workflows/winget.yml"
       - "scripts/build-remote-musl.sh"
@@ -836,3 +845,57 @@ pages:
     related_pages:
       - pandamux_01_overview
       - pandamux_03_architecture
+
+  - id: pandamux_16_dependency-policy
+    title: "Toolchain and Dependency Policy"
+    folder: "operations"
+    filename: "DEPENDENCIES.md"
+    description: "Pinned Rust toolchains, MSRV scope, exact dependency pins, resolved-graph enforcement, and supply-chain gates."
+    category: runbook
+    source_files:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "deny.toml"
+      - ".github/workflows/rust.yml"
+      - ".github/workflows/release.yml"
+      - "crates/pandamux-orchestrator/Cargo.toml"
+      - "tools/pandamux-boundary-check/src/lib.rs"
+      - "tools/pandamux-boundary-check/src/main.rs"
+      - "tools/pandamux-boundary-check/tests/fixture_workspaces.rs"
+      - "tasks/plan-rewrite.md"
+    sections:
+      - id: pandamux_16_dependency-policy_toolchains
+        title: "Toolchains and MSRV"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_16_dependency-policy_pins
+        title: "Direct Dependency Pinning"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_16_dependency-policy_boundaries
+        title: "Resolved Graph Boundaries"
+        autogen: true
+        diagrams_needed: true
+        diagram_types: ["flowchart"]
+      - id: pandamux_16_dependency-policy_fixtures
+        title: "Negative Fixture Workspaces"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_16_dependency-policy_supply-chain
+        title: "Supply-Chain Gates"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_16_dependency-policy_changes
+        title: "Changing Dependencies Safely"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+    related_pages:
+      - pandamux_02_getting-started
+      - pandamux_03_architecture
+      - pandamux_14_release

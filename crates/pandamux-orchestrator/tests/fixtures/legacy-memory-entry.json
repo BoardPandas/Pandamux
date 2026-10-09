@@ -1,0 +1,10 @@
+{
+  "id": "memory-legacy-1",
+  "agentId": "agent-legacy-1",
+  "scope": { "type": "agent_wide" },
+  "text": "Canonical text was mixed with a derived vector.",
+  "embedding": [0.25, 0.5],
+  "createdAtMs": 1,
+  "updatedAtMs": 2,
+  "tombstone": false
+}

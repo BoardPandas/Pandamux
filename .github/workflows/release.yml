@@ -36,8 +36,8 @@ jobs:
             exit 1
           fi
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install pinned development Rust
+        uses: dtolnay/rust-toolchain@1.98.1
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2

@@ -4,13 +4,15 @@
 
 The following files were used as evidence for this page:
 
-- [Cargo.toml:1-40](../../Cargo.toml#L1-L40)
-- [CLAUDE.md:172-215](../../CLAUDE.md#L172-L215)
+- [Cargo.toml:1-48](../../Cargo.toml#L1-L48)
+- [CLAUDE.md:188-237](../../CLAUDE.md#L188-L237)
 - [crates/pandamux-client/src/lib.rs:1-702](../../crates/pandamux-client/src/lib.rs#L1-L702)
 - [crates/pandamux-desktop/src/lib.rs:1-558](../../crates/pandamux-desktop/src/lib.rs#L1-L558)
+- [crates/pandamux-orchestrator/src/lib.rs:1-13](../../crates/pandamux-orchestrator/src/lib.rs#L1-L13)
+- [crates/pandamux-orchestrator/src/compatibility.rs:1-115](../../crates/pandamux-orchestrator/src/compatibility.rs#L1-L115)
 - [crates/pandamux-protocol/src/lib.rs:1-245](../../crates/pandamux-protocol/src/lib.rs#L1-L245)
 - [crates/pandamux-server/src/lib.rs:1-101](../../crates/pandamux-server/src/lib.rs#L1-L101)
-- [scripts/check-rust-boundaries.ps1:1-60](../../scripts/check-rust-boundaries.ps1#L1-L60)
+- [tools/pandamux-boundary-check/src/lib.rs:1-761](../../tools/pandamux-boundary-check/src/lib.rs#L1-L761)
 
 </details>
 
@@ -23,23 +25,26 @@ The following files were used as evidence for this page:
 <!-- BEGIN:AUTOGEN pandamux_03_architecture_crates -->
 ## Workspace and Crate Boundaries
 
-PandaMUX is a nine-crate Rust workspace. Domain and wire contracts sit below server, client, CLI, and desktop composition; terminal and SSH implementation details remain in dedicated crates rather than leaking into those contracts ([Cargo.toml:1-12](../../Cargo.toml#L1-L12), [check-rust-boundaries.ps1:7-43](../../scripts/check-rust-boundaries.ps1#L7-L43)).
+PandaMUX has ten product crates plus one workspace validation tool. Domain, orchestration, and wire contracts sit below server, client, CLI, and desktop composition; terminal and SSH implementation details remain in dedicated crates rather than leaking into those contracts ([Cargo.toml:1-14](../../Cargo.toml#L1-L14), [lib.rs:368-416](../../tools/pandamux-boundary-check/src/lib.rs#L368-L416)).
 
 | Crate | Primary responsibility | Boundary evidence |
 |---|---|---|
-| `pandamux-core` | Framework-free IDs, threads, events, policy, settings, routing, and usage types | Cannot depend on Iced, the terminal grid, or SQLite ([check-rust-boundaries.ps1:8-11](../../scripts/check-rust-boundaries.ps1#L8-L11)) |
-| `pandamux-protocol` | Versioned JSON-RPC, subscriptions, terminal, settings, usage, and proxy messages | Cannot depend on implementation crates or SQLite ([check-rust-boundaries.ps1:21-23](../../scripts/check-rust-boundaries.ps1#L21-L23)) |
-| `pandamux-providers` | Provider drivers and process supervision | Cannot absorb UI, terminal, SSH, or storage frameworks ([check-rust-boundaries.ps1:33-35](../../scripts/check-rust-boundaries.ps1#L33-L35)) |
-| `pandamux-remote` | SSH pool, bootstrap, command execution, SFTP, proxy tunnels, and worktree bundles | Cannot depend on UI, terminal-grid, or SQLite implementations ([check-rust-boundaries.ps1:17-19](../../scripts/check-rust-boundaries.ps1#L17-L19)) |
-| `pandamux-term` | Feature-split grid and PTY primitives | Cannot depend on Iced or SQLite ([check-rust-boundaries.ps1:13-15](../../scripts/check-rust-boundaries.ps1#L13-L15)) |
+| `pandamux-core` | Framework-free IDs, threads, events, policy, settings, routing, and usage types | Foundation for pure domain consumers ([CLAUDE.md:208-208](../../CLAUDE.md#L208-L208)) |
+| `pandamux-orchestrator` | Pure Phase 5 policy and run-domain boundary | Its current dependency surface is only core plus serialization/schema parsers; forbidden transitive implementations are rejected ([lib.rs:3-7](../../crates/pandamux-orchestrator/src/lib.rs#L3-L7), [lib.rs:614-647](../../tools/pandamux-boundary-check/src/lib.rs#L614-L647)) |
+| `pandamux-protocol` | Versioned JSON-RPC, subscriptions, terminal, settings, usage, and proxy messages | Carries wire values without importing implementation crates ([CLAUDE.md:211-211](../../CLAUDE.md#L211-L211)) |
+| `pandamux-providers` | Provider drivers and process supervision | Runtime implementation remains outside the pure orchestrator ([CLAUDE.md:195-195](../../CLAUDE.md#L195-L195)) |
+| `pandamux-remote` | SSH pool, bootstrap, command execution, SFTP, proxy tunnels, and worktree bundles | Server remains the production composition owner ([CLAUDE.md:212-212](../../CLAUDE.md#L212-L212)) |
+| `pandamux-term` | Feature-split grid and PTY primitives | Server resolves exactly `pty`; desktop resolves exactly `grid` ([lib.rs:524-612](../../tools/pandamux-boundary-check/src/lib.rs#L524-L612)) |
 | `pandamux-server` | Store, router, providers, terminals, remote environments, and Hub/node runtime | Exposes the production composition surface ([lib.rs:1-58](../../crates/pandamux-server/src/lib.rs#L1-L58)) |
 | `pandamux-client` | Event projections, client state, usage presentation, and transport seam | Exports projections and a mockable transport without UI types ([lib.rs:1-19](../../crates/pandamux-client/src/lib.rs#L1-L19)) |
 | `pandamux-desktop` | GPUI shell and the server bridge | Re-exports view state and bridge types from focused modules ([lib.rs:3-60](../../crates/pandamux-desktop/src/lib.rs#L3-L60)) |
-| `pandamux-cli` | Authenticated command-line and MCP adapter | Kept free of UI, terminal, SSH, and SQLite implementation dependencies ([check-rust-boundaries.ps1:41-43](../../scripts/check-rust-boundaries.ps1#L41-L43)) |
+| `pandamux-cli` | Authenticated command-line and MCP adapter | Client entry point without UI ownership ([CLAUDE.md:200-200](../../CLAUDE.md#L200-L200)) |
+| `pandamux-boundary-check` | Target-resolved Cargo graph and feature validation | Validates the locked graph for five declared targets and reports stable violation codes ([lib.rs:9-15](../../tools/pandamux-boundary-check/src/lib.rs#L9-L15), [lib.rs:368-416](../../tools/pandamux-boundary-check/src/lib.rs#L368-L416)) |
 
 ```mermaid
 graph TD
     Core["pandamux-core"] --> Protocol["pandamux-protocol"]
+    Core --> Orchestrator["pandamux-orchestrator"]
     Core --> Providers["pandamux-providers"]
     Core --> Remote["pandamux-remote"]
     Core --> Term["pandamux-term"]
@@ -51,9 +56,12 @@ graph TD
     Client --> Desktop["pandamux-desktop"]
     Server --> Desktop
     Protocol --> Cli["pandamux-cli"]
+    Checker["pandamux-boundary-check"] -. validates resolved graphs .-> Orchestrator
+    Checker -. validates resolved graphs .-> Server
+    Checker -. validates resolved graphs .-> Desktop
 ```
 
-Sources: [Cargo.toml:1-40](../../Cargo.toml#L1-L40), [lib.rs:1-58](../../crates/pandamux-server/src/lib.rs#L1-L58), [check-rust-boundaries.ps1:7-43](../../scripts/check-rust-boundaries.ps1#L7-L43)
+Sources: [Cargo.toml:1-48](../../Cargo.toml#L1-L48), [CLAUDE.md:188-219](../../CLAUDE.md#L188-L219), [lib.rs:1-13](../../crates/pandamux-orchestrator/src/lib.rs#L1-L13), [lib.rs:368-449](../../tools/pandamux-boundary-check/src/lib.rs#L368-L449), [lib.rs:524-647](../../tools/pandamux-boundary-check/src/lib.rs#L524-L647)
 <!-- END:AUTOGEN pandamux_03_architecture_crates -->
 
 ---
@@ -61,7 +69,7 @@ Sources: [Cargo.toml:1-40](../../Cargo.toml#L1-L40), [lib.rs:1-58](../../crates/
 <!-- BEGIN:AUTOGEN pandamux_03_architecture_ownership -->
 ## State and Process Ownership
 
-The server owns durable and executable state; clients own projections and presentation state. This prevents the desktop from becoming a second authority for threads, provider processes, terminals, event ordering, or remote routing ([CLAUDE.md:189-199](../../CLAUDE.md#L189-L199)).
+The server owns durable and executable state; clients own projections and presentation state. This prevents the desktop from becoming a second authority for threads, provider processes, terminals, event ordering, or remote routing ([CLAUDE.md:197-215](../../CLAUDE.md#L197-L215), [CLAUDE.md:221-223](../../CLAUDE.md#L221-L223)).
 
 | Owner | State or process | Client-facing consequence |
 |---|---|---|
@@ -72,7 +80,7 @@ The server owns durable and executable state; clients own projections and presen
 
 The server's public composition surface makes these responsibilities explicit: `Store`, `Router`, `ThreadManager`, `TerminalServerManager`, `EnvironmentRouter`, and `ProxyEnvironmentTransport` are server exports, while the client exports projection and formatting types ([lib.rs:31-58](../../crates/pandamux-server/src/lib.rs#L31-L58), [lib.rs:7-19](../../crates/pandamux-client/src/lib.rs#L7-L19)).
 
-Sources: [CLAUDE.md:187-199](../../CLAUDE.md#L187-L199), [lib.rs:25-58](../../crates/pandamux-server/src/lib.rs#L25-L58), [lib.rs:7-19](../../crates/pandamux-client/src/lib.rs#L7-L19)
+Sources: [CLAUDE.md:188-223](../../CLAUDE.md#L188-L223), [lib.rs:25-58](../../crates/pandamux-server/src/lib.rs#L25-L58), [lib.rs:7-19](../../crates/pandamux-client/src/lib.rs#L7-L19)
 <!-- END:AUTOGEN pandamux_03_architecture_ownership -->
 
 ---
@@ -110,7 +118,7 @@ Sources: [lib.rs:24-96](../../crates/pandamux-protocol/src/lib.rs#L24-L96), [lib
 <!-- BEGIN:AUTOGEN pandamux_03_architecture_remote-flow -->
 ## Remote Node Flow
 
-The same server binary composes a desktop-machine Hub and remote Linux nodes. The Hub owns environment routing and connects to a node through the SSH-backed proxy transport; protocol contracts remain identical on either side ([CLAUDE.md:197-203](../../CLAUDE.md#L197-L203), [lib.rs:31-47](../../crates/pandamux-server/src/lib.rs#L31-L47)).
+The same server binary composes a desktop-machine Hub and remote Linux nodes. The Hub owns environment routing and connects to a node through the SSH-backed proxy transport; protocol contracts remain identical on either side ([CLAUDE.md:196-212](../../CLAUDE.md#L196-L212), [lib.rs:31-47](../../crates/pandamux-server/src/lib.rs#L31-L47)).
 
 ```mermaid
 sequenceDiagram
@@ -135,7 +143,7 @@ sequenceDiagram
 
 `pandamux-server` exposes both sides of this boundary: `serve_proxy_connection` runs on the node, while `ProxyEnvironmentTransport` and `EnvironmentRouter` run on the Hub ([lib.rs:31-47](../../crates/pandamux-server/src/lib.rs#L31-L47)). The protocol crate carries the proxy envelope and environment-scoped RPC types without importing the SSH implementation ([lib.rs:4-22](../../crates/pandamux-protocol/src/lib.rs#L4-L22)).
 
-Sources: [CLAUDE.md:197-203](../../CLAUDE.md#L197-L203), [lib.rs:31-47](../../crates/pandamux-server/src/lib.rs#L31-L47), [lib.rs:1-22](../../crates/pandamux-protocol/src/lib.rs#L1-L22)
+Sources: [CLAUDE.md:194-212](../../CLAUDE.md#L194-L212), [lib.rs:31-47](../../crates/pandamux-server/src/lib.rs#L31-L47), [lib.rs:1-22](../../crates/pandamux-protocol/src/lib.rs#L1-L22)
 <!-- END:AUTOGEN pandamux_03_architecture_remote-flow -->
 
 ---
@@ -164,21 +172,25 @@ Sources: [CLAUDE.md:194-201](../../CLAUDE.md#L194-L201), [lib.rs:67-95](../../cr
 
 The repository encodes its most important boundaries as build-time checks and narrow public APIs rather than relying only on convention.
 
-- `pandamux-core` stays independent of UI, terminal-grid, and database implementations ([check-rust-boundaries.ps1:8-11](../../scripts/check-rust-boundaries.ps1#L8-L11)).
-- `pandamux-protocol` contains wire contracts and cannot import server, terminal, remote, UI, or SQLite implementations ([check-rust-boundaries.ps1:21-23](../../scripts/check-rust-boundaries.ps1#L21-L23)).
-- `pandamux-server` is the production composition owner for SSH remoting, PTYs, provider execution, persistence, and routing ([CLAUDE.md:189-199](../../CLAUDE.md#L189-L199)).
-- Desktop code holds rendering-oriented state and sends intents; it is not a durable-state writer ([CLAUDE.md:192-195](../../CLAUDE.md#L192-L195)).
-- Request identity and capability scope are assigned by the accepting server transport, not accepted from request JSON ([CLAUDE.md:201-209](../../CLAUDE.md#L201-L209)).
-- Full-access providers have host-user authority; the local boundary is per OS user and is not hostile same-user process isolation ([CLAUDE.md:211-215](../../CLAUDE.md#L211-L215)).
-- The boundary check examines each crate manifest and fails on a forbidden direct dependency ([check-rust-boundaries.ps1:46-60](../../scripts/check-rust-boundaries.ps1#L46-L60)).
+- `pandamux-core` stays independent of UI, terminal-grid, and database implementations ([CLAUDE.md:206-211](../../CLAUDE.md#L206-L211)).
+- `pandamux-orchestrator` stays free of runtimes, filesystem, network, storage, UI, provider, keyring, and embedding implementations ([lib.rs:3-7](../../crates/pandamux-orchestrator/src/lib.rs#L3-L7), [lib.rs:614-647](../../tools/pandamux-boundary-check/src/lib.rs#L614-L647)).
+- `pandamux-protocol` contains wire contracts and cannot import implementation crates ([CLAUDE.md:211-211](../../CLAUDE.md#L211-L211)).
+- `pandamux-server` is the production composition owner for SSH remoting, PTYs, provider execution, persistence, and routing ([CLAUDE.md:197-215](../../CLAUDE.md#L197-L215), [CLAUDE.md:221-223](../../CLAUDE.md#L221-L223)).
+- Desktop code holds rendering-oriented state and sends intents; it is not a durable-state writer ([CLAUDE.md:199-215](../../CLAUDE.md#L199-L215)).
+- Request identity and capability scope are assigned by the accepting server transport, not accepted from request JSON ([CLAUDE.md:225-233](../../CLAUDE.md#L225-L233)).
+- Full-access providers have host-user authority; the local boundary is per OS user and is not hostile same-user process isolation ([CLAUDE.md:235-237](../../CLAUDE.md#L235-L237)).
+- Direct registry dependencies must be exact-pinned; path dependencies remain exempt ([lib.rs:418-449](../../tools/pandamux-boundary-check/src/lib.rs#L418-L449)).
+- The boundary check reconstructs each workspace root's resolved feature graph per declared target, so indirect dependencies and default-feature leakage are visible ([lib.rs:140-339](../../tools/pandamux-boundary-check/src/lib.rs#L140-L339), [lib.rs:341-416](../../tools/pandamux-boundary-check/src/lib.rs#L341-L416)).
+- GPUI snapshot alignment, desktop-only GPUI ownership, PTY/grid separation, future embedding isolation, and native-stack uniqueness are executable invariants ([lib.rs:451-698](../../tools/pandamux-boundary-check/src/lib.rs#L451-L698)).
 
-```powershell
-pwsh -File scripts/check-rust-boundaries.ps1
+```bash
+cargo test --locked -p pandamux-boundary-check
+cargo run --locked -p pandamux-boundary-check --quiet
 ```
 
-The command above is the repository's explicit architecture guard and is part of the documented validation set ([CLAUDE.md:142-152](../../CLAUDE.md#L142-L152)).
+The fixture test makes the guard falsifiable before the real locked graph is accepted ([CLAUDE.md:216-219](../../CLAUDE.md#L216-L219)).
 
-Sources: [CLAUDE.md:142-215](../../CLAUDE.md#L142-L215), [check-rust-boundaries.ps1:46-60](../../scripts/check-rust-boundaries.ps1#L46-L60)
+Sources: [CLAUDE.md:206-219](../../CLAUDE.md#L206-L219), [lib.rs:140-449](../../tools/pandamux-boundary-check/src/lib.rs#L140-L449), [lib.rs:451-698](../../tools/pandamux-boundary-check/src/lib.rs#L451-L698)
 <!-- END:AUTOGEN pandamux_03_architecture_invariants -->
 
 ---

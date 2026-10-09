@@ -5,8 +5,10 @@ on:
     paths:
       - "Cargo.toml"
       - "Cargo.lock"
+      - "rust-toolchain.toml"
       - "deny.toml"
       - "crates/**"
+      - "tools/**"
       - "scripts/**"
       - ".github/workflows/rust.yml"
   push:
@@ -14,8 +16,10 @@ on:
     paths:
       - "Cargo.toml"
       - "Cargo.lock"
+      - "rust-toolchain.toml"
       - "deny.toml"
       - "crates/**"
+      - "tools/**"
       - "scripts/**"
       - ".github/workflows/rust.yml"
   workflow_dispatch:
@@ -49,8 +53,8 @@ jobs:
       - name: Claude wiring guard (rule scoping + hook matchers)
         run: node scripts/check-claude-wiring.mjs
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install pinned development Rust
+        uses: dtolnay/rust-toolchain@1.98.1
         with:
           components: rustfmt, clippy
 
@@ -68,15 +72,17 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Check crate boundaries
-        shell: pwsh
-        run: .\scripts\check-rust-boundaries.ps1
+      - name: Test resolved-graph boundary fixtures
+        run: cargo test --locked -p pandamux-boundary-check
+
+      - name: Check resolved crate boundaries
+        run: cargo run --locked -p pandamux-boundary-check --quiet
 
       - name: Check advisories and licenses
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
-          command-arguments: advisories licenses
+          command-arguments: advisories licenses bans sources
 
       - name: Test workspace
         run: cargo test --workspace
@@ -95,8 +101,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install pinned development Rust
+        uses: dtolnay/rust-toolchain@1.98.1
 
       - name: Install sccache
         uses: mozilla-actions/sccache-action@v0.0.9
@@ -119,8 +125,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install pinned development Rust
+        uses: dtolnay/rust-toolchain@1.98.1
         with:
           targets: x86_64-unknown-linux-musl
 
@@ -138,3 +144,28 @@ jobs:
       - name: Build musl server and CLI
         run: cargo build --release --target x86_64-unknown-linux-musl -p pandamux-server -p pandamux-cli
 
+  msrv-windows:
+    name: Rust 1.89 MSRV (Windows product graph)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install declared MSRV
+        uses: dtolnay/rust-toolchain@1.89.0
+
+      - name: Check all Windows targets at MSRV
+        run: cargo +1.89.0 check --locked --workspace --all-targets
+
+  msrv-headless-linux:
+    name: Rust 1.89 MSRV (Linux headless graph)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install declared MSRV
+        uses: dtolnay/rust-toolchain@1.89.0
+
+      - name: Check server and CLI graph at MSRV
+        run: cargo +1.89.0 check --locked --workspace --all-targets --exclude pandamux-desktop

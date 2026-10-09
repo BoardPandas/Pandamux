@@ -27,6 +27,7 @@ roadmap.
 | Understand the product and current architecture | [Overview](OVERVIEW.md) |
 | Build, run, and verify the workspace | [Getting Started](GETTING_STARTED.md) |
 | Understand process and state ownership | [Architecture](core/ARCHITECTURE.md) |
+| Change Rust dependencies or toolchains safely | [Toolchain and Dependency Policy](operations/DEPENDENCIES.md) |
 | Find runtime configuration and profile rules | [Configuration](core/CONFIGURATION.md) |
 | Use the command-line client | [CLI Reference](api/CLI_REFERENCE.md) |
 | Understand release gates without implying publication | [Release and Packaging](operations/RELEASE.md) |
@@ -57,6 +58,7 @@ sections with stable AUTOGEN identifiers.
 
 ### Operations and reference
 
+- [Toolchain and Dependency Policy](operations/DEPENDENCIES.md)
 - [Release and Packaging](operations/RELEASE.md)
 - [Glossary](GLOSSARY.md)
 - [Generation Metadata](_meta/GENERATION.md)
@@ -67,6 +69,7 @@ sections with stable AUTOGEN identifiers.
 | Area | Source of truth | Responsibility |
 |---|---|---|
 | Domain | [`crates/pandamux-core`](../crates/pandamux-core) | Framework-free IDs, threads, events, organizations, provider policy, routing, and usage types |
+| Orchestration | [`crates/pandamux-orchestrator`](../crates/pandamux-orchestrator) | Pure Phase 5 policy boundary and fail-closed legacy compatibility inputs |
 | Wire protocol | [`crates/pandamux-protocol`](../crates/pandamux-protocol) | Versioned JSON-RPC, subscriptions, capabilities, and Hub-to-node proxy contracts |
 | Providers | [`crates/pandamux-providers`](../crates/pandamux-providers) | Provider drivers, profiles, discovery, parsing, and process supervision |
 | SSH and bootstrap | [`crates/pandamux-remote`](../crates/pandamux-remote) | SSH pool, exec, SFTP, bootstrap, worktree synchronization, and proxy tunnels |
@@ -75,6 +78,7 @@ sections with stable AUTOGEN identifiers.
 | Desktop | [`crates/pandamux-desktop`](../crates/pandamux-desktop) | GPUI chat shell, timeline, composer, settings, surfaces, terminal grid, and usage views |
 | CLI | [`crates/pandamux-cli`](../crates/pandamux-cli) | Authenticated commands and restricted MCP stdio adapter |
 | Terminal primitives | [`crates/pandamux-term`](../crates/pandamux-term) | Separately selectable `grid` and `pty` features |
+| Dependency validation | [`tools/pandamux-boundary-check`](../tools/pandamux-boundary-check) | Target-resolved ownership, feature, snapshot, embedding, and native-stack checks |
 
 The server owns durable state, provider processes, and local PTYs. The desktop
 and CLI are clients. Remote Linux nodes run `pandamux-server daemon` and are
@@ -108,9 +112,12 @@ The following gates remain open:
   failover behavior;
 - final P4-C7 synchronization after the remaining P4-C5 row stabilizes.
 
-This generated-wiki refresh is an interim P4-C7 synchronization. It does not
-claim that Phase 4 is complete, released, deployed, signed, published, or
-served.
+Phase 5 dependency-boundary work is proceeding under the explicit sequencing
+exception recorded in the active plan. It does not convert either open Phase 4
+row into a pass, and Phase 5 evidence remains separate from exact 0.60.64 Phase
+4 runtime evidence and the retained Galahad databases. This generated-wiki
+refresh remains an interim P4-C7 synchronization; it does not claim that Phase
+4 is complete, released, deployed, signed, published, or served.
 
 ## Security boundary
 

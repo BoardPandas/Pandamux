@@ -1,0 +1,11 @@
+{
+  "id": "agent-legacy-1",
+  "name": "Legacy reviewer",
+  "scope": "personal",
+  "author": { "type": "user" },
+  "version": "",
+  "description": "Unversioned Phase 1 fixture",
+  "systemPrompt": "Review the change.",
+  "allowedTools": [],
+  "disallowedTools": []
+}

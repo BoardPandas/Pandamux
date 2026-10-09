@@ -60,6 +60,34 @@
   with two intentional real-shell ignores, both repository guards, desktop
   headless smoke, dependency policy, and diff hygiene also passed at 0.60.65.
 
+## Phase 5 Dependency-Boundary Update - 2026-10-09
+
+- **Mode:** incremental update from source baseline `a41c5bd` through clean
+  documentation baseline `b0e5f744` plus the current 0.60.66 working tree on
+  `codex/recovery-r0`
+- **Generated pages updated:** Overview, Getting Started, Architecture, Core
+  Domain, and Release and Packaging
+- **Generated page added:** Toolchain and Dependency Policy, with six sections
+  covering toolchains, exact pins, resolved graph boundaries, negative
+  fixtures, supply-chain checks, and the safe dependency-change workflow
+- **Implementation coverage:** the wiki maps the new pure orchestrator crate,
+  fail-closed legacy compatibility fixtures, exact direct registry pin policy,
+  Rust graph checker, five declared metadata targets, four negative fixture
+  workspaces, Rust 1.98.1 development pin, and scoped Rust 1.89 jobs
+- **Acceptance boundary:** this is an explicitly authorized Phase 5 sequencing
+  exception. It does not pass P4-C5, close final P4-C7, replace exact 0.60.64
+  Phase 4 runtime evidence, or alter the retained Galahad databases.
+- **Validation:** 16 pages, 96 ordered AUTOGEN sections, 1,430 active local
+  links, 1,323 line-range citations, all 144 current crate source files, and 18
+  Mermaid blocks passed with zero structural errors. `mmdc` is unavailable, so
+  renderer-level Mermaid validation was not performed.
+- **Code gates:** formatting, strict all-target Clippy, 464 tests with two
+  intentional real-shell ignores, the five-target resolved graph, negative
+  boundary fixtures, repository wiring, all four cargo-deny policy families,
+  and the local Rust 1.89 Linux headless graph passed. Cargo-deny emitted its
+  configured duplicate and yanked-transitive warnings. The Windows MSRV job is
+  implemented but remains unexecuted until CI runs it.
+
 ## Historical context
 
 The previous generated wiki described the removed Iced multiplexer architecture.

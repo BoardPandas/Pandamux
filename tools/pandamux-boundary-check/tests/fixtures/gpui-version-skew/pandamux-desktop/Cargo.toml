@@ -1,0 +1,8 @@
+[package]
+name = "pandamux-desktop"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+gpui-pre = { path = "../gpui-pre" }
+gpui-pre-platform = { path = "../gpui-pre-platform" }

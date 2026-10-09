@@ -85,6 +85,13 @@ The exact results are recorded in
 The remaining capacity-failover row and final post-P4-C5 documentation archive
 keep Phase 4 open.
 
+On 2026-10-09 the user explicitly authorized the Phase 5 dependency and
+boundary gate to proceed while that provider-controlled P4-C5 row remains
+unavailable. This sequencing exception does not mark P4-C5 or P4-C7 complete.
+The first Phase 5 slice is limited to pure-crate ownership, explicit legacy
+compatibility rejection, resolved dependency enforcement, and toolchain/MSRV
+policy; runtime orchestration still requires its own checkpoint evidence.
+
 Exact 0.60.38 commit `d328ad8` supersedes the preceding source-candidate note:
 its complete local gate, native build, host smoke, remote lifecycle, and
 standard successful-login row passed, but genuine Narrator still did not speak
@@ -113,7 +120,11 @@ matrix on the physical MSI at 100 and 200 percent, so P4-C3 remains Pass.
 
 ## Build and development
 
-Use Rust stable. Windows builds require the MSVC build tools. The application has no Node runtime, though Node 24 runs the repository wiring guard.
+Use the Rust 1.98.1 development/evidence toolchain pinned by
+`rust-toolchain.toml`. The workspace declares Rust 1.89 as its MSRV, proven in
+CI for the Windows product graph and the Linux headless graph. Windows builds
+require the MSVC build tools. The application has no Node runtime, though Node
+24 runs the repository wiring guard.
 
 ```bash
 # GPUI desktop, binary name pandamux
@@ -146,7 +157,7 @@ Run Cargo commands serially in one checkout.
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-pwsh -File scripts/check-rust-boundaries.ps1
+cargo run --locked -p pandamux-boundary-check --quiet
 node scripts/check-claude-wiring.mjs
 ```
 
@@ -154,6 +165,7 @@ Useful scoped checks:
 
 ```bash
 cargo test -p pandamux-core
+cargo test -p pandamux-orchestrator
 cargo test -p pandamux-protocol
 cargo test -p pandamux-providers
 cargo test -p pandamux-remote
@@ -161,10 +173,15 @@ cargo test -p pandamux-server
 cargo test -p pandamux-cli
 cargo test -p pandamux-term
 cargo test -p pandamux-desktop
+cargo test -p pandamux-boundary-check
 cargo check -p pandamux-protocol -p pandamux-client -p pandamux-cli -p pandamux-server -p pandamux-desktop
 ```
 
-The CI workflow in `.github/workflows/rust.yml` checks Windows formatting, Clippy, crate boundaries, advisories, tests, and release binaries; it also checks the core binaries on Apple Silicon and builds the x86_64 Linux musl node artifacts.
+The CI workflow in `.github/workflows/rust.yml` checks Windows formatting,
+Clippy, resolved crate boundaries, the complete cargo-deny policy, tests, and
+release binaries on Rust 1.98.1. Separate jobs compile the Windows product
+graph and Linux headless graph at Rust 1.89; Apple Silicon and x86_64 Linux
+musl retain their platform-specific gates.
 
 Before any long or potentially silent command, explain what will run, estimate its duration, and state whether it is safe to interrupt.
 
@@ -173,6 +190,7 @@ Before any long or potentially silent command, explain what will run, estimate i
 ```text
 crates/
   pandamux-core/       Framework-free domain types, IDs, settings, threads, turns, events, policy
+  pandamux-orchestrator/ Pure run-domain and policy engine; serializable inputs and effects only
   pandamux-protocol/   Versioned RPC, subscription, terminal, settings, and proxy contracts
   pandamux-providers/  Provider drivers, profiles, parser fixtures, and process supervision
   pandamux-remote/     SSH auth and pooling, exec, SFTP, bootstrap, ProxyJump, proxy tunnels
@@ -181,17 +199,24 @@ crates/
   pandamux-desktop/    GPUI chat shell, timeline, composer, settings, surfaces, terminal grid
   pandamux-cli/        Authenticated CLI and MCP stdio adapter
   pandamux-term/       Optional `grid` and `pty` terminal features
+tools/
+  pandamux-boundary-check/ Target-resolved Cargo graph and feature-boundary validator
 ```
 
 ### Hard boundaries
 
 - `pandamux-core` remains independent of UI, storage, terminal, and SSH frameworks.
+- `pandamux-orchestrator` remains pure: no Tokio, filesystem, network, SQLite,
+  GPUI, provider process, keyring, or embedding dependency.
 - `pandamux-protocol` contains wire contracts and must not depend on implementation crates.
 - `pandamux-server` is the production composition owner of `pandamux-remote`.
 - `pandamux-server` depends on `pandamux-term` with `default-features = false, features = ["pty"]`.
 - `pandamux-desktop` depends on `pandamux-term` with `default-features = false, features = ["grid"]`.
 - Provider and durable state live behind the server. The desktop maintains projections and submits intents.
-- Run `scripts/check-rust-boundaries.ps1` after dependency changes.
+- Run `cargo test --locked -p pandamux-boundary-check` and then
+  `cargo run --locked -p pandamux-boundary-check --quiet` after dependency
+  changes. The checker evaluates target-resolved Cargo metadata and deliberately
+  failing fixture workspaces.
 
 ## Server and local IPC
 

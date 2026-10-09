@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+
+- **Established the Phase 5 dependency and orchestration boundary.** Added a
+  pure `pandamux-orchestrator` crate whose retained Phase 1 run, agent, memory,
+  and schedule inputs fail closed with stable migration guidance instead of
+  becoming accepted state. A target-resolved Cargo graph checker now enforces
+  exact direct registry pins, GPUI ownership, terminal feature separation,
+  orchestrator purity, future memory isolation, native-stack uniqueness, and
+  exact GPUI snapshot alignment against deliberately failing fixture
+  workspaces. Development and evidence
+  use pinned Rust 1.98.1, while CI separately proves the declared Rust 1.89
+  MSRV for the Windows product and Linux headless graphs. This authorized
+  sequencing change does not mark the open P4-C5 or P4-C7 rows complete.
+
 ### Changed
 
 - **Recorded exact physical-laptop P4-C6 acceptance.** Exact 0.60.64 commit

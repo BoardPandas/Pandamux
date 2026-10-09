@@ -4,10 +4,12 @@
 
 The following files were used as evidence for this page:
 
-- [CLAUDE.md:115-377](../CLAUDE.md#L115-L377)
-- [Cargo.toml:1-40](../Cargo.toml#L1-L40)
-- [.github/workflows/rust.yml:1-140](../.github/workflows/rust.yml#L1-L140)
-- [scripts/check-rust-boundaries.ps1:1-60](../scripts/check-rust-boundaries.ps1#L1-L60)
+- [CLAUDE.md:121-407](../CLAUDE.md#L121-L407)
+- [Cargo.toml:1-48](../Cargo.toml#L1-L48)
+- [rust-toolchain.toml:1-4](../rust-toolchain.toml#L1-L4)
+- [.github/workflows/rust.yml:1-171](../.github/workflows/rust.yml#L1-L171)
+- [tools/pandamux-boundary-check/src/lib.rs:1-761](../tools/pandamux-boundary-check/src/lib.rs#L1-L761)
+- [tools/pandamux-boundary-check/tests/fixture_workspaces.rs:1-80](../tools/pandamux-boundary-check/tests/fixture_workspaces.rs#L1-L80)
 - [scripts/check-claude-wiring.mjs:1-233](../scripts/check-claude-wiring.mjs#L1-L233)
 - [.claude/rules/commit-changelog.md:1-51](../.claude/rules/commit-changelog.md#L1-L51)
 
@@ -15,7 +17,7 @@ The following files were used as evidence for this page:
 
 # Getting Started
 
-> **Related Pages**: [Overview](OVERVIEW.md), [Release and Packaging](operations/RELEASE.md)
+> **Related Pages**: [Overview](OVERVIEW.md), [Toolchain and Dependency Policy](operations/DEPENDENCIES.md), [Release and Packaging](operations/RELEASE.md)
 
 ---
 
@@ -26,15 +28,15 @@ PandaMUX is a Rust workspace with native desktop and operating-system integratio
 
 | Tool | Required version or platform | Purpose |
 |---|---|---|
-| Rust | Stable, with project minimum `1.89` | Compile and test the Rust 2024 workspace ([Cargo.toml:23-28](../Cargo.toml#L23-L28)) |
-| Windows build tools | MSVC toolchain | Build the native Windows desktop and IPC implementation ([CLAUDE.md:115-117](../CLAUDE.md#L115-L117)) |
-| PowerShell | `pwsh` capable | Run the crate-boundary guard ([CLAUDE.md:146-152](../CLAUDE.md#L146-L152)) |
-| Node.js | 24 for parity with CI | Run the repository wiring guard; Node is not an application runtime dependency ([CLAUDE.md:115-117](../CLAUDE.md#L115-L117), [rust.yml:43-50](../.github/workflows/rust.yml#L43-L50)) |
-| musl tools | Linux x86_64 artifact builds only | Build the server and CLI for `x86_64-unknown-linux-musl` ([rust.yml:115-139](../.github/workflows/rust.yml#L115-L139)) |
+| Rust | Development/evidence `1.98.1`; scoped MSRV `1.89` | Compile and test the Rust 2024 workspace with a reproducible development toolchain while retaining explicit minimum-version jobs ([rust-toolchain.toml:1-4](../rust-toolchain.toml#L1-L4), [Cargo.toml:25-30](../Cargo.toml#L25-L30)) |
+| Windows build tools | MSVC toolchain | Build the native Windows desktop and IPC implementation ([CLAUDE.md:121-127](../CLAUDE.md#L121-L127)) |
+| Node.js | 24 for parity with CI | Run the repository wiring guard; Node is not an application runtime dependency ([CLAUDE.md:121-127](../CLAUDE.md#L121-L127), [rust.yml:47-54](../.github/workflows/rust.yml#L47-L54)) |
+| `cargo-deny` | Current local installation, optional outside CI | Reproduce the advisory, license, ban, and source policy enforced by CI ([rust.yml:81-85](../.github/workflows/rust.yml#L81-L85)) |
+| musl tools | Linux x86_64 artifact builds only | Build the server and CLI for `x86_64-unknown-linux-musl` ([rust.yml:121-145](../.github/workflows/rust.yml#L121-L145)) |
 
 The workspace has no package-manager install step. Cargo resolves the dependencies declared in the root and crate manifests.
 
-Sources: [Cargo.toml:23-40](../Cargo.toml#L23-L40), [CLAUDE.md:115-117](../CLAUDE.md#L115-L117), [rust.yml:35-55](../.github/workflows/rust.yml#L35-L55), [rust.yml:115-139](../.github/workflows/rust.yml#L115-L139)
+Sources: [Cargo.toml:25-48](../Cargo.toml#L25-L48), [rust-toolchain.toml:1-4](../rust-toolchain.toml#L1-L4), [CLAUDE.md:121-127](../CLAUDE.md#L121-L127), [rust.yml:39-85](../.github/workflows/rust.yml#L39-L85), [rust.yml:121-171](../.github/workflows/rust.yml#L121-L171)
 <!-- END:AUTOGEN pandamux_02_getting-started_prerequisites -->
 
 ---
@@ -48,15 +50,15 @@ Build the three runtime binaries together when you need a complete local artifac
 cargo build --release -p pandamux-cli -p pandamux-server -p pandamux-desktop
 ```
 
-That is the same release-binary set built by the Windows CI job and the same core set built on Apple Silicon ([rust.yml:81-89](../.github/workflows/rust.yml#L81-L89), [rust.yml:109-113](../.github/workflows/rust.yml#L109-L113)). For a quicker compile-only pass over the main dependency graph, use the scoped check documented by the repository:
+That is the same release-binary set built by the Windows CI job and the same core set built on Apple Silicon ([rust.yml:87-95](../.github/workflows/rust.yml#L87-L95), [rust.yml:115-119](../.github/workflows/rust.yml#L115-L119)). For a quicker compile-only pass over the main dependency graph, use the scoped check documented by the repository:
 
 ```bash
 cargo check -p pandamux-protocol -p pandamux-client -p pandamux-cli -p pandamux-server -p pandamux-desktop
 ```
 
-Run Cargo operations serially within one checkout. Parallel Cargo builds and tests share the target directory and package cache, so serialization avoids avoidable contention ([CLAUDE.md:142-165](../CLAUDE.md#L142-L165)).
+Run Cargo operations serially within one checkout. Parallel Cargo builds and tests share the target directory and package cache, so serialization avoids avoidable contention ([CLAUDE.md:152-186](../CLAUDE.md#L152-L186)).
 
-Sources: [CLAUDE.md:142-165](../CLAUDE.md#L142-L165), [rust.yml:81-89](../.github/workflows/rust.yml#L81-L89), [rust.yml:109-113](../.github/workflows/rust.yml#L109-L113)
+Sources: [CLAUDE.md:152-186](../CLAUDE.md#L152-L186), [rust.yml:87-95](../.github/workflows/rust.yml#L87-L95), [rust.yml:115-119](../.github/workflows/rust.yml#L115-L119)
 <!-- END:AUTOGEN pandamux_02_getting-started_build -->
 
 ---
@@ -64,7 +66,7 @@ Sources: [CLAUDE.md:142-165](../CLAUDE.md#L142-L165), [rust.yml:81-89](../.githu
 <!-- BEGIN:AUTOGEN pandamux_02_getting-started_run -->
 ## Running PandaMUX
 
-Start the Hub and desktop from the same checkout for the most direct development loop. The desktop can discover or launch a sibling server, but starting the server first is useful when the binaries do not share a target directory ([CLAUDE.md:119-140](../CLAUDE.md#L119-L140)).
+Start the Hub and desktop from the same checkout for the most direct development loop. The desktop can discover or launch a sibling server, but starting the server first is useful when the binaries do not share a target directory ([CLAUDE.md:129-150](../CLAUDE.md#L129-L150)).
 
 ```bash
 cargo run -p pandamux-server
@@ -80,9 +82,9 @@ cargo run -p pandamux-desktop
 | Inspect CLI help | `cargo run -p pandamux-cli -- --help` |
 | Check Hub connectivity | `cargo run -p pandamux-cli -- ping` |
 
-These are repository-defined entry points, not release or deployment commands ([CLAUDE.md:119-138](../CLAUDE.md#L119-L138)).
+These are repository-defined entry points, not release or deployment commands ([CLAUDE.md:129-150](../CLAUDE.md#L129-L150)).
 
-Sources: [CLAUDE.md:119-140](../CLAUDE.md#L119-L140)
+Sources: [CLAUDE.md:129-150](../CLAUDE.md#L129-L150)
 <!-- END:AUTOGEN pandamux_02_getting-started_run -->
 
 ---
@@ -90,14 +92,16 @@ Sources: [CLAUDE.md:119-140](../CLAUDE.md#L119-L140)
 <!-- BEGIN:AUTOGEN pandamux_02_getting-started_testing -->
 ## Checks and Tests
 
-The complete local gate combines formatting, Clippy, the workspace test suite, dependency-boundary validation, and repository-agent wiring validation.
+The complete source gate combines formatting, Clippy, the workspace test suite, resolved dependency-boundary validation, repository-agent wiring validation, and dependency policy.
 
 ```bash
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-pwsh -File scripts/check-rust-boundaries.ps1
+cargo test --locked -p pandamux-boundary-check
+cargo run --locked -p pandamux-boundary-check --quiet
 node scripts/check-claude-wiring.mjs
+cargo deny check advisories licenses bans sources
 ```
 
 | Check | What it protects |
@@ -105,12 +109,14 @@ node scripts/check-claude-wiring.mjs
 | `cargo fmt --all --check` | Rust formatting across the workspace ([rust.yml:65-66](../.github/workflows/rust.yml#L65-L66)) |
 | Clippy with `-D warnings` | Lint-clean code across all targets ([rust.yml:68-69](../.github/workflows/rust.yml#L68-L69)) |
 | `cargo test --workspace` | Workspace Rust behavior ([rust.yml:81-82](../.github/workflows/rust.yml#L81-L82)) |
-| Rust boundary guard | Prevents implementation-framework dependencies from crossing crate ownership boundaries ([check-rust-boundaries.ps1:7-43](../scripts/check-rust-boundaries.ps1#L7-L43)) |
+| Boundary-checker fixtures | Prove the checker rejects transitive GPUI, terminal-feature, embedding, and GPUI-version regressions ([fixture_workspaces.rs:39-62](../tools/pandamux-boundary-check/tests/fixture_workspaces.rs#L39-L62)) |
+| Resolved graph guard | Reconstructs per-root features from target-filtered locked Cargo metadata and enforces exact direct pins plus implementation ownership across five declared targets ([lib.rs:9-63](../tools/pandamux-boundary-check/src/lib.rs#L9-L63), [lib.rs:140-449](../tools/pandamux-boundary-check/src/lib.rs#L140-L449)) |
 | Claude wiring guard | Detects dead rule globs, invalid hook matchers, silenced hooks, and excessive always-on context ([check-claude-wiring.mjs:3-22](../scripts/check-claude-wiring.mjs#L3-L22)) |
+| `cargo-deny` | Applies the advisory, license, duplicate-version, and dependency-source policy ([rust.yml:81-85](../.github/workflows/rust.yml#L81-L85)) |
 
-CI additionally runs advisory and license checks and evaluates the built Windows artifacts ([rust.yml:75-89](../.github/workflows/rust.yml#L75-L89)).
+CI also evaluates built Windows artifacts and compiles the product and headless graphs at the declared MSRV ([rust.yml:87-95](../.github/workflows/rust.yml#L87-L95), [rust.yml:147-171](../.github/workflows/rust.yml#L147-L171)). The boundary command analyzes declared target graphs; it does not replace native builds or live platform acceptance.
 
-Sources: [CLAUDE.md:142-168](../CLAUDE.md#L142-L168), [rust.yml:65-89](../.github/workflows/rust.yml#L65-L89), [check-rust-boundaries.ps1:7-60](../scripts/check-rust-boundaries.ps1#L7-L60), [check-claude-wiring.mjs:3-22](../scripts/check-claude-wiring.mjs#L3-L22)
+Sources: [CLAUDE.md:152-186](../CLAUDE.md#L152-L186), [rust.yml:69-95](../.github/workflows/rust.yml#L69-L95), [rust.yml:147-171](../.github/workflows/rust.yml#L147-L171), [lib.rs:140-449](../tools/pandamux-boundary-check/src/lib.rs#L140-L449), [fixture_workspaces.rs:39-62](../tools/pandamux-boundary-check/tests/fixture_workspaces.rs#L39-L62), [check-claude-wiring.mjs:3-22](../scripts/check-claude-wiring.mjs#L3-L22)
 <!-- END:AUTOGEN pandamux_02_getting-started_testing -->
 
 ---
@@ -122,16 +128,16 @@ Platform coverage differs by component. The Windows job is the full native gate;
 
 | Platform | Current automated coverage |
 |---|---|
-| Windows MSVC | Wiring guard, formatting, Clippy, crate boundaries, advisories/licenses, workspace tests, release binary build, and built-artifact smoke ([rust.yml:35-89](../.github/workflows/rust.yml#L35-L89)) |
-| macOS Apple Silicon | Tests core, protocol, client, server, CLI, and desktop; builds server, CLI, and desktop release binaries ([rust.yml:91-113](../.github/workflows/rust.yml#L91-L113)) |
-| Linux x86_64 musl | Cross-builds `pandamux-server` and `pandamux-cli` for node use ([rust.yml:115-139](../.github/workflows/rust.yml#L115-L139)) |
+| Windows MSVC | Development-toolchain wiring, formatting, Clippy, resolved boundaries, complete cargo-deny policy, workspace tests, release binary build, and built-artifact smoke; a separate job checks the complete product graph at Rust 1.89 ([rust.yml:39-95](../.github/workflows/rust.yml#L39-L95), [rust.yml:147-158](../.github/workflows/rust.yml#L147-L158)) |
+| macOS Apple Silicon | Tests the listed core/client/server/desktop set and builds server, CLI, and desktop release binaries with Rust 1.98.1 ([rust.yml:97-119](../.github/workflows/rust.yml#L97-L119)) |
+| Linux x86_64 musl | Cross-builds `pandamux-server` and `pandamux-cli`; a separate Linux job checks the headless workspace graph at Rust 1.89 ([rust.yml:121-145](../.github/workflows/rust.yml#L121-L145), [rust.yml:160-171](../.github/workflows/rust.yml#L160-L171)) |
 
 - The GPUI desktop is the local interactive surface.
 - The server supports a Hub role and a Linux node-daemon role.
 - A successful Linux build does not establish native Windows UI behavior.
-- Before a long or silent command, state what will run, estimate its duration, and say whether cancellation is safe ([CLAUDE.md:168-170](../CLAUDE.md#L168-L170)).
+- Before a long or silent command, state what will run, estimate its duration, and say whether cancellation is safe ([CLAUDE.md:180-186](../CLAUDE.md#L180-L186)).
 
-Sources: [rust.yml:35-140](../.github/workflows/rust.yml#L35-L140), [CLAUDE.md:168-170](../CLAUDE.md#L168-L170)
+Sources: [rust.yml:39-171](../.github/workflows/rust.yml#L39-L171), [CLAUDE.md:180-186](../CLAUDE.md#L180-L186)
 <!-- END:AUTOGEN pandamux_02_getting-started_platforms -->
 
 ---
@@ -146,13 +152,13 @@ Repository workflow rules are designed to preserve evidence and keep generated c
 - Update the changelog and the root workspace version when preparing a commit.
 - Write commit messages through a file with `git commit -F`.
 - Use custom agents only when delegation is explicitly authorized.
-- Do not claim a build, test, artifact, commit, push, deployment, or live acceptance without direct evidence ([CLAUDE.md:368-377](../CLAUDE.md#L368-L377)).
+- Do not claim a build, test, artifact, commit, push, deployment, or live acceptance without direct evidence ([CLAUDE.md:398-407](../CLAUDE.md#L398-L407)).
 
 The commit rule requires user-facing changelog entries categorized under Keep a Changelog headings and requires reviewing the staged diff before describing the change ([commit-changelog.md:7-19](../.claude/rules/commit-changelog.md#L7-L19)). The development guide is authoritative where older rule prose still refers to the removed JavaScript-era version file.
 
 The wiring guard is intentionally falsifiable: it exits successfully only when no wiring errors were collected, otherwise it prints every error and exits 1 ([check-claude-wiring.mjs:221-233](../scripts/check-claude-wiring.mjs#L221-L233)).
 
-Sources: [CLAUDE.md:368-377](../CLAUDE.md#L368-L377), [commit-changelog.md:7-19](../.claude/rules/commit-changelog.md#L7-L19), [check-claude-wiring.mjs:221-233](../scripts/check-claude-wiring.mjs#L221-L233)
+Sources: [CLAUDE.md:398-407](../CLAUDE.md#L398-L407), [commit-changelog.md:7-19](../.claude/rules/commit-changelog.md#L7-L19), [check-claude-wiring.mjs:221-233](../scripts/check-claude-wiring.mjs#L221-L233)
 <!-- END:AUTOGEN pandamux_02_getting-started_conventions -->
 
 ---

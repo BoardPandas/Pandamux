@@ -8,6 +8,9 @@ The following files were used as evidence for this page:
 - [crates/pandamux-core/src/thread.rs:1-235](../../crates/pandamux-core/src/thread.rs#L1-L235)
 - [crates/pandamux-core/src/event.rs:1-196](../../crates/pandamux-core/src/event.rs#L1-L196)
 - [crates/pandamux-core/src/agent_def.rs:1-86](../../crates/pandamux-core/src/agent_def.rs#L1-L86)
+- [crates/pandamux-orchestrator/src/lib.rs:1-13](../../crates/pandamux-orchestrator/src/lib.rs#L1-L13)
+- [crates/pandamux-orchestrator/src/compatibility.rs:1-115](../../crates/pandamux-orchestrator/src/compatibility.rs#L1-L115)
+- [crates/pandamux-orchestrator/tests/compatibility_fixtures.rs:1-50](../../crates/pandamux-orchestrator/tests/compatibility_fixtures.rs#L1-L50)
 - [crates/pandamux-core/src/ast_diff.rs:1-533](../../crates/pandamux-core/src/ast_diff.rs#L1-L533)
 - [crates/pandamux-core/src/attachment.rs:1-240](../../crates/pandamux-core/src/attachment.rs#L1-L240)
 - [crates/pandamux-core/src/home.rs:1-188](../../crates/pandamux-core/src/home.rs#L1-L188)
@@ -47,9 +50,9 @@ The following files were used as evidence for this page:
 | Local safety | `secrets`, `terminal` | `SecretStore`, redaction helpers, ring-buffer configuration ([lib.rs:90-102](../../crates/pandamux-core/src/lib.rs#L90-L102)) |
 | Cost and quota | `usage` | Usage observations, integer pricing, capacity snapshots and projections ([lib.rs:107-114](../../crates/pandamux-core/src/lib.rs#L107-L114)) |
 
-The core crate does not own persistence, process launch, network transport, or rendering. Those layers consume these types and apply effects elsewhere.
+The core crate does not own persistence, process launch, network transport, or rendering. The new pure orchestrator consumes retained core shapes through an explicit compatibility boundary: recognized unversioned run, agent-definition, memory, and schedule records are classified as migration input and rejected with stable next actions until their versioned adapters exist ([compatibility.rs:5-43](../../crates/pandamux-orchestrator/src/compatibility.rs#L5-L43), [compatibility.rs:69-115](../../crates/pandamux-orchestrator/src/compatibility.rs#L69-L115)). Fixture tests prove those historical shapes cannot silently become canonical Phase 5 state and malformed input is not echoed into diagnostics ([compatibility_fixtures.rs:3-50](../../crates/pandamux-orchestrator/tests/compatibility_fixtures.rs#L3-L50)).
 
-Sources: [lib.rs:1-114](../../crates/pandamux-core/src/lib.rs#L1-L114)
+Sources: [lib.rs:1-114](../../crates/pandamux-core/src/lib.rs#L1-L114), [compatibility.rs:5-115](../../crates/pandamux-orchestrator/src/compatibility.rs#L5-L115), [compatibility_fixtures.rs:3-50](../../crates/pandamux-orchestrator/tests/compatibility_fixtures.rs#L3-L50)
 <!-- END:AUTOGEN pandamux_04_core-domain_modules -->
 
 ---

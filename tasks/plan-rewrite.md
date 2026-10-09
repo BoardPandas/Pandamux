@@ -2899,6 +2899,14 @@ Phase 4 closure out of scope:
 - Beginning Phase 5 feature implementation before the Phase 4 development exit
   is archived.
 
+Authorized sequencing exception (2026-10-09): after reviewing the exact open
+P4-C5 condition, the user explicitly authorized Phase 5 implementation to
+proceed without waiting for provider-controlled total capacity exhaustion.
+P4-C5 remains Partial, P4-C7 remains open, and neither row may be reported as
+passed or archived by this exception. Phase 5 evidence and commits remain
+separate from the exact 0.60.64 Phase 4 runtime candidate and its retained
+Galahad databases.
+
 ### Phase 5: Orchestrator, agents, trusted configuration, memory, and integrations
 
 #### Phase 5 dependency and boundary gate
