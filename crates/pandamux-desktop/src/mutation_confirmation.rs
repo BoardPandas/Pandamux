@@ -53,6 +53,7 @@ pub fn render_mutation_confirmation<V: 'static>(
 
     div()
         .id(SharedString::from(format!("mutation-card-{proposal_id}")))
+        .tab_group()
         .role(Role::Group)
         .aria_label(summary)
         .v_flex()
@@ -126,7 +127,26 @@ pub fn render_mutation_confirmation<V: 'static>(
 mod tests {
     use super::*;
     use core::prelude::v1::test;
+    use gpui_kit::test::TestWindowExt as _;
     use pandamux_client::SafeMutationDiff;
+
+    struct ConfirmationHarness {
+        proposal: MutationConfirmationProjection,
+        approvals: usize,
+        rejections: usize,
+    }
+
+    impl Render for ConfirmationHarness {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            render_mutation_confirmation(
+                &self.proposal,
+                &Theme::dark(crate::theme::AccentColor::Teal),
+                |this, _, _, _| this.approvals += 1,
+                |this, _, _, _| this.rejections += 1,
+                cx,
+            )
+        }
+    }
 
     fn projection(can_resolve: bool, status: &str) -> MutationConfirmationProjection {
         MutationConfirmationProjection {
@@ -190,5 +210,42 @@ mod tests {
         assert!(!expired.can_resolve);
         assert!(!disconnected.can_resolve);
         assert_ne!(expired.status_label, disconnected.status_label);
+    }
+
+    #[gpui_kit::test]
+    fn confirmation_actions_are_tab_reachable_and_keyboard_activatable(cx: &mut TestAppContext) {
+        fn activate(cx: &mut VisualTestContext, key: &str) {
+            let keystroke = Keystroke::parse(key).expect("valid test keystroke");
+            cx.simulate_event(KeyDownEvent {
+                keystroke: keystroke.clone(),
+                is_held: false,
+                prefer_character_input: false,
+            });
+            cx.simulate_event(KeyUpEvent { keystroke });
+        }
+
+        cx.update(gpui_kit::init);
+        let (view, cx) = cx.add_window_view(|_, _| ConfirmationHarness {
+            proposal: projection(true, "Pending local confirmation"),
+            approvals: 0,
+            rejections: 0,
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        cx.update(|window, cx| {
+            window.focus_next(cx);
+            window.draw(cx).clear(cx);
+            assert_eq!(window.find("approve-proposal-one").focused(), Some(true));
+        });
+        activate(cx, "enter");
+        cx.update(|_, cx| assert_eq!(view.read(cx).approvals, 1));
+
+        cx.update(|window, cx| {
+            window.focus_next(cx);
+            window.draw(cx).clear(cx);
+            assert_eq!(window.find("reject-proposal-one").focused(), Some(true));
+        });
+        activate(cx, "space");
+        cx.update(|_, cx| assert_eq!(view.read(cx).rejections, 1));
     }
 }

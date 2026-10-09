@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Restored keyboard traversal for trusted-configuration confirmations in
+  version 0.60.87.** Confirmation cards now establish a GPUI tab group so
+  `Approve once` and `Reject` participate in native focus traversal and retain
+  their named Enter and Space activation paths. A retained render-level test
+  covers both actions after physical Windows acceptance exposed that accessible
+  buttons without a tab group were not reachable with Tab.
+
 - **Stabilized native trusted-source polling verification in version 0.60.86.**
   The launch-poller acceptance test now allows enough scheduling headroom for
   native Windows Git durability work while retaining the same production poll
