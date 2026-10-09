@@ -85,7 +85,7 @@ pub fn compile_instruction_bundle(
     finish(parse_issues)?;
 
     let grants = validate_grants(input)?;
-    validate_document_inventory(&parsed)?;
+    validate_document_inventory(&parsed, true)?;
     let references = validate_references(&parsed)?;
 
     let orchestrator = parsed
@@ -113,8 +113,9 @@ pub fn compile_instruction_bundle(
     });
 
     let compiled_agents = compile_agents(&parsed, input)?;
-    let agents = compiled_agents.agents;
+    let mut agents = compiled_agents.agents;
     let mut value_origins = compiled_agents.origins;
+    apply_trusted_settings(&mut agents, &mut value_origins, &input.settings);
     let prompts = compile_prompts(&parsed, &mut value_origins);
     let knowledge = compile_knowledge(&parsed, &mut value_origins);
     let classes = compile_classes(
@@ -213,6 +214,43 @@ pub fn compile_instruction_bundle(
             .all(|layer| parsed.iter().any(|document| document.layer == *layer))
     );
     Ok(bundle)
+}
+
+fn apply_trusted_settings(
+    agents: &mut BTreeMap<AgentId, AgentDefinition>,
+    origins: &mut BTreeMap<String, ValueOrigin>,
+    settings: &TrustedBundleSettings,
+) {
+    for (id, agent) in agents {
+        let pointer = escape_pointer(id.as_str());
+        if settings.disabled_agent_ids.contains(id) {
+            agent.enabled = false;
+            origins.insert(
+                format!("/agents/{pointer}/enabled"),
+                settings_origin("/trustedConfiguration/disabledAgentIds"),
+            );
+        }
+        if settings.full_access_agent_ids.contains(id) {
+            agent.access_mode = AccessMode::FullAccess;
+            agent.full_access_opt_in = true;
+            origins.insert(
+                format!("/agents/{pointer}/accessMode"),
+                settings_origin("/trustedConfiguration/fullAccessAgentIds"),
+            );
+            origins.insert(
+                format!("/agents/{pointer}/fullAccessOptIn"),
+                settings_origin("/trustedConfiguration/fullAccessAgentIds"),
+            );
+        }
+    }
+}
+
+fn settings_origin(field: &str) -> ValueOrigin {
+    ValueOrigin {
+        layer: ValueLayer::Settings,
+        logical_path: "settings".to_string(),
+        field: field.to_string(),
+    }
 }
 
 pub fn canonical_bundle_bytes(bundle: &CompiledInstructionBundleV1) -> Vec<u8> {
@@ -364,6 +402,7 @@ fn validate_grants(
 
 pub(crate) fn validate_document_inventory(
     parsed: &[ParsedLayerDocument],
+    require_instructions: bool,
 ) -> Result<(), DiagnosticSet> {
     let mut issues = Vec::new();
     let mut paths = BTreeSet::new();
@@ -428,7 +467,7 @@ pub(crate) fn validate_document_inventory(
             projects += 1;
         }
     }
-    if orchestrators != 1 {
+    if require_instructions && orchestrators != 1 {
         issues.push(issue(
             ConfigurationIssueCode::ReferenceNotFound,
             RelativeConfigPath::new("orchestrator.yaml").expect("static path"),

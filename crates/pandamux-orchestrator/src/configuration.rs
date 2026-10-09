@@ -32,6 +32,7 @@ pub struct ConfigurationDependencySnapshot {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConfigurationCandidateInspectionInput {
+    pub layer: ValueLayer,
     pub baseline_documents: Vec<SourceDocument>,
     pub candidate_documents: Vec<SourceDocument>,
     pub baseline_dependencies: ConfigurationDependencySnapshot,
@@ -149,6 +150,7 @@ struct AgentBehavior {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct InspectionDigestInput<'a> {
+    layer: ValueLayer,
     baseline_content_sha256: &'a ContentSha256,
     candidate_content_sha256: &'a ContentSha256,
     baseline_dependencies: &'a ConfigurationDependencySnapshot,
@@ -168,8 +170,8 @@ pub fn inspect_configuration_candidate(
     let baseline_content_sha256 = source_layer_sha256(&input.baseline_documents);
     let candidate_content_sha256 = source_layer_sha256(&input.candidate_documents);
     let file_diff = file_diff(&input.baseline_documents, &input.candidate_documents);
-    let baseline = inspect_documents(&input.baseline_documents, false);
-    let candidate = inspect_documents(&input.candidate_documents, true);
+    let baseline = inspect_documents(&input.baseline_documents, false, input.layer);
+    let candidate = inspect_documents(&input.candidate_documents, true, input.layer);
     let mut behavioral_diff = behavior_diff(&baseline.snapshot, &candidate.snapshot);
     dependency_diff(
         &input.baseline_dependencies,
@@ -203,6 +205,7 @@ pub fn inspect_configuration_candidate(
     let activatable = issues.is_empty();
     let local_approval_required = safety.requires_local_approval();
     let digest = InspectionDigestInput {
+        layer: input.layer,
         baseline_content_sha256: &baseline_content_sha256,
         candidate_content_sha256: &candidate_content_sha256,
         baseline_dependencies: &input.baseline_dependencies,
@@ -235,7 +238,11 @@ struct DocumentInspection {
     issues: Vec<InspectedConfigurationIssue>,
 }
 
-fn inspect_documents(documents: &[SourceDocument], validate_set: bool) -> DocumentInspection {
+fn inspect_documents(
+    documents: &[SourceDocument],
+    validate_set: bool,
+    layer: ValueLayer,
+) -> DocumentInspection {
     let mut ordered = documents.iter().collect::<Vec<_>>();
     ordered.sort_by(|left, right| {
         left.logical_path()
@@ -250,7 +257,7 @@ fn inspect_documents(documents: &[SourceDocument], validate_set: bool) -> Docume
     for source in ordered {
         match parse_source_document(source) {
             Ok(document) => parsed.push(ParsedLayerDocument {
-                layer: ValueLayer::Instructions,
+                layer,
                 parsed: document,
             }),
             Err(error) if validate_set => issues.extend(error.into_issues()),
@@ -258,7 +265,10 @@ fn inspect_documents(documents: &[SourceDocument], validate_set: bool) -> Docume
         }
     }
     if validate_set {
-        collect_result_issues(validate_document_inventory(&parsed), &mut issues);
+        collect_result_issues(
+            validate_document_inventory(&parsed, layer == ValueLayer::Instructions),
+            &mut issues,
+        );
         collect_result_issues(validate_references(&parsed).map(|_| ()), &mut issues);
         for document in &parsed {
             if let ParsedDocumentV1::Agent {
@@ -274,9 +284,9 @@ fn inspect_documents(documents: &[SourceDocument], validate_set: bool) -> Docume
         .into_issues()
         .into_iter()
         .map(|issue| InspectedConfigurationIssue {
-            layer: ValueLayer::Instructions,
+            layer,
             origin: ValueOrigin {
-                layer: ValueLayer::Instructions,
+                layer,
                 logical_path: issue.file.as_str().to_string(),
                 field: issue
                     .field
@@ -323,7 +333,7 @@ fn behavior_snapshot(parsed: &[ParsedLayerDocument]) -> BehaviorSnapshot {
                 }
                 snapshot
                     .origins
-                    .insert("routing".to_string(), origin(&path, "/"));
+                    .insert("routing".to_string(), origin(source.layer, &path, "/"));
             }
             ParsedDocumentV1::Project { document, .. } => {
                 snapshot.verification.insert(
@@ -360,23 +370,25 @@ fn behavior_snapshot(parsed: &[ParsedLayerDocument]) -> BehaviorSnapshot {
                 );
                 snapshot
                     .origins
-                    .insert(format!("agent:{id}"), origin(&path, "/"));
+                    .insert(format!("agent:{id}"), origin(source.layer, &path, "/"));
             }
             ParsedDocumentV1::Knowledge { document, body, .. } => {
                 snapshot
                     .knowledge
                     .insert(document.id.clone(), value_digest(document.as_ref(), body));
-                snapshot
-                    .origins
-                    .insert(format!("knowledge:{}", document.id), origin(&path, "/"));
+                snapshot.origins.insert(
+                    format!("knowledge:{}", document.id),
+                    origin(source.layer, &path, "/"),
+                );
             }
             ParsedDocumentV1::Prompt { document, body, .. } => {
                 snapshot
                     .prompts
                     .insert(document.id.clone(), value_digest(document.as_ref(), body));
-                snapshot
-                    .origins
-                    .insert(format!("prompt:{}", document.id), origin(&path, "/"));
+                snapshot.origins.insert(
+                    format!("prompt:{}", document.id),
+                    origin(source.layer, &path, "/"),
+                );
             }
         }
     }
@@ -395,9 +407,9 @@ fn value_digest(value: &impl Serialize, body: &str) -> ContentSha256 {
     .expect("canonical content digest is SHA-256")
 }
 
-fn origin(path: &str, field: &str) -> ValueOrigin {
+fn origin(layer: ValueLayer, path: &str, field: &str) -> ValueOrigin {
     ValueOrigin {
-        layer: ValueLayer::Instructions,
+        layer,
         logical_path: path.to_string(),
         field: field.to_string(),
     }

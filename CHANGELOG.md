@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Added
 
+- **Added exact project-layer trust and trusted local agent controls in version
+  0.60.81.** PandaMUX now discovers a project repository from its server-owned
+  workspace, binds approval to the exact organization, project, credential-free
+  remote, canonical repository root, and strict `.pandamux/` content hash, and
+  automatically revokes approval when repository identity changes. Declined or
+  invalid content remains inspectable through local-control status and diff RPC,
+  with origin-aware hostile diagnostics. Revisioned local settings can disable
+  exact agents or opt them into FullAccess only after repository policy checks,
+  so authored layers cannot use trusted settings to rescue a widening override.
+
 - **Added trusted instructions mirroring and candidate inspection in version
   0.60.80.** PandaMUX can now poll a configured branch, tag, or exact commit
   from one private bare mirror, skip fetches when discovery is unchanged, and

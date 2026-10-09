@@ -7,11 +7,12 @@
 //! and future tooling one shared access path whose keys are exactly the
 //! camelCase names in the file.
 
+use crate::AgentId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-pub const SETTINGS_SCHEMA_VERSION: u32 = 7;
+pub const SETTINGS_SCHEMA_VERSION: u32 = 8;
 
 /// Bounds for `terminal.scrollbackLines` (clamped on load and set).
 pub const SCROLLBACK_LINES_MIN: u32 = 1_000;
@@ -35,7 +36,18 @@ pub struct UserSettings {
     #[serde(default = "default_environments")]
     pub environments: Vec<crate::environment::Environment>,
     #[serde(default)]
+    pub trusted_configuration: TrustedConfigurationSettings,
+    #[serde(default)]
     pub advanced: AdvancedSettings,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
+pub struct TrustedConfigurationSettings {
+    #[serde(default)]
+    pub disabled_agent_ids: BTreeSet<AgentId>,
+    #[serde(default)]
+    pub full_access_agent_ids: BTreeSet<AgentId>,
 }
 
 pub fn default_environments() -> Vec<crate::environment::Environment> {
@@ -214,6 +226,7 @@ impl Default for UserSettings {
             tier_mapping: Some(default_tier_mapping()),
             providers: default_providers(),
             environments: default_environments(),
+            trusted_configuration: TrustedConfigurationSettings::default(),
             advanced: AdvancedSettings::default(),
         }
     }
@@ -273,6 +286,9 @@ impl UserSettings {
                 target.model = "default".to_string();
             }
             self.version = 7;
+        }
+        if self.version < 8 {
+            self.version = 8;
         }
         for provider in &mut self.providers {
             if provider.enabled {
@@ -460,6 +476,13 @@ mod tests {
         assert!(settings.advanced.usage_hub_sync_enabled);
         assert!(settings.advanced.capacity_routing_enabled);
         assert!(settings.advanced.automatic_failover_enabled);
+        assert!(settings.trusted_configuration.disabled_agent_ids.is_empty());
+        assert!(
+            settings
+                .trusted_configuration
+                .full_access_agent_ids
+                .is_empty()
+        );
         let disabled_best_effort = settings
             .providers
             .iter()
@@ -628,6 +651,18 @@ mod tests {
         assert_eq!(settings.terminal.scrollback_lines, 50_000);
         settings_set(&mut settings, "ui.theme", json!("light")).unwrap();
         assert_eq!(settings.ui.theme, "light");
+        settings_set(
+            &mut settings,
+            "trustedConfiguration.disabledAgentIds",
+            json!(["builder"]),
+        )
+        .unwrap();
+        assert!(
+            settings
+                .trusted_configuration
+                .disabled_agent_ids
+                .contains(&AgentId::new("builder"))
+        );
     }
 
     #[test]

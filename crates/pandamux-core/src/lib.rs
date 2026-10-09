@@ -123,8 +123,9 @@ pub use secrets::{
     scrub_memory,
 };
 pub use settings::{
-    AdvancedSettings, KeyboardSettings, SETTINGS_SCHEMA_VERSION, TerminalSettings, UiSettings,
-    UserSettings, default_providers, default_tier_mapping, settings_get, settings_set,
+    AdvancedSettings, KeyboardSettings, SETTINGS_SCHEMA_VERSION, TerminalSettings,
+    TrustedConfigurationSettings, UiSettings, UserSettings, default_providers,
+    default_tier_mapping, settings_get, settings_set,
 };
 pub use ssh::{
     ClipboardConfig, SshAuthConfig, SshHostProfile, SshProfiles, default_ssh_config_path,

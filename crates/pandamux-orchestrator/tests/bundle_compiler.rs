@@ -1,13 +1,13 @@
 use pandamux_core::{
-    BundleSourceManifest, ConfigurationRevision, ModelTarget, OrganizationId, ProjectId,
-    ProviderInstanceId, SourceCommitSha, TierMapping, ValueLayer,
+    AccessMode, AgentId, BundleSourceManifest, ConfigurationRevision, ModelTarget, OrganizationId,
+    ProjectId, ProviderInstanceId, SourceCommitSha, TierMapping, ValueLayer,
 };
 use pandamux_orchestrator::{
     CompileBundleInput, ConfigurationIssueCode, LayerGrant, LayeredSourceDocument, SourceDocument,
     TrustedBundleSettings, canonical_bundle_bytes, compile_instruction_bundle, source_layer_sha256,
     verify_compiled_bundle,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 fn source(path: &str, contents: impl Into<Vec<u8>>) -> SourceDocument {
     SourceDocument::new(path, contents).expect("test path is valid")
@@ -113,6 +113,8 @@ fn settings(with_tier: bool) -> TrustedBundleSettings {
     TrustedBundleSettings {
         revision: ConfigurationRevision::new(7).expect("revision"),
         tier_mapping: TierMapping { tiers },
+        disabled_agent_ids: BTreeSet::new(),
+        full_access_agent_ids: BTreeSet::new(),
     }
 }
 
@@ -350,6 +352,102 @@ fn rejects_project_authority_widening_and_full_access() {
             expected,
         );
     }
+}
+
+#[test]
+fn trusted_settings_apply_only_after_repository_policy_validation() {
+    let mut valid = compile_input(instructions_documents(), project_documents(None));
+    valid
+        .settings
+        .disabled_agent_ids
+        .insert(AgentId::new("builder"));
+    valid
+        .settings
+        .full_access_agent_ids
+        .insert(AgentId::new("builder"));
+    let bundle = compile_instruction_bundle(&valid).expect("trusted settings compile");
+    let builder = bundle
+        .agents
+        .get(&AgentId::new("builder"))
+        .expect("builder");
+    assert!(!builder.enabled);
+    assert_eq!(builder.access_mode, AccessMode::FullAccess);
+    assert!(builder.full_access_opt_in);
+    assert_eq!(
+        bundle
+            .value_origins
+            .get("/agents/builder/accessMode")
+            .expect("access origin")
+            .layer,
+        ValueLayer::Settings
+    );
+
+    let mut widening = compile_input(
+        instructions_documents(),
+        project_documents(Some(agent(
+            "builder",
+            "auto_edit",
+            "read, grep",
+            "write, shell",
+            "local",
+            "reasoning",
+        ))),
+    );
+    widening
+        .settings
+        .full_access_agent_ids
+        .insert(AgentId::new("builder"));
+    assert_code(&widening, ConfigurationIssueCode::PolicyAccessWidening);
+}
+
+#[test]
+fn compiled_origins_cover_all_four_configuration_layers() {
+    let mut input = compile_input(instructions_documents(), project_documents(None));
+    let personal = source(
+        "agents/personal.md",
+        agent(
+            "personal",
+            "read_only",
+            "read, grep",
+            "write, shell",
+            "local",
+            "reasoning",
+        ),
+    );
+    let personal_hash = source_layer_sha256(std::slice::from_ref(&personal));
+    input.documents.push(LayeredSourceDocument {
+        layer: ValueLayer::Personal,
+        source: personal,
+    });
+    input.grants.push(LayerGrant {
+        layer: ValueLayer::Personal,
+        trusted: true,
+        content_sha256: personal_hash,
+        organization_id: input.organization_id.clone(),
+        project_id: Some(input.project_id.clone()),
+    });
+    input.source_manifest.personal_commit_sha =
+        Some(SourceCommitSha::parse("1".repeat(40)).expect("personal commit"));
+    input
+        .settings
+        .disabled_agent_ids
+        .insert(AgentId::new("personal"));
+
+    let bundle = compile_instruction_bundle(&input).expect("four-layer bundle");
+    let layers = bundle
+        .value_origins
+        .values()
+        .map(|origin| origin.layer)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        layers,
+        BTreeSet::from([
+            ValueLayer::Instructions,
+            ValueLayer::Project,
+            ValueLayer::Personal,
+            ValueLayer::Settings,
+        ])
+    );
 }
 
 #[test]

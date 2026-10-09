@@ -10,7 +10,7 @@ use pandamux_core::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Server-issued proof that one exact source layer may participate in compilation.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,6 +30,10 @@ pub struct LayerGrant {
 pub struct TrustedBundleSettings {
     pub revision: ConfigurationRevision,
     pub tier_mapping: TierMapping,
+    #[serde(default)]
+    pub disabled_agent_ids: BTreeSet<pandamux_core::AgentId>,
+    #[serde(default)]
+    pub full_access_agent_ids: BTreeSet<pandamux_core::AgentId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use pandamux_core::{
     AccessMode, AgentId, CAPACITY_SNAPSHOT_SCHEMA_VERSION, CapacityConfidence,
     CapacityEvidenceScope, CapacitySnapshot, DEFAULT_CAPACITY_MAX_AGE_MS, EnvironmentId,
-    OrganizationPolicy, ProviderInstanceId, ProviderKind, RunId, ScheduleApprovalPolicy,
+    OrganizationPolicy, ProjectId, ProviderInstanceId, ProviderKind, RunId, ScheduleApprovalPolicy,
     ScheduleRecord, ScheduleTarget, SubscriptionKey, ThreadEventKind, ThreadOrigin,
     UsageSubscription, UserSettings,
 };
@@ -26,22 +26,24 @@ use pandamux_protocol::{
     HarkDictatePromptParams, HarkSpellbookSyncParams, HelloParams, HelloResult, HubRoutingContext,
     IdentifyResult, InstructionsCheckParams, InstructionsCheckResult, InstructionsDiffParams,
     InstructionsDiffResult, InstructionsStatusParams, InstructionsStatusResult, McpCallToolParams,
-    PROTOCOL_VERSION, PingResult, ProviderHealthParams, ProviderHealthReport, ProviderHealthResult,
-    ProviderLoginFlow, ProviderLoginGuidance, ProviderLoginLaunchParams, ProviderLoginLaunchResult,
-    ProviderLoginPreview, ProviderLoginPreviewParams, ProviderModelInfo, ProviderModelsParams,
-    ProviderModelsReport, ProviderModelsResult, RoutingProviderCatalogEntry, RpcError, RpcRequest,
-    RpcResponse, ScheduleRunParams, ScheduleRunResult, ScheduleSaveParams, ScheduleValidateParams,
-    ScheduleValidationResult, ServerCapabilities, ServerRole, SettingsGetParams, SettingsGetResult,
-    SettingsSetParams, SubAgentTreeItem, SubAgentTreeParams, SubAgentTreeResult,
-    TerminalAttachParams, TerminalCloseParams, TerminalInputParams, TerminalOpenParams,
-    TerminalResizeParams, ThreadCancelTurnParams, ThreadContinueParams, ThreadCreateParams,
-    ThreadGetParams, ThreadListParams, ThreadRespondApprovalParams, ThreadResumeParams,
-    ThreadSendTurnParams, UsageAckParams, UsageAckResult, UsageBackfillParams, UsageCatalogResult,
-    UsageExportParams, UsageQueryParams, UsageSubscriptionSetParams, WorktreeSyncDeltaParams,
-    WorktreeSyncDeltaResult,
+    PROTOCOL_VERSION, PingResult, ProjectLayerDiffParams, ProjectLayerDiffResult,
+    ProjectLayerStatusParams, ProjectLayerStatusResult, ProviderHealthParams, ProviderHealthReport,
+    ProviderHealthResult, ProviderLoginFlow, ProviderLoginGuidance, ProviderLoginLaunchParams,
+    ProviderLoginLaunchResult, ProviderLoginPreview, ProviderLoginPreviewParams, ProviderModelInfo,
+    ProviderModelsParams, ProviderModelsReport, ProviderModelsResult, RoutingProviderCatalogEntry,
+    RpcError, RpcRequest, RpcResponse, ScheduleRunParams, ScheduleRunResult, ScheduleSaveParams,
+    ScheduleValidateParams, ScheduleValidationResult, ServerCapabilities, ServerRole,
+    SettingsGetParams, SettingsGetResult, SettingsSetParams, SubAgentTreeItem, SubAgentTreeParams,
+    SubAgentTreeResult, TerminalAttachParams, TerminalCloseParams, TerminalInputParams,
+    TerminalOpenParams, TerminalResizeParams, ThreadCancelTurnParams, ThreadContinueParams,
+    ThreadCreateParams, ThreadGetParams, ThreadListParams, ThreadRespondApprovalParams,
+    ThreadResumeParams, ThreadSendTurnParams, UsageAckParams, UsageAckResult, UsageBackfillParams,
+    UsageCatalogResult, UsageExportParams, UsageQueryParams, UsageSubscriptionSetParams,
+    WorktreeSyncDeltaParams, WorktreeSyncDeltaResult,
 };
 
 use crate::attachment::AttachmentManager;
+use crate::configuration_service::{ConfigurationService, ConfigurationServiceError};
 use crate::data_paths::DataPaths;
 use crate::driver_registry::DriverRegistry;
 use crate::instructions_service::{InstructionsService, InstructionsServiceError};
@@ -72,6 +74,7 @@ pub struct Router {
     hark: Arc<crate::hark::HarkBridge>,
     personal_repo: PersonalRepoService,
     instructions: InstructionsService,
+    configuration: ConfigurationService,
     data_paths: DataPaths,
     role: ServerRole,
     environment_id: String,
@@ -460,6 +463,18 @@ fn instructions_rpc_error(
     )
 }
 
+fn configuration_rpc_error(error: ConfigurationServiceError) -> RpcError {
+    RpcError::with_data(
+        -32041,
+        error.safe_message,
+        json!({
+            "reason": error.reason,
+            "retryable": error.retryable,
+            "issues": error.issues,
+        }),
+    )
+}
+
 fn provider_rpc_error(error: pandamux_providers::ProviderError) -> RpcError {
     match error {
         pandamux_providers::ProviderError::InstallationError {
@@ -556,6 +571,8 @@ impl Router {
         let attachments = AttachmentManager::new(data_paths.attachments().to_path_buf());
         let personal_repo = PersonalRepoService::new(data_paths.clone(), store.clone());
         let instructions = InstructionsService::new(data_paths.clone(), store.clone());
+        let configuration =
+            ConfigurationService::new(store.clone(), instructions.clone(), personal_repo.clone());
         let terminal = TerminalServerManager::new();
         let environment_router = Arc::new(crate::environment_router::EnvironmentRouter::new(
             pandamux_core::ids::EnvironmentId::new(environment_id.clone()),
@@ -579,6 +596,7 @@ impl Router {
             hark: Arc::new(crate::hark::HarkBridge::default()),
             personal_repo,
             instructions,
+            configuration,
             data_paths,
             role,
             environment_id,
@@ -629,6 +647,11 @@ impl Router {
         self.personal_repo = PersonalRepoService::new(data_paths.clone(), self.store.clone());
         self.instructions.shutdown();
         self.instructions = InstructionsService::new(data_paths.clone(), self.store.clone());
+        self.configuration = ConfigurationService::new(
+            self.store.clone(),
+            self.instructions.clone(),
+            self.personal_repo.clone(),
+        );
         self.data_paths = data_paths;
         self
     }
@@ -651,6 +674,10 @@ impl Router {
 
     pub fn instructions(&self) -> &InstructionsService {
         &self.instructions
+    }
+
+    pub fn configuration(&self) -> &ConfigurationService {
+        &self.configuration
     }
 
     pub async fn shutdown_antigravity_auth(&self) {
@@ -1299,6 +1326,8 @@ impl Router {
             "instructions.status" => self.handle_instructions_status(context, params),
             "instructions.check" => self.handle_instructions_check(context, params).await,
             "instructions.diff" => self.handle_instructions_diff(context, params),
+            "projectLayer.status" => self.handle_project_layer_status(context, params).await,
+            "projectLayer.diff" => self.handle_project_layer_diff(context, params).await,
             "provider.health" | "provider.probe" => self.handle_provider_health(params).await,
             "provider.models" => self.handle_provider_models(params).await,
             "provider.login.preview" => self.handle_provider_login_preview(params).await,
@@ -1549,6 +1578,145 @@ impl Router {
             activatable: candidate.activatable,
         };
         serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_project_layer_status(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_local_configuration_peer(context)?;
+        let params = serde_json::from_value::<ProjectLayerStatusParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let workspace_root = self.local_project_workspace(&params.project_id)?;
+        let service = self.configuration.clone();
+        let project_id = params.project_id;
+        let snapshot = tokio::task::spawn_blocking(move || {
+            service.inspect_project_layer(&project_id, &workspace_root, Self::now_ms())
+        })
+        .await
+        .map_err(|_| {
+            RpcError::with_data(
+                -32000,
+                "The project configuration worker did not join cleanly",
+                json!({ "reason": "configuration_worker_join_failed", "retryable": true }),
+            )
+        })?
+        .map_err(configuration_rpc_error)?;
+        serde_json::to_value(ProjectLayerStatusResult {
+            repository: snapshot.repository,
+            project_content_sha256: snapshot.project_content_sha256,
+            trust: snapshot.trust,
+            visible_but_inactive: snapshot.visible_but_inactive,
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_project_layer_diff(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_local_configuration_peer(context)?;
+        let params = serde_json::from_value::<ProjectLayerDiffParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let workspace_root = self.local_project_workspace(&params.project_id)?;
+        let service = self.configuration.clone();
+        let project_id = params.project_id.clone();
+        let snapshot = tokio::task::spawn_blocking(move || {
+            service.inspect_project_layer(&project_id, &workspace_root, Self::now_ms())
+        })
+        .await
+        .map_err(|_| {
+            RpcError::with_data(
+                -32000,
+                "The project configuration worker did not join cleanly",
+                json!({ "reason": "configuration_worker_join_failed", "retryable": true }),
+            )
+        })?
+        .map_err(configuration_rpc_error)?;
+        if snapshot.project_content_sha256.as_ref() != Some(&params.project_content_sha256) {
+            return Err(RpcError::with_data(
+                -32009,
+                "The project configuration changed before its diff was loaded",
+                json!({
+                    "reason": "project_content_changed",
+                    "projectId": params.project_id,
+                    "expectedContentSha256": params.project_content_sha256,
+                    "actualContentSha256": snapshot.project_content_sha256,
+                    "retryable": true,
+                }),
+            ));
+        }
+        let settings = self
+            .store
+            .get_or_initialize_settings(Self::now_ms())
+            .map_err(|_| RpcError::internal_error("configuration settings unavailable"))?;
+        let trust_digest = pandamux_orchestrator::canonical_json_sha256(&snapshot.trust);
+        let trust_digest = pandamux_core::ContentSha256::parse(trust_digest)
+            .map_err(|_| RpcError::internal_error("configuration trust digest invalid"))?;
+        let dependencies = pandamux_orchestrator::ConfigurationDependencySnapshot {
+            instructions_source_commit_sha: None,
+            canonical_remote_identity: snapshot.repository.canonical_remote_identity.clone(),
+            tracking: pandamux_core::TrackingRef::Branch("refs/heads/project-layer".to_string()),
+            project_content_sha256: snapshot.project_content_sha256.clone(),
+            personal_source_commit_sha: None,
+            settings_revision: settings.revision,
+            trust_digest,
+        };
+        let report = pandamux_orchestrator::inspect_configuration_candidate(
+            &pandamux_orchestrator::ConfigurationCandidateInspectionInput {
+                layer: pandamux_core::ValueLayer::Project,
+                baseline_documents: Vec::new(),
+                candidate_documents: snapshot.documents,
+                baseline_dependencies: dependencies.clone(),
+                candidate_dependencies: dependencies,
+                scheduled_agent_ids: BTreeSet::new(),
+                history_rewritten: false,
+            },
+        );
+        let mut issues = snapshot.issues;
+        issues.extend(
+            report
+                .issues
+                .iter()
+                .map(serde_json::to_value)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| RpcError::internal_error(error.to_string()))?,
+        );
+        issues.sort_by_key(pandamux_orchestrator::canonical_json_bytes);
+        issues.dedup();
+        serde_json::to_value(ProjectLayerDiffResult {
+            project_content_sha256: params.project_content_sha256,
+            behavioral_diff: serde_json::to_value(report.behavioral_diff)
+                .map_err(|error| RpcError::internal_error(error.to_string()))?,
+            issues,
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn local_project_workspace(&self, project_id: &ProjectId) -> Result<PathBuf, RpcError> {
+        self.store
+            .list_threads()
+            .map_err(|_| RpcError::internal_error("project workspace unavailable"))?
+            .into_iter()
+            .find(|thread| {
+                thread.project_id.as_ref() == Some(project_id)
+                    && thread.environment_id.as_str() == self.environment_id
+                    && PathBuf::from(thread.workspace.effective_path()).is_absolute()
+            })
+            .map(|thread| PathBuf::from(thread.workspace.effective_path()))
+            .ok_or_else(|| {
+                RpcError::with_data(
+                    -32004,
+                    "No local workspace is registered for this project",
+                    json!({
+                        "reason": "project_workspace_missing",
+                        "projectId": project_id,
+                        "retryable": false,
+                    }),
+                )
+            })
     }
 
     fn handle_hello(&self, params: Value) -> Result<Value, RpcError> {
@@ -3926,6 +4094,129 @@ impl Router {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn project_layer_rpc_is_local_exact_hash_and_origin_aware() {
+        let root = tempfile::tempdir().expect("temporary project RPC root");
+        let repository = root.path().join("repository");
+        std::fs::create_dir_all(repository.join(".git")).expect("git directory");
+        std::fs::write(
+            repository.join(".git/config"),
+            "[remote \"origin\"]\n\turl = git@github.com:BoardPandas/Pandamux.git\n",
+        )
+        .expect("git config");
+        std::fs::create_dir_all(repository.join(".pandamux")).expect("project layer");
+        std::fs::write(
+            repository.join(".pandamux/project.yaml"),
+            "schemaVersion: 1\nkind: pandamux.project\nclassOverrides: []\nverification: [cargo test]\nagents: []\nknowledge: []\n",
+        )
+        .expect("project configuration");
+        let store = Store::in_memory().expect("store");
+        let project_id = ProjectId::new("project-rpc");
+        let organization_id = pandamux_core::OrganizationId::new("organization-rpc");
+        store
+            .save_organization_policy(
+                &pandamux_core::OrganizationPolicy {
+                    id: organization_id,
+                    display_name: "RPC organization".to_string(),
+                    project_ids: vec![project_id.clone()],
+                    allowed_provider_instances: vec![ProviderInstanceId::new("provider-rpc")],
+                    allowed_subscriptions: vec![SubscriptionKey::new("subscription-rpc")],
+                    failover_pool_ids: Vec::new(),
+                    default_tier_mapping: None,
+                    max_concurrency: Some(1),
+                    daily_budget_micro_usd: None,
+                    broadside: pandamux_core::BroadsidePolicy::default(),
+                    revision: 1,
+                },
+                1,
+            )
+            .expect("organization policy");
+        store
+            .save_thread(&pandamux_core::Thread {
+                id: pandamux_core::ThreadId::new("thread-project-rpc"),
+                project_id: Some(project_id.clone()),
+                environment_id: EnvironmentId::new("env-local"),
+                parent_thread_id: None,
+                title: "Project RPC".to_string(),
+                provider_instance_id: ProviderInstanceId::new("provider-rpc"),
+                model: "test".to_string(),
+                effort: None,
+                access_mode: AccessMode::ReadOnly,
+                workspace: pandamux_core::ThreadWorkspace {
+                    cwd: repository.to_string_lossy().into_owned(),
+                    worktree: None,
+                },
+                status: pandamux_core::ThreadStatus::Idle,
+                agent: None,
+                origin: pandamux_core::ThreadOrigin::Manual,
+                created_at_ms: 1,
+                updated_at_ms: 1,
+            })
+            .expect("project thread");
+        let router = Router::new(store, ServerRole::Hub, "env-local".to_string())
+            .with_data_dir(root.path().join("app"));
+        let node = RequestContext::node_proxy(
+            EnvironmentId::new("env-node"),
+            crate::ClientIdentity::default(),
+        );
+        let denied = router
+            .handle_request_with_context(
+                &node,
+                RpcRequest::new(
+                    1,
+                    "projectLayer.status",
+                    Some(json!({ "projectId": project_id })),
+                ),
+            )
+            .await
+            .expect("node denial response");
+        assert_eq!(
+            denied
+                .error
+                .as_ref()
+                .and_then(|error| error.data.as_ref())
+                .and_then(|data| data.get("reason"))
+                .and_then(Value::as_str),
+            Some("instructions_local_control_required")
+        );
+
+        let status = router
+            .handle_request(RpcRequest::new(
+                2,
+                "projectLayer.status",
+                Some(json!({ "projectId": project_id })),
+            ))
+            .await
+            .expect("project status response");
+        let status = status.result.expect("project status result");
+        let hash = status["projectContentSha256"]
+            .as_str()
+            .expect("project content hash");
+        assert_eq!(
+            status.pointer("/repository/canonicalRemoteIdentity"),
+            Some(&json!("github.com/boardpandas/pandamux"))
+        );
+        assert_eq!(status["visibleButInactive"], true);
+
+        let diff = router
+            .handle_request(RpcRequest::new(
+                3,
+                "projectLayer.diff",
+                Some(json!({
+                    "projectId": project_id,
+                    "projectContentSha256": hash,
+                })),
+            ))
+            .await
+            .expect("project diff response");
+        let diff = diff.result.expect("project diff result");
+        assert_eq!(diff["projectContentSha256"], hash);
+        assert_eq!(
+            diff.pointer("/behavioralDiff/verification/added/0"),
+            Some(&json!("project"))
+        );
+    }
 
     #[tokio::test]
     async fn instructions_rpc_is_bounded_and_local_mutation_is_control_only() {

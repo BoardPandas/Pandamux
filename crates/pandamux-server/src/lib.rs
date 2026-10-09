@@ -1,5 +1,6 @@
 pub mod attachment;
 pub mod checkpoint;
+pub mod configuration_service;
 pub mod data_paths;
 pub mod driver_registry;
 pub mod environment_router;
@@ -30,6 +31,9 @@ pub use attachment::AttachmentManager;
 pub use checkpoint::{
     ChangedFileStat, CheckpointPhase, compute_changed_files, create_checkpoint, is_git_repository,
     prune_old_checkpoints, prune_thread_checkpoints, rollback_to_checkpoint,
+};
+pub use configuration_service::{
+    ConfigurationCompilation, ConfigurationService, ConfigurationServiceError, ProjectLayerSnapshot,
 };
 pub use data_paths::DataPaths;
 pub use driver_registry::DriverRegistry;

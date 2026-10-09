@@ -325,6 +325,16 @@ impl PersonalRepoService {
         self.ensure_initialized_owned(None)
     }
 
+    pub fn current_documents(
+        &self,
+    ) -> Result<(SourceCommitSha, Vec<SourceDocument>), PersonalRepoError> {
+        let _owner = self.owner.lock().expect("personal repository owner lock");
+        let head = self.ensure_initialized_owned(None)?;
+        let snapshot = self.read_snapshot(&self.git_dir(), head.as_str())?;
+        let documents = validate_snapshot(&snapshot)?;
+        Ok((head, documents))
+    }
+
     fn ensure_initialized_owned(
         &self,
         failpoint: Option<PersonalRepoFailpoint>,

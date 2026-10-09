@@ -307,6 +307,7 @@ impl InstructionsService {
             trust_digest,
         };
         let report = inspect_configuration_candidate(&ConfigurationCandidateInspectionInput {
+            layer: ValueLayer::Instructions,
             baseline_documents,
             candidate_documents,
             baseline_dependencies,
@@ -378,6 +379,33 @@ impl InstructionsService {
                     .map_err(|_| state_error())
             })
             .transpose()
+    }
+
+    pub fn active_snapshot(
+        &self,
+        source_id: &InstructionSourceId,
+    ) -> Result<Option<(InstructionsSourceRecord, Vec<SourceDocument>)>, InstructionsServiceError>
+    {
+        let Some(source) = self.store.get_instruction_source(source_id)? else {
+            return Ok(None);
+        };
+        let Some(active_commit) = source.active_source_commit_sha.as_ref() else {
+            return Ok(None);
+        };
+        let mirror = self.mirror_path(&source.canonical_remote_identity);
+        let owner = repository_owner(&mirror);
+        let _owner = owner.lock().expect("instructions mirror owner lock");
+        let (documents, issues) = self.read_source_snapshot(&mirror, active_commit)?;
+        if !issues.is_empty() {
+            return Err(InstructionsServiceError {
+                reason: "active_instructions_invalid",
+                safe_message: "The active instructions snapshot failed integrity inspection"
+                    .to_string(),
+                retryable: false,
+                actual_revision: None,
+            });
+        }
+        Ok(Some((source, documents)))
     }
 
     fn finish_failed_check(

@@ -681,8 +681,9 @@ impl Store {
         &self,
         repository: &ProjectRepositoryRecord,
     ) -> Result<(), StoreError> {
-        let conn = self.conn.lock().unwrap();
-        let existing = conn
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let existing = tx
             .query_row(
                 "SELECT project_id, organization_id, canonical_remote_identity,
                         canonical_root_identity, display_path, revision,
@@ -738,6 +739,13 @@ impl Store {
                 },
             )
             .transpose()?;
+        let identity_changed = existing.as_ref().is_some_and(|existing| {
+            existing.project_id != repository.project_id
+                || existing.organization_id != repository.organization_id
+                || existing.canonical_remote_identity != repository.canonical_remote_identity
+                || existing.canonical_repository_root_identity
+                    != repository.canonical_repository_root_identity
+        });
         if let Some(existing) = existing {
             if repository.revision < existing.revision {
                 return Err(StoreError::Data(
@@ -753,7 +761,7 @@ impl Store {
                 ));
             }
         }
-        conn.execute(
+        tx.execute(
             "INSERT INTO project_repositories (
                 id, project_id, organization_id, canonical_remote_identity,
                 canonical_root_identity, display_path, revision, created_at_ms, updated_at_ms
@@ -779,7 +787,68 @@ impl Store {
                 checked_i64(repository.updated_at_ms, "project repository updated_at_ms")?,
             ],
         )?;
+        if identity_changed {
+            tx.execute(
+                "UPDATE project_layer_trust
+                 SET revoked_at_ms = ?1
+                 WHERE repository_id = ?2 AND revoked_at_ms IS NULL",
+                params![
+                    checked_i64(repository.updated_at_ms, "project trust revoked_at_ms")?,
+                    repository.id.as_str(),
+                ],
+            )?;
+        }
+        tx.commit()?;
         Ok(())
+    }
+
+    pub fn get_project_repository(
+        &self,
+        project_id: &ProjectId,
+        organization_id: &OrganizationId,
+    ) -> Result<Option<ProjectRepositoryRecord>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, canonical_remote_identity, canonical_root_identity,
+                    display_path, revision, created_at_ms, updated_at_ms
+             FROM project_repositories
+             WHERE project_id = ?1 AND organization_id = ?2",
+            params![project_id.as_str(), organization_id.as_str()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
+                ))
+            },
+        )
+        .optional()?
+        .map(
+            |(id, remote, root, display_path, revision, created_at_ms, updated_at_ms)| {
+                Ok(ProjectRepositoryRecord {
+                    id: pandamux_core::ProjectRepositoryId::from(id),
+                    project_id: project_id.clone(),
+                    organization_id: organization_id.clone(),
+                    canonical_remote_identity: remote,
+                    canonical_repository_root_identity: root,
+                    display_path,
+                    revision: configuration_revision(revision, "project_repositories.revision")?,
+                    created_at_ms: checked_u64(
+                        created_at_ms,
+                        "project_repositories.created_at_ms",
+                    )?,
+                    updated_at_ms: checked_u64(
+                        updated_at_ms,
+                        "project_repositories.updated_at_ms",
+                    )?,
+                })
+            },
+        )
+        .transpose()
     }
 
     pub fn insert_project_layer_trust(
@@ -787,6 +856,23 @@ impl Store {
         trust: &ProjectLayerTrustRecord,
     ) -> Result<(), StoreError> {
         let conn = self.conn.lock().unwrap();
+        let repository_scope = conn
+            .query_row(
+                "SELECT organization_id, project_id FROM project_repositories WHERE id = ?1",
+                [trust.repository_id.as_str()],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+        if repository_scope.as_ref()
+            != Some(&(
+                trust.organization_id.as_str().to_string(),
+                trust.project_id.as_str().to_string(),
+            ))
+        {
+            return Err(StoreError::Data(
+                "project trust scope does not match its repository".to_string(),
+            ));
+        }
         conn.execute(
             "INSERT INTO project_layer_trust (
                 id, organization_id, project_id, repository_id, project_content_sha256,
@@ -807,6 +893,68 @@ impl Store {
             ],
         )?;
         Ok(())
+    }
+
+    pub fn get_active_project_layer_trust(
+        &self,
+        organization_id: &OrganizationId,
+        project_id: &ProjectId,
+        repository_id: &pandamux_core::ProjectRepositoryId,
+        content_sha256: &ContentSha256,
+    ) -> Result<Option<ProjectLayerTrustRecord>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, approved_by, approved_at_ms
+             FROM project_layer_trust
+             WHERE organization_id = ?1 AND project_id = ?2
+               AND repository_id = ?3 AND project_content_sha256 = ?4
+               AND revoked_at_ms IS NULL",
+            params![
+                organization_id.as_str(),
+                project_id.as_str(),
+                repository_id.as_str(),
+                content_sha256.as_str(),
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .optional()?
+        .map(|(id, approved_by, approved_at_ms)| {
+            Ok(ProjectLayerTrustRecord {
+                id: pandamux_core::ProjectLayerTrustId::from(id),
+                organization_id: organization_id.clone(),
+                project_id: project_id.clone(),
+                repository_id: repository_id.clone(),
+                project_content_sha256: content_sha256.clone(),
+                approved_by,
+                approved_at_ms: checked_u64(approved_at_ms, "project_layer_trust.approved_at_ms")?,
+                revoked_at_ms: None,
+            })
+        })
+        .transpose()
+    }
+
+    pub fn revoke_project_layer_trust(
+        &self,
+        repository_id: &pandamux_core::ProjectRepositoryId,
+        revoked_at_ms: u64,
+    ) -> Result<usize, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE project_layer_trust
+             SET revoked_at_ms = ?1
+             WHERE repository_id = ?2 AND revoked_at_ms IS NULL",
+            params![
+                checked_i64(revoked_at_ms, "project trust revoked_at_ms")?,
+                repository_id.as_str(),
+            ],
+        )
+        .map_err(StoreError::from)
     }
 
     pub fn append_configuration_audit(
@@ -911,6 +1059,39 @@ mod tests {
             activatable: true,
             created_at_ms: updated_at_ms,
             updated_at_ms,
+        }
+    }
+
+    fn test_project_repository() -> ProjectRepositoryRecord {
+        ProjectRepositoryRecord {
+            id: pandamux_core::ProjectRepositoryId::new("repository-trust-test"),
+            project_id: ProjectId::new("project-trust-test"),
+            organization_id: OrganizationId::new("organization-trust-test"),
+            canonical_remote_identity: "example.invalid/team/repository".to_string(),
+            canonical_repository_root_identity: "root-identity-one".to_string(),
+            display_path: "repository".to_string(),
+            revision: ConfigurationRevision::new(1).expect("revision"),
+            created_at_ms: 10,
+            updated_at_ms: 10,
+        }
+    }
+
+    fn test_project_trust(
+        repository: &ProjectRepositoryRecord,
+        id: &str,
+        content: char,
+        approved_at_ms: u64,
+    ) -> ProjectLayerTrustRecord {
+        ProjectLayerTrustRecord {
+            id: pandamux_core::ProjectLayerTrustId::new(id),
+            organization_id: repository.organization_id.clone(),
+            project_id: repository.project_id.clone(),
+            repository_id: repository.id.clone(),
+            project_content_sha256: ContentSha256::parse(content.to_string().repeat(64))
+                .expect("content hash"),
+            approved_by: "local-control".to_string(),
+            approved_at_ms,
+            revoked_at_ms: None,
         }
     }
 
@@ -1080,5 +1261,112 @@ mod tests {
                 .expect("load latest"),
             None
         );
+    }
+
+    #[test]
+    fn project_trust_requires_every_exact_key_and_identity_change_revokes() {
+        let store = Store::in_memory().expect("store");
+        let mut repository = test_project_repository();
+        store
+            .save_project_repository(&repository)
+            .expect("save repository");
+        let trust = test_project_trust(&repository, "trust-one", 'a', 11);
+        store
+            .insert_project_layer_trust(&trust)
+            .expect("insert trust");
+
+        let lookup = |organization: &OrganizationId,
+                      project: &ProjectId,
+                      repository_id: &pandamux_core::ProjectRepositoryId,
+                      content: &ContentSha256| {
+            store
+                .get_active_project_layer_trust(organization, project, repository_id, content)
+                .expect("load trust")
+        };
+        assert_eq!(
+            lookup(
+                &trust.organization_id,
+                &trust.project_id,
+                &trust.repository_id,
+                &trust.project_content_sha256,
+            ),
+            Some(trust.clone())
+        );
+        assert!(
+            lookup(
+                &OrganizationId::new("organization-other"),
+                &trust.project_id,
+                &trust.repository_id,
+                &trust.project_content_sha256,
+            )
+            .is_none()
+        );
+        assert!(
+            lookup(
+                &trust.organization_id,
+                &ProjectId::new("project-other"),
+                &trust.repository_id,
+                &trust.project_content_sha256,
+            )
+            .is_none()
+        );
+        assert!(
+            lookup(
+                &trust.organization_id,
+                &trust.project_id,
+                &pandamux_core::ProjectRepositoryId::new("repository-other"),
+                &trust.project_content_sha256,
+            )
+            .is_none()
+        );
+        assert!(
+            lookup(
+                &trust.organization_id,
+                &trust.project_id,
+                &trust.repository_id,
+                &ContentSha256::parse("b".repeat(64)).expect("other content hash"),
+            )
+            .is_none()
+        );
+
+        repository.canonical_remote_identity = "example.invalid/team/other".to_string();
+        repository.revision = ConfigurationRevision::new(2).expect("revision");
+        repository.updated_at_ms = 20;
+        store
+            .save_project_repository(&repository)
+            .expect("change remote identity");
+        assert!(
+            lookup(
+                &trust.organization_id,
+                &trust.project_id,
+                &trust.repository_id,
+                &trust.project_content_sha256,
+            )
+            .is_none()
+        );
+
+        let root_trust = test_project_trust(&repository, "trust-two", 'a', 21);
+        store
+            .insert_project_layer_trust(&root_trust)
+            .expect("insert replacement trust");
+        repository.canonical_repository_root_identity = "root-identity-two".to_string();
+        repository.revision = ConfigurationRevision::new(3).expect("revision");
+        repository.updated_at_ms = 30;
+        store
+            .save_project_repository(&repository)
+            .expect("change root identity");
+        assert!(
+            lookup(
+                &root_trust.organization_id,
+                &root_trust.project_id,
+                &root_trust.repository_id,
+                &root_trust.project_content_sha256,
+            )
+            .is_none()
+        );
+
+        let mut wrong_scope = test_project_trust(&repository, "trust-wrong-scope", 'c', 31);
+        wrong_scope.organization_id = OrganizationId::new("organization-other");
+        assert!(store.insert_project_layer_trust(&wrong_scope).is_err());
     }
 }
