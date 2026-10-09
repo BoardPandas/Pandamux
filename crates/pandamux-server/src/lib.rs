@@ -19,6 +19,7 @@ pub mod proxy_connection;
 pub mod proxy_transport;
 pub mod request_context;
 pub mod router;
+pub mod run_execution_service;
 pub mod runtime;
 pub mod server;
 pub mod store;
@@ -73,15 +74,20 @@ pub use request_context::{
     CapabilityAuthority, CapabilityScope, ClientIdentity, PeerRole, RequestContext,
 };
 pub use router::Router;
+pub use run_execution_service::{RunExecutionService, RunTransitionNotice};
 pub use runtime::{RUNTIME_FILENAME, RuntimeInfo};
 pub use server::{Server, ServerConfig};
 pub use store::{
-    AttemptDispatchRecord, AttemptDispatchState, BundleActivationFailpoint,
-    BundleDistributionRecord, BundleObjectRecord, DailyBudgetRecord, NodeReceiptKind,
-    NodeReceiptRecord, OrchestrationQueueRecord, OrchestrationRunRecord,
-    OrchestrationRuntimeRecords, OwnedAttemptWorktreeRecord, PersonalRepoStateRecord,
-    ProviderExecutionAudit, QueueState, RevisionedSettings, Store, StoreError,
+    AssignedRunEvent, AttemptDispatchRecord, AttemptDispatchState, BundleActivationFailpoint,
+    BundleDistributionRecord, BundleObjectRecord, DailyBudgetRecord, EffectClaimOutcome,
+    EffectClaimRequest, EffectDispatchOutcome, EffectDispatchRequest, EffectOutcomeRecord,
+    EffectOutcomeRequest, EffectOwnership, EffectPreparationOutcome, NodeReceiptKind,
+    NodeReceiptRecord, OrchestrationExecutionFailpoint, OrchestrationQueueRecord,
+    OrchestrationReplayAudit, OrchestrationRunRecord, OrchestrationRuntimeRecords,
+    OwnedAttemptWorktreeRecord, PersonalRepoStateRecord, ProviderExecutionAudit, QueueState,
+    RevisionedSettings, RunTransition, RunTransitionRequest, RunTransitionRows, Store, StoreError,
     StoredBudgetReservation, StoredInstructionCandidate, StoredOrchestrationEffect,
+    orchestration_snapshot_sha256,
 };
 pub use terminal::TerminalServerManager;
 pub use thread_manager::ThreadManager;

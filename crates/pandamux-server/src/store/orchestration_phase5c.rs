@@ -3,15 +3,15 @@ use pandamux_core::{
     AgentId, ArtifactKey, AttemptBoundary, AttemptProgressId, AttemptProgressKind,
     AttemptProgressRecord, AttemptWorktreeId, BlackboardEntry, BlackboardEntryId, BudgetGrantId,
     BudgetReservation, EffectDeliveryRecord, EffectDeliveryState, ExecutionLease, ExecutionLeaseId,
-    MAX_ARTIFACT_BYTES, MAX_ARTIFACT_CONTAINER_ITEMS, MAX_ARTIFACT_JSON_DEPTH,
+    LeaseResourceKind, MAX_ARTIFACT_BYTES, MAX_ARTIFACT_CONTAINER_ITEMS, MAX_ARTIFACT_JSON_DEPTH,
     MAX_ARTIFACT_STRING_BYTES, MAX_ARTIFACTS_PER_RUN, MAX_ARTIFACTS_PER_TASK,
     MAX_RUN_ARTIFACT_BYTES, NodeStoreId, OrchestrationEffect, OrchestrationEffectId,
     OrganizationId, OwnedAttemptWorktree, ProjectId, ProjectRepositoryId, RecoveryReview,
-    RecoveryReviewStatus, Run, RunAttemptId, RunEvent, RunEventId, RunId, RunStatus, RunTaskId,
-    ServerIncarnationId, SupplementalBudgetGrant, TaskRouteDecision, ThreadId, TurnAttemptId,
-    TurnId,
+    RecoveryReviewStatus, Run, RunAttemptId, RunCommand, RunEvent, RunEventId, RunId, RunStatus,
+    RunTaskId, ServerIncarnationId, SupplementalBudgetGrant, TaskRouteDecision, ThreadId,
+    TurnAttemptId, TurnId,
 };
-use rusqlite::{OptionalExtension, Transaction, params};
+use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -169,6 +169,121 @@ pub struct OrchestrationRuntimeRecords {
     pub progress: Vec<AttemptProgressRecord>,
     pub recovery_reviews: Vec<RecoveryReview>,
     pub node_receipts: Vec<NodeReceiptRecord>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OrchestrationExecutionFailpoint {
+    AfterEventCommit,
+    BeforeEffectClaim,
+    AfterEffectClaim,
+    BeforeDispatchMarker,
+    AfterDispatchMarker,
+    BeforeOutcomeCommit,
+    AfterOutcomeCommit,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AssignedRunEvent {
+    pub event_id: RunEventId,
+    pub idempotency_key: String,
+    pub at_ms: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RunTransitionRows {
+    pub queue_records: Vec<OrchestrationQueueRecord>,
+    pub budget_reservations: Vec<StoredBudgetReservation>,
+    pub daily_budgets: Vec<DailyBudgetRecord>,
+    pub artifacts: Vec<BlackboardEntry>,
+    pub recovery_reviews: Vec<RecoveryReview>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunTransitionRequest {
+    pub run_id: RunId,
+    pub expected_last_seq: u64,
+    pub expected_snapshot_sha256: String,
+    pub command: RunCommand,
+    pub assigned_events: Vec<AssignedRunEvent>,
+    pub rows: RunTransitionRows,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunTransition {
+    pub run: Run,
+    pub snapshot_sha256: String,
+    pub events: Vec<RunEvent>,
+    pub effect_ids: Vec<OrchestrationEffectId>,
+    pub duplicate: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EffectClaimRequest {
+    pub effect_id: OrchestrationEffectId,
+    pub expected_payload_sha256: String,
+    pub owner_incarnation_id: ServerIncarnationId,
+    pub lease: ExecutionLease,
+    pub claimed_at_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EffectClaimOutcome {
+    pub effect: StoredOrchestrationEffect,
+    pub acquired: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EffectOwnership {
+    pub effect_id: OrchestrationEffectId,
+    pub expected_payload_sha256: String,
+    pub owner_incarnation_id: ServerIncarnationId,
+    pub lease_id: ExecutionLeaseId,
+    pub claim_revision: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EffectDispatchRequest {
+    pub ownership: EffectOwnership,
+    pub dispatch_started_at_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EffectDispatchOutcome {
+    pub effect: StoredOrchestrationEffect,
+    pub dispatch_allowed: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EffectPreparationOutcome {
+    pub effect: StoredOrchestrationEffect,
+    pub prepared: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EffectOutcomeRequest {
+    pub ownership: EffectOwnership,
+    pub result_digest: String,
+    pub safe_error_code: Option<String>,
+    pub recorded_at_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EffectOutcomeRecord {
+    pub effect: StoredOrchestrationEffect,
+    pub recorded: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OrchestrationReplayAudit {
+    pub run_id: RunId,
+    pub last_seq: u64,
+    pub snapshot_sha256: String,
+    pub event_count: usize,
+    pub effect_count: usize,
+}
+
+pub fn orchestration_snapshot_sha256(run: &Run) -> String {
+    sha256_hex(&pandamux_orchestrator::canonical_run_bytes(run))
 }
 
 impl Store {
@@ -379,6 +494,984 @@ impl Store {
         tx.commit()?;
         Ok(())
     }
+
+    pub fn commit_run_transition(
+        &self,
+        request: &RunTransitionRequest,
+        failpoint: Option<OrchestrationExecutionFailpoint>,
+    ) -> Result<RunTransition, StoreError> {
+        validate_failpoint(
+            failpoint,
+            &[OrchestrationExecutionFailpoint::AfterEventCommit],
+        )?;
+        if !is_sha256(&request.expected_snapshot_sha256) {
+            return Err(data_error(
+                "expected orchestration snapshot digest is malformed",
+            ));
+        }
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = load_snapshot(&tx, &request.run_id)?;
+        let stored_events = load_events(&tx, &request.run_id)?;
+        let (replayed, derived_effects) = replay_with_effects(&stored_events)?;
+        if pandamux_orchestrator::canonical_run_bytes(&current)
+            != pandamux_orchestrator::canonical_run_bytes(&replayed)
+        {
+            return Err(data_error(
+                "orchestration replay differs from stored snapshot",
+            ));
+        }
+        let stored_effects = load_effects(&tx, &request.run_id)?;
+        verify_effect_rows(&derived_effects, &stored_effects)?;
+        if request.expected_last_seq > current.last_seq {
+            return Err(data_error(
+                "expected orchestration sequence is ahead of durable state",
+            ));
+        }
+        let base_events = stored_events
+            .iter()
+            .take_while(|event| event.seq <= request.expected_last_seq)
+            .cloned()
+            .collect::<Vec<_>>();
+        let (base, _) = replay_with_effects(&base_events)?;
+        if base.last_seq != request.expected_last_seq
+            || orchestration_snapshot_sha256(&base) != request.expected_snapshot_sha256
+        {
+            return Err(data_error(
+                "expected orchestration snapshot identity does not match replay",
+            ));
+        }
+        let kinds = pandamux_orchestrator::decide(&base, request.command.clone())
+            .map_err(orchestration_error)?;
+        if kinds.len() != request.assigned_events.len() {
+            return Err(data_error(
+                "server-assigned event identities do not match the decided event count",
+            ));
+        }
+        let mut next = base.clone();
+        let mut events = Vec::with_capacity(kinds.len());
+        let mut new_effects = Vec::new();
+        for (kind, assigned) in kinds.into_iter().zip(&request.assigned_events) {
+            if assigned.event_id.as_str().trim().is_empty()
+                || assigned.idempotency_key.trim().is_empty()
+            {
+                return Err(data_error(
+                    "assigned orchestration event identity is malformed",
+                ));
+            }
+            let event = RunEvent {
+                event_id: assigned.event_id.clone(),
+                run_id: request.run_id.clone(),
+                seq: next
+                    .last_seq
+                    .checked_add(1)
+                    .ok_or_else(|| data_error("orchestration event sequence overflow"))?,
+                at_ms: assigned.at_ms,
+                idempotency_key: assigned.idempotency_key.clone(),
+                kind,
+            };
+            let outcome =
+                pandamux_orchestrator::apply(&next, &event).map_err(orchestration_error)?;
+            next = outcome.run;
+            new_effects.extend(outcome.new_effects);
+            events.push(event);
+        }
+        let exact_duplicate = transition_events_match(&tx, &events)?;
+        if exact_duplicate {
+            verify_transition_rows(&tx, &request.run_id, &request.rows)?;
+            return Ok(RunTransition {
+                snapshot_sha256: orchestration_snapshot_sha256(&next),
+                effect_ids: new_effects.iter().map(|effect| effect.id.clone()).collect(),
+                run: next,
+                events,
+                duplicate: true,
+            });
+        }
+        if transition_events_collide(&tx, &events)? {
+            return Err(data_error(
+                "orchestration event or idempotency identity was reused with different bytes",
+            ));
+        }
+        if current.last_seq != request.expected_last_seq
+            || orchestration_snapshot_sha256(&current) != request.expected_snapshot_sha256
+        {
+            return Err(data_error(
+                "orchestration run changed before the transition could commit",
+            ));
+        }
+        for event in &events {
+            insert_event(&tx, event)?;
+        }
+        let stored_new_effects = new_effects
+            .iter()
+            .cloned()
+            .map(|effect| stored_effect_from_run(&next, &events, effect))
+            .collect::<Result<Vec<_>, _>>()?;
+        for effect in &stored_new_effects {
+            insert_effect(&tx, effect)?;
+        }
+        update_run_snapshot(
+            &tx,
+            &request.run_id,
+            &next,
+            request.expected_last_seq,
+            &request.expected_snapshot_sha256,
+        )?;
+        insert_transition_rows(&tx, &request.run_id, &request.rows)?;
+        settle_acknowledged_effect(&tx, &events)?;
+        tx.commit()?;
+        if failpoint == Some(OrchestrationExecutionFailpoint::AfterEventCommit) {
+            return Err(injected_failure("after_event_commit"));
+        }
+        Ok(RunTransition {
+            snapshot_sha256: orchestration_snapshot_sha256(&next),
+            effect_ids: stored_new_effects
+                .iter()
+                .map(|effect| effect.effect.id.clone())
+                .collect(),
+            run: next,
+            events,
+            duplicate: false,
+        })
+    }
+
+    pub fn audit_orchestration_replay(
+        &self,
+        run_id: &RunId,
+    ) -> Result<OrchestrationReplayAudit, StoreError> {
+        let record = self
+            .load_verified_orchestration_run(run_id)?
+            .ok_or_else(|| data_error("orchestration run was not found"))?;
+        let events = self.load_orchestration_events(run_id)?;
+        let effects = self.load_orchestration_effects(run_id)?;
+        Ok(OrchestrationReplayAudit {
+            run_id: run_id.clone(),
+            last_seq: record.run.last_seq,
+            snapshot_sha256: orchestration_snapshot_sha256(&record.run),
+            event_count: events.len(),
+            effect_count: effects.len(),
+        })
+    }
+}
+
+impl Store {
+    pub fn list_pending_orchestration_effects(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<StoredOrchestrationEffect>, StoreError> {
+        let limit = limit.clamp(1, 256);
+        let conn = self.conn.lock().unwrap();
+        let mut statement = conn.prepare(
+            "SELECT effect_id FROM orchestration_effects
+              WHERE delivery_state = 'pending'
+              ORDER BY created_at_ms, effect_id LIMIT ?1",
+        )?;
+        let effect_ids = statement
+            .query_map([i64::from(limit)], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        effect_ids
+            .into_iter()
+            .map(|effect_id| {
+                load_stored_effect_by_id(&conn, &OrchestrationEffectId::from(effect_id))?
+                    .ok_or_else(|| data_error("pending orchestration effect disappeared"))
+            })
+            .collect()
+    }
+
+    pub fn claim_orchestration_effect(
+        &self,
+        request: &EffectClaimRequest,
+        failpoint: Option<OrchestrationExecutionFailpoint>,
+    ) -> Result<EffectClaimOutcome, StoreError> {
+        validate_effect_claim_request(request)?;
+        validate_failpoint(
+            failpoint,
+            &[
+                OrchestrationExecutionFailpoint::BeforeEffectClaim,
+                OrchestrationExecutionFailpoint::AfterEffectClaim,
+            ],
+        )?;
+        if failpoint == Some(OrchestrationExecutionFailpoint::BeforeEffectClaim) {
+            return Err(injected_failure("before_effect_claim"));
+        }
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = load_stored_effect_by_id(&tx, &request.effect_id)?
+            .ok_or_else(|| data_error("orchestration effect was not found"))?;
+        if current.effect.payload_sha256 != request.expected_payload_sha256 {
+            return Err(data_error("orchestration effect payload identity changed"));
+        }
+        let next_revision = current
+            .delivery
+            .claim_revision
+            .checked_add(1)
+            .ok_or_else(|| data_error("effect claim revision overflow"))?;
+        let exact_owner =
+            effect_has_owner(&current, &request.owner_incarnation_id, &request.lease.id);
+        let acquired = match current.delivery.state {
+            EffectDeliveryState::Pending => {
+                if request.lease.revision != next_revision {
+                    return Err(data_error(
+                        "effect lease revision does not match the next claim revision",
+                    ));
+                }
+                ensure_execution_lease(&tx, &request.lease)?;
+                let changed = tx.execute(
+                    "UPDATE orchestration_effects
+                        SET delivery_state = 'claimed', owner_incarnation_id = ?1,
+                            lease_id = ?2, claim_revision = ?3, updated_at_ms = ?4
+                      WHERE effect_id = ?5 AND delivery_state = 'pending'
+                        AND claim_revision = ?6 AND payload_sha256 = ?7",
+                    params![
+                        request.owner_incarnation_id.as_str(),
+                        request.lease.id.as_str(),
+                        checked_i64(next_revision, "effect claim revision")?,
+                        checked_i64(request.claimed_at_ms, "effect claim timestamp")?,
+                        request.effect_id.as_str(),
+                        checked_i64(current.delivery.claim_revision, "prior claim revision")?,
+                        request.expected_payload_sha256,
+                    ],
+                )?;
+                if changed != 1 {
+                    return Err(data_error(
+                        "orchestration effect claim lost its compare-and-swap",
+                    ));
+                }
+                true
+            }
+            _ if exact_owner
+                && current.delivery.claim_revision == request.lease.revision
+                && load_lease(&tx, &request.lease.id)?.as_ref() == Some(&request.lease) =>
+            {
+                false
+            }
+            _ => {
+                return Err(data_error(
+                    "orchestration effect is already owned or no longer claimable",
+                ));
+            }
+        };
+        let effect = load_stored_effect_by_id(&tx, &request.effect_id)?
+            .ok_or_else(|| data_error("claimed orchestration effect disappeared"))?;
+        tx.commit()?;
+        if failpoint == Some(OrchestrationExecutionFailpoint::AfterEffectClaim) {
+            return Err(injected_failure("after_effect_claim"));
+        }
+        Ok(EffectClaimOutcome { effect, acquired })
+    }
+
+    pub fn mark_orchestration_effect_prepared(
+        &self,
+        ownership: &EffectOwnership,
+        prepared_receipt_digest: &str,
+        prepared_at_ms: u64,
+    ) -> Result<EffectPreparationOutcome, StoreError> {
+        validate_effect_ownership(ownership)?;
+        if !is_sha256(prepared_receipt_digest) {
+            return Err(data_error("prepared effect receipt digest is malformed"));
+        }
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (current, lease) = load_owned_effect(&tx, ownership)?;
+        validate_effect_action_time(&current, &lease, prepared_at_ms)?;
+        let prepared = match current.delivery.state {
+            EffectDeliveryState::Claimed => {
+                update_effect_state(
+                    &tx,
+                    ownership,
+                    EffectDeliveryState::Claimed,
+                    EffectDeliveryState::Prepared,
+                    Some(prepared_receipt_digest),
+                    None,
+                    None,
+                    None,
+                    prepared_at_ms,
+                )?;
+                true
+            }
+            EffectDeliveryState::Prepared
+            | EffectDeliveryState::DispatchStarted
+            | EffectDeliveryState::InFlight
+            | EffectDeliveryState::OutcomeRecorded
+                if current.delivery.prepared_receipt_digest.as_deref()
+                    == Some(prepared_receipt_digest) =>
+            {
+                false
+            }
+            _ => {
+                return Err(data_error(
+                    "orchestration effect cannot enter the prepared state",
+                ));
+            }
+        };
+        let effect = load_stored_effect_by_id(&tx, &ownership.effect_id)?
+            .ok_or_else(|| data_error("prepared orchestration effect disappeared"))?;
+        tx.commit()?;
+        Ok(EffectPreparationOutcome { effect, prepared })
+    }
+
+    pub fn mark_orchestration_effect_dispatch_started(
+        &self,
+        request: &EffectDispatchRequest,
+        failpoint: Option<OrchestrationExecutionFailpoint>,
+    ) -> Result<EffectDispatchOutcome, StoreError> {
+        validate_effect_ownership(&request.ownership)?;
+        validate_failpoint(
+            failpoint,
+            &[
+                OrchestrationExecutionFailpoint::BeforeDispatchMarker,
+                OrchestrationExecutionFailpoint::AfterDispatchMarker,
+            ],
+        )?;
+        if failpoint == Some(OrchestrationExecutionFailpoint::BeforeDispatchMarker) {
+            return Err(injected_failure("before_dispatch_marker"));
+        }
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (current, lease) = load_owned_effect(&tx, &request.ownership)?;
+        validate_effect_action_time(&current, &lease, request.dispatch_started_at_ms)?;
+        let dispatch_allowed = match current.delivery.state {
+            EffectDeliveryState::Prepared => {
+                update_effect_state(
+                    &tx,
+                    &request.ownership,
+                    EffectDeliveryState::Prepared,
+                    EffectDeliveryState::DispatchStarted,
+                    current.delivery.prepared_receipt_digest.as_deref(),
+                    Some(request.dispatch_started_at_ms),
+                    None,
+                    None,
+                    request.dispatch_started_at_ms,
+                )?;
+                true
+            }
+            EffectDeliveryState::DispatchStarted
+            | EffectDeliveryState::InFlight
+            | EffectDeliveryState::OutcomeRecorded
+                if current.delivery.dispatch_started_at_ms
+                    == Some(request.dispatch_started_at_ms) =>
+            {
+                false
+            }
+            _ => {
+                return Err(data_error(
+                    "orchestration effect cannot write a dispatch marker",
+                ));
+            }
+        };
+        let effect = load_stored_effect_by_id(&tx, &request.ownership.effect_id)?
+            .ok_or_else(|| data_error("dispatch-marked orchestration effect disappeared"))?;
+        tx.commit()?;
+        if failpoint == Some(OrchestrationExecutionFailpoint::AfterDispatchMarker) {
+            return Err(injected_failure("after_dispatch_marker"));
+        }
+        Ok(EffectDispatchOutcome {
+            effect,
+            dispatch_allowed,
+        })
+    }
+
+    pub fn record_orchestration_effect_outcome(
+        &self,
+        request: &EffectOutcomeRequest,
+        failpoint: Option<OrchestrationExecutionFailpoint>,
+    ) -> Result<EffectOutcomeRecord, StoreError> {
+        validate_effect_ownership(&request.ownership)?;
+        validate_failpoint(
+            failpoint,
+            &[
+                OrchestrationExecutionFailpoint::BeforeOutcomeCommit,
+                OrchestrationExecutionFailpoint::AfterOutcomeCommit,
+            ],
+        )?;
+        if !is_sha256(&request.result_digest)
+            || request
+                .safe_error_code
+                .as_deref()
+                .is_some_and(|code| !valid_reason_code(code))
+        {
+            return Err(data_error("orchestration effect outcome is malformed"));
+        }
+        if failpoint == Some(OrchestrationExecutionFailpoint::BeforeOutcomeCommit) {
+            return Err(injected_failure("before_outcome_commit"));
+        }
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (current, _) = load_owned_effect(&tx, &request.ownership)?;
+        if request.recorded_at_ms < current.updated_at_ms {
+            return Err(data_error(
+                "orchestration effect outcome timestamp moved backwards",
+            ));
+        }
+        let recorded = match current.delivery.state {
+            EffectDeliveryState::DispatchStarted | EffectDeliveryState::InFlight => {
+                update_effect_state(
+                    &tx,
+                    &request.ownership,
+                    current.delivery.state,
+                    EffectDeliveryState::OutcomeRecorded,
+                    current.delivery.prepared_receipt_digest.as_deref(),
+                    current.delivery.dispatch_started_at_ms,
+                    Some(&request.result_digest),
+                    request.safe_error_code.as_deref(),
+                    request.recorded_at_ms,
+                )?;
+                true
+            }
+            EffectDeliveryState::OutcomeRecorded
+                if current.delivery.result_digest.as_deref()
+                    == Some(request.result_digest.as_str())
+                    && current.delivery.safe_error_code == request.safe_error_code =>
+            {
+                false
+            }
+            _ => {
+                return Err(data_error(
+                    "orchestration effect outcome conflicts with durable delivery state",
+                ));
+            }
+        };
+        let effect = load_stored_effect_by_id(&tx, &request.ownership.effect_id)?
+            .ok_or_else(|| data_error("outcome orchestration effect disappeared"))?;
+        tx.commit()?;
+        if failpoint == Some(OrchestrationExecutionFailpoint::AfterOutcomeCommit) {
+            return Err(injected_failure("after_outcome_commit"));
+        }
+        Ok(EffectOutcomeRecord { effect, recorded })
+    }
+}
+
+fn orchestration_error(error: pandamux_orchestrator::OrchestrationError) -> StoreError {
+    data_error(format!(
+        "orchestration transition rejected with {:?}",
+        error.code
+    ))
+}
+
+fn transition_events_match(
+    conn: &rusqlite::Connection,
+    events: &[RunEvent],
+) -> Result<bool, StoreError> {
+    for event in events {
+        let expected = serde_json::to_vec(event)?;
+        let stored = conn
+            .query_row(
+                "SELECT event_bytes FROM orchestration_run_events
+                  WHERE event_id = ?1 AND run_id = ?2 AND seq = ?3
+                    AND idempotency_key = ?4",
+                params![
+                    event.event_id.as_str(),
+                    event.run_id.as_str(),
+                    checked_i64(event.seq, "orchestration event sequence")?,
+                    event.idempotency_key,
+                ],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .optional()?;
+        if stored.as_deref() != Some(expected.as_slice()) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn transition_events_collide(
+    conn: &rusqlite::Connection,
+    events: &[RunEvent],
+) -> Result<bool, StoreError> {
+    for event in events {
+        let collision = conn
+            .query_row(
+                "SELECT 1 FROM orchestration_run_events
+                  WHERE event_id = ?1 OR (
+                    run_id = ?2 AND (seq = ?3 OR idempotency_key = ?4)
+                  ) LIMIT 1",
+                params![
+                    event.event_id.as_str(),
+                    event.run_id.as_str(),
+                    checked_i64(event.seq, "orchestration event sequence")?,
+                    event.idempotency_key,
+                ],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if collision {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn update_run_snapshot(
+    tx: &Transaction<'_>,
+    run_id: &RunId,
+    run: &Run,
+    expected_last_seq: u64,
+    expected_snapshot_sha256: &str,
+) -> Result<(), StoreError> {
+    if run.id != *run_id || run.last_seq <= expected_last_seq {
+        return Err(data_error(
+            "orchestration transition did not advance the canonical run",
+        ));
+    }
+    let bytes = pandamux_orchestrator::canonical_run_bytes(run);
+    let digest = sha256_hex(&bytes);
+    let changed = tx.execute(
+        "UPDATE orchestration_runs
+            SET snapshot_bytes = ?1, snapshot_sha256 = ?2, last_seq = ?3,
+                status = ?4, bundle_sha = ?5, policy_revision = ?6,
+                updated_at_ms = ?7, ended_at_ms = ?8
+          WHERE run_id = ?9 AND last_seq = ?10 AND snapshot_sha256 = ?11",
+        params![
+            bytes,
+            digest,
+            checked_i64(run.last_seq, "orchestration run last sequence")?,
+            enum_text(run.status)?,
+            run.bundle_sha,
+            run.policy_revision,
+            checked_i64(run.updated_at_ms, "orchestration run updated at")?,
+            run.ended_at_ms
+                .map(|value| checked_i64(value, "orchestration run ended at"))
+                .transpose()?,
+            run_id.as_str(),
+            checked_i64(expected_last_seq, "expected orchestration sequence")?,
+            expected_snapshot_sha256,
+        ],
+    )?;
+    if changed != 1 {
+        return Err(data_error(
+            "orchestration snapshot update lost its compare-and-swap",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_transition_row_scope(
+    conn: &rusqlite::Connection,
+    run_id: &RunId,
+    rows: &RunTransitionRows,
+) -> Result<(), StoreError> {
+    if rows
+        .queue_records
+        .iter()
+        .any(|record| record.run_id != *run_id)
+        || rows
+            .budget_reservations
+            .iter()
+            .any(|record| record.run_id != *run_id)
+        || rows
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.run_id != *run_id)
+        || rows
+            .recovery_reviews
+            .iter()
+            .any(|review| review.run_id != *run_id)
+    {
+        return Err(data_error(
+            "orchestration transition rows belong to a different run",
+        ));
+    }
+    let organization_id = conn.query_row(
+        "SELECT organization_id FROM orchestration_runs WHERE run_id = ?1",
+        [run_id.as_str()],
+        |row| row.get::<_, String>(0),
+    )?;
+    if rows
+        .daily_budgets
+        .iter()
+        .any(|record| record.organization_id.as_str() != organization_id)
+    {
+        return Err(data_error(
+            "orchestration transition daily budget belongs to another organization",
+        ));
+    }
+    Ok(())
+}
+
+fn verify_transition_rows(
+    conn: &rusqlite::Connection,
+    run_id: &RunId,
+    rows: &RunTransitionRows,
+) -> Result<(), StoreError> {
+    validate_transition_row_scope(conn, run_id, rows)?;
+    let stored_queue = load_queue_records(conn, run_id)?;
+    let stored_reservations = load_budget_reservations(conn, run_id)?;
+    let stored_artifacts = load_artifacts(conn, run_id)?;
+    let stored_reviews = load_recovery_reviews(conn, run_id)?;
+    if rows
+        .queue_records
+        .iter()
+        .any(|record| !stored_queue.contains(record))
+        || rows
+            .budget_reservations
+            .iter()
+            .any(|record| !stored_reservations.contains(record))
+        || rows
+            .artifacts
+            .iter()
+            .any(|artifact| !stored_artifacts.contains(artifact))
+        || rows
+            .recovery_reviews
+            .iter()
+            .any(|review| !stored_reviews.contains(review))
+    {
+        return Err(data_error(
+            "duplicate orchestration transition rows changed durable bytes",
+        ));
+    }
+    for expected in &rows.daily_budgets {
+        let stored = load_daily_budget(conn, &expected.organization_id, &expected.ledger_utc_date)?;
+        if stored.as_ref() != Some(expected) {
+            return Err(data_error(
+                "duplicate orchestration daily budget changed durable bytes",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn insert_transition_rows(
+    tx: &Transaction<'_>,
+    run_id: &RunId,
+    rows: &RunTransitionRows,
+) -> Result<(), StoreError> {
+    validate_transition_row_scope(tx, run_id, rows)?;
+    for record in &rows.queue_records {
+        insert_queue_record(tx, record)?;
+    }
+    for record in &rows.daily_budgets {
+        insert_daily_budget(tx, record)?;
+    }
+    for record in &rows.budget_reservations {
+        insert_budget_reservation(tx, record)?;
+    }
+    for artifact in &rows.artifacts {
+        insert_artifact(tx, artifact)?;
+    }
+    for review in &rows.recovery_reviews {
+        insert_recovery_review(tx, review)?;
+    }
+    Ok(())
+}
+
+fn load_daily_budget(
+    conn: &rusqlite::Connection,
+    organization_id: &OrganizationId,
+    ledger_utc_date: &str,
+) -> Result<Option<DailyBudgetRecord>, StoreError> {
+    conn.query_row(
+        "SELECT limit_micro_usd, reserved_micro_usd, reconciled_micro_usd,
+                granted_micro_usd, revision, updated_at_ms
+           FROM orchestration_daily_budgets
+          WHERE organization_id = ?1 AND ledger_utc_date = ?2",
+        params![organization_id.as_str(), ledger_utc_date],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+            ))
+        },
+    )
+    .optional()?
+    .map(
+        |(limit, reserved, reconciled, granted, revision, updated)| {
+            let record = DailyBudgetRecord {
+                organization_id: organization_id.clone(),
+                ledger_utc_date: ledger_utc_date.to_string(),
+                limit_micro_usd: checked_u64(limit, "daily budget limit")?,
+                reserved_micro_usd: checked_u64(reserved, "daily budget reserved")?,
+                reconciled_micro_usd: checked_u64(reconciled, "daily budget reconciled")?,
+                granted_micro_usd: checked_u64(granted, "daily budget granted")?,
+                revision: checked_u64(revision, "daily budget revision")?,
+                updated_at_ms: checked_u64(updated, "daily budget updated at")?,
+            };
+            if !valid_utc_date(&record.ledger_utc_date) || record.revision == 0 {
+                return Err(data_error("daily budget row is malformed"));
+            }
+            Ok(record)
+        },
+    )
+    .transpose()
+}
+
+fn settle_acknowledged_effect(tx: &Transaction<'_>, events: &[RunEvent]) -> Result<(), StoreError> {
+    for event in events {
+        let pandamux_core::RunEventKind::EffectAcknowledged { effect_id, receipt } = &event.kind
+        else {
+            continue;
+        };
+        let current = load_stored_effect_by_id(tx, effect_id)?
+            .ok_or_else(|| data_error("acknowledged orchestration effect was not found"))?;
+        if current.run_id != event.run_id
+            || current.delivery.state != EffectDeliveryState::OutcomeRecorded
+            || current.delivery.result_digest.as_deref() != Some(receipt.result_digest.as_str())
+            || receipt.effect_id != *effect_id
+            || receipt.acknowledged_at_ms != event.at_ms
+            || event.at_ms < current.updated_at_ms
+        {
+            return Err(data_error(
+                "orchestration effect acknowledgement conflicts with durable outcome",
+            ));
+        }
+        let owner = current
+            .delivery
+            .owner_incarnation_id
+            .as_ref()
+            .ok_or_else(|| data_error("outcome-recorded effect has no durable owner"))?;
+        let lease_id = current
+            .delivery
+            .lease_id
+            .as_ref()
+            .ok_or_else(|| data_error("outcome-recorded effect has no durable lease"))?;
+        let lease = load_lease(tx, lease_id)?
+            .ok_or_else(|| data_error("outcome-recorded effect lease was not found"))?;
+        if lease.resource_kind != LeaseResourceKind::Effect
+            || lease.resource_id != effect_id.as_str()
+            || lease.owner_incarnation_id != *owner
+            || lease.revision != current.delivery.claim_revision
+        {
+            return Err(data_error(
+                "outcome-recorded effect lease does not match its owner",
+            ));
+        }
+        let changed = tx.execute(
+            "UPDATE orchestration_effects
+                SET delivery_state = 'settled', owner_incarnation_id = NULL,
+                    lease_id = NULL, updated_at_ms = ?1
+              WHERE effect_id = ?2 AND delivery_state = 'outcome_recorded'
+                AND owner_incarnation_id = ?3 AND lease_id = ?4
+                AND claim_revision = ?5 AND result_digest = ?6",
+            params![
+                checked_i64(event.at_ms, "effect acknowledgement timestamp")?,
+                effect_id.as_str(),
+                owner.as_str(),
+                lease_id.as_str(),
+                checked_i64(current.delivery.claim_revision, "effect claim revision")?,
+                receipt.result_digest,
+            ],
+        )?;
+        if changed != 1 {
+            return Err(data_error(
+                "orchestration effect acknowledgement lost its compare-and-swap",
+            ));
+        }
+        let deleted = tx.execute(
+            "DELETE FROM orchestration_leases
+              WHERE lease_id = ?1 AND resource_kind = 'effect' AND resource_id = ?2
+                AND owner_incarnation_id = ?3 AND revision = ?4",
+            params![
+                lease_id.as_str(),
+                effect_id.as_str(),
+                owner.as_str(),
+                checked_i64(current.delivery.claim_revision, "effect claim revision")?,
+            ],
+        )?;
+        if deleted != 1 {
+            return Err(data_error(
+                "orchestration effect acknowledgement could not release its lease",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn injected_failure(name: &str) -> StoreError {
+    data_error(format!("injected orchestration failure: {name}"))
+}
+
+fn validate_failpoint(
+    failpoint: Option<OrchestrationExecutionFailpoint>,
+    allowed: &[OrchestrationExecutionFailpoint],
+) -> Result<(), StoreError> {
+    if failpoint.is_some_and(|candidate| !allowed.contains(&candidate)) {
+        return Err(data_error(
+            "orchestration failpoint is invalid for this operation",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_effect_claim_request(request: &EffectClaimRequest) -> Result<(), StoreError> {
+    let lease = &request.lease;
+    if request.effect_id.as_str().trim().is_empty()
+        || !is_sha256(&request.expected_payload_sha256)
+        || request.owner_incarnation_id.as_str().trim().is_empty()
+        || lease.id.as_str().trim().is_empty()
+        || lease.resource_kind != LeaseResourceKind::Effect
+        || lease.resource_id != request.effect_id.as_str()
+        || lease.owner_incarnation_id != request.owner_incarnation_id
+        || lease.revision == 0
+        || lease.last_heartbeat_ms > request.claimed_at_ms
+        || request.claimed_at_ms >= lease.expires_at_ms
+    {
+        return Err(data_error("orchestration effect claim is malformed"));
+    }
+    Ok(())
+}
+
+fn validate_effect_ownership(ownership: &EffectOwnership) -> Result<(), StoreError> {
+    if ownership.effect_id.as_str().trim().is_empty()
+        || !is_sha256(&ownership.expected_payload_sha256)
+        || ownership.owner_incarnation_id.as_str().trim().is_empty()
+        || ownership.lease_id.as_str().trim().is_empty()
+        || ownership.claim_revision == 0
+    {
+        return Err(data_error("orchestration effect ownership is malformed"));
+    }
+    Ok(())
+}
+
+fn effect_has_owner(
+    effect: &StoredOrchestrationEffect,
+    owner: &ServerIncarnationId,
+    lease_id: &ExecutionLeaseId,
+) -> bool {
+    effect.delivery.owner_incarnation_id.as_ref() == Some(owner)
+        && effect.delivery.lease_id.as_ref() == Some(lease_id)
+}
+
+fn ensure_execution_lease(tx: &Transaction<'_>, lease: &ExecutionLease) -> Result<(), StoreError> {
+    if let Some(existing) = load_lease(tx, &lease.id)? {
+        if existing == *lease {
+            return Ok(());
+        }
+        return Err(data_error(
+            "execution lease identity was reused with different bytes",
+        ));
+    }
+    let resource_kind = enum_text(lease.resource_kind)?;
+    let existing_resource = tx
+        .query_row(
+            "SELECT lease_id FROM orchestration_leases
+              WHERE resource_kind = ?1 AND resource_id = ?2",
+            params![resource_kind, lease.resource_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if existing_resource.is_some() {
+        return Err(data_error(
+            "execution lease resource is already owned by another identity",
+        ));
+    }
+    insert_lease(tx, lease)
+}
+
+fn load_stored_effect_by_id(
+    conn: &rusqlite::Connection,
+    effect_id: &OrchestrationEffectId,
+) -> Result<Option<StoredOrchestrationEffect>, StoreError> {
+    let run_id = conn
+        .query_row(
+            "SELECT run_id FROM orchestration_effects WHERE effect_id = ?1",
+            [effect_id.as_str()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let Some(run_id) = run_id else {
+        return Ok(None);
+    };
+    Ok(load_effects(conn, &RunId::from(run_id))?
+        .into_iter()
+        .find(|record| record.effect.id == *effect_id))
+}
+
+fn load_owned_effect(
+    tx: &Transaction<'_>,
+    ownership: &EffectOwnership,
+) -> Result<(StoredOrchestrationEffect, ExecutionLease), StoreError> {
+    let effect = load_stored_effect_by_id(tx, &ownership.effect_id)?
+        .ok_or_else(|| data_error("orchestration effect was not found"))?;
+    if effect.effect.payload_sha256 != ownership.expected_payload_sha256
+        || !effect_has_owner(
+            &effect,
+            &ownership.owner_incarnation_id,
+            &ownership.lease_id,
+        )
+        || effect.delivery.claim_revision != ownership.claim_revision
+    {
+        return Err(data_error(
+            "orchestration effect ownership no longer matches durable state",
+        ));
+    }
+    let lease = load_lease(tx, &ownership.lease_id)?
+        .ok_or_else(|| data_error("orchestration effect lease was not found"))?;
+    if lease.resource_kind != LeaseResourceKind::Effect
+        || lease.resource_id != ownership.effect_id.as_str()
+        || lease.owner_incarnation_id != ownership.owner_incarnation_id
+        || lease.revision != ownership.claim_revision
+    {
+        return Err(data_error(
+            "orchestration effect lease no longer matches durable ownership",
+        ));
+    }
+    Ok((effect, lease))
+}
+
+fn validate_effect_action_time(
+    effect: &StoredOrchestrationEffect,
+    lease: &ExecutionLease,
+    at_ms: u64,
+) -> Result<(), StoreError> {
+    if at_ms < effect.updated_at_ms
+        || at_ms < lease.last_heartbeat_ms
+        || at_ms >= lease.expires_at_ms
+    {
+        return Err(data_error(
+            "orchestration effect action is outside its active lease",
+        ));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn update_effect_state(
+    tx: &Transaction<'_>,
+    ownership: &EffectOwnership,
+    expected_state: EffectDeliveryState,
+    next_state: EffectDeliveryState,
+    prepared_receipt_digest: Option<&str>,
+    dispatch_started_at_ms: Option<u64>,
+    result_digest: Option<&str>,
+    safe_error_code: Option<&str>,
+    updated_at_ms: u64,
+) -> Result<(), StoreError> {
+    let changed = tx.execute(
+        "UPDATE orchestration_effects
+            SET delivery_state = ?1, prepared_receipt_digest = ?2,
+                dispatch_started_at_ms = ?3, result_digest = ?4,
+                safe_error_code = ?5, updated_at_ms = ?6
+          WHERE effect_id = ?7 AND payload_sha256 = ?8
+            AND delivery_state = ?9 AND owner_incarnation_id = ?10
+            AND lease_id = ?11 AND claim_revision = ?12",
+        params![
+            enum_text(next_state)?,
+            prepared_receipt_digest,
+            dispatch_started_at_ms
+                .map(|value| checked_i64(value, "effect dispatch timestamp"))
+                .transpose()?,
+            result_digest,
+            safe_error_code,
+            checked_i64(updated_at_ms, "effect update timestamp")?,
+            ownership.effect_id.as_str(),
+            ownership.expected_payload_sha256,
+            enum_text(expected_state)?,
+            ownership.owner_incarnation_id.as_str(),
+            ownership.lease_id.as_str(),
+            checked_i64(ownership.claim_revision, "effect claim revision")?,
+        ],
+    )?;
+    if changed != 1 {
+        return Err(data_error(
+            "orchestration effect update lost its compare-and-swap",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_run_metadata(record: &OrchestrationRunRecord) -> Result<(), StoreError> {
@@ -564,10 +1657,61 @@ fn insert_effect(
 }
 
 fn validate_effect_record(record: &StoredOrchestrationEffect) -> Result<(), StoreError> {
+    let owned = record.delivery.owner_incarnation_id.is_some()
+        && record.delivery.lease_id.is_some()
+        && record.delivery.claim_revision > 0;
+    let state_valid = match record.delivery.state {
+        EffectDeliveryState::Pending => {
+            !owned
+                && record.delivery.owner_incarnation_id.is_none()
+                && record.delivery.lease_id.is_none()
+                && record.delivery.claim_revision == 0
+                && record.delivery.prepared_receipt_digest.is_none()
+                && record.delivery.dispatch_started_at_ms.is_none()
+                && record.delivery.result_digest.is_none()
+                && record.delivery.safe_error_code.is_none()
+        }
+        EffectDeliveryState::Claimed => {
+            owned
+                && record.delivery.prepared_receipt_digest.is_none()
+                && record.delivery.dispatch_started_at_ms.is_none()
+                && record.delivery.result_digest.is_none()
+                && record.delivery.safe_error_code.is_none()
+        }
+        EffectDeliveryState::Prepared => {
+            owned
+                && record.delivery.prepared_receipt_digest.is_some()
+                && record.delivery.dispatch_started_at_ms.is_none()
+                && record.delivery.result_digest.is_none()
+                && record.delivery.safe_error_code.is_none()
+        }
+        EffectDeliveryState::DispatchStarted | EffectDeliveryState::InFlight => {
+            owned
+                && record.delivery.prepared_receipt_digest.is_some()
+                && record.delivery.dispatch_started_at_ms.is_some()
+                && record.delivery.result_digest.is_none()
+                && record.delivery.safe_error_code.is_none()
+        }
+        EffectDeliveryState::OutcomeRecorded => {
+            owned
+                && record.delivery.prepared_receipt_digest.is_some()
+                && record.delivery.dispatch_started_at_ms.is_some()
+                && record.delivery.result_digest.is_some()
+        }
+        EffectDeliveryState::Settled => {
+            record.delivery.owner_incarnation_id.is_none()
+                && record.delivery.lease_id.is_none()
+                && record.delivery.result_digest.is_some()
+        }
+        EffectDeliveryState::Cancelled | EffectDeliveryState::ReviewRequired => {
+            record.delivery.owner_incarnation_id.is_some() == record.delivery.lease_id.is_some()
+        }
+    };
     if record.effect.id != record.delivery.effect_id
         || record.effect.payload_sha256 != record.delivery.payload_sha256
         || !is_sha256(&record.effect.payload_sha256)
         || record.updated_at_ms < record.created_at_ms
+        || !state_valid
         || record
             .delivery
             .prepared_receipt_digest
@@ -578,6 +1722,15 @@ fn validate_effect_record(record: &StoredOrchestrationEffect) -> Result<(), Stor
             .result_digest
             .as_deref()
             .is_some_and(|value| !is_sha256(value))
+        || record
+            .delivery
+            .safe_error_code
+            .as_deref()
+            .is_some_and(|value| !valid_reason_code(value))
+        || record
+            .delivery
+            .dispatch_started_at_ms
+            .is_some_and(|value| value < record.created_at_ms || value > record.updated_at_ms)
     {
         return Err(data_error("orchestration effect record is malformed"));
     }
@@ -2551,7 +3704,7 @@ mod tests {
     use pandamux_core::{
         AccessMode, AgentTask, Attempt, AttemptStatus, BlackboardArtifact, BudgetAmount,
         BudgetReservationId, BudgetReservationState, BudgetUsage, CleanupState,
-        ConfigurationRevision, LeaseResourceKind, OrchestrationMode, OutputContract,
+        ConfigurationRevision, EffectReceipt, LeaseResourceKind, OrchestrationMode, OutputContract,
         ProjectRepositoryRecord, ProviderInstanceId, RoutingDecision, RunCommand, RunSeed,
         RunTaskStatus, RunTrigger, SubscriptionKey, ValidatedPlan, WorktreeCleanupEligibility,
         WorktreeDirtyState,
@@ -2790,6 +3943,74 @@ mod tests {
             );
         }
         (run, events)
+    }
+
+    fn fixture_before_dispatch() -> (Run, Vec<RunEvent>) {
+        let seed = seed();
+        let mut run = Run::draft(RunId::new("run-phase5c"), seed.clone(), 10_001);
+        let mut events = Vec::new();
+        execute(
+            &mut run,
+            &mut events,
+            RunCommand::AcceptPlan { seed, plan: plan() },
+        );
+        execute(
+            &mut run,
+            &mut events,
+            RunCommand::SelectRoute { decision: route() },
+        );
+        execute(
+            &mut run,
+            &mut events,
+            RunCommand::ReserveBudget {
+                reservation: reservation(),
+            },
+        );
+        (run, events)
+    }
+
+    fn dispatch_transition(run: &Run) -> RunTransitionRequest {
+        RunTransitionRequest {
+            run_id: run.id.clone(),
+            expected_last_seq: run.last_seq,
+            expected_snapshot_sha256: orchestration_snapshot_sha256(run),
+            command: RunCommand::RequestDispatch { attempt: attempt() },
+            assigned_events: vec![AssignedRunEvent {
+                event_id: RunEventId::new("run-event-phase5c-dispatch-transition"),
+                idempotency_key: "phase5c-dispatch-transition".to_string(),
+                at_ms: 20_000,
+            }],
+            rows: RunTransitionRows::default(),
+        }
+    }
+
+    fn effect_claim(effect: &StoredOrchestrationEffect, owner_suffix: &str) -> EffectClaimRequest {
+        let owner = ServerIncarnationId::new(format!("server-owner-{owner_suffix}"));
+        EffectClaimRequest {
+            effect_id: effect.effect.id.clone(),
+            expected_payload_sha256: effect.effect.payload_sha256.clone(),
+            owner_incarnation_id: owner.clone(),
+            lease: ExecutionLease {
+                id: ExecutionLeaseId::new(format!("effect-lease-{owner_suffix}")),
+                resource_kind: LeaseResourceKind::Effect,
+                resource_id: effect.effect.id.as_str().to_string(),
+                owner_incarnation_id: owner,
+                expires_at_ms: 50_000,
+                last_heartbeat_ms: 29_000,
+                revision: effect.delivery.claim_revision + 1,
+            },
+            claimed_at_ms: 30_000,
+        }
+    }
+
+    fn effect_ownership(request: &EffectClaimRequest) -> EffectOwnership {
+        EffectOwnership {
+            effect_id: request.effect_id.clone(),
+            expected_payload_sha256: request.expected_payload_sha256.clone(),
+            owner_incarnation_id: request.owner_incarnation_id.clone(),
+            lease_id: request.lease.id.clone(),
+            claim_revision: request.lease.revision,
+        }
     }
 
     fn repository() -> ProjectRepositoryRecord {
@@ -3309,5 +4530,341 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn run_transition_crash_replays_exactly_rejects_changed_bytes_and_broadcasts_after_commit() {
+        let store = store_with_repository();
+        let (base, events) = fixture_before_dispatch();
+        store
+            .insert_orchestration_run(&run_record(base.clone()), &events)
+            .expect("insert transition base");
+        let service = crate::RunExecutionService::new(store.clone());
+        let mut notices = service.subscribe();
+        let request = dispatch_transition(&base);
+
+        assert!(
+            service
+                .commit_transition(
+                    &request,
+                    Some(OrchestrationExecutionFailpoint::AfterEventCommit),
+                )
+                .expect_err("post-commit failpoint")
+                .to_string()
+                .contains("after_event_commit")
+        );
+        assert_eq!(
+            notices.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty),
+            "a failed caller observes no pre-commit or speculative broadcast"
+        );
+
+        let duplicate = service
+            .commit_transition(&request, None)
+            .expect("database-only transition retry");
+        assert!(duplicate.duplicate);
+        let notice = notices.try_recv().expect("post-commit projection notice");
+        assert!(notice.duplicate);
+        assert_eq!(notice.run_id, base.id);
+        assert_eq!(notice.last_seq, base.last_seq + 1);
+        assert_eq!(
+            notice.event_ids,
+            vec![request.assigned_events[0].event_id.clone()]
+        );
+        assert_eq!(notice.effect_ids, duplicate.effect_ids);
+        let safe_debug = format!("{notice:?}");
+        assert!(!safe_debug.contains("Persist Phase 5C state"));
+        assert!(!safe_debug.contains("model-phase5c"));
+
+        let audit = service.audit_replay(&base.id).expect("replay audit");
+        assert_eq!(audit.last_seq, base.last_seq + 1);
+        assert_eq!(audit.snapshot_sha256, duplicate.snapshot_sha256);
+        let stored_events = store
+            .load_orchestration_events(&base.id)
+            .expect("load committed events");
+        let full = pandamux_orchestrator::replay(stored_events.iter()).expect("full replay");
+        for prefix_len in 1..=stored_events.len() {
+            let prefix = pandamux_orchestrator::replay(stored_events[..prefix_len].iter())
+                .expect("prefix replay");
+            let rebuilt =
+                pandamux_orchestrator::replay_from(&prefix, stored_events[prefix_len..].iter())
+                    .expect("suffix replay");
+            assert_eq!(
+                pandamux_orchestrator::canonical_run_bytes(&rebuilt),
+                pandamux_orchestrator::canonical_run_bytes(&full)
+            );
+        }
+
+        let mut changed = request.clone();
+        changed.assigned_events[0].at_ms += 1;
+        assert!(
+            service
+                .commit_transition(&changed, None)
+                .expect_err("changed event identity must conflict")
+                .to_string()
+                .contains("reused with different bytes")
+        );
+        assert_eq!(
+            store
+                .load_orchestration_events(&base.id)
+                .expect("unchanged event log")
+                .len(),
+            events.len() + 1
+        );
+    }
+
+    #[test]
+    fn effect_failpoints_resume_database_only_and_never_redispatch() {
+        let store = store_with_repository();
+        let (run, events) = fixture_lifecycle(false);
+        let effects = store
+            .insert_orchestration_run(&run_record(run.clone()), &events)
+            .expect("insert effect fixture");
+        let effect = effects
+            .iter()
+            .find(|record| {
+                matches!(
+                    record.effect.kind,
+                    pandamux_core::OrchestrationEffectKind::DispatchTask { .. }
+                )
+            })
+            .expect("dispatch effect")
+            .clone();
+        let claim = effect_claim(&effect, "crash");
+
+        assert!(
+            store
+                .claim_orchestration_effect(
+                    &claim,
+                    Some(OrchestrationExecutionFailpoint::BeforeEffectClaim),
+                )
+                .expect_err("before-claim failpoint")
+                .to_string()
+                .contains("before_effect_claim")
+        );
+        assert_eq!(
+            load_stored_effect_by_id(&store.conn.lock().unwrap(), &effect.effect.id)
+                .unwrap()
+                .unwrap()
+                .delivery
+                .state,
+            EffectDeliveryState::Pending
+        );
+        assert!(
+            store
+                .claim_orchestration_effect(
+                    &claim,
+                    Some(OrchestrationExecutionFailpoint::AfterEffectClaim),
+                )
+                .expect_err("after-claim failpoint")
+                .to_string()
+                .contains("after_effect_claim")
+        );
+        let retry = store
+            .claim_orchestration_effect(&claim, None)
+            .expect("exact claim retry");
+        assert!(!retry.acquired);
+        let competing = effect_claim(&effect, "foreign");
+        assert!(
+            store
+                .claim_orchestration_effect(&competing, None)
+                .expect_err("foreign owner cannot steal claim")
+                .to_string()
+                .contains("already owned")
+        );
+
+        let ownership = effect_ownership(&claim);
+        assert!(
+            store
+                .mark_orchestration_effect_prepared(&ownership, &"c".repeat(64), 31_000)
+                .expect("prepare effect")
+                .prepared
+        );
+        let dispatch = EffectDispatchRequest {
+            ownership: ownership.clone(),
+            dispatch_started_at_ms: 32_000,
+        };
+        assert!(
+            store
+                .mark_orchestration_effect_dispatch_started(
+                    &dispatch,
+                    Some(OrchestrationExecutionFailpoint::BeforeDispatchMarker),
+                )
+                .expect_err("before-dispatch-marker failpoint")
+                .to_string()
+                .contains("before_dispatch_marker")
+        );
+        assert!(
+            store
+                .mark_orchestration_effect_dispatch_started(
+                    &dispatch,
+                    Some(OrchestrationExecutionFailpoint::AfterDispatchMarker),
+                )
+                .expect_err("after-dispatch-marker failpoint")
+                .to_string()
+                .contains("after_dispatch_marker")
+        );
+        assert!(
+            !store
+                .mark_orchestration_effect_dispatch_started(&dispatch, None)
+                .expect("dispatch marker retry")
+                .dispatch_allowed,
+            "a committed marker must never authorize a second external dispatch"
+        );
+
+        let outcome = EffectOutcomeRequest {
+            ownership: ownership.clone(),
+            result_digest: "d".repeat(64),
+            safe_error_code: None,
+            recorded_at_ms: 33_000,
+        };
+        assert!(
+            store
+                .record_orchestration_effect_outcome(
+                    &outcome,
+                    Some(OrchestrationExecutionFailpoint::BeforeOutcomeCommit),
+                )
+                .expect_err("before-outcome failpoint")
+                .to_string()
+                .contains("before_outcome_commit")
+        );
+        assert!(
+            store
+                .record_orchestration_effect_outcome(
+                    &outcome,
+                    Some(OrchestrationExecutionFailpoint::AfterOutcomeCommit),
+                )
+                .expect_err("after-outcome failpoint")
+                .to_string()
+                .contains("after_outcome_commit")
+        );
+        let mut changed_outcome = outcome.clone();
+        changed_outcome.result_digest = "e".repeat(64);
+        assert!(
+            store
+                .record_orchestration_effect_outcome(&changed_outcome, None)
+                .expect_err("changed outcome retry")
+                .to_string()
+                .contains("conflicts")
+        );
+        assert!(
+            !store
+                .record_orchestration_effect_outcome(&outcome, None)
+                .expect("exact outcome retry")
+                .recorded
+        );
+
+        let acknowledged_at_ms = 34_000;
+        let acknowledgement = RunTransitionRequest {
+            run_id: run.id.clone(),
+            expected_last_seq: run.last_seq,
+            expected_snapshot_sha256: orchestration_snapshot_sha256(&run),
+            command: RunCommand::AcknowledgeEffect {
+                effect_id: effect.effect.id.clone(),
+                receipt: EffectReceipt {
+                    effect_id: effect.effect.id.clone(),
+                    acknowledged_at_ms,
+                    result_digest: outcome.result_digest.clone(),
+                },
+            },
+            assigned_events: vec![AssignedRunEvent {
+                event_id: RunEventId::new("run-event-phase5c-acknowledge-effect"),
+                idempotency_key: "phase5c-acknowledge-effect".to_string(),
+                at_ms: acknowledged_at_ms,
+            }],
+            rows: RunTransitionRows::default(),
+        };
+        assert!(
+            store
+                .commit_run_transition(
+                    &acknowledgement,
+                    Some(OrchestrationExecutionFailpoint::AfterEventCommit),
+                )
+                .expect_err("acknowledgement post-commit failpoint")
+                .to_string()
+                .contains("after_event_commit")
+        );
+        let settled = load_stored_effect_by_id(&store.conn.lock().unwrap(), &effect.effect.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(settled.delivery.state, EffectDeliveryState::Settled);
+        assert!(settled.delivery.owner_incarnation_id.is_none());
+        assert!(settled.delivery.lease_id.is_none());
+        assert!(
+            load_lease(&store.conn.lock().unwrap(), &claim.lease.id)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .commit_run_transition(&acknowledgement, None)
+                .expect("database-only acknowledgement retry")
+                .duplicate
+        );
+        assert!(
+            store
+                .list_pending_orchestration_effects(256)
+                .expect("pending effects")
+                .iter()
+                .all(|record| record.effect.id != effect.effect.id)
+        );
+    }
+
+    #[test]
+    fn independent_connections_racing_effect_claims_choose_exactly_one_owner() {
+        let temp = tempfile::tempdir().expect("temporary store");
+        let database = temp.path().join("pandamux.db");
+        let first = Store::open(&database).expect("first connection");
+        first
+            .save_project_repository(&repository())
+            .expect("save repository");
+        let (run, events) = fixture_lifecycle(false);
+        let effects = first
+            .insert_orchestration_run(&run_record(run.clone()), &events)
+            .expect("insert run");
+        let effect = effects
+            .iter()
+            .find(|record| {
+                matches!(
+                    record.effect.kind,
+                    pandamux_core::OrchestrationEffectKind::DispatchTask { .. }
+                )
+            })
+            .expect("dispatch effect")
+            .clone();
+        let second = Store::open(&database).expect("second connection");
+        let left_request = effect_claim(&effect, "left");
+        let right_request = effect_claim(&effect, "right");
+        let barrier = Arc::new(Barrier::new(2));
+        let results = std::thread::scope(|scope| {
+            let left_barrier = barrier.clone();
+            let left = scope.spawn(move || {
+                left_barrier.wait();
+                first.claim_orchestration_effect(&left_request, None)
+            });
+            let right_barrier = barrier.clone();
+            let right = scope.spawn(move || {
+                right_barrier.wait();
+                second.claim_orchestration_effect(&right_request, None)
+            });
+            [
+                left.join().expect("left join"),
+                right.join().expect("right join"),
+            ]
+        });
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(results.iter().filter(|result| result.is_err()).count(), 1);
+
+        let reopened = Store::open(&database).expect("reopen claimed store");
+        let claimed = reopened
+            .load_orchestration_effects(&run.id)
+            .expect("load raced effects")
+            .into_iter()
+            .find(|record| record.effect.id == effect.effect.id)
+            .expect("claimed effect");
+        assert_eq!(claimed.delivery.state, EffectDeliveryState::Claimed);
+        assert_eq!(claimed.delivery.claim_revision, 1);
+        assert!(claimed.delivery.owner_incarnation_id.is_some());
+        assert!(claimed.delivery.lease_id.is_some());
     }
 }

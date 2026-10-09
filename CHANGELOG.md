@@ -40,6 +40,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Added the crash-safe Phase 5C run engine adapter and effect outbox in
+  version 0.60.93.** Canonical transitions now commit immutable events,
+  verified snapshots, derived effects, and transaction-owned rows once, with
+  exact-byte replay and hard identity-conflict handling. Durable effect claims,
+  ownership leases, preparation receipts, dispatch markers, outcomes, and
+  acknowledgements recover across every declared failpoint without authorizing
+  a second external dispatch, while bounded projection notices contain only
+  safe identities and digests after commit. This checkpoint executes no
+  provider or tool, contacts no node, and adds no native/live acceptance, push,
+  CI, deployment, activation, packaging, signing, publication, or release
+  claim.
+
 - **Added the durable Phase 5C execution store in version 0.60.92.** Migration
   14 preserves and backs up every earlier schema while adding verified canonical
   run replay, immutable events and artifacts, effect delivery, attempt, queue,

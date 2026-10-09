@@ -15,10 +15,13 @@ pub use mutation_phase5b::{
     MutationApplyFailpoint, MutationProposalSave, ProjectTrustMutationState, StoredMutationProposal,
 };
 pub use orchestration_phase5c::{
-    AttemptDispatchRecord, AttemptDispatchState, DailyBudgetRecord, NodeReceiptKind,
-    NodeReceiptRecord, OrchestrationQueueRecord, OrchestrationRunRecord,
-    OrchestrationRuntimeRecords, OwnedAttemptWorktreeRecord, QueueState, StoredBudgetReservation,
-    StoredOrchestrationEffect,
+    AssignedRunEvent, AttemptDispatchRecord, AttemptDispatchState, DailyBudgetRecord,
+    EffectClaimOutcome, EffectClaimRequest, EffectDispatchOutcome, EffectDispatchRequest,
+    EffectOutcomeRecord, EffectOutcomeRequest, EffectOwnership, EffectPreparationOutcome,
+    NodeReceiptKind, NodeReceiptRecord, OrchestrationExecutionFailpoint, OrchestrationQueueRecord,
+    OrchestrationReplayAudit, OrchestrationRunRecord, OrchestrationRuntimeRecords,
+    OwnedAttemptWorktreeRecord, QueueState, RunTransition, RunTransitionRequest, RunTransitionRows,
+    StoredBudgetReservation, StoredOrchestrationEffect, orchestration_snapshot_sha256,
 };
 pub use usage_phase4c::{
     DEFAULT_USAGE_OUTBOX_MAX_AGE_MS, DEFAULT_USAGE_OUTBOX_MAX_BYTES, DEFAULT_USAGE_OUTBOX_MAX_ROWS,
