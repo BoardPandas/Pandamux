@@ -1,6 +1,24 @@
 use pandamux_orchestrator::{LegacyRecordKind, require_explicit_legacy_migration};
 
 #[test]
+fn payload_bearing_v1_blackboard_effect_remains_fixture_only() {
+    let raw = include_str!("fixtures/legacy-blackboard-publish-effect-v1.json");
+    let frozen: serde_json::Value = serde_json::from_str(raw).expect("valid frozen V1 fixture");
+    assert_eq!(
+        frozen
+            .pointer("/kind/type")
+            .and_then(|value| value.as_str()),
+        Some("publish_blackboard_entry")
+    );
+    assert!(frozen.pointer("/kind/entry/content").is_some());
+
+    serde_json::from_value::<pandamux_core::OrchestrationEffectKind>(frozen["kind"].clone())
+        .expect_err("the payload-bearing V1 effect kind is no longer executable");
+    serde_json::from_str::<pandamux_core::OrchestrationEffect>(raw)
+        .expect_err("the current interpreter must not accept V1 payload persistence");
+}
+
+#[test]
 fn unversioned_records_never_become_canonical_state_silently() {
     let fixtures = [
         (

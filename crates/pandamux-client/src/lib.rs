@@ -305,6 +305,7 @@ mod tests {
                     kind: "patch".to_string(),
                     schema: None,
                 }],
+                required_verification: Default::default(),
                 selected_agent_id: Some(pandamux_core::AgentId::from("agent-builder")),
                 route: None,
                 status: RunTaskStatus::Running,

@@ -7,8 +7,9 @@ use pandamux_core::{
 use pandamux_orchestrator::{
     AgentFeasibilitySnapshot, ConfigurationIssueCode, PlanValidationContext, ProjectPolicySnapshot,
     ProposedDependencyEdgeV1, ProposedPlanV1, ProposedTaskInputV1, ProposedTaskV1, is_task_ready,
-    validate_plan,
+    validate_output_contract_schema, validate_output_value, validate_plan,
 };
+use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 
 fn contract(kind: &str) -> OutputContract {
@@ -28,6 +29,7 @@ fn proposed_task(id: &str) -> ProposedTaskV1 {
         access_ceiling: AccessMode::ReadOnly,
         inputs: Vec::new(),
         outputs: vec![contract("patch")],
+        required_verification: BTreeSet::new(),
         selected_agent_id: None,
         max_attempts: 2,
         budget_limit: BudgetAmount {
@@ -443,6 +445,105 @@ fn requires_one_compatible_producer_and_success_edge() {
             &context(),
         ),
         ConfigurationIssueCode::PlanOutputIncompatible,
+    );
+}
+
+#[test]
+fn validates_only_the_supported_deterministic_output_schema_subset() {
+    let supported = OutputContract {
+        kind: "change_set".to_string(),
+        schema: Some(json!({
+            "type": "object",
+            "required": ["files", "verified"],
+            "properties": {
+                "files": {
+                    "type": "array",
+                    "items": {"type": "string"}
+                },
+                "verified": {
+                    "type": "string",
+                    "enum": ["yes", "no"]
+                }
+            },
+            "additionalProperties": false
+        })),
+    };
+    validate_output_contract_schema(&supported).expect("supported schema validates");
+    validate_output_value(
+        &supported,
+        &json!({"files": ["src/lib.rs"], "verified": "yes"}),
+    )
+    .expect("matching value validates");
+    assert!(
+        validate_output_value(
+            &supported,
+            &json!({"files": ["src/lib.rs"], "verified": "maybe"}),
+        )
+        .is_err(),
+        "enum mismatches must fail"
+    );
+    assert!(
+        validate_output_value(
+            &supported,
+            &json!({"files": ["src/lib.rs"], "verified": "yes", "authority": "full"}),
+        )
+        .is_err(),
+        "additional data must not widen the declared contract"
+    );
+
+    for schema in [
+        json!({"type": "integer", "minimum": 0}),
+        json!({"type": "string", "additionalProperties": false}),
+        json!({"type": "string", "enum": [1]}),
+        json!({
+            "type": "object",
+            "required": ["missing"],
+            "properties": {},
+            "additionalProperties": false
+        }),
+    ] {
+        let contract = OutputContract {
+            kind: "invalid".to_string(),
+            schema: Some(schema),
+        };
+        assert!(
+            validate_output_contract_schema(&contract).is_err(),
+            "unsupported or internally inconsistent schemas must fail closed"
+        );
+    }
+
+    let mut invalid_task = proposed_task("task-schema-invalid");
+    invalid_task.outputs = vec![OutputContract {
+        kind: "patch".to_string(),
+        schema: Some(json!({"type": "integer", "minimum": 0})),
+    }];
+    assert_code(
+        validate_plan(
+            &ProposedPlanV1 {
+                schema_version: 1,
+                tasks: vec![invalid_task],
+                edges: Vec::new(),
+            },
+            &context(),
+        ),
+        ConfigurationIssueCode::PlanOutputIncompatible,
+    );
+
+    let mut verified_task = proposed_task("task-verified");
+    verified_task.required_verification =
+        BTreeSet::from([pandamux_core::VerificationEvidenceKind::Command]);
+    let validated = validate_plan(
+        &ProposedPlanV1 {
+            schema_version: 1,
+            tasks: vec![verified_task],
+            edges: Vec::new(),
+        },
+        &context(),
+    )
+    .expect("verification requirements survive plan validation");
+    assert_eq!(
+        validated.tasks[&RunTaskId::new("task-verified")].required_verification,
+        BTreeSet::from([pandamux_core::VerificationEvidenceKind::Command])
     );
 }
 

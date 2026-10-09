@@ -55,13 +55,15 @@ pub use event::{
 pub use home::{HomeLayout, HomePane};
 pub use i18n::{Locale, Localizer};
 pub use ids::{
-    AgentId, ApprovalId, BlackboardEntryId, BudgetReservationId, BundleActivationId,
-    BundleTransferId, ConfigurationAuditId, ContinuationId, DependencyEdgeId, EnvironmentId,
-    FailoverPoolId, InstructionCandidateId, InstructionSourceId, MutationAuditId,
+    AgentId, ApprovalId, ArtifactKey, AttemptProgressId, AttemptWorktreeId, BlackboardEntryId,
+    BudgetGrantId, BudgetReservationId, BundleActivationId, BundleTransferId, CheckpointId,
+    CleanupRecordId, ConfigurationAuditId, ContinuationId, DependencyEdgeId, EnvironmentId,
+    ExecutionLeaseId, FailoverPoolId, InstructionCandidateId, InstructionSourceId, MutationAuditId,
     MutationProposalId, NodeStoreId, OrchestrationEffectId, OrganizationId, PaneId, PersonalEditId,
     PricingVersionId, ProjectId, ProjectLayerTrustId, ProjectRepositoryId, ProviderInstanceId,
-    RunAttemptId, RunEventId, RunId, RunTaskId, ScheduleId, SshProfileId, SubscriptionKey,
-    SurfaceId, ThreadId, TurnAttemptId, TurnId, UsageObservationId, WindowId, WorkspaceId,
+    RecoveryReviewId, RunAttemptId, RunEventId, RunId, RunTaskId, ScheduleId, ServerIncarnationId,
+    SshProfileId, SubscriptionKey, SurfaceId, ThreadId, TurnAttemptId, TurnId, UsageObservationId,
+    VerificationEvidenceId, WindowId, WorkspaceId,
 };
 pub use instruction_bundle::{
     BundleReference, BundleSourceManifest, COMPILED_BUNDLE_SCHEMA_VERSION, CompiledClassRule,
@@ -106,12 +108,20 @@ pub use routing::{
 };
 pub use run::{
     AgentEvaluation, AgentSelectionScore, AgentTask, ApprovalDecisionProvenance,
-    ApprovalRequirement, Attempt, AttemptFailure, AttemptStatus, BlackboardEntry, BudgetAmount,
-    BudgetReservation, BudgetReservationState, CheckpointKind, CheckpointRef, DependencyEdge,
-    DependencyRequirement, EffectReceipt, FailureClass, OrchestrationEffect,
-    OrchestrationEffectKind, OrchestrationMode, RoutingEnvironment, Run, RunApprovalKind,
-    RunApprovalStatus, RunBudget, RunCommand, RunEvent, RunEventKind, RunSeed, RunStatus,
-    RunTaskStatus, RunTrigger, TaskInput, TaskRouteDecision, ValidatedPlan,
+    ApprovalRequirement, ArtifactProvenance, Attempt, AttemptFailure, AttemptProgressKind,
+    AttemptProgressRecord, AttemptStatus, BlackboardArtifact, BlackboardEntry, BudgetAmount,
+    BudgetDimension, BudgetIncomplete, BudgetReservation, BudgetReservationState, BudgetUsage,
+    CheckpointKind, CheckpointRef, CleanupRecord, CleanupState, DependencyEdge,
+    DependencyRequirement, EffectDeliveryRecord, EffectDeliveryState, EffectReceipt,
+    ExecutionLease, FailureClass, LeaseResourceKind, MAX_ARTIFACT_BYTES,
+    MAX_ARTIFACT_CONTAINER_ITEMS, MAX_ARTIFACT_JSON_DEPTH, MAX_ARTIFACT_STRING_BYTES,
+    MAX_ARTIFACTS_PER_RUN, MAX_ARTIFACTS_PER_TASK, MAX_RUN_ARTIFACT_BYTES, OrchestrationEffect,
+    OrchestrationEffectKind, OrchestrationMode, OwnedAttemptWorktree, RecoveryReview,
+    RecoveryReviewStatus, RoutingEnvironment, Run, RunApprovalKind, RunApprovalStatus, RunBudget,
+    RunCommand, RunEvent, RunEventKind, RunSeed, RunStatus, RunTaskStatus, RunTrigger,
+    SupplementalBudgetGrant, TaskInput, TaskRouteDecision, ValidatedPlan, VerificationEvidence,
+    VerificationEvidenceKind, VerificationEvidenceOutcome, WorktreeCleanupEligibility,
+    WorktreeDirtyState,
 };
 pub use schedule::{
     PerDayBudget, PerRunBudget, ScheduleApprovalPolicy, ScheduleBudget, ScheduleCatchUpPolicy,

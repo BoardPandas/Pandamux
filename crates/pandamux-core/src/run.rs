@@ -1,13 +1,24 @@
 use crate::agent_def::OutputContract;
 use crate::ids::{
-    AgentId, ApprovalId, BlackboardEntryId, BudgetReservationId, DependencyEdgeId, EnvironmentId,
-    OrchestrationEffectId, OrganizationId, ProjectId, RunAttemptId, RunEventId, RunId, RunTaskId,
-    ThreadId, TurnAttemptId,
+    AgentId, ApprovalId, ArtifactKey, AttemptProgressId, AttemptWorktreeId, BlackboardEntryId,
+    BudgetGrantId, BudgetReservationId, CheckpointId, CleanupRecordId, DependencyEdgeId,
+    EnvironmentId, ExecutionLeaseId, OrchestrationEffectId, OrganizationId, ProjectId,
+    ProjectRepositoryId, ProviderInstanceId, RecoveryReviewId, RunAttemptId, RunEventId, RunId,
+    RunTaskId, ServerIncarnationId, ThreadId, TurnAttemptId, UsageObservationId,
+    VerificationEvidenceId,
 };
 use crate::routing::{AttemptBoundary, RoutingDecision};
 use crate::thread::AccessMode;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+
+pub const MAX_ARTIFACTS_PER_TASK: usize = 32;
+pub const MAX_ARTIFACTS_PER_RUN: usize = 256;
+pub const MAX_ARTIFACT_BYTES: usize = 1024 * 1024;
+pub const MAX_RUN_ARTIFACT_BYTES: usize = 16 * 1024 * 1024;
+pub const MAX_ARTIFACT_JSON_DEPTH: usize = 32;
+pub const MAX_ARTIFACT_CONTAINER_ITEMS: usize = 1024;
+pub const MAX_ARTIFACT_STRING_BYTES: usize = 256 * 1024;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -64,7 +75,11 @@ pub struct Run {
     #[serde(default)]
     pub reservations: BTreeMap<BudgetReservationId, BudgetReservation>,
     #[serde(default)]
-    pub checkpoints: BTreeMap<RunAttemptId, CheckpointRef>,
+    pub budget_grants: BTreeMap<BudgetGrantId, SupplementalBudgetGrant>,
+    #[serde(default)]
+    pub checkpoints: BTreeMap<CheckpointId, CheckpointRef>,
+    #[serde(default)]
+    pub verification_evidence: BTreeMap<VerificationEvidenceId, VerificationEvidence>,
     #[serde(default)]
     pub routes: BTreeMap<RunTaskId, TaskRouteDecision>,
     #[serde(default)]
@@ -103,7 +118,9 @@ impl Run {
             approvals: BTreeMap::new(),
             blackboard: BTreeMap::new(),
             reservations: BTreeMap::new(),
+            budget_grants: BTreeMap::new(),
             checkpoints: BTreeMap::new(),
+            verification_evidence: BTreeMap::new(),
             routes: BTreeMap::new(),
             replay_receipts: BTreeMap::new(),
             idempotency_receipts: BTreeMap::new(),
@@ -177,6 +194,8 @@ pub struct AgentTask {
     #[serde(default)]
     pub outputs: Vec<OutputContract>,
     #[serde(default)]
+    pub required_verification: BTreeSet<VerificationEvidenceKind>,
+    #[serde(default)]
     pub selected_agent_id: Option<AgentId>,
     #[serde(default)]
     pub route: Option<TaskRouteDecision>,
@@ -247,6 +266,14 @@ pub struct Attempt {
     pub usage_reconciled: bool,
     #[serde(default)]
     pub ambiguous_effect: bool,
+    #[serde(default)]
+    pub ambiguity_reason: Option<String>,
+    #[serde(default)]
+    pub worktree_id: Option<AttemptWorktreeId>,
+    #[serde(default)]
+    pub checkpoint_ids: BTreeSet<CheckpointId>,
+    #[serde(default)]
+    pub cleanup_state: CleanupState,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -298,16 +325,64 @@ pub enum DependencyRequirement {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BlackboardEntry {
+pub struct BlackboardArtifact {
     pub id: BlackboardEntryId,
+    pub run_id: RunId,
+    pub artifact_key: ArtifactKey,
     pub version: u64,
+    #[serde(default)]
+    pub previous_entry_id: Option<BlackboardEntryId>,
     pub producer: RunTaskId,
     #[serde(default)]
     pub consumers: BTreeSet<RunTaskId>,
     pub output_contract: OutputContract,
-    pub content: serde_json::Value,
+    pub schema_sha256: String,
+    pub canonical_json: Vec<u8>,
+    pub byte_len: u64,
+    pub content_sha256: String,
+    #[serde(default)]
+    pub provenance: Option<ArtifactProvenance>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlackboardEntry {
+    pub id: BlackboardEntryId,
+    pub run_id: RunId,
+    pub artifact_key: ArtifactKey,
+    pub version: u64,
+    #[serde(default)]
+    pub previous_entry_id: Option<BlackboardEntryId>,
+    pub producer: RunTaskId,
+    #[serde(default)]
+    pub consumers: BTreeSet<RunTaskId>,
+    pub output_contract: OutputContract,
+    pub schema_sha256: String,
+    pub canonical_json: Vec<u8>,
+    pub byte_len: u64,
     pub content_sha256: String,
     pub created_event_id: RunEventId,
+    #[serde(default)]
+    pub provenance: Option<ArtifactProvenance>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ArtifactProvenance {
+    Checkpoint {
+        checkpoint_id: CheckpointId,
+    },
+    Command {
+        evidence_id: VerificationEvidenceId,
+    },
+    ToolResult {
+        thread_id: ThreadId,
+        turn_attempt_id: TurnAttemptId,
+        tool_item_id: String,
+    },
+    Usage {
+        observation_id: UsageObservationId,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -322,8 +397,33 @@ pub struct BudgetAmount {
 #[serde(rename_all = "camelCase")]
 pub struct RunBudget {
     pub limit: BudgetAmount,
+    #[serde(default)]
+    pub granted: BudgetAmount,
     pub reserved: BudgetAmount,
     pub reconciled: BudgetAmount,
+    #[serde(default)]
+    pub overage: BudgetAmount,
+    #[serde(default)]
+    pub incomplete: BudgetIncomplete,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BudgetIncomplete {
+    pub tokens: bool,
+    pub cost_micro_usd: bool,
+    pub runtime_ms: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BudgetUsage {
+    #[serde(default)]
+    pub tokens: Option<u64>,
+    #[serde(default)]
+    pub cost_micro_usd: Option<u64>,
+    #[serde(default)]
+    pub runtime_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -331,9 +431,11 @@ pub struct RunBudget {
 pub struct BudgetReservation {
     pub id: BudgetReservationId,
     pub task_id: RunTaskId,
-    #[serde(default)]
-    pub attempt_id: Option<RunAttemptId>,
+    pub attempt_id: RunAttemptId,
     pub amount: BudgetAmount,
+    #[serde(default)]
+    pub actual: BudgetUsage,
+    pub ledger_utc_date: String,
     pub state: BudgetReservationState,
 }
 
@@ -341,8 +443,32 @@ pub struct BudgetReservation {
 #[serde(rename_all = "snake_case")]
 pub enum BudgetReservationState {
     Reserved,
+    PartiallyReconciled,
     Reconciled,
     Released,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BudgetDimension {
+    Tokens,
+    CostMicroUsd,
+    RuntimeMs,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SupplementalBudgetGrant {
+    pub id: BudgetGrantId,
+    pub run_id: RunId,
+    pub task_id: RunTaskId,
+    pub attempt_id: RunAttemptId,
+    pub approval_id: ApprovalId,
+    pub dimension: BudgetDimension,
+    pub amount: u64,
+    pub policy_revision: String,
+    pub action_digest: String,
+    pub expires_at_ms: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -393,19 +519,204 @@ pub struct ApprovalDecisionProvenance {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckpointRef {
+    pub id: CheckpointId,
+    pub run_id: RunId,
     pub value: String,
     pub task_id: RunTaskId,
     pub attempt_id: RunAttemptId,
-    pub thread_id: ThreadId,
+    #[serde(default)]
+    pub thread_id: Option<ThreadId>,
     pub kind: CheckpointKind,
+    pub created_at_ms: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CheckpointKind {
     BeforeAttempt,
     AfterAttempt,
     Recovery,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CleanupState {
+    #[default]
+    NotStarted,
+    Pending,
+    Verified,
+    Quarantined,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LeaseResourceKind {
+    Effect,
+    Capacity,
+    Worktree,
+    RemoteAttempt,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionLease {
+    pub id: ExecutionLeaseId,
+    pub resource_kind: LeaseResourceKind,
+    pub resource_id: String,
+    pub owner_incarnation_id: ServerIncarnationId,
+    pub expires_at_ms: u64,
+    pub last_heartbeat_ms: u64,
+    pub revision: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorktreeDirtyState {
+    Clean,
+    Dirty,
+    Locked,
+    Ambiguous,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorktreeCleanupEligibility {
+    Ineligible,
+    Eligible,
+    Retained,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnedAttemptWorktree {
+    pub id: AttemptWorktreeId,
+    pub repository_id: ProjectRepositoryId,
+    pub run_id: RunId,
+    pub task_id: RunTaskId,
+    pub attempt_id: RunAttemptId,
+    pub environment_id: EnvironmentId,
+    pub git_common_dir_identity: String,
+    pub baseline_commit: String,
+    pub branch_ref: String,
+    pub path: String,
+    pub lease_id: ExecutionLeaseId,
+    #[serde(default)]
+    pub checkpoint_ids: BTreeSet<CheckpointId>,
+    pub dirty_state: WorktreeDirtyState,
+    pub cleanup_eligibility: WorktreeCleanupEligibility,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttemptProgressKind {
+    BoundaryAdvance,
+    StreamBytes,
+    ToolLifecycle,
+    ApprovalTransition,
+    CheckpointCreated,
+    UsageReceipt,
+    ArtifactPublished,
+    TerminalOutcome,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttemptProgressRecord {
+    pub id: AttemptProgressId,
+    pub run_id: RunId,
+    pub task_id: RunTaskId,
+    pub attempt_id: RunAttemptId,
+    pub kind: AttemptProgressKind,
+    pub payload_digest: String,
+    pub at_ms: u64,
+    #[serde(default)]
+    pub cumulative_stream_bytes: Option<u64>,
+    pub terminal: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupRecord {
+    pub id: CleanupRecordId,
+    pub run_id: RunId,
+    pub task_id: RunTaskId,
+    pub attempt_id: RunAttemptId,
+    pub state: CleanupState,
+    pub reason_code: String,
+    pub evidence_digest: String,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryReviewStatus {
+    Pending,
+    Resolved,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoveryReview {
+    pub id: RecoveryReviewId,
+    pub run_id: RunId,
+    pub task_id: RunTaskId,
+    pub attempt_id: RunAttemptId,
+    #[serde(default)]
+    pub effect_id: Option<OrchestrationEffectId>,
+    pub reason_code: String,
+    pub evidence_digest: String,
+    pub status: RecoveryReviewStatus,
+    pub created_at_ms: u64,
+    #[serde(default)]
+    pub resolved_at_ms: Option<u64>,
+    #[serde(default)]
+    pub resolution: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerificationEvidenceKind {
+    Command,
+    Checkpoint,
+    ToolResult,
+    Usage,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerificationEvidenceOutcome {
+    Passed,
+    Failed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VerificationEvidence {
+    pub id: VerificationEvidenceId,
+    pub run_id: RunId,
+    pub task_id: RunTaskId,
+    pub attempt_id: RunAttemptId,
+    pub kind: VerificationEvidenceKind,
+    pub outcome: VerificationEvidenceOutcome,
+    #[serde(default)]
+    pub command_digest: Option<String>,
+    #[serde(default)]
+    pub arguments_digest: Option<String>,
+    #[serde(default)]
+    pub exit_status: Option<i32>,
+    pub bounded_output_digest: String,
+    #[serde(default)]
+    pub checkpoint_id: Option<CheckpointId>,
+    #[serde(default)]
+    pub checkpoint_diff_digest: Option<String>,
+    #[serde(default)]
+    pub tool_item_id: Option<String>,
+    #[serde(default)]
+    pub usage_observation_id: Option<UsageObservationId>,
+    pub provider_instance_id: ProviderInstanceId,
+    pub thread_id: ThreadId,
+    pub turn_attempt_id: TurnAttemptId,
+    pub recorded_at_ms: u64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -473,10 +784,13 @@ pub enum RunEventKind {
     },
     BudgetReconciled {
         reservation_id: BudgetReservationId,
-        actual: BudgetAmount,
+        actual: BudgetUsage,
     },
     BudgetReleased {
         reservation_id: BudgetReservationId,
+    },
+    SupplementalBudgetGranted {
+        grant: SupplementalBudgetGrant,
     },
     RouteSelected {
         decision: TaskRouteDecision,
@@ -493,14 +807,29 @@ pub enum RunEventKind {
         attempt_id: RunAttemptId,
         boundary: AttemptBoundary,
     },
+    CheckpointRecorded {
+        checkpoint: CheckpointRef,
+    },
+    AttemptMarkedAmbiguous {
+        attempt_id: RunAttemptId,
+        reason_code: String,
+    },
     AttemptSettled {
         attempt_id: RunAttemptId,
         status: AttemptStatus,
         failure: Option<AttemptFailure>,
         usage_reconciled: bool,
     },
-    BlackboardPublished {
-        entry: BlackboardEntry,
+    VerificationEvidenceRecorded {
+        evidence: VerificationEvidence,
+    },
+    TaskSucceeded {
+        task_id: RunTaskId,
+        attempt_id: RunAttemptId,
+        artifacts: Vec<BlackboardArtifact>,
+        #[serde(default)]
+        evidence_ids: BTreeSet<VerificationEvidenceId>,
+        summary: Option<String>,
     },
     TaskSettled {
         task_id: RunTaskId,
@@ -545,10 +874,13 @@ pub enum RunCommand {
     },
     ReconcileBudget {
         reservation_id: BudgetReservationId,
-        actual: BudgetAmount,
+        actual: BudgetUsage,
     },
     ReleaseBudget {
         reservation_id: BudgetReservationId,
+    },
+    GrantSupplementalBudget {
+        grant: SupplementalBudgetGrant,
     },
     SelectRoute {
         decision: TaskRouteDecision,
@@ -565,14 +897,29 @@ pub enum RunCommand {
         attempt_id: RunAttemptId,
         boundary: AttemptBoundary,
     },
+    RecordCheckpoint {
+        checkpoint: CheckpointRef,
+    },
+    MarkAttemptAmbiguous {
+        attempt_id: RunAttemptId,
+        reason_code: String,
+    },
     SettleAttempt {
         attempt_id: RunAttemptId,
         status: AttemptStatus,
         failure: Option<AttemptFailure>,
         usage_reconciled: bool,
     },
-    PublishBlackboard {
-        entry: BlackboardEntry,
+    RecordVerificationEvidence {
+        evidence: VerificationEvidence,
+    },
+    CompleteTask {
+        task_id: RunTaskId,
+        attempt_id: RunAttemptId,
+        artifacts: Vec<BlackboardArtifact>,
+        #[serde(default)]
+        evidence_ids: BTreeSet<VerificationEvidenceId>,
+        summary: Option<String>,
     },
     SettleTask {
         task_id: RunTaskId,
@@ -599,6 +946,7 @@ pub enum RunCommand {
 pub struct OrchestrationEffect {
     pub id: OrchestrationEffectId,
     pub source_event_id: RunEventId,
+    pub payload_sha256: String,
     pub kind: OrchestrationEffectKind,
 }
 
@@ -619,8 +967,10 @@ pub enum OrchestrationEffectKind {
     RequestApproval {
         approval: ApprovalRequirement,
     },
-    PublishBlackboardEntry {
-        entry: BlackboardEntry,
+    NotifyBlackboardPublished {
+        run_id: RunId,
+        entry_id: BlackboardEntryId,
+        content_sha256: String,
     },
     NotifyRunState {
         run_id: RunId,
@@ -634,6 +984,41 @@ pub struct EffectReceipt {
     pub effect_id: OrchestrationEffectId,
     pub acknowledged_at_ms: u64,
     pub result_digest: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EffectDeliveryState {
+    Pending,
+    Claimed,
+    Prepared,
+    DispatchStarted,
+    InFlight,
+    OutcomeRecorded,
+    Settled,
+    Cancelled,
+    ReviewRequired,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectDeliveryRecord {
+    pub effect_id: OrchestrationEffectId,
+    pub payload_sha256: String,
+    pub state: EffectDeliveryState,
+    #[serde(default)]
+    pub owner_incarnation_id: Option<ServerIncarnationId>,
+    #[serde(default)]
+    pub lease_id: Option<ExecutionLeaseId>,
+    pub claim_revision: u64,
+    #[serde(default)]
+    pub prepared_receipt_digest: Option<String>,
+    #[serde(default)]
+    pub dispatch_started_at_ms: Option<u64>,
+    #[serde(default)]
+    pub result_digest: Option<String>,
+    #[serde(default)]
+    pub safe_error_code: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -661,6 +1046,7 @@ mod tests {
                 kind: "patch".to_string(),
                 schema: None,
             }],
+            required_verification: BTreeSet::new(),
             selected_agent_id: None,
             route: None,
             status: RunTaskStatus::Pending,
@@ -721,5 +1107,19 @@ mod tests {
         ] {
             assert!(state.is_terminal());
         }
+    }
+
+    #[test]
+    fn legacy_budget_totals_gain_non_authoritative_defaults() {
+        let budget: RunBudget = serde_json::from_value(serde_json::json!({
+            "limit": {"tokens": 10, "costMicroUsd": 20, "runtimeMs": 30},
+            "reserved": {"tokens": 1, "costMicroUsd": 2, "runtimeMs": 3},
+            "reconciled": {"tokens": 4, "costMicroUsd": 5, "runtimeMs": 6}
+        }))
+        .expect("legacy budget totals remain readable");
+
+        assert_eq!(budget.granted, BudgetAmount::default());
+        assert_eq!(budget.overage, BudgetAmount::default());
+        assert_eq!(budget.incomplete, BudgetIncomplete::default());
     }
 }

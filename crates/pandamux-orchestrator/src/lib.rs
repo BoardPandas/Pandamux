@@ -33,7 +33,7 @@ pub use configuration::{
 pub use dag::{
     AgentFeasibilitySnapshot, PlanValidationContext, ProjectPolicySnapshot,
     ProposedDependencyEdgeV1, ProposedPlanV1, ProposedTaskInputV1, ProposedTaskV1, is_task_ready,
-    validate_plan,
+    validate_output_contract_schema, validate_output_value, validate_plan,
 };
 pub use diagnostics::{
     ConfigurationIssue, ConfigurationIssueCode, ConfigurationStage, DiagnosticSet,
@@ -57,6 +57,7 @@ pub use schema::{
     validate_source_set_bounds,
 };
 pub use state::{
-    ApplyOutcome, OrchestrationError, OrchestrationErrorCode, apply, canonical_blackboard_sha256,
-    canonical_run_bytes, decide, replay, replay_from,
+    ApplyOutcome, OrchestrationError, OrchestrationErrorCode, apply, artifact_key,
+    canonical_artifact_json, canonical_blackboard_sha256, canonical_run_bytes, decide,
+    output_contract_schema_sha256, replay, replay_from,
 };

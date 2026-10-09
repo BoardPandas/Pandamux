@@ -63,6 +63,7 @@ fn task() -> pandamux_core::AgentTask {
         access_ceiling: AccessMode::WorkspaceOnly,
         inputs: Vec::new(),
         outputs: vec![contract("patch")],
+        required_verification: BTreeSet::new(),
         selected_agent_id: None,
         route: None,
         status: RunTaskStatus::Ready,

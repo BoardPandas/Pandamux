@@ -5,10 +5,12 @@ use crate::diagnostics::{
 use crate::policy::canonical_json_bytes;
 use pandamux_core::{
     AccessMode, AgentDefinition, AgentId, AgentScope, AgentTask, BudgetAmount, DependencyEdge,
-    DependencyEdgeId, DependencyRequirement, OrchestrationMode, OrganizationId, OutputContract,
-    ProjectId, RunTaskId, RunTaskStatus, TaskInput, ValidatedPlan,
+    DependencyEdgeId, DependencyRequirement, MAX_ARTIFACT_CONTAINER_ITEMS, MAX_ARTIFACT_JSON_DEPTH,
+    MAX_ARTIFACT_STRING_BYTES, OrchestrationMode, OrganizationId, OutputContract, ProjectId,
+    RunTaskId, RunTaskStatus, TaskInput, ValidatedPlan, VerificationEvidenceKind,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -42,6 +44,8 @@ pub struct ProposedTaskV1 {
     pub inputs: Vec<ProposedTaskInputV1>,
     #[serde(default)]
     pub outputs: Vec<OutputContract>,
+    #[serde(default)]
+    pub required_verification: BTreeSet<VerificationEvidenceKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected_agent_id: Option<AgentId>,
     pub max_attempts: u32,
@@ -150,6 +154,13 @@ pub fn is_task_ready(
     ) {
         return false;
     }
+    if task
+        .inputs
+        .iter()
+        .any(|input| input.producer_task_id.is_some() && input.blackboard_entry_id.is_none())
+    {
+        return false;
+    }
     edges
         .values()
         .filter(|edge| edge.target == task.id)
@@ -230,6 +241,7 @@ fn normalize_unique_records(proposal: &ProposedPlanV1) -> Result<NormalizedGraph
                 })
                 .collect(),
             outputs: proposed.outputs.clone(),
+            required_verification: proposed.required_verification.clone(),
             selected_agent_id: proposed.selected_agent_id.clone(),
             route: None,
             status: RunTaskStatus::Pending,
@@ -482,6 +494,7 @@ fn validate_agent_and_output_references(
 ) -> Result<(), DiagnosticSet> {
     let mut issues = Vec::new();
     for task in tasks.values() {
+        let mut output_identities = BTreeSet::new();
         if task.summary.trim().is_empty() || task.class.trim().is_empty() {
             issues.push(plan_issue(
                 ConfigurationIssueCode::SchemaInvalidValue,
@@ -491,22 +504,28 @@ fn validate_agent_and_output_references(
             ));
         }
         for output in &task.outputs {
-            if output.kind.trim().is_empty() {
+            if output.kind.trim().is_empty()
+                || validate_output_contract_schema(output).is_err()
+                || !output_identities.insert(canonical_json_bytes(output))
+            {
                 issues.push(plan_issue(
                     ConfigurationIssueCode::PlanOutputIncompatible,
                     Some("/tasks/outputs"),
-                    "A task output contract has an empty kind",
-                    "Name the typed output contract",
+                    "A task output contract is empty, duplicated, or uses an unsupported schema keyword",
+                    "Name each output once and use only type, required, properties, items, enum, and additionalProperties false",
                 ));
             }
         }
         for input in &task.inputs {
-            if input.name.trim().is_empty() || input.contract.kind.trim().is_empty() {
+            if input.name.trim().is_empty()
+                || input.contract.kind.trim().is_empty()
+                || validate_output_contract_schema(&input.contract).is_err()
+            {
                 issues.push(plan_issue(
                     ConfigurationIssueCode::PlanOutputIncompatible,
                     Some("/tasks/inputs"),
-                    "A task input name or contract kind is empty",
-                    "Name every typed input and output contract",
+                    "A task input is empty or uses an unsupported output schema keyword",
+                    "Name every typed input and use only the supported deterministic schema subset",
                 ));
             }
         }
@@ -579,6 +598,221 @@ fn validate_producer_compatibility(
 
 fn contracts_compatible(left: &OutputContract, right: &OutputContract) -> bool {
     left.kind == right.kind && left.schema == right.schema
+}
+
+pub fn validate_output_contract_schema(contract: &OutputContract) -> Result<(), &'static str> {
+    if contract.kind.trim().is_empty() {
+        return Err("empty output kind");
+    }
+    let Some(schema) = &contract.schema else {
+        return Ok(());
+    };
+    validate_schema_node(schema, 1)
+}
+
+pub fn validate_output_value(contract: &OutputContract, value: &Value) -> Result<(), &'static str> {
+    validate_output_contract_schema(contract)?;
+    match &contract.schema {
+        Some(schema) => validate_value_node(schema, value, 1),
+        None => Ok(()),
+    }
+}
+
+fn validate_schema_node(schema: &Value, depth: usize) -> Result<(), &'static str> {
+    if depth > MAX_ARTIFACT_JSON_DEPTH {
+        return Err("schema depth");
+    }
+    let object = schema.as_object().ok_or("schema node must be an object")?;
+    if object.len() > MAX_ARTIFACT_CONTAINER_ITEMS {
+        return Err("schema object size");
+    }
+    const ALLOWED: [&str; 6] = [
+        "type",
+        "required",
+        "properties",
+        "items",
+        "enum",
+        "additionalProperties",
+    ];
+    if object.keys().any(|key| !ALLOWED.contains(&key.as_str())) {
+        return Err("unsupported schema keyword");
+    }
+    let schema_type = object.get("type").map(|value| {
+        let kind = value.as_str().ok_or("schema type must be a string")?;
+        if !matches!(
+            kind,
+            "object" | "array" | "string" | "number" | "integer" | "boolean" | "null"
+        ) {
+            return Err("unsupported schema type");
+        }
+        Ok(kind)
+    });
+    let schema_type = match schema_type {
+        Some(result) => Some(result?),
+        None => None,
+    };
+
+    let properties = object.get("properties").map(|value| {
+        if schema_type != Some("object") {
+            return Err("properties require object type");
+        }
+        let properties = value
+            .as_object()
+            .ok_or("schema properties must be an object")?;
+        if properties.len() > MAX_ARTIFACT_CONTAINER_ITEMS {
+            return Err("schema property count");
+        }
+        for child in properties.values() {
+            validate_schema_node(child, depth + 1)?;
+        }
+        Ok(properties)
+    });
+    let properties = match properties {
+        Some(result) => Some(result?),
+        None => None,
+    };
+
+    if let Some(required) = object.get("required") {
+        if schema_type != Some("object") {
+            return Err("required needs object type");
+        }
+        let required = required
+            .as_array()
+            .ok_or("schema required must be an array")?;
+        if required.len() > MAX_ARTIFACT_CONTAINER_ITEMS {
+            return Err("schema required count");
+        }
+        let mut names = BTreeSet::new();
+        for value in required {
+            let name = value.as_str().ok_or("required names must be strings")?;
+            if name.is_empty()
+                || !names.insert(name)
+                || properties.is_none_or(|entries| !entries.contains_key(name))
+            {
+                return Err("invalid required property");
+            }
+        }
+    }
+    if let Some(items) = object.get("items") {
+        if schema_type != Some("array") {
+            return Err("items require array type");
+        }
+        validate_schema_node(items, depth + 1)?;
+    }
+    if let Some(values) = object.get("enum") {
+        let values = values.as_array().ok_or("schema enum must be an array")?;
+        if values.is_empty() || values.len() > MAX_ARTIFACT_CONTAINER_ITEMS {
+            return Err("invalid schema enum");
+        }
+        let mut canonical = BTreeSet::new();
+        for value in values {
+            validate_schema_literal_bounds(value, 0)?;
+            if schema_type.is_some_and(|kind| !value_matches_type(kind, value)) {
+                return Err("schema enum type mismatch");
+            }
+            if !canonical.insert(canonical_json_bytes(value)) {
+                return Err("duplicate schema enum value");
+            }
+        }
+    }
+    if let Some(additional) = object.get("additionalProperties")
+        && (schema_type != Some("object") || additional != &Value::Bool(false))
+    {
+        return Err("additionalProperties must be false on an object schema");
+    }
+    Ok(())
+}
+
+fn validate_value_node(schema: &Value, value: &Value, depth: usize) -> Result<(), &'static str> {
+    if depth > MAX_ARTIFACT_JSON_DEPTH {
+        return Err("value depth");
+    }
+    let object = schema.as_object().ok_or("schema node")?;
+    if let Some(values) = object.get("enum").and_then(Value::as_array)
+        && !values.contains(value)
+    {
+        return Err("enum mismatch");
+    }
+    if let Some(kind) = object.get("type").and_then(Value::as_str)
+        && !value_matches_type(kind, value)
+    {
+        return Err("type mismatch");
+    }
+    if let Some(properties) = object.get("properties").and_then(Value::as_object) {
+        let values = value.as_object().ok_or("object mismatch")?;
+        if let Some(required) = object.get("required").and_then(Value::as_array) {
+            for name in required.iter().filter_map(Value::as_str) {
+                if !values.contains_key(name) {
+                    return Err("required property missing");
+                }
+            }
+        }
+        if object.get("additionalProperties") == Some(&Value::Bool(false))
+            && values.keys().any(|key| !properties.contains_key(key))
+        {
+            return Err("additional property");
+        }
+        for (name, child_schema) in properties {
+            if let Some(child) = values.get(name) {
+                validate_value_node(child_schema, child, depth + 1)?;
+            }
+        }
+    }
+    if let Some(items) = object.get("items") {
+        let values = value.as_array().ok_or("array mismatch")?;
+        for child in values {
+            validate_value_node(items, child, depth + 1)?;
+        }
+    }
+    Ok(())
+}
+
+fn value_matches_type(kind: &str, value: &Value) -> bool {
+    match kind {
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "string" => value.is_string(),
+        "number" => value.is_number(),
+        "integer" => value
+            .as_number()
+            .is_some_and(|number| number.is_i64() || number.is_u64()),
+        "boolean" => value.is_boolean(),
+        "null" => value.is_null(),
+        _ => false,
+    }
+}
+
+fn validate_schema_literal_bounds(value: &Value, depth: usize) -> Result<(), &'static str> {
+    match value {
+        Value::String(text) if text.len() > MAX_ARTIFACT_STRING_BYTES => {
+            Err("schema literal string size")
+        }
+        Value::Array(items) => {
+            let child_depth = depth.checked_add(1).ok_or("schema literal depth")?;
+            if child_depth > MAX_ARTIFACT_JSON_DEPTH || items.len() > MAX_ARTIFACT_CONTAINER_ITEMS {
+                return Err("schema literal array bounds");
+            }
+            for item in items {
+                validate_schema_literal_bounds(item, child_depth)?;
+            }
+            Ok(())
+        }
+        Value::Object(entries) => {
+            let child_depth = depth.checked_add(1).ok_or("schema literal depth")?;
+            if child_depth > MAX_ARTIFACT_JSON_DEPTH || entries.len() > MAX_ARTIFACT_CONTAINER_ITEMS
+            {
+                return Err("schema literal object bounds");
+            }
+            for (key, item) in entries {
+                if key.len() > MAX_ARTIFACT_STRING_BYTES {
+                    return Err("schema literal key size");
+                }
+                validate_schema_literal_bounds(item, child_depth)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
 }
 
 fn validate_budget(

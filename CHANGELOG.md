@@ -40,6 +40,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Repaired the Phase 5 execution contracts in version 0.60.91.** Canonical
+  runs now retain attempt-bound budget reservations and truthful partial or
+  over-limit usage, replayable checkpoints and ambiguity, exact supplemental
+  grants, immutable bounded artifacts, and server-fact verification evidence.
+  Successful tasks publish every declared artifact atomically before addressed
+  consumers become ready, while post-commit notifications contain identity and
+  digest only. This pure-runtime checkpoint adds no live provider dispatch,
+  migration, push, deployment, activation, packaging, signing, publication, or
+  release claim.
+
 - **Published the detailed Phase 5C execution-runtime contract in version
   0.60.90.** The plan defines one server-owned effect interpreter, additive
   migration 14, crash-safe event and outbox ordering, per-attempt app-data
