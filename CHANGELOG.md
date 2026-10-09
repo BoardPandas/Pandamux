@@ -116,6 +116,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Made approval identity canonical under workspace feature unification in
+  version 0.60.76.** Approval action objects now sort every nested JSON key
+  before hashing even when another workspace crate enables Serde JSON's
+  insertion-order map backend. The digest contract is pinned by an exact hash
+  fixture, so focused and full-workspace builds cannot assign different
+  approval identities to byte-equivalent actions.
+
 - Fixed the Linux SSH proxy bridge so a node-side heartbeat lease closure
   terminates the dedicated bridge process even while the Hub-side stdin pipe is
   still half-open after a client network loss.

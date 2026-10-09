@@ -426,6 +426,10 @@ fn canonical_approval_identity_and_one_mode_reconciler_deduplicate_exact_actions
         canonical_action_digest(&action().canonical_action),
         canonical_action_digest(&reordered.canonical_action)
     );
+    assert_eq!(
+        canonical_action_digest(&action().canonical_action),
+        "6f8d1c3d05d97eed01c2075d8b214890582453321b8597acedb3158391128712"
+    );
 
     assert!(matches!(
         reconcile_approval(

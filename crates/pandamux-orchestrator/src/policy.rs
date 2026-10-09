@@ -223,12 +223,15 @@ fn approval_matches_identity(
 
 fn canonicalize_json(value: &Value) -> Value {
     match value {
-        Value::Object(object) => Value::Object(
-            object
-                .iter()
-                .map(|(key, value)| (key.clone(), canonicalize_json(value)))
-                .collect(),
-        ),
+        Value::Object(object) => {
+            let mut entries = object.iter().collect::<Vec<_>>();
+            entries.sort_by_key(|(key, _)| *key);
+            let mut canonical = serde_json::Map::new();
+            for (key, value) in entries {
+                canonical.insert(key.clone(), canonicalize_json(value));
+            }
+            Value::Object(canonical)
+        }
         Value::Array(values) => Value::Array(values.iter().map(canonicalize_json).collect()),
         other => other.clone(),
     }
