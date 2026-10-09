@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Added
 
+- **Added deterministic Phase 5 plan and DAG validation in version 0.60.72.**
+  Proposed plans now normalize into ordered task and edge maps only after fixed
+  fail-closed stages for bounds, duplicate or missing identities, stable cycle
+  witnesses, trusted project and organization policy, agent and typed-output
+  references, checked token/cost/runtime budgets, route capability feasibility,
+  and approval availability. Stable topological ordering and one shared
+  dependency-readiness predicate produce byte-identical validated plans across
+  input permutations without adding a graph dependency.
+
 - **Added the trust-aware Phase 5 instruction-bundle compiler in version
   0.60.71.** Bounded authored documents now compile only with server-issued
   layer grants bound to exact source hashes, project and organization scope,

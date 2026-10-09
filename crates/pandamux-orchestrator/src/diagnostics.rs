@@ -125,6 +125,7 @@ pub enum ConfigurationStage {
     Reference,
     Policy,
     Compilation,
+    Plan,
 }
 
 #[derive(
@@ -168,6 +169,21 @@ pub enum ConfigurationIssueCode {
     TierUnmapped,
     BundleHashMismatch,
     MinimumVersionUnsupported,
+    PlanTaskLimit,
+    PlanEdgeLimit,
+    PlanDuplicateTask,
+    PlanDuplicateEdge,
+    PlanMissingTask,
+    PlanSelfEdge,
+    PlanCycle,
+    PlanProjectDenied,
+    PlanCrossOrganization,
+    PlanAgentNotFound,
+    PlanOutputIncompatible,
+    PlanBudgetOverflow,
+    PlanBudgetExceeded,
+    PlanCapabilityImpossible,
+    PlanApprovalImpossible,
 }
 
 impl ConfigurationIssueCode {
@@ -208,6 +224,21 @@ impl ConfigurationIssueCode {
         Self::TierUnmapped,
         Self::BundleHashMismatch,
         Self::MinimumVersionUnsupported,
+        Self::PlanTaskLimit,
+        Self::PlanEdgeLimit,
+        Self::PlanDuplicateTask,
+        Self::PlanDuplicateEdge,
+        Self::PlanMissingTask,
+        Self::PlanSelfEdge,
+        Self::PlanCycle,
+        Self::PlanProjectDenied,
+        Self::PlanCrossOrganization,
+        Self::PlanAgentNotFound,
+        Self::PlanOutputIncompatible,
+        Self::PlanBudgetOverflow,
+        Self::PlanBudgetExceeded,
+        Self::PlanCapabilityImpossible,
+        Self::PlanApprovalImpossible,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -248,6 +279,21 @@ impl ConfigurationIssueCode {
             Self::TierUnmapped => "tier_unmapped",
             Self::BundleHashMismatch => "bundle_hash_mismatch",
             Self::MinimumVersionUnsupported => "minimum_version_unsupported",
+            Self::PlanTaskLimit => "plan_task_limit",
+            Self::PlanEdgeLimit => "plan_edge_limit",
+            Self::PlanDuplicateTask => "plan_duplicate_task",
+            Self::PlanDuplicateEdge => "plan_duplicate_edge",
+            Self::PlanMissingTask => "plan_missing_task",
+            Self::PlanSelfEdge => "plan_self_edge",
+            Self::PlanCycle => "plan_cycle",
+            Self::PlanProjectDenied => "plan_project_denied",
+            Self::PlanCrossOrganization => "plan_cross_organization",
+            Self::PlanAgentNotFound => "plan_agent_not_found",
+            Self::PlanOutputIncompatible => "plan_output_incompatible",
+            Self::PlanBudgetOverflow => "plan_budget_overflow",
+            Self::PlanBudgetExceeded => "plan_budget_exceeded",
+            Self::PlanCapabilityImpossible => "plan_capability_impossible",
+            Self::PlanApprovalImpossible => "plan_approval_impossible",
         }
     }
 }

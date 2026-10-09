@@ -8,6 +8,7 @@
 
 pub mod bundle;
 pub mod compatibility;
+pub mod dag;
 pub mod diagnostics;
 pub mod policy;
 pub mod schema;
@@ -18,6 +19,11 @@ pub use bundle::{
 };
 pub use compatibility::{
     LegacyCompatibilityError, LegacyRecordKind, require_explicit_legacy_migration,
+};
+pub use dag::{
+    AgentFeasibilitySnapshot, PlanValidationContext, ProjectPolicySnapshot,
+    ProposedDependencyEdgeV1, ProposedPlanV1, ProposedTaskInputV1, ProposedTaskV1, is_task_ready,
+    validate_plan,
 };
 pub use diagnostics::{
     ConfigurationIssue, ConfigurationIssueCode, ConfigurationStage, DiagnosticSet,
