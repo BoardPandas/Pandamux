@@ -3,6 +3,7 @@ mod configuration_phase5b;
 mod failover_phase4f;
 pub mod migrations;
 mod mutation_phase5b;
+mod orchestration_phase5c;
 mod usage_phase4c;
 mod usage_query_phase4c;
 
@@ -12,6 +13,12 @@ pub use configuration_phase5b::{
 };
 pub use mutation_phase5b::{
     MutationApplyFailpoint, MutationProposalSave, ProjectTrustMutationState, StoredMutationProposal,
+};
+pub use orchestration_phase5c::{
+    AttemptDispatchRecord, AttemptDispatchState, DailyBudgetRecord, NodeReceiptKind,
+    NodeReceiptRecord, OrchestrationQueueRecord, OrchestrationRunRecord,
+    OrchestrationRuntimeRecords, OwnedAttemptWorktreeRecord, QueueState, StoredBudgetReservation,
+    StoredOrchestrationEffect,
 };
 pub use usage_phase4c::{
     DEFAULT_USAGE_OUTBOX_MAX_AGE_MS, DEFAULT_USAGE_OUTBOX_MAX_BYTES, DEFAULT_USAGE_OUTBOX_MAX_ROWS,
@@ -204,11 +211,11 @@ impl Store {
         Self::open_with_backups(path, &backups)
     }
 
-    /// Open a persistent store and back up any pre-v13 database before
+    /// Open a persistent store and back up any pre-v14 database before
     /// migration changes it.
     pub fn open_with_backups(path: &Path, backups: &Path) -> Result<Self, StoreError> {
         let mut conn = Connection::open(path)?;
-        Self::backup_before_v13(&conn, backups)?;
+        Self::backup_before_v14(&conn, backups)?;
         Self::init_connection(&mut conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -235,7 +242,7 @@ impl Store {
         Ok(())
     }
 
-    fn backup_before_v13(conn: &Connection, backups: &Path) -> Result<Option<PathBuf>, StoreError> {
+    fn backup_before_v14(conn: &Connection, backups: &Path) -> Result<Option<PathBuf>, StoreError> {
         let has_migrations = conn.query_row(
             "SELECT EXISTS(
                 SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_migrations'
@@ -251,15 +258,15 @@ impl Store {
             [],
             |row| row.get::<_, i64>(0),
         )?;
-        if version <= 0 || version >= 13 {
+        if version <= 0 || version >= 14 {
             return Ok(None);
         }
 
         ensure_private_backup_directory(backups)?;
         let timestamp = current_time_ms();
-        let final_path = backups.join(format!("pandamux.db.pre-v13.{timestamp}"));
+        let final_path = backups.join(format!("pandamux.db.pre-v14.{timestamp}"));
         let temporary = backups.join(format!(
-            ".pandamux.db.pre-v13.{timestamp}.{}.tmp",
+            ".pandamux.db.pre-v14.{timestamp}.{}.tmp",
             uuid::Uuid::new_v4().simple()
         ));
         let backup_result = (|| -> Result<(), StoreError> {
@@ -4691,7 +4698,7 @@ mod tests {
     }
 
     #[test]
-    fn persistent_store_backs_up_and_verifies_schema_twelve_before_migration() {
+    fn persistent_store_backs_up_and_verifies_schema_thirteen_before_migration() {
         let temp = tempfile::tempdir().expect("temporary directory");
         let database = temp.path().join("data/pandamux.db");
         let backups = temp.path().join("data/backups");
@@ -4699,7 +4706,7 @@ mod tests {
             .expect("create data directory");
         {
             let mut connection = Connection::open(&database).expect("open fixture database");
-            migrations::apply_migrations_to(&mut connection, 12).expect("schema twelve");
+            migrations::apply_migrations_to(&mut connection, 13).expect("schema thirteen");
             connection
                 .execute(
                     "INSERT INTO settings (key, value_json)
@@ -4720,7 +4727,7 @@ mod tests {
             backup_paths[0]
                 .file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with("pandamux.db.pre-v13."))
+                .is_some_and(|name| name.starts_with("pandamux.db.pre-v14."))
         );
         let backup = Connection::open(&backup_paths[0]).expect("open independent backup");
         assert_eq!(
@@ -4731,7 +4738,7 @@ mod tests {
                     |row| row.get::<_, i64>(0),
                 )
                 .expect("backup schema"),
-            12
+            13
         );
         assert_eq!(
             backup
@@ -4759,7 +4766,7 @@ mod tests {
         let blocked_backups = temp.path().join("blocked-backups");
         {
             let mut connection = Connection::open(&database).expect("open fixture database");
-            migrations::apply_migrations_to(&mut connection, 12).expect("schema twelve");
+            migrations::apply_migrations_to(&mut connection, 13).expect("schema thirteen");
         }
         fs::write(&blocked_backups, b"not a directory").expect("block backup directory");
 
@@ -4773,18 +4780,19 @@ mod tests {
                     |row| row.get::<_, i64>(0),
                 )
                 .expect("schema version"),
-            12
+            13
         );
-        let has_revision: bool = connection
+        let has_orchestration_runs: bool = connection
             .query_row(
                 "SELECT EXISTS(
-                    SELECT 1 FROM pragma_table_info('settings') WHERE name = 'revision'
+                    SELECT 1 FROM sqlite_master
+                     WHERE type = 'table' AND name = 'orchestration_runs'
                  )",
                 [],
                 |row| row.get(0),
             )
-            .expect("revision column lookup");
-        assert!(!has_revision);
+            .expect("orchestration table lookup");
+        assert!(!has_orchestration_runs);
     }
 
     #[test]

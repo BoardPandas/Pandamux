@@ -10,6 +10,7 @@ pub mod instructions_rpc;
 pub mod jsonrpc;
 pub mod mcp;
 pub mod mutation_rpc;
+pub mod orchestration_execution;
 pub mod personal_config_rpc;
 pub mod project_layer_rpc;
 pub mod provider_rpc;
@@ -66,6 +67,16 @@ pub use mcp::{McpCallToolParams, McpCallToolResult, McpContentItem, McpToolDefin
 pub use mutation_rpc::{
     MutationGetParams, MutationGetResult, MutationListParams, MutationListResult,
     MutationResolveParams, MutationResolveResult,
+};
+pub use orchestration_execution::{
+    ORCHESTRATION_EXECUTION_SCHEMA_VERSION, OrchestrationAttemptAckParams,
+    OrchestrationAttemptAckResult, OrchestrationAttemptCancelParams,
+    OrchestrationAttemptCancelResult, OrchestrationAttemptDispatchParams,
+    OrchestrationAttemptEventsParams, OrchestrationAttemptEventsResult,
+    OrchestrationAttemptPrepareParams, OrchestrationAttemptReceipt,
+    OrchestrationAttemptStatusParams, OrchestrationAttemptStatusResult,
+    OrchestrationExecutionIdentity, OrchestrationNodeAttemptState, OrchestrationNodeEvent,
+    OrchestrationRepositoryPrepareParams, OrchestrationRepositoryPrepareResult,
 };
 pub use personal_config_rpc::{
     PersonalConfigDiffParams, PersonalConfigDiffResult, PersonalConfigHistoryEntry,

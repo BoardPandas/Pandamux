@@ -1,0 +1,3313 @@
+use super::{Store, StoreError, checked_i64, checked_u64};
+use pandamux_core::{
+    AgentId, ArtifactKey, AttemptBoundary, AttemptProgressId, AttemptProgressKind,
+    AttemptProgressRecord, AttemptWorktreeId, BlackboardEntry, BlackboardEntryId, BudgetGrantId,
+    BudgetReservation, EffectDeliveryRecord, EffectDeliveryState, ExecutionLease, ExecutionLeaseId,
+    MAX_ARTIFACT_BYTES, MAX_ARTIFACT_CONTAINER_ITEMS, MAX_ARTIFACT_JSON_DEPTH,
+    MAX_ARTIFACT_STRING_BYTES, MAX_ARTIFACTS_PER_RUN, MAX_ARTIFACTS_PER_TASK,
+    MAX_RUN_ARTIFACT_BYTES, NodeStoreId, OrchestrationEffect, OrchestrationEffectId,
+    OrganizationId, OwnedAttemptWorktree, ProjectId, ProjectRepositoryId, RecoveryReview,
+    RecoveryReviewStatus, Run, RunAttemptId, RunEvent, RunEventId, RunId, RunStatus, RunTaskId,
+    ServerIncarnationId, SupplementalBudgetGrant, TaskRouteDecision, ThreadId, TurnAttemptId,
+    TurnId,
+};
+use rusqlite::{OptionalExtension, Transaction, params};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OrchestrationRunRecord {
+    pub run: Run,
+    pub project_id: ProjectId,
+    pub repository_id: ProjectRepositoryId,
+    pub settings_revision: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredOrchestrationEffect {
+    pub run_id: RunId,
+    pub effect: OrchestrationEffect,
+    pub delivery: EffectDeliveryRecord,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttemptDispatchState {
+    Prepared,
+    DispatchStarted,
+    Accepted,
+    NotStarted,
+    Ambiguous,
+    Terminal,
+    CancelRequested,
+    Cancelled,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttemptDispatchRecord {
+    pub attempt_id: RunAttemptId,
+    pub run_id: RunId,
+    pub task_id: RunTaskId,
+    pub effect_id: OrchestrationEffectId,
+    pub thread_id: ThreadId,
+    pub turn_id: TurnId,
+    pub turn_attempt_id: TurnAttemptId,
+    pub provider_instance_id: pandamux_core::ProviderInstanceId,
+    pub route: TaskRouteDecision,
+    pub bundle_sha: String,
+    pub state: AttemptDispatchState,
+    pub last_boundary: AttemptBoundary,
+    pub last_progress_at_ms: u64,
+    pub cancel_requested_at_ms: Option<u64>,
+    pub ambiguity_reason: Option<String>,
+    pub outcome_digest: Option<String>,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueueState {
+    Queued,
+    Claimed,
+    Cancelled,
+    Dispatched,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OrchestrationQueueRecord {
+    pub queue_id: String,
+    pub run_id: RunId,
+    pub task_id: RunTaskId,
+    pub attempt_id: RunAttemptId,
+    pub agent_id: AgentId,
+    pub provider_instance_id: pandamux_core::ProviderInstanceId,
+    pub environment_id: pandamux_core::EnvironmentId,
+    pub candidate_sha256: String,
+    pub priority: i64,
+    pub task_enqueued_at_ms: u64,
+    pub enqueued_at_ms: u64,
+    pub not_before_ms: u64,
+    pub state: QueueState,
+    pub owner_incarnation_id: Option<ServerIncarnationId>,
+    pub lease_id: Option<ExecutionLeaseId>,
+    pub claim_revision: u64,
+    pub interactive: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OwnedAttemptWorktreeRecord {
+    pub worktree: OwnedAttemptWorktree,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredBudgetReservation {
+    pub run_id: RunId,
+    pub agent_id: AgentId,
+    pub organization_id: OrganizationId,
+    pub reservation: BudgetReservation,
+    pub grants: BTreeMap<BudgetGrantId, SupplementalBudgetGrant>,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DailyBudgetRecord {
+    pub organization_id: OrganizationId,
+    pub ledger_utc_date: String,
+    pub limit_micro_usd: u64,
+    pub reserved_micro_usd: u64,
+    pub reconciled_micro_usd: u64,
+    pub granted_micro_usd: u64,
+    pub revision: u64,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeReceiptKind {
+    RepositoryPrepare,
+    AttemptPrepare,
+    AttemptDispatch,
+    AttemptStatus,
+    AttemptCancel,
+    AttemptEvents,
+    AttemptAck,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NodeReceiptRecord {
+    pub receipt_id: String,
+    pub node_store_id: NodeStoreId,
+    pub run_id: RunId,
+    pub task_id: RunTaskId,
+    pub attempt_id: RunAttemptId,
+    pub effect_id: OrchestrationEffectId,
+    pub request_kind: NodeReceiptKind,
+    pub idempotency_key: String,
+    pub request_sha256: String,
+    pub result_sha256: String,
+    pub result_bytes: Vec<u8>,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OrchestrationRuntimeRecords {
+    pub attempt_dispatches: Vec<AttemptDispatchRecord>,
+    pub queue_records: Vec<OrchestrationQueueRecord>,
+    pub leases: Vec<ExecutionLease>,
+    pub worktrees: Vec<OwnedAttemptWorktreeRecord>,
+    pub budget_reservations: Vec<StoredBudgetReservation>,
+    pub daily_budgets: Vec<DailyBudgetRecord>,
+    pub artifacts: Vec<BlackboardEntry>,
+    pub progress: Vec<AttemptProgressRecord>,
+    pub recovery_reviews: Vec<RecoveryReview>,
+    pub node_receipts: Vec<NodeReceiptRecord>,
+}
+
+impl Store {
+    /// Inserts one canonical run, its immutable event log, and every derived
+    /// effect in one transaction. The snapshot is accepted only when replay
+    /// produces byte-identical canonical state.
+    pub fn insert_orchestration_run(
+        &self,
+        record: &OrchestrationRunRecord,
+        events: &[RunEvent],
+    ) -> Result<Vec<StoredOrchestrationEffect>, StoreError> {
+        validate_run_metadata(record)?;
+        let (replayed, effects) = replay_with_effects(events)?;
+        let snapshot_bytes = pandamux_orchestrator::canonical_run_bytes(&record.run);
+        let replay_bytes = pandamux_orchestrator::canonical_run_bytes(&replayed);
+        if snapshot_bytes != replay_bytes {
+            return Err(data_error(
+                "orchestration snapshot does not match event replay",
+            ));
+        }
+        let snapshot_sha256 = sha256_hex(&snapshot_bytes);
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO orchestration_runs (
+                run_id, organization_id, project_id, repository_id,
+                snapshot_bytes, snapshot_sha256, last_seq, status, bundle_sha,
+                policy_revision, settings_revision, created_at_ms, updated_at_ms, ended_at_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![
+                record.run.id.as_str(),
+                record.run.organization_id.as_str(),
+                record.project_id.as_str(),
+                record.repository_id.as_str(),
+                snapshot_bytes,
+                snapshot_sha256,
+                checked_i64(record.run.last_seq, "orchestration run last sequence")?,
+                enum_text(record.run.status)?,
+                record.run.bundle_sha,
+                record.run.policy_revision,
+                checked_i64(record.settings_revision, "orchestration settings revision")?,
+                checked_i64(record.run.created_at_ms, "orchestration run created at")?,
+                checked_i64(record.run.updated_at_ms, "orchestration run updated at")?,
+                record
+                    .run
+                    .ended_at_ms
+                    .map(|value| checked_i64(value, "orchestration run ended at"))
+                    .transpose()?,
+            ],
+        )?;
+        for event in events {
+            insert_event(&tx, event)?;
+        }
+        let stored_effects = effects
+            .into_iter()
+            .map(|effect| stored_effect_from_run(&record.run, events, effect))
+            .collect::<Result<Vec<_>, _>>()?;
+        for effect in &stored_effects {
+            insert_effect(&tx, effect)?;
+        }
+        tx.commit()?;
+        Ok(stored_effects)
+    }
+
+    /// Loads a canonical run only after verifying row digests, immutable event
+    /// bytes, event replay, snapshot metadata, and the derived effect payloads.
+    pub fn load_verified_orchestration_run(
+        &self,
+        run_id: &RunId,
+    ) -> Result<Option<OrchestrationRunRecord>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let row = conn
+            .query_row(
+                "SELECT organization_id, project_id, repository_id, snapshot_bytes,
+                        snapshot_sha256, last_seq, status, bundle_sha, policy_revision,
+                        settings_revision, created_at_ms, updated_at_ms, ended_at_ms
+                   FROM orchestration_runs WHERE run_id = ?1",
+                [run_id.as_str()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Vec<u8>>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, String>(8)?,
+                        row.get::<_, i64>(9)?,
+                        row.get::<_, i64>(10)?,
+                        row.get::<_, i64>(11)?,
+                        row.get::<_, Option<i64>>(12)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((
+            organization_id,
+            project_id,
+            repository_id,
+            snapshot_bytes,
+            snapshot_sha256,
+            last_seq,
+            status,
+            bundle_sha,
+            policy_revision,
+            settings_revision,
+            created_at_ms,
+            updated_at_ms,
+            ended_at_ms,
+        )) = row
+        else {
+            return Ok(None);
+        };
+        if snapshot_sha256 != sha256_hex(&snapshot_bytes) {
+            return Err(data_error("orchestration snapshot digest mismatch"));
+        }
+        let snapshot: Run = serde_json::from_slice(&snapshot_bytes)?;
+        let events = load_events(&conn, run_id)?;
+        let (replayed, derived_effects) = replay_with_effects(&events)?;
+        let replay_bytes = pandamux_orchestrator::canonical_run_bytes(&replayed);
+        if replay_bytes != snapshot_bytes {
+            return Err(data_error(
+                "orchestration replay differs from stored snapshot",
+            ));
+        }
+        let stored_effects = load_effects(&conn, run_id)?;
+        verify_effect_rows(&derived_effects, &stored_effects)?;
+        let stored_status: RunStatus = parse_enum(&status, "orchestration run status")?;
+        if snapshot.id != *run_id
+            || snapshot.organization_id.as_str() != organization_id
+            || snapshot.last_seq != checked_u64(last_seq, "orchestration run last sequence")?
+            || snapshot.status != stored_status
+            || snapshot.bundle_sha != bundle_sha
+            || snapshot.policy_revision != policy_revision
+            || snapshot.created_at_ms != checked_u64(created_at_ms, "orchestration run created at")?
+            || snapshot.updated_at_ms != checked_u64(updated_at_ms, "orchestration run updated at")?
+            || snapshot.ended_at_ms
+                != ended_at_ms
+                    .map(|value| checked_u64(value, "orchestration run ended at"))
+                    .transpose()?
+        {
+            return Err(data_error("orchestration snapshot metadata mismatch"));
+        }
+        let record = OrchestrationRunRecord {
+            run: snapshot,
+            project_id: ProjectId::from(project_id),
+            repository_id: ProjectRepositoryId::from(repository_id),
+            settings_revision: checked_u64(settings_revision, "orchestration settings revision")?,
+        };
+        validate_run_metadata(&record)?;
+        Ok(Some(record))
+    }
+
+    pub fn load_orchestration_events(&self, run_id: &RunId) -> Result<Vec<RunEvent>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        load_events(&conn, run_id)
+    }
+
+    pub fn load_orchestration_effects(
+        &self,
+        run_id: &RunId,
+    ) -> Result<Vec<StoredOrchestrationEffect>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        load_effects(&conn, run_id)
+    }
+
+    /// Persists operational records as one all-or-nothing unit. This is the
+    /// storage boundary used by later execution checkpoints; filesystem and
+    /// provider effects remain outside it.
+    pub fn insert_orchestration_runtime_records(
+        &self,
+        records: &OrchestrationRuntimeRecords,
+    ) -> Result<(), StoreError> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        for lease in &records.leases {
+            insert_lease(&tx, lease)?;
+        }
+        for record in &records.attempt_dispatches {
+            insert_attempt_dispatch(&tx, record)?;
+        }
+        for record in &records.queue_records {
+            insert_queue_record(&tx, record)?;
+        }
+        for record in &records.worktrees {
+            insert_worktree(&tx, record)?;
+        }
+        for record in &records.budget_reservations {
+            insert_budget_reservation(&tx, record)?;
+        }
+        for record in &records.daily_budgets {
+            insert_daily_budget(&tx, record)?;
+        }
+        for artifact in &records.artifacts {
+            insert_artifact(&tx, artifact)?;
+        }
+        for progress in &records.progress {
+            insert_progress(&tx, progress)?;
+        }
+        for review in &records.recovery_reviews {
+            insert_recovery_review(&tx, review)?;
+        }
+        for receipt in &records.node_receipts {
+            insert_node_receipt(&tx, receipt)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+}
+
+fn validate_run_metadata(record: &OrchestrationRunRecord) -> Result<(), StoreError> {
+    if record.run.id.as_str().is_empty()
+        || record.run.organization_id.as_str().is_empty()
+        || record.project_id.as_str().is_empty()
+        || record.repository_id.as_str().is_empty()
+        || record.settings_revision == 0
+        || record.run.bundle_sha.len() != 64
+        || !is_sha256(&record.run.bundle_sha)
+        || record.run.policy_revision.trim().is_empty()
+    {
+        return Err(data_error("orchestration run metadata is malformed"));
+    }
+    Ok(())
+}
+
+fn replay_with_effects(events: &[RunEvent]) -> Result<(Run, Vec<OrchestrationEffect>), StoreError> {
+    let first = events
+        .first()
+        .ok_or_else(|| data_error("orchestration replay requires an event"))?;
+    let pandamux_core::RunEventKind::PlanAccepted { seed, .. } = &first.kind else {
+        return Err(data_error(
+            "orchestration replay must begin with plan acceptance",
+        ));
+    };
+    let mut run = Run::draft(first.run_id.clone(), seed.clone(), first.at_ms);
+    let mut effects = Vec::new();
+    for event in events {
+        let outcome = pandamux_orchestrator::apply(&run, event)
+            .map_err(|error| data_error(format!("orchestration replay failed: {error}")))?;
+        effects.extend(outcome.new_effects);
+        run = outcome.run;
+    }
+    Ok((run, effects))
+}
+
+fn insert_event(tx: &Transaction<'_>, event: &RunEvent) -> Result<(), StoreError> {
+    let bytes = serde_json::to_vec(event)?;
+    tx.execute(
+        "INSERT INTO orchestration_run_events (
+            event_id, run_id, seq, idempotency_key, event_bytes, payload_sha256, at_ms
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            event.event_id.as_str(),
+            event.run_id.as_str(),
+            checked_i64(event.seq, "orchestration event sequence")?,
+            event.idempotency_key,
+            bytes,
+            sha256_hex(&bytes),
+            checked_i64(event.at_ms, "orchestration event timestamp")?,
+        ],
+    )?;
+    Ok(())
+}
+
+fn load_events(conn: &rusqlite::Connection, run_id: &RunId) -> Result<Vec<RunEvent>, StoreError> {
+    let mut statement = conn.prepare(
+        "SELECT event_id, seq, idempotency_key, event_bytes, payload_sha256, at_ms
+           FROM orchestration_run_events WHERE run_id = ?1 ORDER BY seq",
+    )?;
+    let rows = statement.query_map([run_id.as_str()], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, Vec<u8>>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, i64>(5)?,
+        ))
+    })?;
+    let mut events = Vec::new();
+    for row in rows {
+        let (event_id, seq, idempotency_key, bytes, digest, at_ms) = row?;
+        if digest != sha256_hex(&bytes) {
+            return Err(data_error("orchestration event digest mismatch"));
+        }
+        let event: RunEvent = serde_json::from_slice(&bytes)?;
+        if event.event_id.as_str() != event_id
+            || event.run_id != *run_id
+            || event.seq != checked_u64(seq, "orchestration event sequence")?
+            || event.idempotency_key != idempotency_key
+            || event.at_ms != checked_u64(at_ms, "orchestration event timestamp")?
+        {
+            return Err(data_error("orchestration event row metadata mismatch"));
+        }
+        events.push(event);
+    }
+    Ok(events)
+}
+
+fn stored_effect_from_run(
+    run: &Run,
+    events: &[RunEvent],
+    effect: OrchestrationEffect,
+) -> Result<StoredOrchestrationEffect, StoreError> {
+    let source = events
+        .iter()
+        .find(|event| event.event_id == effect.source_event_id)
+        .ok_or_else(|| data_error("derived effect has no source event"))?;
+    let settled = run.settled_effects.get(&effect.id);
+    let updated_at_ms = settled
+        .map(|receipt| receipt.acknowledged_at_ms)
+        .unwrap_or(source.at_ms);
+    if !is_sha256(&effect.payload_sha256) {
+        return Err(data_error(
+            "orchestration effect payload digest is malformed",
+        ));
+    }
+    if settled.is_some_and(|receipt| !is_sha256(&receipt.result_digest)) {
+        return Err(data_error(
+            "orchestration effect result digest is malformed",
+        ));
+    }
+    Ok(StoredOrchestrationEffect {
+        run_id: run.id.clone(),
+        delivery: EffectDeliveryRecord {
+            effect_id: effect.id.clone(),
+            payload_sha256: effect.payload_sha256.clone(),
+            state: if settled.is_some() {
+                EffectDeliveryState::Settled
+            } else {
+                EffectDeliveryState::Pending
+            },
+            owner_incarnation_id: None,
+            lease_id: None,
+            claim_revision: 0,
+            prepared_receipt_digest: None,
+            dispatch_started_at_ms: None,
+            result_digest: settled.map(|receipt| receipt.result_digest.clone()),
+            safe_error_code: None,
+        },
+        effect,
+        created_at_ms: source.at_ms,
+        updated_at_ms,
+    })
+}
+
+fn insert_effect(
+    tx: &Transaction<'_>,
+    record: &StoredOrchestrationEffect,
+) -> Result<(), StoreError> {
+    validate_effect_record(record)?;
+    let bytes = serde_json::to_vec(&record.effect)?;
+    tx.execute(
+        "INSERT INTO orchestration_effects (
+            effect_id, run_id, source_event_id, effect_bytes, payload_sha256,
+            delivery_state, owner_incarnation_id, lease_id, claim_revision,
+            prepared_receipt_digest, dispatch_started_at_ms, result_digest,
+            safe_error_code, created_at_ms, updated_at_ms
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        params![
+            record.effect.id.as_str(),
+            record.run_id.as_str(),
+            record.effect.source_event_id.as_str(),
+            bytes,
+            record.effect.payload_sha256,
+            enum_text(record.delivery.state)?,
+            record
+                .delivery
+                .owner_incarnation_id
+                .as_ref()
+                .map(ServerIncarnationId::as_str),
+            record
+                .delivery
+                .lease_id
+                .as_ref()
+                .map(ExecutionLeaseId::as_str),
+            checked_i64(record.delivery.claim_revision, "effect claim revision")?,
+            record.delivery.prepared_receipt_digest,
+            record
+                .delivery
+                .dispatch_started_at_ms
+                .map(|value| checked_i64(value, "effect dispatch timestamp"))
+                .transpose()?,
+            record.delivery.result_digest,
+            record.delivery.safe_error_code,
+            checked_i64(record.created_at_ms, "effect created at")?,
+            checked_i64(record.updated_at_ms, "effect updated at")?,
+        ],
+    )?;
+    Ok(())
+}
+
+fn validate_effect_record(record: &StoredOrchestrationEffect) -> Result<(), StoreError> {
+    if record.effect.id != record.delivery.effect_id
+        || record.effect.payload_sha256 != record.delivery.payload_sha256
+        || !is_sha256(&record.effect.payload_sha256)
+        || record.updated_at_ms < record.created_at_ms
+        || record
+            .delivery
+            .prepared_receipt_digest
+            .as_deref()
+            .is_some_and(|value| !is_sha256(value))
+        || record
+            .delivery
+            .result_digest
+            .as_deref()
+            .is_some_and(|value| !is_sha256(value))
+    {
+        return Err(data_error("orchestration effect record is malformed"));
+    }
+    Ok(())
+}
+
+fn load_effects(
+    conn: &rusqlite::Connection,
+    run_id: &RunId,
+) -> Result<Vec<StoredOrchestrationEffect>, StoreError> {
+    let mut statement = conn.prepare(
+        "SELECT effect_id, source_event_id, effect_bytes, payload_sha256,
+                delivery_state, owner_incarnation_id, lease_id, claim_revision,
+                prepared_receipt_digest, dispatch_started_at_ms, result_digest,
+                safe_error_code, created_at_ms, updated_at_ms
+           FROM orchestration_effects WHERE run_id = ?1 ORDER BY created_at_ms, effect_id",
+    )?;
+    let rows = statement.query_map([run_id.as_str()], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Vec<u8>>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, Option<String>>(5)?,
+            row.get::<_, Option<String>>(6)?,
+            row.get::<_, i64>(7)?,
+            row.get::<_, Option<String>>(8)?,
+            row.get::<_, Option<i64>>(9)?,
+            row.get::<_, Option<String>>(10)?,
+            row.get::<_, Option<String>>(11)?,
+            row.get::<_, i64>(12)?,
+            row.get::<_, i64>(13)?,
+        ))
+    })?;
+    let mut effects = Vec::new();
+    for row in rows {
+        let (
+            effect_id,
+            source_event_id,
+            effect_bytes,
+            payload_sha256,
+            delivery_state,
+            owner_incarnation_id,
+            lease_id,
+            claim_revision,
+            prepared_receipt_digest,
+            dispatch_started_at_ms,
+            result_digest,
+            safe_error_code,
+            created_at_ms,
+            updated_at_ms,
+        ) = row?;
+        let effect: OrchestrationEffect = serde_json::from_slice(&effect_bytes)?;
+        if effect.id.as_str() != effect_id
+            || effect.source_event_id.as_str() != source_event_id
+            || effect.payload_sha256 != payload_sha256
+        {
+            return Err(data_error("orchestration effect row metadata mismatch"));
+        }
+        let record = StoredOrchestrationEffect {
+            run_id: run_id.clone(),
+            delivery: EffectDeliveryRecord {
+                effect_id: effect.id.clone(),
+                payload_sha256,
+                state: parse_enum(&delivery_state, "effect delivery state")?,
+                owner_incarnation_id: owner_incarnation_id.map(ServerIncarnationId::from),
+                lease_id: lease_id.map(ExecutionLeaseId::from),
+                claim_revision: checked_u64(claim_revision, "effect claim revision")?,
+                prepared_receipt_digest,
+                dispatch_started_at_ms: dispatch_started_at_ms
+                    .map(|value| checked_u64(value, "effect dispatch timestamp"))
+                    .transpose()?,
+                result_digest,
+                safe_error_code,
+            },
+            effect,
+            created_at_ms: checked_u64(created_at_ms, "effect created at")?,
+            updated_at_ms: checked_u64(updated_at_ms, "effect updated at")?,
+        };
+        validate_effect_record(&record)?;
+        effects.push(record);
+    }
+    Ok(effects)
+}
+
+fn load_effect_by_id(
+    conn: &rusqlite::Connection,
+    effect_id: &OrchestrationEffectId,
+) -> Result<Option<OrchestrationEffect>, StoreError> {
+    conn.query_row(
+        "SELECT effect_bytes FROM orchestration_effects WHERE effect_id = ?1",
+        [effect_id.as_str()],
+        |row| row.get::<_, Vec<u8>>(0),
+    )
+    .optional()?
+    .map(|bytes| serde_json::from_slice(&bytes).map_err(StoreError::from))
+    .transpose()
+}
+
+fn verify_effect_rows(
+    derived: &[OrchestrationEffect],
+    stored: &[StoredOrchestrationEffect],
+) -> Result<(), StoreError> {
+    if derived.len() != stored.len() {
+        return Err(data_error(
+            "derived effect count differs from durable effect rows",
+        ));
+    }
+    for effect in derived {
+        let Some(record) = stored.iter().find(|record| record.effect.id == effect.id) else {
+            return Err(data_error("derived effect is missing from durable rows"));
+        };
+        if &record.effect != effect {
+            return Err(data_error(
+                "derived effect differs from durable effect payload",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn insert_lease(tx: &Transaction<'_>, lease: &ExecutionLease) -> Result<(), StoreError> {
+    if lease.id.as_str().is_empty()
+        || lease.resource_id.trim().is_empty()
+        || lease.owner_incarnation_id.as_str().is_empty()
+        || lease.revision == 0
+        || lease.expires_at_ms < lease.last_heartbeat_ms
+    {
+        return Err(data_error("execution lease is malformed"));
+    }
+    tx.execute(
+        "INSERT INTO orchestration_leases (
+            lease_id, resource_kind, resource_id, owner_incarnation_id,
+            expires_at_ms, last_heartbeat_ms, revision
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            lease.id.as_str(),
+            enum_text(lease.resource_kind)?,
+            lease.resource_id,
+            lease.owner_incarnation_id.as_str(),
+            checked_i64(lease.expires_at_ms, "lease expiry")?,
+            checked_i64(lease.last_heartbeat_ms, "lease heartbeat")?,
+            checked_i64(lease.revision, "lease revision")?,
+        ],
+    )?;
+    Ok(())
+}
+
+fn insert_attempt_dispatch(
+    tx: &Transaction<'_>,
+    record: &AttemptDispatchRecord,
+) -> Result<(), StoreError> {
+    let selected_provider = record.route.provider.selected_provider_instance_id.as_ref();
+    if record.attempt_id.as_str().is_empty()
+        || record.run_id.as_str().is_empty()
+        || record.task_id.as_str().is_empty()
+        || record.route.task_id != record.task_id
+        || selected_provider != Some(&record.provider_instance_id)
+        || !is_sha256(&record.bundle_sha)
+        || record.updated_at_ms < record.created_at_ms
+        || record.last_progress_at_ms < record.created_at_ms
+        || record
+            .cancel_requested_at_ms
+            .is_some_and(|value| value < record.created_at_ms)
+        || (record.state == AttemptDispatchState::Ambiguous
+            && record.ambiguity_reason.as_deref().is_none_or(str::is_empty))
+        || (record.state == AttemptDispatchState::Terminal
+            && record
+                .outcome_digest
+                .as_deref()
+                .is_none_or(|value| !is_sha256(value)))
+        || record
+            .outcome_digest
+            .as_deref()
+            .is_some_and(|value| !is_sha256(value))
+    {
+        return Err(data_error("attempt dispatch record is malformed"));
+    }
+    let effect_bytes = tx.query_row(
+        "SELECT effect_bytes FROM orchestration_effects
+          WHERE effect_id = ?1 AND run_id = ?2",
+        params![record.effect_id.as_str(), record.run_id.as_str()],
+        |row| row.get::<_, Vec<u8>>(0),
+    )?;
+    let effect: OrchestrationEffect = serde_json::from_slice(&effect_bytes)?;
+    if !matches!(
+        effect.kind,
+        pandamux_core::OrchestrationEffectKind::DispatchTask {
+            ref run_id,
+            ref task_id,
+            ref attempt_id,
+            ref route,
+        } if run_id == &record.run_id
+            && task_id == &record.task_id
+            && attempt_id == &record.attempt_id
+            && route == &record.route
+    ) {
+        return Err(data_error(
+            "attempt dispatch does not reference its exact provider effect",
+        ));
+    }
+    let snapshot = load_snapshot(tx, &record.run_id)?;
+    if snapshot.bundle_sha != record.bundle_sha
+        || snapshot.routes.get(&record.task_id) != Some(&record.route)
+    {
+        return Err(data_error(
+            "attempt dispatch differs from the canonical run snapshot",
+        ));
+    }
+    let route_bytes = serde_json::to_vec(&record.route)?;
+    tx.execute(
+        "INSERT INTO orchestration_attempt_dispatch (
+            attempt_id, run_id, task_id, effect_id, thread_id, turn_id,
+            turn_attempt_id, provider_instance_id, route_bytes, route_sha256,
+            bundle_sha, state, last_boundary, last_progress_at_ms,
+            cancel_requested_at_ms, ambiguity_reason, outcome_digest,
+            created_at_ms, updated_at_ms
+         ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+            ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19
+         )",
+        params![
+            record.attempt_id.as_str(),
+            record.run_id.as_str(),
+            record.task_id.as_str(),
+            record.effect_id.as_str(),
+            record.thread_id.as_str(),
+            record.turn_id.as_str(),
+            record.turn_attempt_id.as_str(),
+            record.provider_instance_id.as_str(),
+            route_bytes,
+            sha256_hex(&route_bytes),
+            record.bundle_sha,
+            enum_text(record.state)?,
+            enum_text(record.last_boundary)?,
+            checked_i64(record.last_progress_at_ms, "attempt progress timestamp")?,
+            record
+                .cancel_requested_at_ms
+                .map(|value| checked_i64(value, "attempt cancellation timestamp"))
+                .transpose()?,
+            record.ambiguity_reason,
+            record.outcome_digest,
+            checked_i64(record.created_at_ms, "attempt dispatch created at")?,
+            checked_i64(record.updated_at_ms, "attempt dispatch updated at")?,
+        ],
+    )?;
+    Ok(())
+}
+
+fn insert_queue_record(
+    tx: &Transaction<'_>,
+    record: &OrchestrationQueueRecord,
+) -> Result<(), StoreError> {
+    if record.queue_id.trim().is_empty()
+        || !is_sha256(&record.candidate_sha256)
+        || record.enqueued_at_ms < record.task_enqueued_at_ms
+        || record.not_before_ms < record.enqueued_at_ms
+        || (record.owner_incarnation_id.is_none() != record.lease_id.is_none())
+    {
+        return Err(data_error("orchestration queue record is malformed"));
+    }
+    let snapshot = load_snapshot(tx, &record.run_id)?;
+    let route = snapshot
+        .routes
+        .get(&record.task_id)
+        .ok_or_else(|| data_error("queue record has no canonical task route"))?;
+    if !snapshot.tasks.contains_key(&record.task_id)
+        || route.selected_agent_id.as_ref() != Some(&record.agent_id)
+        || route.provider.selected_provider_instance_id.as_ref()
+            != Some(&record.provider_instance_id)
+    {
+        return Err(data_error(
+            "orchestration queue record differs from the canonical run",
+        ));
+    }
+    tx.execute(
+        "INSERT INTO orchestration_queue (
+            queue_id, run_id, task_id, attempt_id, agent_id, provider_instance_id,
+            environment_id, candidate_sha256, priority, task_enqueued_at_ms,
+            enqueued_at_ms, not_before_ms, state, owner_incarnation_id,
+            lease_id, claim_revision, interactive
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+        params![
+            record.queue_id,
+            record.run_id.as_str(),
+            record.task_id.as_str(),
+            record.attempt_id.as_str(),
+            record.agent_id.as_str(),
+            record.provider_instance_id.as_str(),
+            record.environment_id.as_str(),
+            record.candidate_sha256,
+            record.priority,
+            checked_i64(record.task_enqueued_at_ms, "queue task age")?,
+            checked_i64(record.enqueued_at_ms, "queue timestamp")?,
+            checked_i64(record.not_before_ms, "queue not-before")?,
+            enum_text(record.state)?,
+            record
+                .owner_incarnation_id
+                .as_ref()
+                .map(ServerIncarnationId::as_str),
+            record.lease_id.as_ref().map(ExecutionLeaseId::as_str),
+            checked_i64(record.claim_revision, "queue claim revision")?,
+            record.interactive,
+        ],
+    )?;
+    Ok(())
+}
+
+fn insert_worktree(
+    tx: &Transaction<'_>,
+    record: &OwnedAttemptWorktreeRecord,
+) -> Result<(), StoreError> {
+    let worktree = &record.worktree;
+    if worktree.id.as_str().is_empty()
+        || worktree.git_common_dir_identity.trim().is_empty()
+        || worktree.baseline_commit.trim().is_empty()
+        || worktree.branch_ref.trim().is_empty()
+        || worktree.path.trim().is_empty()
+        || record.updated_at_ms < record.created_at_ms
+    {
+        return Err(data_error("owned worktree record is malformed"));
+    }
+    let snapshot = load_snapshot(tx, &worktree.run_id)?;
+    if snapshot
+        .attempts
+        .get(&worktree.attempt_id)
+        .is_none_or(|attempt| attempt.task_id != worktree.task_id)
+    {
+        return Err(data_error(
+            "owned worktree differs from the canonical attempt owner",
+        ));
+    }
+    let repository_id = tx.query_row(
+        "SELECT repository_id FROM orchestration_runs WHERE run_id = ?1",
+        [worktree.run_id.as_str()],
+        |row| row.get::<_, String>(0),
+    )?;
+    if repository_id != worktree.repository_id.as_str() {
+        return Err(data_error(
+            "owned worktree differs from the canonical run repository",
+        ));
+    }
+    tx.execute(
+        "INSERT INTO orchestration_worktrees (
+            worktree_id, repository_id, run_id, task_id, attempt_id, environment_id,
+            git_common_dir_identity, baseline_commit, branch_ref, path, lease_id,
+            checkpoint_ids_json, dirty_state, cleanup_eligibility,
+            created_at_ms, updated_at_ms
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+        params![
+            worktree.id.as_str(),
+            worktree.repository_id.as_str(),
+            worktree.run_id.as_str(),
+            worktree.task_id.as_str(),
+            worktree.attempt_id.as_str(),
+            worktree.environment_id.as_str(),
+            worktree.git_common_dir_identity,
+            worktree.baseline_commit,
+            worktree.branch_ref,
+            worktree.path,
+            worktree.lease_id.as_str(),
+            serde_json::to_string(&worktree.checkpoint_ids)?,
+            enum_text(worktree.dirty_state)?,
+            enum_text(worktree.cleanup_eligibility)?,
+            checked_i64(record.created_at_ms, "worktree created at")?,
+            checked_i64(record.updated_at_ms, "worktree updated at")?,
+        ],
+    )?;
+    Ok(())
+}
+
+fn insert_budget_reservation(
+    tx: &Transaction<'_>,
+    record: &StoredBudgetReservation,
+) -> Result<(), StoreError> {
+    let reservation = &record.reservation;
+    if reservation.id.as_str().is_empty()
+        || reservation.task_id.as_str().is_empty()
+        || reservation.attempt_id.as_str().is_empty()
+        || !valid_utc_date(&reservation.ledger_utc_date)
+        || record.updated_at_ms < record.created_at_ms
+        || record.grants.values().any(|grant| {
+            grant.run_id != record.run_id
+                || grant.task_id != reservation.task_id
+                || grant.attempt_id != reservation.attempt_id
+                || grant.amount == 0
+                || !is_sha256(&grant.action_digest)
+        })
+    {
+        return Err(data_error("budget reservation record is malformed"));
+    }
+    let snapshot = load_snapshot(tx, &record.run_id)?;
+    if snapshot.reservations.get(&reservation.id) != Some(reservation)
+        || snapshot.organization_id != record.organization_id
+        || grants_for_attempt(&snapshot, &reservation.attempt_id) != record.grants
+    {
+        return Err(data_error(
+            "budget reservation differs from the canonical run snapshot",
+        ));
+    }
+    tx.execute(
+        "INSERT INTO orchestration_budget_reservations (
+            reservation_id, run_id, task_id, attempt_id, agent_id, organization_id,
+            ledger_utc_date, reserved_tokens, reserved_micro_usd, reserved_runtime_ms,
+            actual_tokens, actual_micro_usd, actual_runtime_ms, state, grants_json,
+            created_at_ms, updated_at_ms
+         ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+            ?13, ?14, ?15, ?16, ?17
+         )",
+        params![
+            reservation.id.as_str(),
+            record.run_id.as_str(),
+            reservation.task_id.as_str(),
+            reservation.attempt_id.as_str(),
+            record.agent_id.as_str(),
+            record.organization_id.as_str(),
+            reservation.ledger_utc_date,
+            checked_i64(reservation.amount.tokens, "reserved tokens")?,
+            checked_i64(reservation.amount.cost_micro_usd, "reserved cost")?,
+            checked_i64(reservation.amount.runtime_ms, "reserved runtime")?,
+            reservation
+                .actual
+                .tokens
+                .map(|value| checked_i64(value, "actual tokens"))
+                .transpose()?,
+            reservation
+                .actual
+                .cost_micro_usd
+                .map(|value| checked_i64(value, "actual cost"))
+                .transpose()?,
+            reservation
+                .actual
+                .runtime_ms
+                .map(|value| checked_i64(value, "actual runtime"))
+                .transpose()?,
+            enum_text(reservation.state)?,
+            serde_json::to_string(&record.grants)?,
+            checked_i64(record.created_at_ms, "budget reservation created at")?,
+            checked_i64(record.updated_at_ms, "budget reservation updated at")?,
+        ],
+    )?;
+    Ok(())
+}
+
+fn insert_daily_budget(tx: &Transaction<'_>, record: &DailyBudgetRecord) -> Result<(), StoreError> {
+    if !valid_utc_date(&record.ledger_utc_date) || record.revision == 0 {
+        return Err(data_error("daily budget record is malformed"));
+    }
+    tx.execute(
+        "INSERT INTO orchestration_daily_budgets (
+            organization_id, ledger_utc_date, limit_micro_usd, reserved_micro_usd,
+            reconciled_micro_usd, granted_micro_usd, revision, updated_at_ms
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            record.organization_id.as_str(),
+            record.ledger_utc_date,
+            checked_i64(record.limit_micro_usd, "daily budget limit")?,
+            checked_i64(record.reserved_micro_usd, "daily budget reserved")?,
+            checked_i64(record.reconciled_micro_usd, "daily budget reconciled")?,
+            checked_i64(record.granted_micro_usd, "daily budget granted")?,
+            checked_i64(record.revision, "daily budget revision")?,
+            checked_i64(record.updated_at_ms, "daily budget updated at")?,
+        ],
+    )?;
+    Ok(())
+}
+
+fn insert_artifact(tx: &Transaction<'_>, artifact: &BlackboardEntry) -> Result<(), StoreError> {
+    if artifact.id.as_str().is_empty()
+        || artifact.run_id.as_str().is_empty()
+        || artifact.artifact_key
+            != pandamux_orchestrator::artifact_key(&artifact.producer, &artifact.output_contract)
+        || artifact.schema_sha256
+            != pandamux_orchestrator::output_contract_schema_sha256(&artifact.output_contract)
+        || artifact.byte_len != u64::try_from(artifact.canonical_json.len()).unwrap_or(u64::MAX)
+        || artifact.content_sha256 != sha256_hex(&artifact.canonical_json)
+        || artifact.canonical_json.len() > MAX_ARTIFACT_BYTES
+    {
+        return Err(data_error(
+            "blackboard artifact identity or digest is malformed",
+        ));
+    }
+    let content: serde_json::Value = serde_json::from_slice(&artifact.canonical_json)?;
+    if pandamux_orchestrator::canonical_artifact_json(&content) != artifact.canonical_json {
+        return Err(data_error(
+            "blackboard artifact bytes are not canonical JSON",
+        ));
+    }
+    validate_json_bounds(&content, 0)?;
+    pandamux_orchestrator::validate_output_value(&artifact.output_contract, &content)
+        .map_err(|reason| data_error(format!("blackboard artifact contract mismatch: {reason}")))?;
+    let snapshot = load_snapshot(tx, &artifact.run_id)?;
+    if snapshot.blackboard.get(&artifact.id) != Some(artifact) {
+        return Err(data_error(
+            "blackboard artifact differs from the canonical run snapshot",
+        ));
+    }
+    let producer = snapshot
+        .tasks
+        .get(&artifact.producer)
+        .ok_or_else(|| data_error("blackboard producer does not exist in the run"))?;
+    let expected_consumers = snapshot
+        .tasks
+        .values()
+        .filter(|consumer| {
+            consumer.inputs.iter().any(|input| {
+                input.producer_task_id.as_ref() == Some(&artifact.producer)
+                    && input.contract == artifact.output_contract
+            })
+        })
+        .map(|consumer| consumer.id.clone())
+        .collect::<BTreeSet<_>>();
+    if !producer.outputs.contains(&artifact.output_contract)
+        || artifact.consumers != expected_consumers
+    {
+        return Err(data_error(
+            "blackboard artifact scope differs from the run plan",
+        ));
+    }
+    let task_count = tx.query_row(
+        "SELECT COUNT(*) FROM orchestration_blackboard_artifacts
+          WHERE run_id = ?1 AND producer_task_id = ?2",
+        params![artifact.run_id.as_str(), artifact.producer.as_str()],
+        |row| row.get::<_, i64>(0),
+    )?;
+    let run_count = tx.query_row(
+        "SELECT COUNT(*) FROM orchestration_blackboard_artifacts WHERE run_id = ?1",
+        [artifact.run_id.as_str()],
+        |row| row.get::<_, i64>(0),
+    )?;
+    let run_bytes = tx.query_row(
+        "SELECT COALESCE(SUM(byte_len), 0)
+           FROM orchestration_blackboard_artifacts WHERE run_id = ?1",
+        [artifact.run_id.as_str()],
+        |row| row.get::<_, i64>(0),
+    )?;
+    if checked_u64(task_count, "task artifact count")? >= MAX_ARTIFACTS_PER_TASK as u64
+        || checked_u64(run_count, "run artifact count")? >= MAX_ARTIFACTS_PER_RUN as u64
+        || checked_u64(run_bytes, "run artifact bytes")?
+            .checked_add(artifact.byte_len)
+            .is_none_or(|value| value > MAX_RUN_ARTIFACT_BYTES as u64)
+    {
+        return Err(data_error("blackboard artifact limits are exceeded"));
+    }
+    let prior = tx
+        .query_row(
+            "SELECT entry_id, version
+               FROM orchestration_blackboard_artifacts
+              WHERE run_id = ?1 AND artifact_key = ?2
+              ORDER BY version DESC LIMIT 1",
+            params![artifact.run_id.as_str(), artifact.artifact_key.as_str()],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()?;
+    match prior {
+        None if artifact.version == 1 && artifact.previous_entry_id.is_none() => {}
+        Some((entry_id, version))
+            if checked_u64(version, "artifact version")?.checked_add(1)
+                == Some(artifact.version)
+                && artifact
+                    .previous_entry_id
+                    .as_ref()
+                    .map(BlackboardEntryId::as_str)
+                    == Some(entry_id.as_str()) => {}
+        _ => return Err(data_error("blackboard artifact version chain is invalid")),
+    }
+    tx.execute(
+        "INSERT INTO orchestration_blackboard_artifacts (
+            entry_id, run_id, artifact_key, version, previous_entry_id,
+            producer_task_id, consumers_json, output_contract_json, schema_sha256,
+            canonical_json, byte_len, content_sha256, created_event_id, provenance_json
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        params![
+            artifact.id.as_str(),
+            artifact.run_id.as_str(),
+            artifact.artifact_key.as_str(),
+            checked_i64(artifact.version, "artifact version")?,
+            artifact
+                .previous_entry_id
+                .as_ref()
+                .map(BlackboardEntryId::as_str),
+            artifact.producer.as_str(),
+            serde_json::to_string(&artifact.consumers)?,
+            serde_json::to_string(&artifact.output_contract)?,
+            artifact.schema_sha256,
+            artifact.canonical_json,
+            checked_i64(artifact.byte_len, "artifact byte length")?,
+            artifact.content_sha256,
+            artifact.created_event_id.as_str(),
+            artifact
+                .provenance
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()?,
+        ],
+    )?;
+    Ok(())
+}
+
+fn insert_progress(
+    tx: &Transaction<'_>,
+    progress: &AttemptProgressRecord,
+) -> Result<(), StoreError> {
+    if !is_sha256(&progress.payload_digest)
+        || (progress.kind == AttemptProgressKind::StreamBytes)
+            != progress.cumulative_stream_bytes.is_some()
+        || (progress.kind == AttemptProgressKind::TerminalOutcome) != progress.terminal
+    {
+        return Err(data_error("attempt progress record is malformed"));
+    }
+    let owner = tx
+        .query_row(
+            "SELECT run_id, task_id FROM orchestration_attempt_dispatch WHERE attempt_id = ?1",
+            [progress.attempt_id.as_str()],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?;
+    if owner.as_ref().is_none_or(|(run_id, task_id)| {
+        run_id != progress.run_id.as_str() || task_id != progress.task_id.as_str()
+    }) {
+        return Err(data_error(
+            "attempt progress ownership does not match dispatch",
+        ));
+    }
+    tx.execute(
+        "INSERT INTO orchestration_attempt_progress (
+            progress_id, run_id, task_id, attempt_id, kind, payload_digest,
+            at_ms, cumulative_stream_bytes, terminal
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            progress.id.as_str(),
+            progress.run_id.as_str(),
+            progress.task_id.as_str(),
+            progress.attempt_id.as_str(),
+            enum_text(progress.kind)?,
+            progress.payload_digest,
+            checked_i64(progress.at_ms, "attempt progress timestamp")?,
+            progress
+                .cumulative_stream_bytes
+                .map(|value| checked_i64(value, "attempt progress bytes"))
+                .transpose()?,
+            progress.terminal,
+        ],
+    )?;
+    Ok(())
+}
+
+fn insert_recovery_review(tx: &Transaction<'_>, review: &RecoveryReview) -> Result<(), StoreError> {
+    if !valid_reason_code(&review.reason_code)
+        || !is_sha256(&review.evidence_digest)
+        || match review.status {
+            RecoveryReviewStatus::Pending => {
+                review.resolved_at_ms.is_some() || review.resolution.is_some()
+            }
+            RecoveryReviewStatus::Resolved => {
+                review.resolved_at_ms.is_none()
+                    || review.resolution.as_deref().is_none_or(str::is_empty)
+            }
+        }
+    {
+        return Err(data_error("recovery review record is malformed"));
+    }
+    let snapshot = load_snapshot(tx, &review.run_id)?;
+    if snapshot
+        .attempts
+        .get(&review.attempt_id)
+        .is_none_or(|attempt| attempt.task_id != review.task_id)
+    {
+        return Err(data_error(
+            "recovery review differs from the canonical attempt owner",
+        ));
+    }
+    if let Some(effect_id) = &review.effect_id {
+        let effect = load_effect_by_id(tx, effect_id)?
+            .ok_or_else(|| data_error("recovery review references a missing effect"))?;
+        if !effect_matches_attempt(
+            &effect,
+            &review.run_id,
+            &review.task_id,
+            &review.attempt_id,
+            None,
+        ) {
+            return Err(data_error(
+                "recovery review differs from its canonical effect",
+            ));
+        }
+    }
+    tx.execute(
+        "INSERT INTO orchestration_recovery_reviews (
+            review_id, run_id, task_id, attempt_id, effect_id, reason_code,
+            evidence_digest, status, created_at_ms, resolved_at_ms, resolution
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        params![
+            review.id.as_str(),
+            review.run_id.as_str(),
+            review.task_id.as_str(),
+            review.attempt_id.as_str(),
+            review.effect_id.as_ref().map(OrchestrationEffectId::as_str),
+            review.reason_code,
+            review.evidence_digest,
+            enum_text(review.status)?,
+            checked_i64(review.created_at_ms, "recovery review created at")?,
+            review
+                .resolved_at_ms
+                .map(|value| checked_i64(value, "recovery review resolved at"))
+                .transpose()?,
+            review.resolution,
+        ],
+    )?;
+    Ok(())
+}
+
+fn insert_node_receipt(
+    tx: &Transaction<'_>,
+    receipt: &NodeReceiptRecord,
+) -> Result<(), StoreError> {
+    if receipt.receipt_id.trim().is_empty()
+        || receipt.idempotency_key.trim().is_empty()
+        || !is_sha256(&receipt.request_sha256)
+        || !is_sha256(&receipt.result_sha256)
+        || receipt.result_sha256 != sha256_hex(&receipt.result_bytes)
+        || receipt.result_bytes.is_empty()
+        || receipt.updated_at_ms < receipt.created_at_ms
+    {
+        return Err(data_error("node receipt is malformed"));
+    }
+    let effect = load_effect_by_id(tx, &receipt.effect_id)?
+        .ok_or_else(|| data_error("node receipt references a missing effect"))?;
+    if !effect_matches_attempt(
+        &effect,
+        &receipt.run_id,
+        &receipt.task_id,
+        &receipt.attempt_id,
+        None,
+    ) {
+        return Err(data_error(
+            "node receipt differs from its canonical provider effect",
+        ));
+    }
+    tx.execute(
+        "INSERT INTO orchestration_node_receipts (
+            receipt_id, node_store_id, run_id, task_id, attempt_id, effect_id,
+            request_kind, idempotency_key, request_sha256, result_sha256,
+            result_bytes, created_at_ms, updated_at_ms
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        params![
+            receipt.receipt_id,
+            receipt.node_store_id.as_str(),
+            receipt.run_id.as_str(),
+            receipt.task_id.as_str(),
+            receipt.attempt_id.as_str(),
+            receipt.effect_id.as_str(),
+            enum_text(receipt.request_kind)?,
+            receipt.idempotency_key,
+            receipt.request_sha256,
+            receipt.result_sha256,
+            receipt.result_bytes,
+            checked_i64(receipt.created_at_ms, "node receipt created at")?,
+            checked_i64(receipt.updated_at_ms, "node receipt updated at")?,
+        ],
+    )?;
+    Ok(())
+}
+
+impl Store {
+    pub fn load_orchestration_runtime_records(
+        &self,
+        run_id: &RunId,
+    ) -> Result<OrchestrationRuntimeRecords, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let snapshot = load_snapshot(&conn, run_id)?;
+        let events = load_events(&conn, run_id)?;
+        let (replayed, derived_effects) = replay_with_effects(&events)?;
+        if pandamux_orchestrator::canonical_run_bytes(&snapshot)
+            != pandamux_orchestrator::canonical_run_bytes(&replayed)
+        {
+            return Err(data_error(
+                "orchestration replay differs from stored snapshot",
+            ));
+        }
+        let effects = load_effects(&conn, run_id)?;
+        verify_effect_rows(&derived_effects, &effects)?;
+        let attempt_dispatches = load_attempt_dispatches(&conn, run_id)?;
+        let queue_records = load_queue_records(&conn, run_id)?;
+        let worktrees = load_worktrees(&conn, run_id)?;
+        let budget_reservations = load_budget_reservations(&conn, run_id)?;
+        let daily_budgets = load_daily_budgets(&conn, &budget_reservations)?;
+        let artifacts = load_artifacts(&conn, run_id)?;
+        let progress = load_progress(&conn, run_id)?;
+        let recovery_reviews = load_recovery_reviews(&conn, run_id)?;
+        let node_receipts = load_node_receipts(&conn, run_id)?;
+        let mut lease_ids = queue_records
+            .iter()
+            .filter_map(|record| record.lease_id.clone())
+            .chain(
+                worktrees
+                    .iter()
+                    .map(|record| record.worktree.lease_id.clone()),
+            )
+            .collect::<BTreeSet<_>>();
+        validate_runtime_bindings(
+            &snapshot,
+            &effects,
+            &attempt_dispatches,
+            &queue_records,
+            &worktrees,
+            &budget_reservations,
+            &artifacts,
+            &progress,
+            &recovery_reviews,
+            &node_receipts,
+        )?;
+        for effect in effects {
+            if let Some(lease_id) = effect.delivery.lease_id {
+                lease_ids.insert(lease_id);
+            }
+        }
+        let leases = lease_ids
+            .iter()
+            .map(|lease_id| {
+                load_lease(&conn, lease_id)?.ok_or_else(|| {
+                    data_error("an orchestration record references a missing execution lease")
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(OrchestrationRuntimeRecords {
+            attempt_dispatches,
+            queue_records,
+            leases,
+            worktrees,
+            budget_reservations,
+            daily_budgets,
+            artifacts,
+            progress,
+            recovery_reviews,
+            node_receipts,
+        })
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_runtime_bindings(
+    snapshot: &Run,
+    effects: &[StoredOrchestrationEffect],
+    attempts: &[AttemptDispatchRecord],
+    queue_records: &[OrchestrationQueueRecord],
+    worktrees: &[OwnedAttemptWorktreeRecord],
+    reservations: &[StoredBudgetReservation],
+    artifacts: &[BlackboardEntry],
+    progress: &[AttemptProgressRecord],
+    reviews: &[RecoveryReview],
+    receipts: &[NodeReceiptRecord],
+) -> Result<(), StoreError> {
+    for attempt in attempts {
+        let effect = effects
+            .iter()
+            .find(|effect| effect.effect.id == attempt.effect_id)
+            .ok_or_else(|| data_error("attempt dispatch references a missing effect"))?;
+        if !effect_matches_attempt(
+            &effect.effect,
+            &attempt.run_id,
+            &attempt.task_id,
+            &attempt.attempt_id,
+            Some(&attempt.route),
+        ) || snapshot.bundle_sha != attempt.bundle_sha
+            || snapshot.routes.get(&attempt.task_id) != Some(&attempt.route)
+        {
+            return Err(data_error(
+                "attempt dispatch differs from its canonical run or provider effect",
+            ));
+        }
+    }
+    for record in queue_records {
+        let route = snapshot
+            .routes
+            .get(&record.task_id)
+            .ok_or_else(|| data_error("queue row has no canonical task route"))?;
+        if !snapshot.tasks.contains_key(&record.task_id)
+            || route.selected_agent_id.as_ref() != Some(&record.agent_id)
+            || route.provider.selected_provider_instance_id.as_ref()
+                != Some(&record.provider_instance_id)
+        {
+            return Err(data_error(
+                "orchestration queue row differs from the canonical run",
+            ));
+        }
+    }
+    for record in worktrees {
+        if snapshot
+            .attempts
+            .get(&record.worktree.attempt_id)
+            .is_none_or(|attempt| attempt.task_id != record.worktree.task_id)
+        {
+            return Err(data_error(
+                "owned worktree differs from the canonical attempt owner",
+            ));
+        }
+    }
+    for reservation in reservations {
+        if snapshot.organization_id != reservation.organization_id
+            || snapshot.reservations.get(&reservation.reservation.id)
+                != Some(&reservation.reservation)
+            || grants_for_attempt(snapshot, &reservation.reservation.attempt_id)
+                != reservation.grants
+        {
+            return Err(data_error(
+                "budget reservation differs from the canonical run snapshot",
+            ));
+        }
+    }
+    validate_loaded_artifact_set(snapshot, artifacts)?;
+    for record in progress {
+        if snapshot
+            .attempts
+            .get(&record.attempt_id)
+            .is_none_or(|attempt| attempt.task_id != record.task_id)
+        {
+            return Err(data_error(
+                "attempt progress differs from the canonical attempt owner",
+            ));
+        }
+    }
+    for review in reviews {
+        if snapshot
+            .attempts
+            .get(&review.attempt_id)
+            .is_none_or(|attempt| attempt.task_id != review.task_id)
+            || review.effect_id.as_ref().is_some_and(|effect_id| {
+                effects.iter().all(|effect| {
+                    effect.effect.id != *effect_id
+                        || !effect_matches_attempt(
+                            &effect.effect,
+                            &review.run_id,
+                            &review.task_id,
+                            &review.attempt_id,
+                            None,
+                        )
+                })
+            })
+        {
+            return Err(data_error(
+                "recovery review differs from its canonical attempt or effect",
+            ));
+        }
+    }
+    for receipt in receipts {
+        if effects.iter().all(|effect| {
+            effect.effect.id != receipt.effect_id
+                || !effect_matches_attempt(
+                    &effect.effect,
+                    &receipt.run_id,
+                    &receipt.task_id,
+                    &receipt.attempt_id,
+                    None,
+                )
+        }) {
+            return Err(data_error(
+                "node receipt differs from its canonical provider effect",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn grants_for_attempt(
+    snapshot: &Run,
+    attempt_id: &RunAttemptId,
+) -> BTreeMap<BudgetGrantId, SupplementalBudgetGrant> {
+    snapshot
+        .budget_grants
+        .iter()
+        .filter(|(_, grant)| grant.attempt_id == *attempt_id)
+        .map(|(id, grant)| (id.clone(), grant.clone()))
+        .collect()
+}
+
+fn effect_matches_attempt(
+    effect: &OrchestrationEffect,
+    run_id: &RunId,
+    task_id: &RunTaskId,
+    attempt_id: &RunAttemptId,
+    route: Option<&TaskRouteDecision>,
+) -> bool {
+    match &effect.kind {
+        pandamux_core::OrchestrationEffectKind::DispatchTask {
+            run_id: effect_run_id,
+            task_id: effect_task_id,
+            attempt_id: effect_attempt_id,
+            route: effect_route,
+        } => {
+            effect_run_id == run_id
+                && effect_task_id == task_id
+                && effect_attempt_id == attempt_id
+                && route.is_none_or(|route| route == effect_route)
+        }
+        pandamux_core::OrchestrationEffectKind::CancelAttempt {
+            run_id: effect_run_id,
+            task_id: effect_task_id,
+            attempt_id: effect_attempt_id,
+        } => {
+            route.is_none()
+                && effect_run_id == run_id
+                && effect_task_id == task_id
+                && effect_attempt_id == attempt_id
+        }
+        _ => false,
+    }
+}
+
+fn load_attempt_dispatches(
+    conn: &rusqlite::Connection,
+    run_id: &RunId,
+) -> Result<Vec<AttemptDispatchRecord>, StoreError> {
+    let mut statement = conn.prepare(
+        "SELECT attempt_id, task_id, effect_id, thread_id, turn_id, turn_attempt_id,
+                provider_instance_id, route_bytes, route_sha256, bundle_sha, state,
+                last_boundary, last_progress_at_ms, cancel_requested_at_ms,
+                ambiguity_reason, outcome_digest, created_at_ms, updated_at_ms
+           FROM orchestration_attempt_dispatch
+          WHERE run_id = ?1 ORDER BY created_at_ms, attempt_id",
+    )?;
+    let rows = statement.query_map([run_id.as_str()], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, String>(5)?,
+            row.get::<_, String>(6)?,
+            row.get::<_, Vec<u8>>(7)?,
+            row.get::<_, String>(8)?,
+            row.get::<_, String>(9)?,
+            row.get::<_, String>(10)?,
+            row.get::<_, String>(11)?,
+            row.get::<_, i64>(12)?,
+            row.get::<_, Option<i64>>(13)?,
+            row.get::<_, Option<String>>(14)?,
+            row.get::<_, Option<String>>(15)?,
+            row.get::<_, i64>(16)?,
+            row.get::<_, i64>(17)?,
+        ))
+    })?;
+    let mut records = Vec::new();
+    for row in rows {
+        let (
+            attempt_id,
+            task_id,
+            effect_id,
+            thread_id,
+            turn_id,
+            turn_attempt_id,
+            provider_instance_id,
+            route_bytes,
+            route_sha256,
+            bundle_sha,
+            state,
+            last_boundary,
+            last_progress_at_ms,
+            cancel_requested_at_ms,
+            ambiguity_reason,
+            outcome_digest,
+            created_at_ms,
+            updated_at_ms,
+        ) = row?;
+        if route_sha256 != sha256_hex(&route_bytes) {
+            return Err(data_error("attempt route digest mismatch"));
+        }
+        let record = AttemptDispatchRecord {
+            attempt_id: RunAttemptId::from(attempt_id),
+            run_id: run_id.clone(),
+            task_id: RunTaskId::from(task_id),
+            effect_id: OrchestrationEffectId::from(effect_id),
+            thread_id: ThreadId::from(thread_id),
+            turn_id: TurnId::from(turn_id),
+            turn_attempt_id: TurnAttemptId::from(turn_attempt_id),
+            provider_instance_id: pandamux_core::ProviderInstanceId::from(provider_instance_id),
+            route: serde_json::from_slice(&route_bytes)?,
+            bundle_sha,
+            state: parse_enum(&state, "attempt dispatch state")?,
+            last_boundary: parse_enum(&last_boundary, "attempt boundary")?,
+            last_progress_at_ms: checked_u64(last_progress_at_ms, "attempt progress timestamp")?,
+            cancel_requested_at_ms: cancel_requested_at_ms
+                .map(|value| checked_u64(value, "attempt cancellation timestamp"))
+                .transpose()?,
+            ambiguity_reason,
+            outcome_digest,
+            created_at_ms: checked_u64(created_at_ms, "attempt dispatch created at")?,
+            updated_at_ms: checked_u64(updated_at_ms, "attempt dispatch updated at")?,
+        };
+        validate_attempt_dispatch_record(&record)?;
+        records.push(record);
+    }
+    Ok(records)
+}
+
+fn validate_attempt_dispatch_record(record: &AttemptDispatchRecord) -> Result<(), StoreError> {
+    let selected_provider = record.route.provider.selected_provider_instance_id.as_ref();
+    if record.route.task_id != record.task_id
+        || selected_provider != Some(&record.provider_instance_id)
+        || !is_sha256(&record.bundle_sha)
+        || record.updated_at_ms < record.created_at_ms
+        || record.last_progress_at_ms < record.created_at_ms
+        || record
+            .cancel_requested_at_ms
+            .is_some_and(|value| value < record.created_at_ms)
+        || (record.state == AttemptDispatchState::Ambiguous
+            && record.ambiguity_reason.as_deref().is_none_or(str::is_empty))
+        || (record.state == AttemptDispatchState::Terminal
+            && record
+                .outcome_digest
+                .as_deref()
+                .is_none_or(|value| !is_sha256(value)))
+        || record
+            .outcome_digest
+            .as_deref()
+            .is_some_and(|value| !is_sha256(value))
+    {
+        return Err(data_error("attempt dispatch row is malformed"));
+    }
+    Ok(())
+}
+
+fn load_queue_records(
+    conn: &rusqlite::Connection,
+    run_id: &RunId,
+) -> Result<Vec<OrchestrationQueueRecord>, StoreError> {
+    let mut statement = conn.prepare(
+        "SELECT queue_id, task_id, attempt_id, agent_id, provider_instance_id,
+                environment_id, candidate_sha256, priority, task_enqueued_at_ms,
+                enqueued_at_ms, not_before_ms, state, owner_incarnation_id,
+                lease_id, claim_revision, interactive
+           FROM orchestration_queue WHERE run_id = ?1
+          ORDER BY enqueued_at_ms, task_id, attempt_id",
+    )?;
+    let rows = statement.query_map([run_id.as_str()], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, String>(5)?,
+            row.get::<_, String>(6)?,
+            row.get::<_, i64>(7)?,
+            row.get::<_, i64>(8)?,
+            row.get::<_, i64>(9)?,
+            row.get::<_, i64>(10)?,
+            row.get::<_, String>(11)?,
+            row.get::<_, Option<String>>(12)?,
+            row.get::<_, Option<String>>(13)?,
+            row.get::<_, i64>(14)?,
+            row.get::<_, bool>(15)?,
+        ))
+    })?;
+    let mut records = Vec::new();
+    for row in rows {
+        let (
+            queue_id,
+            task_id,
+            attempt_id,
+            agent_id,
+            provider_instance_id,
+            environment_id,
+            candidate_sha256,
+            priority,
+            task_enqueued_at_ms,
+            enqueued_at_ms,
+            not_before_ms,
+            state,
+            owner_incarnation_id,
+            lease_id,
+            claim_revision,
+            interactive,
+        ) = row?;
+        let record = OrchestrationQueueRecord {
+            queue_id,
+            run_id: run_id.clone(),
+            task_id: RunTaskId::from(task_id),
+            attempt_id: RunAttemptId::from(attempt_id),
+            agent_id: AgentId::from(agent_id),
+            provider_instance_id: pandamux_core::ProviderInstanceId::from(provider_instance_id),
+            environment_id: pandamux_core::EnvironmentId::from(environment_id),
+            candidate_sha256,
+            priority,
+            task_enqueued_at_ms: checked_u64(task_enqueued_at_ms, "queue task age")?,
+            enqueued_at_ms: checked_u64(enqueued_at_ms, "queue timestamp")?,
+            not_before_ms: checked_u64(not_before_ms, "queue not-before")?,
+            state: parse_enum(&state, "queue state")?,
+            owner_incarnation_id: owner_incarnation_id.map(ServerIncarnationId::from),
+            lease_id: lease_id.map(ExecutionLeaseId::from),
+            claim_revision: checked_u64(claim_revision, "queue claim revision")?,
+            interactive,
+        };
+        if !is_sha256(&record.candidate_sha256)
+            || record.enqueued_at_ms < record.task_enqueued_at_ms
+            || record.not_before_ms < record.enqueued_at_ms
+            || (record.owner_incarnation_id.is_none() != record.lease_id.is_none())
+        {
+            return Err(data_error("orchestration queue row is malformed"));
+        }
+        records.push(record);
+    }
+    Ok(records)
+}
+
+fn load_lease(
+    conn: &rusqlite::Connection,
+    lease_id: &ExecutionLeaseId,
+) -> Result<Option<ExecutionLease>, StoreError> {
+    conn.query_row(
+        "SELECT resource_kind, resource_id, owner_incarnation_id,
+                expires_at_ms, last_heartbeat_ms, revision
+           FROM orchestration_leases WHERE lease_id = ?1",
+        [lease_id.as_str()],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+            ))
+        },
+    )
+    .optional()?
+    .map(|(kind, resource_id, owner, expiry, heartbeat, revision)| {
+        let lease = ExecutionLease {
+            id: lease_id.clone(),
+            resource_kind: parse_enum(&kind, "lease resource kind")?,
+            resource_id,
+            owner_incarnation_id: ServerIncarnationId::from(owner),
+            expires_at_ms: checked_u64(expiry, "lease expiry")?,
+            last_heartbeat_ms: checked_u64(heartbeat, "lease heartbeat")?,
+            revision: checked_u64(revision, "lease revision")?,
+        };
+        if lease.resource_id.trim().is_empty()
+            || lease.owner_incarnation_id.as_str().is_empty()
+            || lease.revision == 0
+            || lease.expires_at_ms < lease.last_heartbeat_ms
+        {
+            return Err(data_error("execution lease row is malformed"));
+        }
+        Ok(lease)
+    })
+    .transpose()
+}
+
+fn load_worktrees(
+    conn: &rusqlite::Connection,
+    run_id: &RunId,
+) -> Result<Vec<OwnedAttemptWorktreeRecord>, StoreError> {
+    let mut statement = conn.prepare(
+        "SELECT worktree_id, repository_id, task_id, attempt_id, environment_id,
+                git_common_dir_identity, baseline_commit, branch_ref, path, lease_id,
+                checkpoint_ids_json, dirty_state, cleanup_eligibility,
+                created_at_ms, updated_at_ms
+           FROM orchestration_worktrees WHERE run_id = ?1 ORDER BY created_at_ms, worktree_id",
+    )?;
+    let rows = statement.query_map([run_id.as_str()], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, String>(5)?,
+            row.get::<_, String>(6)?,
+            row.get::<_, String>(7)?,
+            row.get::<_, String>(8)?,
+            row.get::<_, String>(9)?,
+            row.get::<_, String>(10)?,
+            row.get::<_, String>(11)?,
+            row.get::<_, String>(12)?,
+            row.get::<_, i64>(13)?,
+            row.get::<_, i64>(14)?,
+        ))
+    })?;
+    let mut records = Vec::new();
+    for row in rows {
+        let (
+            worktree_id,
+            repository_id,
+            task_id,
+            attempt_id,
+            environment_id,
+            git_common_dir_identity,
+            baseline_commit,
+            branch_ref,
+            path,
+            lease_id,
+            checkpoint_ids_json,
+            dirty_state,
+            cleanup_eligibility,
+            created_at_ms,
+            updated_at_ms,
+        ) = row?;
+        let record = OwnedAttemptWorktreeRecord {
+            worktree: OwnedAttemptWorktree {
+                id: AttemptWorktreeId::from(worktree_id),
+                repository_id: ProjectRepositoryId::from(repository_id),
+                run_id: run_id.clone(),
+                task_id: RunTaskId::from(task_id),
+                attempt_id: RunAttemptId::from(attempt_id),
+                environment_id: pandamux_core::EnvironmentId::from(environment_id),
+                git_common_dir_identity,
+                baseline_commit,
+                branch_ref,
+                path,
+                lease_id: ExecutionLeaseId::from(lease_id),
+                checkpoint_ids: serde_json::from_str(&checkpoint_ids_json)?,
+                dirty_state: parse_enum(&dirty_state, "worktree dirty state")?,
+                cleanup_eligibility: parse_enum(
+                    &cleanup_eligibility,
+                    "worktree cleanup eligibility",
+                )?,
+            },
+            created_at_ms: checked_u64(created_at_ms, "worktree created at")?,
+            updated_at_ms: checked_u64(updated_at_ms, "worktree updated at")?,
+        };
+        if record.worktree.git_common_dir_identity.trim().is_empty()
+            || record.worktree.baseline_commit.trim().is_empty()
+            || record.worktree.branch_ref.trim().is_empty()
+            || record.worktree.path.trim().is_empty()
+            || record.updated_at_ms < record.created_at_ms
+        {
+            return Err(data_error("owned worktree row is malformed"));
+        }
+        records.push(record);
+    }
+    Ok(records)
+}
+
+fn load_budget_reservations(
+    conn: &rusqlite::Connection,
+    run_id: &RunId,
+) -> Result<Vec<StoredBudgetReservation>, StoreError> {
+    let mut statement = conn.prepare(
+        "SELECT reservation_id, task_id, attempt_id, agent_id, organization_id,
+                ledger_utc_date, reserved_tokens, reserved_micro_usd, reserved_runtime_ms,
+                actual_tokens, actual_micro_usd, actual_runtime_ms, state, grants_json,
+                created_at_ms, updated_at_ms
+           FROM orchestration_budget_reservations WHERE run_id = ?1
+          ORDER BY created_at_ms, reservation_id",
+    )?;
+    let rows = statement.query_map([run_id.as_str()], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, String>(5)?,
+            row.get::<_, i64>(6)?,
+            row.get::<_, i64>(7)?,
+            row.get::<_, i64>(8)?,
+            row.get::<_, Option<i64>>(9)?,
+            row.get::<_, Option<i64>>(10)?,
+            row.get::<_, Option<i64>>(11)?,
+            row.get::<_, String>(12)?,
+            row.get::<_, String>(13)?,
+            row.get::<_, i64>(14)?,
+            row.get::<_, i64>(15)?,
+        ))
+    })?;
+    let mut records = Vec::new();
+    for row in rows {
+        let (
+            reservation_id,
+            task_id,
+            attempt_id,
+            agent_id,
+            organization_id,
+            ledger_utc_date,
+            reserved_tokens,
+            reserved_micro_usd,
+            reserved_runtime_ms,
+            actual_tokens,
+            actual_micro_usd,
+            actual_runtime_ms,
+            state,
+            grants_json,
+            created_at_ms,
+            updated_at_ms,
+        ) = row?;
+        let task_id = RunTaskId::from(task_id);
+        let attempt_id = RunAttemptId::from(attempt_id);
+        let grants: BTreeMap<BudgetGrantId, SupplementalBudgetGrant> =
+            serde_json::from_str(&grants_json)?;
+        let record = StoredBudgetReservation {
+            run_id: run_id.clone(),
+            agent_id: AgentId::from(agent_id),
+            organization_id: OrganizationId::from(organization_id),
+            reservation: BudgetReservation {
+                id: pandamux_core::BudgetReservationId::from(reservation_id),
+                task_id,
+                attempt_id,
+                amount: pandamux_core::BudgetAmount {
+                    tokens: checked_u64(reserved_tokens, "reserved tokens")?,
+                    cost_micro_usd: checked_u64(reserved_micro_usd, "reserved cost")?,
+                    runtime_ms: checked_u64(reserved_runtime_ms, "reserved runtime")?,
+                },
+                actual: pandamux_core::BudgetUsage {
+                    tokens: actual_tokens
+                        .map(|value| checked_u64(value, "actual tokens"))
+                        .transpose()?,
+                    cost_micro_usd: actual_micro_usd
+                        .map(|value| checked_u64(value, "actual cost"))
+                        .transpose()?,
+                    runtime_ms: actual_runtime_ms
+                        .map(|value| checked_u64(value, "actual runtime"))
+                        .transpose()?,
+                },
+                ledger_utc_date,
+                state: parse_enum(&state, "budget reservation state")?,
+            },
+            grants,
+            created_at_ms: checked_u64(created_at_ms, "budget reservation created at")?,
+            updated_at_ms: checked_u64(updated_at_ms, "budget reservation updated at")?,
+        };
+        if !valid_utc_date(&record.reservation.ledger_utc_date)
+            || record.updated_at_ms < record.created_at_ms
+            || record.grants.iter().any(|(grant_id, grant)| {
+                grant_id != &grant.id
+                    || grant.run_id != record.run_id
+                    || grant.task_id != record.reservation.task_id
+                    || grant.attempt_id != record.reservation.attempt_id
+                    || grant.amount == 0
+                    || !is_sha256(&grant.action_digest)
+            })
+        {
+            return Err(data_error("budget reservation row is malformed"));
+        }
+        records.push(record);
+    }
+    Ok(records)
+}
+
+fn load_daily_budgets(
+    conn: &rusqlite::Connection,
+    reservations: &[StoredBudgetReservation],
+) -> Result<Vec<DailyBudgetRecord>, StoreError> {
+    let identities = reservations
+        .iter()
+        .map(|record| {
+            (
+                record.organization_id.clone(),
+                record.reservation.ledger_utc_date.clone(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    identities
+        .into_iter()
+        .map(|(organization_id, ledger_utc_date)| {
+            conn.query_row(
+                "SELECT limit_micro_usd, reserved_micro_usd, reconciled_micro_usd,
+                        granted_micro_usd, revision, updated_at_ms
+                   FROM orchestration_daily_budgets
+                  WHERE organization_id = ?1 AND ledger_utc_date = ?2",
+                params![organization_id.as_str(), ledger_utc_date],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                    ))
+                },
+            )
+            .optional()?
+            .map(
+                |(limit, reserved, reconciled, granted, revision, updated)| {
+                    let record = DailyBudgetRecord {
+                        organization_id,
+                        ledger_utc_date,
+                        limit_micro_usd: checked_u64(limit, "daily budget limit")?,
+                        reserved_micro_usd: checked_u64(reserved, "daily budget reserved")?,
+                        reconciled_micro_usd: checked_u64(reconciled, "daily budget reconciled")?,
+                        granted_micro_usd: checked_u64(granted, "daily budget granted")?,
+                        revision: checked_u64(revision, "daily budget revision")?,
+                        updated_at_ms: checked_u64(updated, "daily budget updated at")?,
+                    };
+                    if !valid_utc_date(&record.ledger_utc_date) || record.revision == 0 {
+                        return Err(data_error("daily budget row is malformed"));
+                    }
+                    Ok(record)
+                },
+            )
+            .transpose()?
+            .ok_or_else(|| data_error("budget reservation has no UTC daily ledger"))
+        })
+        .collect()
+}
+
+fn load_artifacts(
+    conn: &rusqlite::Connection,
+    run_id: &RunId,
+) -> Result<Vec<BlackboardEntry>, StoreError> {
+    let mut statement = conn.prepare(
+        "SELECT entry_id, artifact_key, version, previous_entry_id, producer_task_id,
+                consumers_json, output_contract_json, schema_sha256, canonical_json,
+                byte_len, content_sha256, created_event_id, provenance_json
+           FROM orchestration_blackboard_artifacts WHERE run_id = ?1
+          ORDER BY artifact_key, version",
+    )?;
+    let rows = statement.query_map([run_id.as_str()], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, String>(5)?,
+            row.get::<_, String>(6)?,
+            row.get::<_, String>(7)?,
+            row.get::<_, Vec<u8>>(8)?,
+            row.get::<_, i64>(9)?,
+            row.get::<_, String>(10)?,
+            row.get::<_, String>(11)?,
+            row.get::<_, Option<String>>(12)?,
+        ))
+    })?;
+    let mut artifacts = Vec::new();
+    for row in rows {
+        let (
+            entry_id,
+            artifact_key,
+            version,
+            previous_entry_id,
+            producer_task_id,
+            consumers_json,
+            output_contract_json,
+            schema_sha256,
+            canonical_json,
+            byte_len,
+            content_sha256,
+            created_event_id,
+            provenance_json,
+        ) = row?;
+        let artifact = BlackboardEntry {
+            id: pandamux_core::BlackboardEntryId::from(entry_id),
+            run_id: run_id.clone(),
+            artifact_key: ArtifactKey::from(artifact_key),
+            version: checked_u64(version, "artifact version")?,
+            previous_entry_id: previous_entry_id.map(pandamux_core::BlackboardEntryId::from),
+            producer: RunTaskId::from(producer_task_id),
+            consumers: serde_json::from_str(&consumers_json)?,
+            output_contract: serde_json::from_str(&output_contract_json)?,
+            schema_sha256,
+            canonical_json,
+            byte_len: checked_u64(byte_len, "artifact byte length")?,
+            content_sha256,
+            created_event_id: RunEventId::from(created_event_id),
+            provenance: provenance_json
+                .as_deref()
+                .map(serde_json::from_str)
+                .transpose()?,
+        };
+        validate_loaded_artifact(&artifact)?;
+        artifacts.push(artifact);
+    }
+    Ok(artifacts)
+}
+
+fn validate_loaded_artifact(artifact: &BlackboardEntry) -> Result<(), StoreError> {
+    if artifact.artifact_key
+        != pandamux_orchestrator::artifact_key(&artifact.producer, &artifact.output_contract)
+        || artifact.schema_sha256
+            != pandamux_orchestrator::output_contract_schema_sha256(&artifact.output_contract)
+        || artifact.byte_len != u64::try_from(artifact.canonical_json.len()).unwrap_or(u64::MAX)
+        || artifact.content_sha256 != sha256_hex(&artifact.canonical_json)
+        || artifact.canonical_json.len() > MAX_ARTIFACT_BYTES
+    {
+        return Err(data_error("blackboard artifact row is malformed"));
+    }
+    let content: serde_json::Value = serde_json::from_slice(&artifact.canonical_json)?;
+    if pandamux_orchestrator::canonical_artifact_json(&content) != artifact.canonical_json {
+        return Err(data_error("blackboard artifact row is not canonical JSON"));
+    }
+    validate_json_bounds(&content, 0)?;
+    pandamux_orchestrator::validate_output_value(&artifact.output_contract, &content)
+        .map_err(|reason| data_error(format!("blackboard artifact row violates schema: {reason}")))
+}
+
+fn validate_loaded_artifact_set(
+    snapshot: &Run,
+    artifacts: &[BlackboardEntry],
+) -> Result<(), StoreError> {
+    let mut task_counts = std::collections::BTreeMap::<RunTaskId, usize>::new();
+    let mut run_bytes = 0_u64;
+    let mut prior: Option<(&ArtifactKey, u64, &BlackboardEntryId)> = None;
+    for artifact in artifacts {
+        if snapshot.blackboard.get(&artifact.id) != Some(artifact) {
+            return Err(data_error(
+                "blackboard artifact differs from the canonical run snapshot",
+            ));
+        }
+        let producer = snapshot
+            .tasks
+            .get(&artifact.producer)
+            .ok_or_else(|| data_error("blackboard producer does not exist in the run"))?;
+        let expected_consumers = snapshot
+            .tasks
+            .values()
+            .filter(|consumer| {
+                consumer.inputs.iter().any(|input| {
+                    input.producer_task_id.as_ref() == Some(&artifact.producer)
+                        && input.contract == artifact.output_contract
+                })
+            })
+            .map(|consumer| consumer.id.clone())
+            .collect::<BTreeSet<_>>();
+        if !producer.outputs.contains(&artifact.output_contract)
+            || artifact.consumers != expected_consumers
+        {
+            return Err(data_error(
+                "blackboard artifact scope differs from the run plan",
+            ));
+        }
+        let count = task_counts.entry(artifact.producer.clone()).or_default();
+        *count = count
+            .checked_add(1)
+            .ok_or_else(|| data_error("task artifact count overflow"))?;
+        run_bytes = run_bytes
+            .checked_add(artifact.byte_len)
+            .ok_or_else(|| data_error("run artifact byte count overflow"))?;
+        if *count > MAX_ARTIFACTS_PER_TASK
+            || artifacts.len() > MAX_ARTIFACTS_PER_RUN
+            || run_bytes > MAX_RUN_ARTIFACT_BYTES as u64
+        {
+            return Err(data_error("blackboard artifact limits are exceeded"));
+        }
+        match prior {
+            Some((prior_key, prior_version, prior_id))
+                if prior_key == &artifact.artifact_key
+                    && prior_version.checked_add(1) == Some(artifact.version)
+                    && artifact.previous_entry_id.as_ref() == Some(prior_id) => {}
+            Some((prior_key, _, _))
+                if prior_key != &artifact.artifact_key
+                    && artifact.version == 1
+                    && artifact.previous_entry_id.is_none() => {}
+            None if artifact.version == 1 && artifact.previous_entry_id.is_none() => {}
+            _ => return Err(data_error("blackboard artifact version chain is invalid")),
+        }
+        prior = Some((&artifact.artifact_key, artifact.version, &artifact.id));
+    }
+    Ok(())
+}
+
+fn load_progress(
+    conn: &rusqlite::Connection,
+    run_id: &RunId,
+) -> Result<Vec<AttemptProgressRecord>, StoreError> {
+    let mut statement = conn.prepare(
+        "SELECT progress_id, task_id, attempt_id, kind, payload_digest, at_ms,
+                cumulative_stream_bytes, terminal
+           FROM orchestration_attempt_progress WHERE run_id = ?1
+          ORDER BY at_ms, progress_id",
+    )?;
+    let rows = statement.query_map([run_id.as_str()], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, i64>(5)?,
+            row.get::<_, Option<i64>>(6)?,
+            row.get::<_, bool>(7)?,
+        ))
+    })?;
+    let mut records = Vec::new();
+    for row in rows {
+        let (id, task_id, attempt_id, kind, digest, at_ms, stream_bytes, terminal) = row?;
+        let record = AttemptProgressRecord {
+            id: AttemptProgressId::from(id),
+            run_id: run_id.clone(),
+            task_id: RunTaskId::from(task_id),
+            attempt_id: RunAttemptId::from(attempt_id),
+            kind: parse_enum(&kind, "attempt progress kind")?,
+            payload_digest: digest,
+            at_ms: checked_u64(at_ms, "attempt progress timestamp")?,
+            cumulative_stream_bytes: stream_bytes
+                .map(|value| checked_u64(value, "attempt progress bytes"))
+                .transpose()?,
+            terminal,
+        };
+        if !is_sha256(&record.payload_digest)
+            || (record.kind == AttemptProgressKind::StreamBytes)
+                != record.cumulative_stream_bytes.is_some()
+            || (record.kind == AttemptProgressKind::TerminalOutcome) != record.terminal
+        {
+            return Err(data_error("attempt progress row is malformed"));
+        }
+        records.push(record);
+    }
+    Ok(records)
+}
+
+fn load_recovery_reviews(
+    conn: &rusqlite::Connection,
+    run_id: &RunId,
+) -> Result<Vec<RecoveryReview>, StoreError> {
+    let mut statement = conn.prepare(
+        "SELECT review_id, task_id, attempt_id, effect_id, reason_code,
+                evidence_digest, status, created_at_ms, resolved_at_ms, resolution
+           FROM orchestration_recovery_reviews WHERE run_id = ?1
+          ORDER BY created_at_ms, review_id",
+    )?;
+    let rows = statement.query_map([run_id.as_str()], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, String>(5)?,
+            row.get::<_, String>(6)?,
+            row.get::<_, i64>(7)?,
+            row.get::<_, Option<i64>>(8)?,
+            row.get::<_, Option<String>>(9)?,
+        ))
+    })?;
+    let mut reviews = Vec::new();
+    for row in rows {
+        let (
+            review_id,
+            task_id,
+            attempt_id,
+            effect_id,
+            reason_code,
+            evidence_digest,
+            status,
+            created_at_ms,
+            resolved_at_ms,
+            resolution,
+        ) = row?;
+        let review = RecoveryReview {
+            id: pandamux_core::RecoveryReviewId::from(review_id),
+            run_id: run_id.clone(),
+            task_id: RunTaskId::from(task_id),
+            attempt_id: RunAttemptId::from(attempt_id),
+            effect_id: effect_id.map(OrchestrationEffectId::from),
+            reason_code,
+            evidence_digest,
+            status: parse_enum(&status, "recovery review status")?,
+            created_at_ms: checked_u64(created_at_ms, "recovery review created at")?,
+            resolved_at_ms: resolved_at_ms
+                .map(|value| checked_u64(value, "recovery review resolved at"))
+                .transpose()?,
+            resolution,
+        };
+        if !valid_reason_code(&review.reason_code)
+            || !is_sha256(&review.evidence_digest)
+            || match review.status {
+                RecoveryReviewStatus::Pending => {
+                    review.resolved_at_ms.is_some() || review.resolution.is_some()
+                }
+                RecoveryReviewStatus::Resolved => {
+                    review.resolved_at_ms.is_none()
+                        || review.resolution.as_deref().is_none_or(str::is_empty)
+                }
+            }
+        {
+            return Err(data_error("recovery review row is malformed"));
+        }
+        reviews.push(review);
+    }
+    Ok(reviews)
+}
+
+fn load_node_receipts(
+    conn: &rusqlite::Connection,
+    run_id: &RunId,
+) -> Result<Vec<NodeReceiptRecord>, StoreError> {
+    let mut statement = conn.prepare(
+        "SELECT receipt_id, node_store_id, task_id, attempt_id, effect_id,
+                request_kind, idempotency_key, request_sha256, result_sha256,
+                result_bytes, created_at_ms, updated_at_ms
+           FROM orchestration_node_receipts WHERE run_id = ?1
+          ORDER BY created_at_ms, receipt_id",
+    )?;
+    let rows = statement.query_map([run_id.as_str()], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, String>(5)?,
+            row.get::<_, String>(6)?,
+            row.get::<_, String>(7)?,
+            row.get::<_, String>(8)?,
+            row.get::<_, Vec<u8>>(9)?,
+            row.get::<_, i64>(10)?,
+            row.get::<_, i64>(11)?,
+        ))
+    })?;
+    let mut receipts = Vec::new();
+    for row in rows {
+        let (
+            receipt_id,
+            node_store_id,
+            task_id,
+            attempt_id,
+            effect_id,
+            request_kind,
+            idempotency_key,
+            request_sha256,
+            result_sha256,
+            result_bytes,
+            created_at_ms,
+            updated_at_ms,
+        ) = row?;
+        let receipt = NodeReceiptRecord {
+            receipt_id,
+            node_store_id: NodeStoreId::from(node_store_id),
+            run_id: run_id.clone(),
+            task_id: RunTaskId::from(task_id),
+            attempt_id: RunAttemptId::from(attempt_id),
+            effect_id: OrchestrationEffectId::from(effect_id),
+            request_kind: parse_enum(&request_kind, "node receipt kind")?,
+            idempotency_key,
+            request_sha256,
+            result_sha256,
+            result_bytes,
+            created_at_ms: checked_u64(created_at_ms, "node receipt created at")?,
+            updated_at_ms: checked_u64(updated_at_ms, "node receipt updated at")?,
+        };
+        if receipt.receipt_id.trim().is_empty()
+            || receipt.idempotency_key.trim().is_empty()
+            || !is_sha256(&receipt.request_sha256)
+            || receipt.result_sha256 != sha256_hex(&receipt.result_bytes)
+            || receipt.result_bytes.is_empty()
+            || receipt.updated_at_ms < receipt.created_at_ms
+        {
+            return Err(data_error("node receipt row is malformed"));
+        }
+        receipts.push(receipt);
+    }
+    Ok(receipts)
+}
+
+fn load_snapshot(conn: &rusqlite::Connection, run_id: &RunId) -> Result<Run, StoreError> {
+    let (bytes, digest) = conn.query_row(
+        "SELECT snapshot_bytes, snapshot_sha256 FROM orchestration_runs WHERE run_id = ?1",
+        [run_id.as_str()],
+        |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?)),
+    )?;
+    if digest != sha256_hex(&bytes) {
+        return Err(data_error("orchestration snapshot digest mismatch"));
+    }
+    let run: Run = serde_json::from_slice(&bytes)?;
+    if run.id != *run_id {
+        return Err(data_error("orchestration snapshot identity mismatch"));
+    }
+    Ok(run)
+}
+
+fn validate_json_bounds(value: &serde_json::Value, depth: usize) -> Result<(), StoreError> {
+    match value {
+        serde_json::Value::String(text) if text.len() > MAX_ARTIFACT_STRING_BYTES => {
+            Err(data_error("artifact JSON contains an oversized string"))
+        }
+        serde_json::Value::Array(items) => {
+            let next = depth
+                .checked_add(1)
+                .ok_or_else(|| data_error("artifact JSON nesting overflow"))?;
+            if next > MAX_ARTIFACT_JSON_DEPTH || items.len() > MAX_ARTIFACT_CONTAINER_ITEMS {
+                return Err(data_error("artifact JSON array exceeds a hard bound"));
+            }
+            for item in items {
+                validate_json_bounds(item, next)?;
+            }
+            Ok(())
+        }
+        serde_json::Value::Object(entries) => {
+            let next = depth
+                .checked_add(1)
+                .ok_or_else(|| data_error("artifact JSON nesting overflow"))?;
+            if next > MAX_ARTIFACT_JSON_DEPTH || entries.len() > MAX_ARTIFACT_CONTAINER_ITEMS {
+                return Err(data_error("artifact JSON object exceeds a hard bound"));
+            }
+            for (key, value) in entries {
+                if key.len() > MAX_ARTIFACT_STRING_BYTES {
+                    return Err(data_error("artifact JSON key exceeds the string bound"));
+                }
+                validate_json_bounds(value, next)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn enum_text<T: Serialize>(value: T) -> Result<String, StoreError> {
+    serde_json::to_value(value)?
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| data_error("enum did not serialize to a string"))
+}
+
+fn parse_enum<T: DeserializeOwned>(value: &str, label: &str) -> Result<T, StoreError> {
+    serde_json::from_value(serde_json::Value::String(value.to_string()))
+        .map_err(|_| data_error(format!("{label} is invalid")))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn is_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn valid_reason_code(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b':'))
+}
+
+fn valid_utc_date(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 10
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || !bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| index == 4 || index == 7 || byte.is_ascii_digit())
+    {
+        return false;
+    }
+    let year = value[0..4].parse::<u32>().ok();
+    let month = value[5..7].parse::<u32>().ok();
+    let day = value[8..10].parse::<u32>().ok();
+    let (Some(year), Some(month), Some(day)) = (year, month, day) else {
+        return false;
+    };
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (1..=days).contains(&day)
+}
+
+fn data_error(message: impl Into<String>) -> StoreError {
+    StoreError::Data(message.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pandamux_core::{
+        AccessMode, AgentTask, Attempt, AttemptStatus, BlackboardArtifact, BudgetAmount,
+        BudgetReservationId, BudgetReservationState, BudgetUsage, CleanupState,
+        ConfigurationRevision, LeaseResourceKind, OrchestrationMode, OutputContract,
+        ProjectRepositoryRecord, ProviderInstanceId, RoutingDecision, RunCommand, RunSeed,
+        RunTaskStatus, RunTrigger, SubscriptionKey, ValidatedPlan, WorktreeCleanupEligibility,
+        WorktreeDirtyState,
+    };
+    use std::collections::BTreeMap;
+    use std::sync::{Arc, Barrier};
+
+    fn output_contract() -> OutputContract {
+        OutputContract {
+            kind: "change_set".to_string(),
+            schema: None,
+        }
+    }
+
+    fn seed() -> RunSeed {
+        RunSeed {
+            trigger: RunTrigger::Manual {
+                client_id: "phase5c-test".to_string(),
+            },
+            policy_revision: "policy-phase5c".to_string(),
+            bundle_sha: "a".repeat(64),
+            organization_id: OrganizationId::new("org-phase5c"),
+            mode: OrchestrationMode::Auto,
+            budget_limit: BudgetAmount {
+                tokens: 1_000,
+                cost_micro_usd: 2_000,
+                runtime_ms: 3_000,
+            },
+            max_parallel_tasks: 2,
+        }
+    }
+
+    fn task() -> AgentTask {
+        AgentTask {
+            id: RunTaskId::new("task-phase5c"),
+            summary: "Persist Phase 5C state".to_string(),
+            class: "build".to_string(),
+            project_id: ProjectId::new("project-phase5c"),
+            organization_id: OrganizationId::new("org-phase5c"),
+            required_capabilities: BTreeSet::new(),
+            access_ceiling: AccessMode::WorkspaceOnly,
+            inputs: Vec::new(),
+            outputs: vec![output_contract()],
+            required_verification: BTreeSet::new(),
+            selected_agent_id: None,
+            route: None,
+            status: RunTaskStatus::Ready,
+            max_attempts: 2,
+            approval_ids: BTreeSet::new(),
+            budget_limit: BudgetAmount {
+                tokens: 100,
+                cost_micro_usd: 200,
+                runtime_ms: 300,
+            },
+            budget_reservation_id: None,
+        }
+    }
+
+    fn plan() -> ValidatedPlan {
+        let task = task();
+        ValidatedPlan {
+            schema_version: 1,
+            source_digest: "b".repeat(64),
+            tasks: BTreeMap::from([(task.id.clone(), task)]),
+            edges: BTreeMap::new(),
+            topological_order: vec![RunTaskId::new("task-phase5c")],
+            total_budget: BudgetAmount {
+                tokens: 100,
+                cost_micro_usd: 200,
+                runtime_ms: 300,
+            },
+        }
+    }
+
+    fn route() -> TaskRouteDecision {
+        TaskRouteDecision {
+            task_id: RunTaskId::new("task-phase5c"),
+            selected_agent_id: Some(AgentId::new("agent-phase5c")),
+            agent_evaluations: Vec::new(),
+            provider: RoutingDecision {
+                selected_provider_instance_id: Some(ProviderInstanceId::new("provider-phase5c")),
+                selected_subscription_key: Some(SubscriptionKey::new("subscription-phase5c")),
+                selected_model: Some("model-phase5c".to_string()),
+                evaluations: Vec::new(),
+            },
+        }
+    }
+
+    fn reservation() -> BudgetReservation {
+        BudgetReservation {
+            id: BudgetReservationId::new("budget-phase5c"),
+            task_id: RunTaskId::new("task-phase5c"),
+            attempt_id: RunAttemptId::new("run-attempt-phase5c"),
+            amount: BudgetAmount {
+                tokens: 100,
+                cost_micro_usd: 200,
+                runtime_ms: 300,
+            },
+            actual: BudgetUsage::default(),
+            ledger_utc_date: "2026-10-09".to_string(),
+            state: BudgetReservationState::Reserved,
+        }
+    }
+
+    fn attempt() -> Attempt {
+        Attempt {
+            id: RunAttemptId::new("run-attempt-phase5c"),
+            task_id: RunTaskId::new("task-phase5c"),
+            ordinal: 1,
+            route: route(),
+            thread_id: None,
+            turn_attempt_id: None,
+            status: AttemptStatus::DispatchRequested,
+            boundary: AttemptBoundary::SafeToRetry,
+            started_at_ms: 20_000,
+            ended_at_ms: None,
+            failure: None,
+            usage_reconciled: false,
+            ambiguous_effect: false,
+            ambiguity_reason: None,
+            worktree_id: None,
+            checkpoint_ids: BTreeSet::new(),
+            cleanup_state: CleanupState::NotStarted,
+        }
+    }
+
+    fn execute(run: &mut Run, events: &mut Vec<RunEvent>, command: RunCommand) {
+        let kinds = pandamux_orchestrator::decide(run, command).expect("legal fixture command");
+        for kind in kinds {
+            let seq = run.last_seq + 1;
+            let event = RunEvent {
+                event_id: RunEventId::new(format!("run-event-phase5c-{seq}")),
+                run_id: run.id.clone(),
+                seq,
+                at_ms: 10_000 + seq,
+                idempotency_key: format!("phase5c-{seq}"),
+                kind,
+            };
+            *run = pandamux_orchestrator::apply(run, &event)
+                .expect("fixture event applies")
+                .run;
+            events.push(event);
+        }
+    }
+
+    fn fixture_lifecycle(complete: bool) -> (Run, Vec<RunEvent>) {
+        let seed = seed();
+        let mut run = Run::draft(RunId::new("run-phase5c"), seed.clone(), 10_001);
+        let mut events = Vec::new();
+        execute(
+            &mut run,
+            &mut events,
+            RunCommand::AcceptPlan { seed, plan: plan() },
+        );
+        execute(
+            &mut run,
+            &mut events,
+            RunCommand::SelectRoute { decision: route() },
+        );
+        execute(
+            &mut run,
+            &mut events,
+            RunCommand::ReserveBudget {
+                reservation: reservation(),
+            },
+        );
+        execute(
+            &mut run,
+            &mut events,
+            RunCommand::RequestDispatch { attempt: attempt() },
+        );
+        if complete {
+            execute(
+                &mut run,
+                &mut events,
+                RunCommand::StartAttempt {
+                    attempt_id: RunAttemptId::new("run-attempt-phase5c"),
+                    thread_id: ThreadId::new("thread-phase5c-orchestration"),
+                    turn_attempt_id: TurnAttemptId::new("attempt-phase5c-orchestration"),
+                },
+            );
+            execute(
+                &mut run,
+                &mut events,
+                RunCommand::SettleAttempt {
+                    attempt_id: RunAttemptId::new("run-attempt-phase5c"),
+                    status: AttemptStatus::Succeeded,
+                    failure: None,
+                    usage_reconciled: false,
+                },
+            );
+            execute(
+                &mut run,
+                &mut events,
+                RunCommand::ReconcileBudget {
+                    reservation_id: BudgetReservationId::new("budget-phase5c"),
+                    actual: BudgetUsage {
+                        tokens: Some(80),
+                        cost_micro_usd: Some(150),
+                        runtime_ms: Some(250),
+                    },
+                },
+            );
+            let content = serde_json::json!({"files": ["src/lib.rs"]});
+            let canonical_json = pandamux_orchestrator::canonical_artifact_json(&content);
+            let contract = output_contract();
+            execute(
+                &mut run,
+                &mut events,
+                RunCommand::CompleteTask {
+                    task_id: RunTaskId::new("task-phase5c"),
+                    attempt_id: RunAttemptId::new("run-attempt-phase5c"),
+                    artifacts: vec![BlackboardArtifact {
+                        id: BlackboardEntryId::new("blackboard-phase5c"),
+                        run_id: RunId::new("run-phase5c"),
+                        artifact_key: pandamux_orchestrator::artifact_key(
+                            &RunTaskId::new("task-phase5c"),
+                            &contract,
+                        ),
+                        version: 1,
+                        previous_entry_id: None,
+                        producer: RunTaskId::new("task-phase5c"),
+                        consumers: BTreeSet::new(),
+                        output_contract: contract.clone(),
+                        schema_sha256: pandamux_orchestrator::output_contract_schema_sha256(
+                            &contract,
+                        ),
+                        byte_len: canonical_json.len() as u64,
+                        content_sha256: sha256_hex(&canonical_json),
+                        canonical_json,
+                        provenance: None,
+                    }],
+                    evidence_ids: BTreeSet::new(),
+                    summary: Some("stored".to_string()),
+                },
+            );
+        }
+        (run, events)
+    }
+
+    fn repository() -> ProjectRepositoryRecord {
+        ProjectRepositoryRecord {
+            id: ProjectRepositoryId::new("project-repository-phase5c"),
+            project_id: ProjectId::new("project-phase5c"),
+            organization_id: OrganizationId::new("org-phase5c"),
+            canonical_remote_identity: "remote-phase5c".to_string(),
+            canonical_repository_root_identity: "root-phase5c".to_string(),
+            display_path: "PandaMUX".to_string(),
+            revision: ConfigurationRevision::INITIAL,
+            created_at_ms: 1_000,
+            updated_at_ms: 1_000,
+        }
+    }
+
+    fn run_record(run: Run) -> OrchestrationRunRecord {
+        OrchestrationRunRecord {
+            run,
+            project_id: ProjectId::new("project-phase5c"),
+            repository_id: ProjectRepositoryId::new("project-repository-phase5c"),
+            settings_revision: 1,
+        }
+    }
+
+    fn store_with_repository() -> Store {
+        let store = Store::in_memory().expect("in-memory store");
+        store
+            .save_project_repository(&repository())
+            .expect("save repository");
+        store
+    }
+
+    fn runtime_records(dispatch_effect_id: OrchestrationEffectId) -> OrchestrationRuntimeRecords {
+        let capacity_lease = ExecutionLease {
+            id: ExecutionLeaseId::new("execution-lease-capacity-phase5c"),
+            resource_kind: LeaseResourceKind::Capacity,
+            resource_id: "provider:provider-phase5c".to_string(),
+            owner_incarnation_id: ServerIncarnationId::new("server-incarnation-phase5c"),
+            expires_at_ms: 40_000,
+            last_heartbeat_ms: 30_000,
+            revision: 1,
+        };
+        let worktree_lease = ExecutionLease {
+            id: ExecutionLeaseId::new("execution-lease-worktree-phase5c"),
+            resource_kind: LeaseResourceKind::Worktree,
+            resource_id: "attempt-worktree-phase5c".to_string(),
+            owner_incarnation_id: ServerIncarnationId::new("server-incarnation-phase5c"),
+            expires_at_ms: 40_000,
+            last_heartbeat_ms: 30_000,
+            revision: 1,
+        };
+        let result_bytes = br#"{"state":"prepared"}"#.to_vec();
+        OrchestrationRuntimeRecords {
+            attempt_dispatches: vec![AttemptDispatchRecord {
+                attempt_id: RunAttemptId::new("run-attempt-phase5c"),
+                run_id: RunId::new("run-phase5c"),
+                task_id: RunTaskId::new("task-phase5c"),
+                effect_id: dispatch_effect_id.clone(),
+                thread_id: ThreadId::new("thread-phase5c-orchestration"),
+                turn_id: TurnId::new("turn-phase5c-orchestration"),
+                turn_attempt_id: TurnAttemptId::new("attempt-phase5c-orchestration"),
+                provider_instance_id: ProviderInstanceId::new("provider-phase5c"),
+                route: route(),
+                bundle_sha: "a".repeat(64),
+                state: AttemptDispatchState::Prepared,
+                last_boundary: AttemptBoundary::SafeToRetry,
+                last_progress_at_ms: 30_000,
+                cancel_requested_at_ms: None,
+                ambiguity_reason: None,
+                outcome_digest: None,
+                created_at_ms: 30_000,
+                updated_at_ms: 30_000,
+            }],
+            queue_records: vec![OrchestrationQueueRecord {
+                queue_id: "queue-phase5c".to_string(),
+                run_id: RunId::new("run-phase5c"),
+                task_id: RunTaskId::new("task-phase5c"),
+                attempt_id: RunAttemptId::new("run-attempt-phase5c"),
+                agent_id: AgentId::new("agent-phase5c"),
+                provider_instance_id: ProviderInstanceId::new("provider-phase5c"),
+                environment_id: pandamux_core::EnvironmentId::new("env-phase5c"),
+                candidate_sha256: "c".repeat(64),
+                priority: 4,
+                task_enqueued_at_ms: 25_000,
+                enqueued_at_ms: 25_001,
+                not_before_ms: 25_001,
+                state: QueueState::Claimed,
+                owner_incarnation_id: Some(ServerIncarnationId::new(
+                    "server-incarnation-phase5c",
+                )),
+                lease_id: Some(capacity_lease.id.clone()),
+                claim_revision: 1,
+                interactive: false,
+            }],
+            leases: vec![capacity_lease, worktree_lease.clone()],
+            worktrees: vec![OwnedAttemptWorktreeRecord {
+                worktree: OwnedAttemptWorktree {
+                    id: AttemptWorktreeId::new("attempt-worktree-phase5c"),
+                    repository_id: ProjectRepositoryId::new("project-repository-phase5c"),
+                    run_id: RunId::new("run-phase5c"),
+                    task_id: RunTaskId::new("task-phase5c"),
+                    attempt_id: RunAttemptId::new("run-attempt-phase5c"),
+                    environment_id: pandamux_core::EnvironmentId::new("env-phase5c"),
+                    git_common_dir_identity: "git-common-phase5c".to_string(),
+                    baseline_commit: "d".repeat(40),
+                    branch_ref: "refs/heads/pandamux/run/run-phase5c/task-phase5c/1".to_string(),
+                    path: "/private/worktrees/project-repository-phase5c/run-phase5c/run-attempt-phase5c"
+                        .to_string(),
+                    lease_id: worktree_lease.id,
+                    checkpoint_ids: BTreeSet::new(),
+                    dirty_state: WorktreeDirtyState::Clean,
+                    cleanup_eligibility: WorktreeCleanupEligibility::Ineligible,
+                },
+                created_at_ms: 30_000,
+                updated_at_ms: 30_000,
+            }],
+            budget_reservations: vec![StoredBudgetReservation {
+                run_id: RunId::new("run-phase5c"),
+                agent_id: AgentId::new("agent-phase5c"),
+                organization_id: OrganizationId::new("org-phase5c"),
+                reservation: reservation(),
+                grants: BTreeMap::new(),
+                created_at_ms: 30_000,
+                updated_at_ms: 30_000,
+            }],
+            daily_budgets: vec![DailyBudgetRecord {
+                organization_id: OrganizationId::new("org-phase5c"),
+                ledger_utc_date: "2026-10-09".to_string(),
+                limit_micro_usd: 10_000,
+                reserved_micro_usd: 200,
+                reconciled_micro_usd: 0,
+                granted_micro_usd: 0,
+                revision: 1,
+                updated_at_ms: 30_000,
+            }],
+            artifacts: Vec::new(),
+            progress: vec![AttemptProgressRecord {
+                id: AttemptProgressId::new("attempt-progress-phase5c"),
+                run_id: RunId::new("run-phase5c"),
+                task_id: RunTaskId::new("task-phase5c"),
+                attempt_id: RunAttemptId::new("run-attempt-phase5c"),
+                kind: AttemptProgressKind::BoundaryAdvance,
+                payload_digest: "e".repeat(64),
+                at_ms: 30_001,
+                cumulative_stream_bytes: None,
+                terminal: false,
+            }],
+            recovery_reviews: vec![RecoveryReview {
+                id: pandamux_core::RecoveryReviewId::new("recovery-review-phase5c"),
+                run_id: RunId::new("run-phase5c"),
+                task_id: RunTaskId::new("task-phase5c"),
+                attempt_id: RunAttemptId::new("run-attempt-phase5c"),
+                effect_id: Some(dispatch_effect_id.clone()),
+                reason_code: "dispatch_response_unknown".to_string(),
+                evidence_digest: "f".repeat(64),
+                status: RecoveryReviewStatus::Pending,
+                created_at_ms: 30_002,
+                resolved_at_ms: None,
+                resolution: None,
+            }],
+            node_receipts: vec![NodeReceiptRecord {
+                receipt_id: "node-receipt-phase5c".to_string(),
+                node_store_id: NodeStoreId::new("store-phase5c"),
+                run_id: RunId::new("run-phase5c"),
+                task_id: RunTaskId::new("task-phase5c"),
+                attempt_id: RunAttemptId::new("run-attempt-phase5c"),
+                effect_id: dispatch_effect_id,
+                request_kind: NodeReceiptKind::AttemptPrepare,
+                idempotency_key: "node-prepare-phase5c".to_string(),
+                request_sha256: "1".repeat(64),
+                result_sha256: sha256_hex(&result_bytes),
+                result_bytes,
+                created_at_ms: 30_003,
+                updated_at_ms: 30_003,
+            }],
+        }
+    }
+
+    #[test]
+    fn canonical_run_replay_and_every_runtime_mapping_round_trip() {
+        let store = store_with_repository();
+        let (run, events) = fixture_lifecycle(false);
+        let stored_effects = store
+            .insert_orchestration_run(&run_record(run.clone()), &events)
+            .expect("insert verified run");
+        let loaded = store
+            .load_verified_orchestration_run(&run.id)
+            .expect("load verified run")
+            .expect("stored run");
+        assert_eq!(loaded, run_record(run.clone()));
+        assert_eq!(store.load_orchestration_events(&run.id).unwrap(), events);
+        assert_eq!(
+            store.load_orchestration_effects(&run.id).unwrap(),
+            stored_effects
+        );
+
+        let dispatch_effect = stored_effects
+            .iter()
+            .find(|record| {
+                matches!(
+                    record.effect.kind,
+                    pandamux_core::OrchestrationEffectKind::DispatchTask { .. }
+                )
+            })
+            .expect("dispatch effect")
+            .effect
+            .id
+            .clone();
+        let records = runtime_records(dispatch_effect);
+        store
+            .insert_orchestration_runtime_records(&records)
+            .expect("insert runtime records");
+        assert_eq!(
+            store
+                .load_orchestration_runtime_records(&run.id)
+                .expect("load runtime records"),
+            records
+        );
+    }
+
+    #[test]
+    fn runtime_transaction_rolls_back_every_prior_insert_on_a_late_invalid_receipt() {
+        let store = store_with_repository();
+        let (run, events) = fixture_lifecycle(false);
+        let effects = store
+            .insert_orchestration_run(&run_record(run.clone()), &events)
+            .expect("insert verified run");
+        let dispatch_effect = effects
+            .iter()
+            .find(|record| {
+                matches!(
+                    record.effect.kind,
+                    pandamux_core::OrchestrationEffectKind::DispatchTask { .. }
+                )
+            })
+            .expect("dispatch effect")
+            .effect
+            .id
+            .clone();
+        let mut records = runtime_records(dispatch_effect);
+        records.node_receipts[0].result_sha256 = "0".repeat(64);
+        assert!(
+            store
+                .insert_orchestration_runtime_records(&records)
+                .is_err()
+        );
+
+        assert_eq!(
+            store
+                .load_orchestration_runtime_records(&run.id)
+                .expect("load rolled-back runtime"),
+            OrchestrationRuntimeRecords::default()
+        );
+    }
+
+    #[test]
+    fn artifact_rows_match_the_atomic_snapshot_and_remain_immutable() {
+        let store = store_with_repository();
+        let (run, events) = fixture_lifecycle(true);
+        store
+            .insert_orchestration_run(&run_record(run.clone()), &events)
+            .expect("insert completed run");
+        let artifact = run
+            .blackboard
+            .values()
+            .next()
+            .expect("atomic artifact")
+            .clone();
+        store
+            .insert_orchestration_runtime_records(&OrchestrationRuntimeRecords {
+                artifacts: vec![artifact.clone()],
+                ..OrchestrationRuntimeRecords::default()
+            })
+            .expect("insert canonical artifact");
+        assert_eq!(
+            store
+                .load_orchestration_runtime_records(&run.id)
+                .expect("load artifact")
+                .artifacts,
+            vec![artifact]
+        );
+
+        let conn = store.conn.lock().unwrap();
+        assert!(
+            conn.execute(
+                "UPDATE orchestration_blackboard_artifacts
+                    SET content_sha256 = ?1 WHERE entry_id = 'blackboard-phase5c'",
+                ["0".repeat(64)],
+            )
+            .is_err(),
+            "immutable artifact trigger rejects updates"
+        );
+    }
+
+    #[test]
+    fn verified_load_rejects_a_digest_valid_snapshot_that_disagrees_with_replay() {
+        let store = store_with_repository();
+        let (run, events) = fixture_lifecycle(false);
+        store
+            .insert_orchestration_run(&run_record(run.clone()), &events)
+            .expect("insert verified run");
+        let mut corrupted = run.clone();
+        corrupted.policy_revision = "different-policy".to_string();
+        let bytes = pandamux_orchestrator::canonical_run_bytes(&corrupted);
+        let digest = sha256_hex(&bytes);
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE orchestration_runs
+                    SET snapshot_bytes = ?1, snapshot_sha256 = ?2,
+                        policy_revision = 'different-policy'
+                  WHERE run_id = ?3",
+                params![bytes, digest, run.id.as_str()],
+            )
+            .expect("inject internally consistent corruption");
+
+        let error = store
+            .load_verified_orchestration_run(&run.id)
+            .expect_err("event replay remains authoritative");
+        assert!(error.to_string().contains("replay differs"));
+    }
+
+    #[test]
+    fn runtime_load_rejects_digest_valid_rows_that_change_canonical_identity() {
+        let store = store_with_repository();
+        let (run, events) = fixture_lifecycle(false);
+        let effects = store
+            .insert_orchestration_run(&run_record(run.clone()), &events)
+            .expect("insert verified run");
+        let dispatch_effect = effects
+            .iter()
+            .find(|record| {
+                matches!(
+                    record.effect.kind,
+                    pandamux_core::OrchestrationEffectKind::DispatchTask { .. }
+                )
+            })
+            .expect("dispatch effect")
+            .effect
+            .id
+            .clone();
+        let records = runtime_records(dispatch_effect);
+        store
+            .insert_orchestration_runtime_records(&records)
+            .expect("insert runtime records");
+
+        let mut changed_route = records.attempt_dispatches[0].route.clone();
+        changed_route.provider.selected_model = Some("changed-model".to_string());
+        let changed_route_bytes = serde_json::to_vec(&changed_route).expect("changed route bytes");
+        let changed_route_sha = sha256_hex(&changed_route_bytes);
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE orchestration_attempt_dispatch
+                    SET route_bytes = ?1, route_sha256 = ?2
+                  WHERE attempt_id = 'run-attempt-phase5c'",
+                params![changed_route_bytes, changed_route_sha],
+            )
+            .expect("inject digest-valid route mismatch");
+
+        let error = store
+            .load_orchestration_runtime_records(&run.id)
+            .expect_err("changed canonical route must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("canonical run or provider effect")
+        );
+    }
+
+    #[test]
+    fn runtime_load_rejects_budget_and_progress_rows_with_changed_owners() {
+        let store = store_with_repository();
+        let (run, events) = fixture_lifecycle(false);
+        let effects = store
+            .insert_orchestration_run(&run_record(run.clone()), &events)
+            .expect("insert verified run");
+        let dispatch_effect = effects
+            .iter()
+            .find(|record| {
+                matches!(
+                    record.effect.kind,
+                    pandamux_core::OrchestrationEffectKind::DispatchTask { .. }
+                )
+            })
+            .expect("dispatch effect")
+            .effect
+            .id
+            .clone();
+        let records = runtime_records(dispatch_effect);
+        store
+            .insert_orchestration_runtime_records(&records)
+            .expect("insert runtime records");
+
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE orchestration_budget_reservations
+                    SET reserved_tokens = reserved_tokens - 1
+                  WHERE reservation_id = 'budget-phase5c'",
+                [],
+            )
+            .expect("inject in-range budget mismatch");
+        assert!(
+            store
+                .load_orchestration_runtime_records(&run.id)
+                .expect_err("changed reservation must fail closed")
+                .to_string()
+                .contains("canonical run snapshot")
+        );
+
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE orchestration_budget_reservations
+                    SET reserved_tokens = reserved_tokens + 1
+                  WHERE reservation_id = 'budget-phase5c'",
+                [],
+            )
+            .expect("restore reservation");
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE orchestration_attempt_progress
+                    SET task_id = 'task-foreign'
+                  WHERE progress_id = 'attempt-progress-phase5c'",
+                [],
+            )
+            .expect("inject progress owner mismatch");
+        assert!(
+            store
+                .load_orchestration_runtime_records(&run.id)
+                .expect_err("changed progress owner must fail closed")
+                .to_string()
+                .contains("canonical attempt owner")
+        );
+    }
+
+    #[test]
+    fn independent_connections_racing_the_same_run_leave_one_canonical_identity() {
+        let temp = tempfile::tempdir().expect("temporary store");
+        let database = temp.path().join("pandamux.db");
+        let first = Store::open(&database).expect("first store connection");
+        first
+            .save_project_repository(&repository())
+            .expect("save repository");
+        let second = Store::open(&database).expect("second store connection");
+        let (run, events) = fixture_lifecycle(false);
+        let record = run_record(run.clone());
+        let barrier = Arc::new(Barrier::new(2));
+        let results = std::thread::scope(|scope| {
+            let left_barrier = barrier.clone();
+            let left_record = record.clone();
+            let left_events = events.clone();
+            let left = scope.spawn(move || {
+                left_barrier.wait();
+                first.insert_orchestration_run(&left_record, &left_events)
+            });
+            let right_barrier = barrier.clone();
+            let right_record = record.clone();
+            let right_events = events.clone();
+            let right = scope.spawn(move || {
+                right_barrier.wait();
+                second.insert_orchestration_run(&right_record, &right_events)
+            });
+            [
+                left.join().expect("left join"),
+                right.join().expect("right join"),
+            ]
+        });
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(results.iter().filter(|result| result.is_err()).count(), 1);
+
+        let reopened = Store::open(&database).expect("reopen raced store");
+        assert_eq!(
+            reopened
+                .load_verified_orchestration_run(&run.id)
+                .expect("verify raced run")
+                .expect("one canonical run"),
+            record
+        );
+    }
+
+    #[test]
+    fn immutable_event_constraints_and_malformed_runtime_values_fail_closed() {
+        let store = store_with_repository();
+        let (run, events) = fixture_lifecycle(false);
+        store
+            .insert_orchestration_run(&run_record(run.clone()), &events)
+            .expect("insert verified run");
+        let conn = store.conn.lock().unwrap();
+        assert!(
+            conn.execute(
+                "UPDATE orchestration_run_events SET seq = 99 WHERE run_id = ?1 AND seq = 1",
+                [run.id.as_str()],
+            )
+            .is_err()
+        );
+        assert!(
+            conn.execute(
+                "INSERT INTO orchestration_leases (
+                    lease_id, resource_kind, resource_id, owner_incarnation_id,
+                    expires_at_ms, last_heartbeat_ms, revision
+                 ) VALUES ('bad-lease', 'capacity', 'provider:x', 'owner', 1, 2, 0)",
+                [],
+            )
+            .is_err()
+        );
+    }
+}

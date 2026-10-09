@@ -40,6 +40,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Added the durable Phase 5C execution store in version 0.60.92.** Migration
+  14 preserves and backs up every earlier schema while adding verified canonical
+  run replay, immutable events and artifacts, effect delivery, attempt, queue,
+  lease, worktree, budget, progress, recovery-review, and node-receipt records.
+  Private Hub/node DTOs bind every request to exact run, effect, baseline,
+  bundle, route, lease, and idempotency identities without accepting environment
+  authority from JSON, and app-owned worktree/artifact roots reject link
+  substitution. This storage checkpoint starts no provider, contacts no node,
+  and adds no push, deployment, activation, packaging, signing, publication, or
+  release claim.
+
 - **Repaired the Phase 5 execution contracts in version 0.60.91.** Canonical
   runs now retain attempt-bound budget reservations and truthful partial or
   over-limit usage, replayable checkpoints and ambiguity, exact supplemental

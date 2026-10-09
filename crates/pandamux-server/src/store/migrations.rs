@@ -3,7 +3,7 @@ use rusqlite::{Connection, Result, Transaction, params};
 use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const SCHEMA_VERSION: i64 = 13;
+pub const SCHEMA_VERSION: i64 = 14;
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -1705,12 +1705,375 @@ pub(crate) fn apply_migrations_to(conn: &mut Connection, target_version: i64) ->
         tx.commit()?;
     }
 
+    if current < 14 && target_version >= 14 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(
+            "CREATE TABLE orchestration_runs (
+                run_id TEXT PRIMARY KEY CHECK(run_id <> ''),
+                organization_id TEXT NOT NULL CHECK(organization_id <> ''),
+                project_id TEXT NOT NULL CHECK(project_id <> ''),
+                repository_id TEXT NOT NULL REFERENCES project_repositories(id),
+                snapshot_bytes BLOB NOT NULL CHECK(length(snapshot_bytes) > 0),
+                snapshot_sha256 TEXT NOT NULL CHECK(length(snapshot_sha256) = 64),
+                last_seq INTEGER NOT NULL CHECK(last_seq >= 0),
+                status TEXT NOT NULL CHECK(status IN (
+                    'draft', 'awaiting_approval', 'ready', 'running', 'paused',
+                    'cancelling', 'succeeded', 'failed', 'cancelled'
+                )),
+                bundle_sha TEXT NOT NULL CHECK(length(bundle_sha) = 64),
+                policy_revision TEXT NOT NULL CHECK(policy_revision <> ''),
+                settings_revision INTEGER NOT NULL CHECK(settings_revision > 0),
+                created_at_ms INTEGER NOT NULL CHECK(created_at_ms >= 0),
+                updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= created_at_ms),
+                ended_at_ms INTEGER CHECK(ended_at_ms >= created_at_ms),
+                CHECK(
+                    (status IN ('succeeded', 'failed', 'cancelled')) =
+                    (ended_at_ms IS NOT NULL)
+                )
+            );
+            CREATE INDEX idx_orchestration_runs_nonterminal
+                ON orchestration_runs(updated_at_ms, run_id)
+                WHERE status NOT IN ('succeeded', 'failed', 'cancelled');
+
+            CREATE TABLE orchestration_run_events (
+                event_id TEXT PRIMARY KEY CHECK(event_id <> ''),
+                run_id TEXT NOT NULL REFERENCES orchestration_runs(run_id) ON DELETE CASCADE,
+                seq INTEGER NOT NULL CHECK(seq > 0),
+                idempotency_key TEXT NOT NULL CHECK(idempotency_key <> ''),
+                event_bytes BLOB NOT NULL CHECK(length(event_bytes) > 0),
+                payload_sha256 TEXT NOT NULL CHECK(length(payload_sha256) = 64),
+                at_ms INTEGER NOT NULL CHECK(at_ms >= 0),
+                UNIQUE(run_id, seq),
+                UNIQUE(run_id, idempotency_key)
+            );
+            CREATE INDEX idx_orchestration_run_events_replay
+                ON orchestration_run_events(run_id, seq);
+            CREATE TRIGGER orchestration_run_events_immutable_update
+                BEFORE UPDATE ON orchestration_run_events
+                BEGIN SELECT RAISE(ABORT, 'orchestration events are immutable'); END;
+            CREATE TRIGGER orchestration_run_events_immutable_delete
+                BEFORE DELETE ON orchestration_run_events
+                BEGIN SELECT RAISE(ABORT, 'orchestration events are immutable'); END;
+
+            CREATE TABLE orchestration_leases (
+                lease_id TEXT PRIMARY KEY CHECK(lease_id <> ''),
+                resource_kind TEXT NOT NULL CHECK(resource_kind IN (
+                    'effect', 'capacity', 'worktree', 'remote_attempt'
+                )),
+                resource_id TEXT NOT NULL CHECK(resource_id <> ''),
+                owner_incarnation_id TEXT NOT NULL CHECK(owner_incarnation_id <> ''),
+                expires_at_ms INTEGER NOT NULL CHECK(expires_at_ms >= 0),
+                last_heartbeat_ms INTEGER NOT NULL CHECK(last_heartbeat_ms >= 0),
+                revision INTEGER NOT NULL CHECK(revision > 0),
+                CHECK(expires_at_ms >= last_heartbeat_ms),
+                UNIQUE(resource_kind, resource_id)
+            );
+            CREATE INDEX idx_orchestration_leases_expiry
+                ON orchestration_leases(expires_at_ms, resource_kind, resource_id);
+
+            CREATE TABLE orchestration_effects (
+                effect_id TEXT PRIMARY KEY CHECK(effect_id <> ''),
+                run_id TEXT NOT NULL REFERENCES orchestration_runs(run_id) ON DELETE CASCADE,
+                source_event_id TEXT NOT NULL REFERENCES orchestration_run_events(event_id),
+                effect_bytes BLOB NOT NULL CHECK(length(effect_bytes) > 0),
+                payload_sha256 TEXT NOT NULL CHECK(length(payload_sha256) = 64),
+                delivery_state TEXT NOT NULL CHECK(delivery_state IN (
+                    'pending', 'claimed', 'prepared', 'dispatch_started', 'in_flight',
+                    'outcome_recorded', 'settled', 'cancelled', 'review_required'
+                )),
+                owner_incarnation_id TEXT,
+                lease_id TEXT REFERENCES orchestration_leases(lease_id),
+                claim_revision INTEGER NOT NULL DEFAULT 0 CHECK(claim_revision >= 0),
+                prepared_receipt_digest TEXT CHECK(
+                    prepared_receipt_digest IS NULL OR length(prepared_receipt_digest) = 64
+                ),
+                dispatch_started_at_ms INTEGER CHECK(dispatch_started_at_ms >= 0),
+                result_digest TEXT CHECK(result_digest IS NULL OR length(result_digest) = 64),
+                safe_error_code TEXT CHECK(safe_error_code IS NULL OR safe_error_code <> ''),
+                created_at_ms INTEGER NOT NULL CHECK(created_at_ms >= 0),
+                updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= created_at_ms),
+                CHECK((owner_incarnation_id IS NULL) = (lease_id IS NULL)),
+                CHECK(
+                    delivery_state NOT IN ('outcome_recorded', 'settled') OR
+                    result_digest IS NOT NULL
+                )
+            );
+            CREATE INDEX idx_orchestration_effects_pending
+                ON orchestration_effects(delivery_state, created_at_ms, effect_id)
+                WHERE delivery_state NOT IN ('settled', 'cancelled');
+            CREATE TRIGGER orchestration_effect_identity_immutable
+                BEFORE UPDATE ON orchestration_effects
+                WHEN OLD.effect_id <> NEW.effect_id OR OLD.run_id <> NEW.run_id OR
+                     OLD.source_event_id <> NEW.source_event_id OR
+                     OLD.effect_bytes <> NEW.effect_bytes OR
+                     OLD.payload_sha256 <> NEW.payload_sha256 OR
+                     OLD.created_at_ms <> NEW.created_at_ms
+                BEGIN SELECT RAISE(ABORT, 'orchestration effect identity is immutable'); END;
+            CREATE TRIGGER orchestration_effects_immutable_delete
+                BEFORE DELETE ON orchestration_effects
+                BEGIN SELECT RAISE(ABORT, 'orchestration effects are immutable'); END;
+
+            CREATE TABLE orchestration_attempt_dispatch (
+                attempt_id TEXT PRIMARY KEY CHECK(attempt_id <> ''),
+                run_id TEXT NOT NULL REFERENCES orchestration_runs(run_id) ON DELETE CASCADE,
+                task_id TEXT NOT NULL CHECK(task_id <> ''),
+                effect_id TEXT NOT NULL UNIQUE REFERENCES orchestration_effects(effect_id),
+                thread_id TEXT NOT NULL UNIQUE CHECK(thread_id <> ''),
+                turn_id TEXT NOT NULL UNIQUE CHECK(turn_id <> ''),
+                turn_attempt_id TEXT NOT NULL UNIQUE CHECK(turn_attempt_id <> ''),
+                provider_instance_id TEXT NOT NULL CHECK(provider_instance_id <> ''),
+                route_bytes BLOB NOT NULL CHECK(length(route_bytes) > 0),
+                route_sha256 TEXT NOT NULL CHECK(length(route_sha256) = 64),
+                bundle_sha TEXT NOT NULL CHECK(length(bundle_sha) = 64),
+                state TEXT NOT NULL CHECK(state IN (
+                    'prepared', 'dispatch_started', 'accepted', 'not_started',
+                    'ambiguous', 'terminal', 'cancel_requested', 'cancelled'
+                )),
+                last_boundary TEXT NOT NULL CHECK(last_boundary IN (
+                    'safe_to_retry', 'request_submitted', 'visible_output_begun',
+                    'tool_started', 'external_commit'
+                )),
+                last_progress_at_ms INTEGER NOT NULL CHECK(last_progress_at_ms >= 0),
+                cancel_requested_at_ms INTEGER CHECK(cancel_requested_at_ms >= 0),
+                ambiguity_reason TEXT,
+                outcome_digest TEXT CHECK(outcome_digest IS NULL OR length(outcome_digest) = 64),
+                created_at_ms INTEGER NOT NULL CHECK(created_at_ms >= 0),
+                updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= created_at_ms),
+                CHECK(last_progress_at_ms >= created_at_ms),
+                CHECK(cancel_requested_at_ms IS NULL OR cancel_requested_at_ms >= created_at_ms),
+                CHECK(state <> 'ambiguous' OR ambiguity_reason IS NOT NULL),
+                CHECK(state <> 'terminal' OR outcome_digest IS NOT NULL)
+            );
+            CREATE INDEX idx_orchestration_attempt_dispatch_active
+                ON orchestration_attempt_dispatch(state, last_progress_at_ms, attempt_id)
+                WHERE state NOT IN ('not_started', 'terminal', 'cancelled');
+
+            CREATE TABLE orchestration_queue (
+                queue_id TEXT PRIMARY KEY CHECK(queue_id <> ''),
+                run_id TEXT NOT NULL CHECK(run_id <> ''),
+                task_id TEXT NOT NULL CHECK(task_id <> ''),
+                attempt_id TEXT NOT NULL CHECK(attempt_id <> ''),
+                agent_id TEXT NOT NULL CHECK(agent_id <> ''),
+                provider_instance_id TEXT NOT NULL CHECK(provider_instance_id <> ''),
+                environment_id TEXT NOT NULL CHECK(environment_id <> ''),
+                candidate_sha256 TEXT NOT NULL CHECK(length(candidate_sha256) = 64),
+                priority INTEGER NOT NULL,
+                task_enqueued_at_ms INTEGER NOT NULL CHECK(task_enqueued_at_ms >= 0),
+                enqueued_at_ms INTEGER NOT NULL CHECK(enqueued_at_ms >= task_enqueued_at_ms),
+                not_before_ms INTEGER NOT NULL CHECK(not_before_ms >= enqueued_at_ms),
+                state TEXT NOT NULL CHECK(state IN (
+                    'queued', 'claimed', 'cancelled', 'dispatched'
+                )),
+                owner_incarnation_id TEXT,
+                lease_id TEXT REFERENCES orchestration_leases(lease_id),
+                claim_revision INTEGER NOT NULL DEFAULT 0 CHECK(claim_revision >= 0),
+                interactive INTEGER NOT NULL DEFAULT 0 CHECK(interactive IN (0, 1)),
+                UNIQUE(run_id, task_id, attempt_id),
+                CHECK((owner_incarnation_id IS NULL) = (lease_id IS NULL))
+            );
+            CREATE INDEX idx_orchestration_queue_order
+                ON orchestration_queue(
+                    interactive DESC, priority DESC, enqueued_at_ms,
+                    run_id, task_id, attempt_id
+                ) WHERE state = 'queued';
+
+            CREATE TABLE orchestration_worktrees (
+                worktree_id TEXT PRIMARY KEY CHECK(worktree_id <> ''),
+                repository_id TEXT NOT NULL REFERENCES project_repositories(id),
+                run_id TEXT NOT NULL REFERENCES orchestration_runs(run_id) ON DELETE CASCADE,
+                task_id TEXT NOT NULL CHECK(task_id <> ''),
+                attempt_id TEXT NOT NULL UNIQUE CHECK(attempt_id <> ''),
+                environment_id TEXT NOT NULL CHECK(environment_id <> ''),
+                git_common_dir_identity TEXT NOT NULL CHECK(git_common_dir_identity <> ''),
+                baseline_commit TEXT NOT NULL CHECK(baseline_commit <> ''),
+                branch_ref TEXT NOT NULL UNIQUE CHECK(branch_ref <> ''),
+                path TEXT NOT NULL UNIQUE CHECK(path <> ''),
+                lease_id TEXT NOT NULL UNIQUE REFERENCES orchestration_leases(lease_id),
+                checkpoint_ids_json TEXT NOT NULL,
+                dirty_state TEXT NOT NULL CHECK(dirty_state IN (
+                    'clean', 'dirty', 'locked', 'ambiguous'
+                )),
+                cleanup_eligibility TEXT NOT NULL CHECK(cleanup_eligibility IN (
+                    'ineligible', 'eligible', 'retained'
+                )),
+                created_at_ms INTEGER NOT NULL CHECK(created_at_ms >= 0),
+                updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= created_at_ms)
+            );
+            CREATE INDEX idx_orchestration_worktrees_active
+                ON orchestration_worktrees(cleanup_eligibility, updated_at_ms, worktree_id)
+                WHERE cleanup_eligibility <> 'eligible';
+
+            CREATE TABLE orchestration_budget_reservations (
+                reservation_id TEXT PRIMARY KEY CHECK(reservation_id <> ''),
+                run_id TEXT NOT NULL REFERENCES orchestration_runs(run_id) ON DELETE CASCADE,
+                task_id TEXT NOT NULL CHECK(task_id <> ''),
+                attempt_id TEXT NOT NULL UNIQUE CHECK(attempt_id <> ''),
+                agent_id TEXT NOT NULL CHECK(agent_id <> ''),
+                organization_id TEXT NOT NULL CHECK(organization_id <> ''),
+                ledger_utc_date TEXT NOT NULL CHECK(
+                    length(ledger_utc_date) = 10 AND
+                    substr(ledger_utc_date, 5, 1) = '-' AND
+                    substr(ledger_utc_date, 8, 1) = '-'
+                ),
+                reserved_tokens INTEGER NOT NULL CHECK(reserved_tokens >= 0),
+                reserved_micro_usd INTEGER NOT NULL CHECK(reserved_micro_usd >= 0),
+                reserved_runtime_ms INTEGER NOT NULL CHECK(reserved_runtime_ms >= 0),
+                actual_tokens INTEGER CHECK(actual_tokens >= 0),
+                actual_micro_usd INTEGER CHECK(actual_micro_usd >= 0),
+                actual_runtime_ms INTEGER CHECK(actual_runtime_ms >= 0),
+                state TEXT NOT NULL CHECK(state IN (
+                    'reserved', 'partially_reconciled', 'reconciled', 'released'
+                )),
+                grants_json TEXT NOT NULL CHECK(length(grants_json) > 0),
+                created_at_ms INTEGER NOT NULL CHECK(created_at_ms >= 0),
+                updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= created_at_ms),
+                CHECK(
+                    state <> 'reconciled' OR
+                    (actual_tokens IS NOT NULL AND actual_micro_usd IS NOT NULL AND
+                     actual_runtime_ms IS NOT NULL)
+                )
+            );
+            CREATE INDEX idx_orchestration_budget_incomplete
+                ON orchestration_budget_reservations(state, updated_at_ms, reservation_id)
+                WHERE state IN ('reserved', 'partially_reconciled');
+
+            CREATE TABLE orchestration_daily_budgets (
+                organization_id TEXT NOT NULL CHECK(organization_id <> ''),
+                ledger_utc_date TEXT NOT NULL CHECK(
+                    length(ledger_utc_date) = 10 AND
+                    substr(ledger_utc_date, 5, 1) = '-' AND
+                    substr(ledger_utc_date, 8, 1) = '-'
+                ),
+                limit_micro_usd INTEGER NOT NULL CHECK(limit_micro_usd >= 0),
+                reserved_micro_usd INTEGER NOT NULL CHECK(reserved_micro_usd >= 0),
+                reconciled_micro_usd INTEGER NOT NULL CHECK(reconciled_micro_usd >= 0),
+                granted_micro_usd INTEGER NOT NULL CHECK(granted_micro_usd >= 0),
+                revision INTEGER NOT NULL CHECK(revision > 0),
+                updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0),
+                PRIMARY KEY(organization_id, ledger_utc_date)
+            );
+
+            CREATE TABLE orchestration_blackboard_artifacts (
+                entry_id TEXT PRIMARY KEY CHECK(entry_id <> ''),
+                run_id TEXT NOT NULL REFERENCES orchestration_runs(run_id) ON DELETE CASCADE,
+                artifact_key TEXT NOT NULL CHECK(artifact_key <> ''),
+                version INTEGER NOT NULL CHECK(version > 0),
+                previous_entry_id TEXT REFERENCES orchestration_blackboard_artifacts(entry_id),
+                producer_task_id TEXT NOT NULL CHECK(producer_task_id <> ''),
+                consumers_json TEXT NOT NULL,
+                output_contract_json TEXT NOT NULL,
+                schema_sha256 TEXT NOT NULL CHECK(length(schema_sha256) = 64),
+                canonical_json BLOB NOT NULL CHECK(length(canonical_json) <= 1048576),
+                byte_len INTEGER NOT NULL CHECK(byte_len >= 0 AND byte_len <= 1048576),
+                content_sha256 TEXT NOT NULL CHECK(length(content_sha256) = 64),
+                created_event_id TEXT NOT NULL REFERENCES orchestration_run_events(event_id),
+                provenance_json TEXT,
+                CHECK(byte_len = length(canonical_json)),
+                CHECK(
+                    (version = 1 AND previous_entry_id IS NULL) OR
+                    (version > 1 AND previous_entry_id IS NOT NULL)
+                ),
+                UNIQUE(run_id, artifact_key, version)
+            );
+            CREATE INDEX idx_orchestration_artifact_versions
+                ON orchestration_blackboard_artifacts(run_id, artifact_key, version DESC);
+            CREATE TRIGGER orchestration_blackboard_artifacts_immutable_update
+                BEFORE UPDATE ON orchestration_blackboard_artifacts
+                BEGIN SELECT RAISE(ABORT, 'orchestration artifacts are immutable'); END;
+            CREATE TRIGGER orchestration_blackboard_artifacts_immutable_delete
+                BEFORE DELETE ON orchestration_blackboard_artifacts
+                BEGIN SELECT RAISE(ABORT, 'orchestration artifacts are immutable'); END;
+
+            CREATE TABLE orchestration_attempt_progress (
+                progress_id TEXT PRIMARY KEY CHECK(progress_id <> ''),
+                run_id TEXT NOT NULL REFERENCES orchestration_runs(run_id) ON DELETE CASCADE,
+                task_id TEXT NOT NULL CHECK(task_id <> ''),
+                attempt_id TEXT NOT NULL CHECK(attempt_id <> ''),
+                kind TEXT NOT NULL CHECK(kind IN (
+                    'boundary_advance', 'stream_bytes', 'tool_lifecycle',
+                    'approval_transition', 'checkpoint_created', 'usage_receipt',
+                    'artifact_published', 'terminal_outcome'
+                )),
+                payload_digest TEXT NOT NULL CHECK(length(payload_digest) = 64),
+                at_ms INTEGER NOT NULL CHECK(at_ms >= 0),
+                cumulative_stream_bytes INTEGER CHECK(cumulative_stream_bytes >= 0),
+                terminal INTEGER NOT NULL CHECK(terminal IN (0, 1)),
+                CHECK((kind = 'stream_bytes') OR cumulative_stream_bytes IS NULL),
+                CHECK((kind = 'terminal_outcome') = terminal)
+            );
+            CREATE INDEX idx_orchestration_attempt_progress_recent
+                ON orchestration_attempt_progress(attempt_id, at_ms DESC, progress_id DESC);
+
+            CREATE TABLE orchestration_recovery_reviews (
+                review_id TEXT PRIMARY KEY CHECK(review_id <> ''),
+                run_id TEXT NOT NULL REFERENCES orchestration_runs(run_id) ON DELETE CASCADE,
+                task_id TEXT NOT NULL CHECK(task_id <> ''),
+                attempt_id TEXT NOT NULL CHECK(attempt_id <> ''),
+                effect_id TEXT REFERENCES orchestration_effects(effect_id),
+                reason_code TEXT NOT NULL CHECK(reason_code <> ''),
+                evidence_digest TEXT NOT NULL CHECK(length(evidence_digest) = 64),
+                status TEXT NOT NULL CHECK(status IN ('pending', 'resolved')),
+                created_at_ms INTEGER NOT NULL CHECK(created_at_ms >= 0),
+                resolved_at_ms INTEGER CHECK(resolved_at_ms >= created_at_ms),
+                resolution TEXT,
+                CHECK(
+                    (status = 'pending' AND resolved_at_ms IS NULL AND resolution IS NULL) OR
+                    (status = 'resolved' AND resolved_at_ms IS NOT NULL AND resolution IS NOT NULL)
+                )
+            );
+            CREATE UNIQUE INDEX idx_orchestration_recovery_review_identity
+                ON orchestration_recovery_reviews(
+                    run_id, task_id, attempt_id, ifnull(effect_id, ''),
+                    reason_code, evidence_digest
+                );
+            CREATE INDEX idx_orchestration_recovery_reviews_unresolved
+                ON orchestration_recovery_reviews(created_at_ms, review_id)
+                WHERE status = 'pending';
+
+            CREATE TABLE orchestration_node_receipts (
+                receipt_id TEXT PRIMARY KEY CHECK(receipt_id <> ''),
+                node_store_id TEXT NOT NULL CHECK(node_store_id <> ''),
+                run_id TEXT NOT NULL CHECK(run_id <> ''),
+                task_id TEXT NOT NULL CHECK(task_id <> ''),
+                attempt_id TEXT NOT NULL CHECK(attempt_id <> ''),
+                effect_id TEXT NOT NULL CHECK(effect_id <> ''),
+                request_kind TEXT NOT NULL CHECK(request_kind IN (
+                    'repository_prepare', 'attempt_prepare', 'attempt_dispatch',
+                    'attempt_status', 'attempt_cancel', 'attempt_events', 'attempt_ack'
+                )),
+                idempotency_key TEXT NOT NULL CHECK(idempotency_key <> ''),
+                request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64),
+                result_sha256 TEXT NOT NULL CHECK(length(result_sha256) = 64),
+                result_bytes BLOB NOT NULL CHECK(length(result_bytes) > 0),
+                created_at_ms INTEGER NOT NULL CHECK(created_at_ms >= 0),
+                updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= created_at_ms),
+                UNIQUE(node_store_id, request_kind, idempotency_key)
+            );
+            CREATE INDEX idx_orchestration_node_receipts_updated
+                ON orchestration_node_receipts(node_store_id, updated_at_ms, receipt_id);
+            CREATE INDEX idx_orchestration_node_receipts_attempt
+                ON orchestration_node_receipts(run_id, attempt_id, updated_at_ms, receipt_id);
+            CREATE TRIGGER orchestration_node_receipts_immutable_update
+                BEFORE UPDATE ON orchestration_node_receipts
+                BEGIN SELECT RAISE(ABORT, 'orchestration node receipts are immutable'); END;
+            CREATE TRIGGER orchestration_node_receipts_immutable_delete
+                BEFORE DELETE ON orchestration_node_receipts
+                BEGIN SELECT RAISE(ABORT, 'orchestration node receipts are immutable'); END;",
+        )?;
+        tx.execute(
+            "INSERT INTO _migrations (version, applied_at_ms) VALUES (14, ?1)",
+            [now_ms() as i64],
+        )?;
+        tx.commit()?;
+    }
+
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
     use tempfile::NamedTempFile;
 
     fn migration_version(conn: &Connection) -> i64 {
@@ -1755,6 +2118,56 @@ mod tests {
             params![day, provider, input_tokens],
         )
         .expect("insert legacy bucket");
+    }
+
+    fn existing_table_contents(conn: &Connection) -> BTreeMap<String, Vec<String>> {
+        let table_names = {
+            let mut statement = conn
+                .prepare(
+                    "SELECT name FROM sqlite_master
+                      WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+                        AND name <> '_migrations'
+                      ORDER BY name",
+                )
+                .expect("prepare table inventory");
+            statement
+                .query_map([], |row| row.get::<_, String>(0))
+                .expect("query table inventory")
+                .collect::<Result<Vec<_>>>()
+                .expect("collect table inventory")
+        };
+        table_names
+            .into_iter()
+            .map(|table| {
+                let escaped_table = table.replace('"', "\"\"");
+                let columns = {
+                    let mut statement = conn
+                        .prepare(&format!("PRAGMA table_info(\"{escaped_table}\")"))
+                        .expect("prepare column inventory");
+                    statement
+                        .query_map([], |row| row.get::<_, String>(1))
+                        .expect("query column inventory")
+                        .collect::<Result<Vec<_>>>()
+                        .expect("collect column inventory")
+                };
+                let expression = columns
+                    .iter()
+                    .map(|column| format!("quote(\"{}\")", column.replace('"', "\"\"")))
+                    .collect::<Vec<_>>()
+                    .join(" || char(31) || ");
+                let mut statement = conn
+                    .prepare(&format!(
+                        "SELECT {expression} FROM \"{escaped_table}\" ORDER BY 1"
+                    ))
+                    .expect("prepare table snapshot");
+                let rows = statement
+                    .query_map([], |row| row.get::<_, String>(0))
+                    .expect("query table snapshot")
+                    .collect::<Result<Vec<_>>>()
+                    .expect("collect table snapshot");
+                (table, rows)
+            })
+            .collect()
     }
 
     #[test]
@@ -2053,7 +2466,7 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM settings", [], |row| row.get(0))
             .expect("settings count before migration");
 
-        apply_migrations(&mut conn).expect("apply migration thirteen");
+        apply_migrations_to(&mut conn, 13).expect("apply migration thirteen");
 
         let (stored_json, revision, updated_at_ms): (String, i64, i64) = conn
             .query_row(
@@ -2089,7 +2502,7 @@ mod tests {
         }
         assert_eq!(migration_version(&conn), 13);
 
-        apply_migrations(&mut conn).expect("repeat migration thirteen");
+        apply_migrations_to(&mut conn, 13).expect("repeat migration thirteen");
         assert_eq!(migration_version(&conn), 13);
         assert_eq!(
             conn.query_row("SELECT COUNT(*) FROM settings", [], |row| row
@@ -2110,6 +2523,322 @@ mod tests {
         assert_eq!(migration_version(&conn), 12);
         assert!(!column_exists(&conn, "settings", "revision"));
         assert!(!table_exists(&conn, "project_layer_trust"));
+    }
+
+    #[test]
+    fn migration_fourteen_preserves_every_schema_thirteen_table_and_adds_execution_storage() {
+        let mut conn = Connection::open_in_memory().expect("open database");
+        apply_migrations_to(&mut conn, 13).expect("apply schema thirteen");
+        conn.execute(
+            "INSERT INTO settings (key, value_json, revision, updated_at_ms)
+             VALUES ('phase5c-fixture', '{\"kept\":true}', 4, 1234)",
+            [],
+        )
+        .expect("insert settings fixture");
+        conn.execute(
+            "INSERT INTO threads (
+                id, project_id, environment_id, parent_thread_id, title,
+                provider_instance_id, model, effort, access_mode, workspace_json,
+                status, agent_json, origin_json, created_at_ms, updated_at_ms
+             ) VALUES (
+                'thread-phase5c', 'project-phase5c', 'env-phase5c', NULL,
+                'Phase 5C fixture', 'provider-phase5c', 'model-phase5c', NULL,
+                '\"workspace_only\"', '{}', '\"idle\"', NULL,
+                '{\"type\":\"manual\"}', 1000, 1001
+             )",
+            [],
+        )
+        .expect("insert thread fixture");
+        conn.execute(
+            "INSERT INTO turns (
+                id, thread_id, seq, input_json, status, started_at_ms
+             ) VALUES ('turn-phase5c', 'thread-phase5c', 1, '{\"text\":\"kept\"}',
+                '\"completed\"', 1000)",
+            [],
+        )
+        .expect("insert turn fixture");
+        conn.execute(
+            "INSERT INTO failover_pools (
+                id, display_name, revision, definition_json, updated_at_ms
+             ) VALUES ('pool-phase5c', 'Phase 5C fixture', 1, '{}', 1000)",
+            [],
+        )
+        .expect("insert failover fixture");
+        conn.execute(
+            "INSERT INTO project_repositories (
+                id, project_id, organization_id, canonical_remote_identity,
+                canonical_root_identity, display_path, revision, created_at_ms, updated_at_ms
+             ) VALUES (
+                'project-repository-phase5c', 'project-phase5c', 'org-phase5c',
+                'remote-phase5c', 'root-phase5c', 'display-phase5c', 1, 1000, 1000
+             )",
+            [],
+        )
+        .expect("insert configuration fixture");
+        let before = existing_table_contents(&conn);
+
+        apply_migrations(&mut conn).expect("apply migration fourteen");
+
+        assert_eq!(migration_version(&conn), 14);
+        let after = existing_table_contents(&conn);
+        for (table, rows) in before {
+            assert_eq!(
+                after.get(&table),
+                Some(&rows),
+                "changed legacy table {table}"
+            );
+        }
+        for table in [
+            "orchestration_runs",
+            "orchestration_run_events",
+            "orchestration_effects",
+            "orchestration_attempt_dispatch",
+            "orchestration_queue",
+            "orchestration_leases",
+            "orchestration_worktrees",
+            "orchestration_budget_reservations",
+            "orchestration_daily_budgets",
+            "orchestration_blackboard_artifacts",
+            "orchestration_attempt_progress",
+            "orchestration_recovery_reviews",
+            "orchestration_node_receipts",
+        ] {
+            assert!(table_exists(&conn, table), "missing {table}");
+        }
+        apply_migrations(&mut conn).expect("repeat migration fourteen");
+        assert_eq!(migration_version(&conn), 14);
+    }
+
+    #[test]
+    fn migration_fourteen_failure_rolls_back_every_execution_table() {
+        let mut conn = Connection::open_in_memory().expect("open database");
+        apply_migrations_to(&mut conn, 13).expect("apply schema thirteen");
+        conn.execute_batch("CREATE TABLE orchestration_queue (conflict INTEGER);")
+            .expect("inject migration conflict");
+
+        assert!(apply_migrations(&mut conn).is_err());
+        assert_eq!(migration_version(&conn), 13);
+        assert!(!table_exists(&conn, "orchestration_runs"));
+        assert!(!table_exists(&conn, "orchestration_run_events"));
+        assert!(!table_exists(&conn, "orchestration_effects"));
+        assert!(!table_exists(&conn, "orchestration_leases"));
+    }
+
+    #[test]
+    fn migration_fourteen_enforces_each_runtime_table_and_declares_query_indexes() {
+        let mut conn = Connection::open_in_memory().expect("open database");
+        apply_migrations(&mut conn).expect("apply migration fourteen");
+        conn.execute(
+            "INSERT INTO project_repositories (
+                id, project_id, organization_id, canonical_remote_identity,
+                canonical_root_identity, display_path, revision, created_at_ms, updated_at_ms
+             ) VALUES (
+                'repository-db05', 'project-db05', 'organization-db05',
+                'remote-db05', 'root-db05', 'display-db05', 1, 1, 1
+             )",
+            [],
+        )
+        .expect("insert repository prerequisite");
+        conn.execute(
+            "INSERT INTO orchestration_runs (
+                run_id, organization_id, project_id, repository_id,
+                snapshot_bytes, snapshot_sha256, last_seq, status, bundle_sha,
+                policy_revision, settings_revision, created_at_ms, updated_at_ms, ended_at_ms
+             ) VALUES (
+                'run-db05', 'organization-db05', 'project-db05', 'repository-db05',
+                x'00', lower(hex(zeroblob(32))), 1, 'running', lower(hex(zeroblob(32))),
+                'policy-db05', 1, 1, 1, NULL
+             )",
+            [],
+        )
+        .expect("insert run prerequisite");
+        conn.execute(
+            "INSERT INTO orchestration_run_events (
+                event_id, run_id, seq, idempotency_key, event_bytes, payload_sha256, at_ms
+             ) VALUES (
+                'event-db05', 'run-db05', 1, 'event-key-db05', x'00',
+                lower(hex(zeroblob(32))), 1
+             )",
+            [],
+        )
+        .expect("insert event prerequisite");
+        conn.execute(
+            "INSERT INTO orchestration_leases (
+                lease_id, resource_kind, resource_id, owner_incarnation_id,
+                expires_at_ms, last_heartbeat_ms, revision
+             ) VALUES ('lease-db05', 'capacity', 'capacity-db05', 'owner-db05', 2, 1, 1)",
+            [],
+        )
+        .expect("insert lease prerequisite");
+        conn.execute(
+            "INSERT INTO orchestration_effects (
+                effect_id, run_id, source_event_id, effect_bytes, payload_sha256,
+                delivery_state, claim_revision, created_at_ms, updated_at_ms
+             ) VALUES (
+                'effect-db05', 'run-db05', 'event-db05', x'00',
+                lower(hex(zeroblob(32))), 'pending', 0, 1, 1
+             )",
+            [],
+        )
+        .expect("insert effect prerequisite");
+
+        let rejected = |sql: &str| {
+            assert!(
+                conn.execute(sql, []).is_err(),
+                "migration constraint accepted malformed SQL: {sql}"
+            );
+        };
+        rejected(
+            "INSERT INTO orchestration_runs (
+                run_id, organization_id, project_id, repository_id, snapshot_bytes,
+                snapshot_sha256, last_seq, status, bundle_sha, policy_revision,
+                settings_revision, created_at_ms, updated_at_ms
+             ) VALUES ('', 'o', 'p', 'repository-db05', x'00',
+                lower(hex(zeroblob(32))), 0, 'running', lower(hex(zeroblob(32))),
+                'policy', 1, 1, 1)",
+        );
+        rejected(
+            "INSERT INTO orchestration_run_events (
+                event_id, run_id, seq, idempotency_key, event_bytes, payload_sha256, at_ms
+             ) VALUES ('bad-event-db05', 'run-db05', 0, 'bad-event-key-db05', x'00',
+                lower(hex(zeroblob(32))), 1)",
+        );
+        rejected(
+            "INSERT INTO orchestration_leases (
+                lease_id, resource_kind, resource_id, owner_incarnation_id,
+                expires_at_ms, last_heartbeat_ms, revision
+             ) VALUES ('bad-lease-db05', 'capacity', 'bad', 'owner', 1, 2, 1)",
+        );
+        rejected(
+            "INSERT INTO orchestration_effects (
+                effect_id, run_id, source_event_id, effect_bytes, payload_sha256,
+                delivery_state, owner_incarnation_id, claim_revision, created_at_ms, updated_at_ms
+             ) VALUES ('bad-effect-db05', 'run-db05', 'event-db05', x'00',
+                lower(hex(zeroblob(32))), 'claimed', 'owner', 1, 1, 1)",
+        );
+        rejected(
+            "INSERT INTO orchestration_attempt_dispatch (
+                attempt_id, run_id, task_id, effect_id, thread_id, turn_id,
+                turn_attempt_id, provider_instance_id, route_bytes, route_sha256,
+                bundle_sha, state, last_boundary, last_progress_at_ms,
+                created_at_ms, updated_at_ms
+             ) VALUES (
+                'bad-attempt-db05', 'run-db05', 'task-db05', 'effect-db05',
+                'thread-db05', 'turn-db05', 'turn-attempt-db05', 'provider-db05',
+                x'00', lower(hex(zeroblob(32))), lower(hex(zeroblob(32))),
+                'terminal', 'safe_to_retry', 1, 1, 1
+             )",
+        );
+        rejected(
+            "INSERT INTO orchestration_queue (
+                queue_id, run_id, task_id, attempt_id, agent_id, provider_instance_id,
+                environment_id, candidate_sha256, priority, task_enqueued_at_ms,
+                enqueued_at_ms, not_before_ms, state
+             ) VALUES (
+                'bad-queue-db05', 'run-db05', 'task-db05', 'attempt-db05',
+                'agent-db05', 'provider-db05', 'environment-db05',
+                lower(hex(zeroblob(32))), 0, 2, 1, 1, 'queued'
+             )",
+        );
+        rejected(
+            "INSERT INTO orchestration_worktrees (
+                worktree_id, repository_id, run_id, task_id, attempt_id, environment_id,
+                git_common_dir_identity, baseline_commit, branch_ref, path, lease_id,
+                checkpoint_ids_json, dirty_state, cleanup_eligibility,
+                created_at_ms, updated_at_ms
+             ) VALUES (
+                'bad-worktree-db05', 'repository-db05', 'run-db05', 'task-db05',
+                'attempt-db05', 'environment-db05', 'common-db05', 'baseline-db05',
+                'refs/heads/db05', '/db05', 'lease-db05', '[]', 'foreign',
+                'retained', 1, 1
+             )",
+        );
+        rejected(
+            "INSERT INTO orchestration_budget_reservations (
+                reservation_id, run_id, task_id, attempt_id, agent_id, organization_id,
+                ledger_utc_date, reserved_tokens, reserved_micro_usd, reserved_runtime_ms,
+                state, grants_json, created_at_ms, updated_at_ms
+             ) VALUES (
+                'bad-budget-db05', 'run-db05', 'task-db05', 'attempt-db05',
+                'agent-db05', 'organization-db05', '2026-10-09', 1, 1, 1,
+                'reconciled', '{}', 1, 1
+             )",
+        );
+        rejected(
+            "INSERT INTO orchestration_daily_budgets (
+                organization_id, ledger_utc_date, limit_micro_usd, reserved_micro_usd,
+                reconciled_micro_usd, granted_micro_usd, revision, updated_at_ms
+             ) VALUES ('organization-db05', '2026-10-09', 1, 0, 0, 0, 0, 1)",
+        );
+        rejected(
+            "INSERT INTO orchestration_blackboard_artifacts (
+                entry_id, run_id, artifact_key, version, producer_task_id,
+                consumers_json, output_contract_json, schema_sha256, canonical_json,
+                byte_len, content_sha256, created_event_id
+             ) VALUES (
+                'bad-artifact-db05', 'run-db05', 'artifact-db05', 1, 'task-db05',
+                '[]', '{}', lower(hex(zeroblob(32))), x'00', 2,
+                lower(hex(zeroblob(32))), 'event-db05'
+             )",
+        );
+        rejected(
+            "INSERT INTO orchestration_attempt_progress (
+                progress_id, run_id, task_id, attempt_id, kind, payload_digest,
+                at_ms, terminal
+             ) VALUES (
+                'bad-progress-db05', 'run-db05', 'task-db05', 'attempt-db05',
+                'terminal_outcome', lower(hex(zeroblob(32))), 1, 0
+             )",
+        );
+        rejected(
+            "INSERT INTO orchestration_recovery_reviews (
+                review_id, run_id, task_id, attempt_id, reason_code,
+                evidence_digest, status, created_at_ms
+             ) VALUES (
+                'bad-review-db05', 'run-db05', 'task-db05', 'attempt-db05',
+                'reason', lower(hex(zeroblob(32))), 'resolved', 1
+             )",
+        );
+        rejected(
+            "INSERT INTO orchestration_node_receipts (
+                receipt_id, node_store_id, run_id, task_id, attempt_id, effect_id,
+                request_kind, idempotency_key, request_sha256, result_sha256,
+                result_bytes, created_at_ms, updated_at_ms
+             ) VALUES (
+                'bad-receipt-db05', 'node-db05', 'run-db05', 'task-db05',
+                'attempt-db05', 'effect-db05', 'attempt_status', '',
+                lower(hex(zeroblob(32))), lower(hex(zeroblob(32))), x'00', 1, 1
+             )",
+        );
+
+        for index in [
+            "idx_orchestration_runs_nonterminal",
+            "idx_orchestration_run_events_replay",
+            "idx_orchestration_effects_pending",
+            "idx_orchestration_attempt_dispatch_active",
+            "idx_orchestration_queue_order",
+            "idx_orchestration_leases_expiry",
+            "idx_orchestration_worktrees_active",
+            "idx_orchestration_budget_incomplete",
+            "idx_orchestration_artifact_versions",
+            "idx_orchestration_attempt_progress_recent",
+            "idx_orchestration_recovery_review_identity",
+            "idx_orchestration_recovery_reviews_unresolved",
+            "idx_orchestration_node_receipts_updated",
+            "idx_orchestration_node_receipts_attempt",
+        ] {
+            assert!(
+                conn.query_row(
+                    "SELECT EXISTS(
+                        SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?1
+                     )",
+                    [index],
+                    |row| row.get::<_, bool>(0),
+                )
+                .expect("index lookup"),
+                "missing runtime index {index}"
+            );
+        }
     }
 
     #[test]

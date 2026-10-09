@@ -76,9 +76,12 @@ pub use router::Router;
 pub use runtime::{RUNTIME_FILENAME, RuntimeInfo};
 pub use server::{Server, ServerConfig};
 pub use store::{
-    BundleActivationFailpoint, BundleDistributionRecord, BundleObjectRecord,
-    PersonalRepoStateRecord, ProviderExecutionAudit, RevisionedSettings, Store, StoreError,
-    StoredInstructionCandidate,
+    AttemptDispatchRecord, AttemptDispatchState, BundleActivationFailpoint,
+    BundleDistributionRecord, BundleObjectRecord, DailyBudgetRecord, NodeReceiptKind,
+    NodeReceiptRecord, OrchestrationQueueRecord, OrchestrationRunRecord,
+    OrchestrationRuntimeRecords, OwnedAttemptWorktreeRecord, PersonalRepoStateRecord,
+    ProviderExecutionAudit, QueueState, RevisionedSettings, Store, StoreError,
+    StoredBudgetReservation, StoredInstructionCandidate, StoredOrchestrationEffect,
 };
 pub use terminal::TerminalServerManager;
 pub use thread_manager::ThreadManager;

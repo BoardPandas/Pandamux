@@ -16,6 +16,8 @@ pub struct DataPaths {
     bundle_staging: PathBuf,
     recovery: PathBuf,
     attachments: PathBuf,
+    worktrees: PathBuf,
+    run_artifacts: PathBuf,
 }
 
 impl DataPaths {
@@ -33,6 +35,8 @@ impl DataPaths {
             bundle_staging: root.join("bundle-staging"),
             recovery: root.join("recovery"),
             attachments: data.join("attachments"),
+            worktrees: root.join("worktrees"),
+            run_artifacts: root.join("run-artifacts"),
             root,
             data,
         })
@@ -68,6 +72,8 @@ impl DataPaths {
             &self.bundle_staging,
             &self.recovery,
             &self.attachments,
+            &self.worktrees,
+            &self.run_artifacts,
         ] {
             ensure_private_directory(path, Some(owner_root))?;
         }
@@ -128,6 +134,14 @@ impl DataPaths {
 
     pub fn attachments(&self) -> &Path {
         &self.attachments
+    }
+
+    pub fn worktrees(&self) -> &Path {
+        &self.worktrees
+    }
+
+    pub fn run_artifacts(&self) -> &Path {
+        &self.run_artifacts
     }
 }
 
@@ -246,6 +260,8 @@ mod tests {
         assert_eq!(paths.database(), temp.path().join("app/data/pandamux.db"));
         assert_eq!(paths.personal(), temp.path().join("app/personal"));
         assert_eq!(paths.bundles(), temp.path().join("app/bundles"));
+        assert_eq!(paths.worktrees(), temp.path().join("app/worktrees"));
+        assert_eq!(paths.run_artifacts(), temp.path().join("app/run-artifacts"));
         assert_eq!(
             paths.bundle_staging(),
             temp.path().join("app/bundle-staging")
@@ -256,6 +272,8 @@ mod tests {
             .expect("private roots remain valid after reopen");
         assert!(paths.backups().is_dir());
         assert!(paths.recovery().is_dir());
+        assert!(paths.worktrees().is_dir());
+        assert!(paths.run_artifacts().is_dir());
         assert!(paths.owns(&paths.configuration_candidates().join("candidate")));
         assert!(!paths.owns(temp.path().join("outside").as_path()));
     }
@@ -278,6 +296,32 @@ mod tests {
                 .kind(),
             io::ErrorKind::PermissionDenied
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn execution_roots_reject_symlink_substitution() {
+        use std::os::unix::fs::symlink;
+
+        for root_name in ["worktrees", "run-artifacts"] {
+            let temp = tempfile::tempdir().expect("temporary root");
+            let paths = DataPaths::from_root(temp.path().join("app")).expect("data paths");
+            paths.ensure_private_roots().expect("initial private roots");
+            let managed = paths.root().join(root_name);
+            fs::remove_dir(&managed).expect("remove managed root");
+            let target = temp.path().join(format!("{root_name}-outside"));
+            fs::create_dir(&target).expect("create outside target");
+            symlink(&target, &managed).expect("replace managed root with symlink");
+
+            assert_eq!(
+                paths
+                    .ensure_private_roots()
+                    .expect_err("execution root symlink must fail")
+                    .kind(),
+                io::ErrorKind::PermissionDenied,
+                "unsafe root {root_name} was accepted"
+            );
+        }
     }
 
     #[test]
