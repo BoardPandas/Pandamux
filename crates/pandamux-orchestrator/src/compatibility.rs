@@ -1,4 +1,3 @@
-use pandamux_core::{AgentDefinition, MemoryEntry, Run, ScheduleRecord};
 use serde::de::DeserializeOwned;
 use std::fmt;
 
@@ -6,6 +5,7 @@ use std::fmt;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LegacyRecordKind {
     Run,
+    RunEvent,
     AgentDefinition,
     MemoryEntry,
     ScheduleRecord,
@@ -15,6 +15,7 @@ impl LegacyRecordKind {
     const fn label(self) -> &'static str {
         match self {
             Self::Run => "run",
+            Self::RunEvent => "run event",
             Self::AgentDefinition => "agent definition",
             Self::MemoryEntry => "memory entry",
             Self::ScheduleRecord => "schedule record",
@@ -26,6 +27,10 @@ impl LegacyRecordKind {
             Self::Run => (
                 "legacy_run_requires_versioned_adapter",
                 "Preserve the original JSON and migrate it through the versioned Phase 5 run adapter before dispatch.",
+            ),
+            Self::RunEvent => (
+                "legacy_run_event_requires_versioned_adapter",
+                "Preserve the original JSON and migrate it together with its legacy run through the versioned Phase 5 run adapter before replay.",
             ),
             Self::AgentDefinition => (
                 "legacy_agent_requires_versioned_adapter",
@@ -76,10 +81,11 @@ pub fn require_explicit_legacy_migration(
     raw_json: &str,
 ) -> Result<(), LegacyCompatibilityError> {
     let parsed = match kind {
-        LegacyRecordKind::Run => parse_legacy::<Run>(raw_json),
-        LegacyRecordKind::AgentDefinition => parse_legacy::<AgentDefinition>(raw_json),
-        LegacyRecordKind::MemoryEntry => parse_legacy::<MemoryEntry>(raw_json),
-        LegacyRecordKind::ScheduleRecord => parse_legacy::<ScheduleRecord>(raw_json),
+        LegacyRecordKind::Run => parse_legacy::<v0::Run>(raw_json),
+        LegacyRecordKind::RunEvent => parse_legacy::<v0::RunEvent>(raw_json),
+        LegacyRecordKind::AgentDefinition => parse_legacy::<v0::AgentDefinition>(raw_json),
+        LegacyRecordKind::MemoryEntry => parse_legacy::<v0::MemoryEntry>(raw_json),
+        LegacyRecordKind::ScheduleRecord => parse_legacy::<v0::ScheduleRecord>(raw_json),
     };
 
     if let Err(error) = parsed {
@@ -112,4 +118,384 @@ pub fn require_explicit_legacy_migration(
 
 fn parse_legacy<T: DeserializeOwned>(raw_json: &str) -> Result<(), serde_json::Error> {
     serde_json::from_str::<T>(raw_json).map(|_| ())
+}
+
+/// Exact private copies of the unversioned Phase 1 wire records.
+///
+/// These types intentionally do not use `pandamux-core`. They exist only to
+/// recognize historical input before returning a fail-closed compatibility
+/// error. `deny_unknown_fields` prevents a later canonical field from making a
+/// legacy payload look executable after the live core model changes.
+mod v0 {
+    #![allow(dead_code)]
+
+    use serde::Deserialize;
+    use serde_json::Value;
+    use std::collections::{BTreeSet, HashMap};
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub(super) struct Run {
+        id: String,
+        kind: RunKind,
+        #[serde(default)]
+        status: RunStatus,
+        trigger: String,
+        started_at_ms: u64,
+        #[serde(default)]
+        ended_at_ms: Option<u64>,
+        #[serde(default)]
+        tasks: Vec<RunTask>,
+        #[serde(default)]
+        blackboard: HashMap<String, Value>,
+        #[serde(default)]
+        usage: Option<TurnUsage>,
+        #[serde(default)]
+        outcome: Option<String>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+    enum RunKind {
+        Orchestrator,
+        Schedule { schedule_id: String },
+    }
+
+    #[derive(Default, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub(super) enum RunStatus {
+        #[default]
+        Planned,
+        Running,
+        Paused,
+        Succeeded,
+        Failed,
+        Cancelled,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub(super) struct RunTask {
+        task_id: String,
+        #[serde(default)]
+        target_project_id: Option<String>,
+        #[serde(default)]
+        agent_id: Option<String>,
+        #[serde(default)]
+        thread_id: Option<String>,
+        #[serde(default)]
+        status: RunTaskStatus,
+        #[serde(default)]
+        depends_on: Vec<String>,
+        #[serde(default)]
+        summary: Option<String>,
+    }
+
+    #[derive(Default, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum RunTaskStatus {
+        #[default]
+        Pending,
+        Dispatched,
+        Running,
+        Finished,
+        Failed,
+        Skipped,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+    pub(super) enum RunEvent {
+        Planned {
+            run_id: String,
+            tasks: Vec<RunTask>,
+        },
+        ApprovalRequested {
+            run_id: String,
+            request_id: String,
+            reason: String,
+        },
+        TaskDispatched {
+            run_id: String,
+            task_id: String,
+            #[serde(default)]
+            target_project_id: Option<String>,
+            #[serde(default)]
+            agent_id: Option<String>,
+            thread_id: String,
+        },
+        TaskRerouted {
+            run_id: String,
+            task_id: String,
+            new_route: String,
+        },
+        TaskFinished {
+            run_id: String,
+            task_id: String,
+            outcome: String,
+        },
+        Paused {
+            run_id: String,
+            reason: String,
+        },
+        Resumed {
+            run_id: String,
+        },
+        Finished {
+            run_id: String,
+            status: RunStatus,
+        },
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub(super) struct AgentDefinition {
+        id: String,
+        name: String,
+        scope: AgentScope,
+        author: AgentAuthor,
+        #[serde(default)]
+        version: String,
+        description: String,
+        system_prompt: String,
+        #[serde(default)]
+        allowed_tools: Vec<String>,
+        #[serde(default)]
+        disallowed_tools: Vec<String>,
+        #[serde(default)]
+        max_turns: Option<u32>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum AgentScope {
+        Team,
+        Project,
+        Personal,
+        BuiltIn,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+    enum AgentAuthor {
+        User,
+        Orchestrator { run_id: String },
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub(super) struct MemoryEntry {
+        id: String,
+        agent_id: String,
+        scope: MemoryScope,
+        text: String,
+        #[serde(default)]
+        embedding: Option<Vec<f32>>,
+        created_at_ms: u64,
+        updated_at_ms: u64,
+        #[serde(default)]
+        source_run_id: Option<String>,
+        #[serde(default)]
+        tombstone: bool,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+    enum MemoryScope {
+        Project { project_id: String },
+        AgentWide,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub(super) struct ScheduleRecord {
+        id: String,
+        name: String,
+        #[serde(default)]
+        project_id: Option<String>,
+        environment: ScheduleEnvironmentRef,
+        trigger: ScheduleTrigger,
+        target: ScheduleTarget,
+        #[serde(default)]
+        approval: ScheduleApprovalPolicy,
+        #[serde(default)]
+        overlap: ScheduleOverlapPolicy,
+        #[serde(default)]
+        catch_up: ScheduleCatchUpPolicy,
+        #[serde(default)]
+        budget: ScheduleBudget,
+        #[serde(default)]
+        notify: Vec<String>,
+        #[serde(default)]
+        full_access_opt_in: bool,
+        #[serde(default = "default_true")]
+        enabled: bool,
+    }
+
+    fn default_true() -> bool {
+        true
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct ScheduleEnvironmentRef {
+        id: String,
+        display_name: String,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct ScheduleTrigger {
+        cron: String,
+        timezone: String,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+    enum ScheduleTarget {
+        Orchestrator {
+            prompt: String,
+        },
+        Agent {
+            agent: String,
+            project_path: String,
+            prompt: String,
+        },
+        Session {
+            project_path: String,
+            prompt: String,
+            #[serde(default)]
+            provider: Option<String>,
+            #[serde(default)]
+            model: Option<String>,
+            #[serde(default)]
+            thread_mode: ScheduleThreadMode,
+        },
+    }
+
+    #[derive(Default, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum ScheduleThreadMode {
+        #[default]
+        NewThreadPerRun,
+        ContinueExistingThread,
+    }
+
+    #[derive(Default, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum ScheduleApprovalPolicy {
+        #[default]
+        Auto,
+        ApproveFirst,
+    }
+
+    #[derive(Default, Deserialize)]
+    #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+    enum ScheduleOverlapPolicy {
+        #[default]
+        Skip,
+        Queue,
+        Parallel {
+            max: u32,
+        },
+    }
+
+    #[derive(Default, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum ScheduleCatchUpPolicy {
+        #[default]
+        Skip,
+        RunOnce,
+    }
+
+    #[derive(Default, Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct ScheduleBudget {
+        #[serde(default)]
+        per_run: Option<PerRunBudget>,
+        #[serde(default)]
+        per_day: Option<PerDayBudget>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct PerRunBudget {
+        #[serde(default)]
+        max_tokens: Option<u64>,
+        #[serde(default)]
+        max_runtime_minutes: Option<u32>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct PerDayBudget {
+        #[serde(default)]
+        max_cost_usd: Option<f64>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct TurnUsage {
+        #[serde(default)]
+        input_tokens: u64,
+        #[serde(default)]
+        output_tokens: u64,
+        #[serde(default)]
+        cache_read_tokens: Option<u64>,
+        #[serde(default)]
+        cache_write_tokens: Option<u64>,
+        #[serde(default)]
+        cost_usd: Option<f64>,
+        #[serde(default)]
+        unknown_fields: BTreeSet<UsageUnknownField>,
+        #[serde(default)]
+        provider_reported_micro_usd: Option<u64>,
+        #[serde(default)]
+        provenance: Option<TurnUsageProvenance>,
+        #[serde(default)]
+        components: Vec<TurnUsageComponent>,
+    }
+
+    #[derive(Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+    #[serde(rename_all = "snake_case")]
+    enum UsageUnknownField {
+        OccurredAt,
+        Model,
+        Identity,
+        InputTokens,
+        OutputTokens,
+        CacheReadTokens,
+        CacheWriteTokens,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct TurnUsageComponent {
+        provider_native_message_id: String,
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        input_tokens: u64,
+        #[serde(default)]
+        output_tokens: u64,
+        #[serde(default)]
+        cache_read_tokens: Option<u64>,
+        #[serde(default)]
+        cache_write_tokens: Option<u64>,
+        #[serde(default)]
+        occurred_at_ms: Option<u64>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct TurnUsageProvenance {
+        #[serde(default)]
+        provider_native_session_id: Option<String>,
+        #[serde(default)]
+        provider_native_turn_id: Option<String>,
+        #[serde(default)]
+        occurred_at_ms: Option<u64>,
+        #[serde(default)]
+        model: Option<String>,
+    }
 }

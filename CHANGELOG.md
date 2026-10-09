@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Added
 
+- **Froze Phase 1 orchestration compatibility at version 0.60.68.** Legacy
+  runs, run events, agents, vector-bearing memory, and schedules now validate
+  against private exact V0 wire records instead of the evolving live core
+  model. Existing migration codes and recovery guidance remain stable, later
+  canonical fields fail closed, runs and events remain non-executable, memory
+  stays deferred to Phase 5E, and schedules stay deferred to Phase 6.
+
 - **Established the Phase 5 dependency and orchestration boundary.** Added a
   pure `pandamux-orchestrator` crate whose retained Phase 1 run, agent, memory,
   and schedule inputs fail closed with stable migration guidance instead of
