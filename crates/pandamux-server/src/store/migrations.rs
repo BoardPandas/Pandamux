@@ -1929,6 +1929,9 @@ pub(crate) fn apply_migrations_to(conn: &mut Connection, target_version: i64) ->
                 attempt_id TEXT NOT NULL UNIQUE CHECK(attempt_id <> ''),
                 agent_id TEXT NOT NULL CHECK(agent_id <> ''),
                 organization_id TEXT NOT NULL CHECK(organization_id <> ''),
+                agent_limit_tokens INTEGER NOT NULL CHECK(agent_limit_tokens >= 0),
+                agent_limit_micro_usd INTEGER NOT NULL CHECK(agent_limit_micro_usd >= 0),
+                agent_limit_runtime_ms INTEGER NOT NULL CHECK(agent_limit_runtime_ms >= 0),
                 ledger_utc_date TEXT NOT NULL CHECK(
                     length(ledger_utc_date) = 10 AND
                     substr(ledger_utc_date, 5, 1) = '-' AND
@@ -1944,6 +1947,7 @@ pub(crate) fn apply_migrations_to(conn: &mut Connection, target_version: i64) ->
                     'reserved', 'partially_reconciled', 'reconciled', 'released'
                 )),
                 grants_json TEXT NOT NULL CHECK(length(grants_json) > 0),
+                reconciliation_json TEXT,
                 created_at_ms INTEGER NOT NULL CHECK(created_at_ms >= 0),
                 updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= created_at_ms),
                 CHECK(
@@ -2775,11 +2779,13 @@ mod tests {
         rejected(
             "INSERT INTO orchestration_budget_reservations (
                 reservation_id, run_id, task_id, attempt_id, agent_id, organization_id,
+                agent_limit_tokens, agent_limit_micro_usd, agent_limit_runtime_ms,
                 ledger_utc_date, reserved_tokens, reserved_micro_usd, reserved_runtime_ms,
                 state, grants_json, created_at_ms, updated_at_ms
              ) VALUES (
                 'bad-budget-db05', 'run-db05', 'task-db05', 'attempt-db05',
-                'agent-db05', 'organization-db05', '2026-10-09', 1, 1, 1,
+                'agent-db05', 'organization-db05', 10, 10, 10,
+                '2026-10-09', 1, 1, 1,
                 'reconciled', '{}', 1, 1
              )",
         );

@@ -324,6 +324,17 @@ configuration replacement, or shutdown. The selected instance ID is carried
 through the queue, thread, health and login paths, turn, process audit, and
 provider launch.
 
+Orchestrated admission also consumes an exact plan from
+`ExecutionBudgetService`. The successful claim atomically checks and reserves
+the task, run, compiled-agent, and organization UTC-day integer ceilings before
+creating a dispatch effect. Supplemental budget changes require a connected
+local approval bound to exact request bytes. Terminal reconciliation uses the
+attempt's durable managed-turn facts, prefers provider-reported micro-USD, then
+effective-dated integer pricing, and never treats legacy floating-point or
+unknown cost as zero. Unknown dimensions retain their reservation; actual
+overage is recorded before the run pauses. Conservation diagnostics compare
+the durable ledgers without claiming to replace or certify source facts.
+
 The desktop composer never converts a provider kind into an instance ID. After bounded
 health checks, it builds its routes from enabled, authenticated stored instances and
 `provider.models` results. Model discovery uses each provider driver's current contract,

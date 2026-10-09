@@ -40,6 +40,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Added durable Phase 5C budget enforcement and reconciliation in version
+  0.60.96.** `ExecutionBudgetService` now plans checked attempt-bound task and
+  run reservations, while the shared admission transaction authoritatively
+  checks compiled agent and organization UTC-day ceilings before dispatch.
+  Exact local budget approvals create one digest-bound supplemental grant;
+  rejection, expiry, disconnect, policy drift, and changed bytes fail closed.
+  Settled attempts reconcile integer tokens, runtime, and provider-reported or
+  effective-dated estimated micro-USD from exact durable managed-turn facts;
+  legacy floating-point cost is ignored, unknown cost retains its reservation,
+  and actual overage is recorded before the run pauses. Pre-dispatch release,
+  grant, and reconciliation failpoints prove rollback or database-only replay,
+  and conservation diagnostics report mismatches without claiming source
+  truth. This checkpoint does not start a provider, contact a node or external
+  repository, add native or live-provider acceptance, push, run CI, deploy,
+  activate, package, sign, publish, or release.
+
 - **Added durable shared execution admission in version 0.60.95.** Manual and
   orchestrated provider starts now share stable SQLite queue identities,
   owner-bound TTL leases, compare-and-swap claims, bounded retry delay, and

@@ -1,16 +1,20 @@
-use super::{Store, StoreError, checked_i64, checked_u32, checked_u64};
+use super::{Store, StoreError, checked_i64, checked_u32, checked_u64, decode_usage_observation};
 use pandamux_core::{
     AgentId, ArtifactKey, Attempt, AttemptBoundary, AttemptProgressId, AttemptProgressKind,
-    AttemptProgressRecord, AttemptWorktreeId, BlackboardEntry, BlackboardEntryId, BudgetGrantId,
-    BudgetReservation, CheckpointId, EffectDeliveryRecord, EffectDeliveryState, EnvironmentId,
-    ExecutionLease, ExecutionLeaseId, LeaseResourceKind, MAX_ARTIFACT_BYTES,
-    MAX_ARTIFACT_CONTAINER_ITEMS, MAX_ARTIFACT_JSON_DEPTH, MAX_ARTIFACT_STRING_BYTES,
-    MAX_ARTIFACTS_PER_RUN, MAX_ARTIFACTS_PER_TASK, MAX_RUN_ARTIFACT_BYTES, NodeStoreId,
-    OrchestrationEffect, OrchestrationEffectId, OrganizationId, OwnedAttemptWorktree, ProjectId,
-    ProjectRepositoryId, ProviderInstanceId, RecoveryReview, RecoveryReviewStatus, Run,
-    RunAttemptId, RunCommand, RunEvent, RunEventId, RunId, RunStatus, RunTaskId,
-    ServerIncarnationId, SupplementalBudgetGrant, TaskRouteDecision, ThreadId, TurnAttemptId,
-    TurnId, WorktreeCleanupEligibility, WorktreeDirtyState,
+    AttemptProgressRecord, AttemptStatus, AttemptWorktreeId, BlackboardEntry, BlackboardEntryId,
+    BudgetAmount, BudgetDimension, BudgetGrantId, BudgetIncomplete, BudgetReservation,
+    BudgetReservationId, BudgetReservationState, BudgetUsage, CheckpointId, EffectDeliveryRecord,
+    EffectDeliveryState, EnvironmentId, ExecutionLease, ExecutionLeaseId, LeaseResourceKind,
+    MAX_ARTIFACT_BYTES, MAX_ARTIFACT_CONTAINER_ITEMS, MAX_ARTIFACT_JSON_DEPTH,
+    MAX_ARTIFACT_STRING_BYTES, MAX_ARTIFACTS_PER_RUN, MAX_ARTIFACTS_PER_TASK,
+    MAX_RUN_ARTIFACT_BYTES, NodeStoreId, OrchestrationEffect, OrchestrationEffectId,
+    OrganizationId, OwnedAttemptWorktree, PricingVersionId, ProjectId, ProjectRepositoryId,
+    ProviderInstanceId, RecoveryReview, RecoveryReviewStatus, Run, RunAttemptId, RunCommand,
+    RunEvent, RunEventId, RunId, RunStatus, RunTaskId, ServerIncarnationId,
+    SupplementalBudgetGrant, TaskRouteDecision, ThreadId, TokenCounts, TurnAttemptId,
+    TurnAttemptStatus, TurnId, UsageFactKind, UsageObservation, UsageObservationId,
+    UsagePricingRates, UsageSourceKind, UsageUnknownField, WorktreeCleanupEligibility,
+    WorktreeDirtyState, estimate_usage_micro_usd,
 };
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -215,10 +219,90 @@ pub struct StoredBudgetReservation {
     pub run_id: RunId,
     pub agent_id: AgentId,
     pub organization_id: OrganizationId,
+    pub agent_budget_limit: BudgetAmount,
     pub reservation: BudgetReservation,
     pub grants: BTreeMap<BudgetGrantId, SupplementalBudgetGrant>,
+    pub reconciliation: Option<BudgetReconciliationEvidence>,
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BudgetCostSource {
+    ProviderReported,
+    EffectiveDatedEstimate,
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BudgetReconciliationEvidence {
+    pub turn_id: TurnId,
+    pub turn_attempt_id: TurnAttemptId,
+    pub usage_observation_ids: BTreeSet<UsageObservationId>,
+    pub source_sha256: String,
+    pub cost_source: BudgetCostSource,
+    pub pricing_version_ids: BTreeSet<PricingVersionId>,
+    pub actual: BudgetUsage,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BudgetExecutionFailpoint {
+    BeforeGrantCommit,
+    AfterGrantCommit,
+    BeforeReconciliationCommit,
+    AfterReconciliationCommit,
+    BeforeReleaseCommit,
+    AfterReleaseCommit,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BudgetGrantOutcome {
+    pub run: Run,
+    pub snapshot_sha256: String,
+    pub grant: SupplementalBudgetGrant,
+    pub duplicate: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BudgetReconciliationOutcome {
+    pub run: Run,
+    pub snapshot_sha256: String,
+    pub reservation: StoredBudgetReservation,
+    pub daily_budget: DailyBudgetRecord,
+    pub duplicate: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BudgetConservationMismatch {
+    pub scope: String,
+    pub dimension: BudgetDimension,
+    pub expected: u64,
+    pub actual: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BudgetScopeOverage {
+    pub scope: String,
+    pub resource_id: String,
+    pub amount: BudgetAmount,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BudgetConservationVerdict {
+    Mismatch,
+    BalancedSourceUnverified,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BudgetConservationReport {
+    pub run_id: RunId,
+    pub verdict: BudgetConservationVerdict,
+    pub mismatches: Vec<BudgetConservationMismatch>,
+    pub incomplete: BudgetIncomplete,
+    pub run_overage: BudgetAmount,
+    pub scope_overages: Vec<BudgetScopeOverage>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -391,6 +475,32 @@ pub struct OrchestrationReplayAudit {
 
 pub fn orchestration_snapshot_sha256(run: &Run) -> String {
     sha256_hex(&pandamux_orchestrator::canonical_run_bytes(run))
+}
+
+pub fn supplemental_budget_action_digest(grant: &SupplementalBudgetGrant) -> String {
+    let dimension = match grant.dimension {
+        BudgetDimension::Tokens => "tokens",
+        BudgetDimension::CostMicroUsd => "cost_micro_usd",
+        BudgetDimension::RuntimeMs => "runtime_ms",
+    };
+    let amount = grant.amount.to_string();
+    let expires_at_ms = grant.expires_at_ms.to_string();
+    let mut digest = Sha256::new();
+    for field in [
+        grant.id.as_str(),
+        grant.run_id.as_str(),
+        grant.task_id.as_str(),
+        grant.attempt_id.as_str(),
+        grant.approval_id.as_str(),
+        dimension,
+        amount.as_str(),
+        grant.policy_revision.as_str(),
+        expires_at_ms.as_str(),
+    ] {
+        digest.update((field.len() as u64).to_be_bytes());
+        digest.update(field.as_bytes());
+    }
+    format!("{:x}", digest.finalize())
 }
 
 impl Store {
@@ -1446,6 +1556,18 @@ fn validate_failpoint(
     Ok(())
 }
 
+fn validate_budget_failpoint(
+    failpoint: Option<BudgetExecutionFailpoint>,
+    allowed: &[BudgetExecutionFailpoint],
+) -> Result<(), StoreError> {
+    if failpoint.is_some_and(|candidate| !allowed.contains(&candidate)) {
+        return Err(data_error(
+            "budget execution failpoint is invalid for this operation",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_effect_claim_request(request: &EffectClaimRequest) -> Result<(), StoreError> {
     let lease = &request.lease;
     if request.effect_id.as_str().trim().is_empty()
@@ -2346,7 +2468,9 @@ fn insert_budget_reservation(
         || reservation.task_id.as_str().is_empty()
         || reservation.attempt_id.as_str().is_empty()
         || !valid_utc_date(&reservation.ledger_utc_date)
+        || amount_exceeds_sqlite(&record.agent_budget_limit)
         || record.updated_at_ms < record.created_at_ms
+        || !valid_budget_reconciliation(record)
         || record.grants.values().any(|grant| {
             grant.run_id != record.run_id
                 || grant.task_id != reservation.task_id
@@ -2360,7 +2484,11 @@ fn insert_budget_reservation(
     let snapshot = load_snapshot(tx, &record.run_id)?;
     if snapshot.reservations.get(&reservation.id) != Some(reservation)
         || snapshot.organization_id != record.organization_id
-        || grants_for_attempt(&snapshot, &reservation.attempt_id) != record.grants
+        || grants_for_attempt_at(
+            &snapshot,
+            &reservation.attempt_id,
+            Some(record.created_at_ms),
+        ) != record.grants
     {
         return Err(data_error(
             "budget reservation differs from the canonical run snapshot",
@@ -2369,12 +2497,13 @@ fn insert_budget_reservation(
     tx.execute(
         "INSERT INTO orchestration_budget_reservations (
             reservation_id, run_id, task_id, attempt_id, agent_id, organization_id,
+            agent_limit_tokens, agent_limit_micro_usd, agent_limit_runtime_ms,
             ledger_utc_date, reserved_tokens, reserved_micro_usd, reserved_runtime_ms,
             actual_tokens, actual_micro_usd, actual_runtime_ms, state, grants_json,
-            created_at_ms, updated_at_ms
+            reconciliation_json, created_at_ms, updated_at_ms
          ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-            ?13, ?14, ?15, ?16, ?17
+            ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21
          )",
         params![
             reservation.id.as_str(),
@@ -2383,6 +2512,9 @@ fn insert_budget_reservation(
             reservation.attempt_id.as_str(),
             record.agent_id.as_str(),
             record.organization_id.as_str(),
+            checked_i64(record.agent_budget_limit.tokens, "agent token limit")?,
+            checked_i64(record.agent_budget_limit.cost_micro_usd, "agent cost limit")?,
+            checked_i64(record.agent_budget_limit.runtime_ms, "agent runtime limit")?,
             reservation.ledger_utc_date,
             checked_i64(reservation.amount.tokens, "reserved tokens")?,
             checked_i64(reservation.amount.cost_micro_usd, "reserved cost")?,
@@ -2404,6 +2536,11 @@ fn insert_budget_reservation(
                 .transpose()?,
             enum_text(reservation.state)?,
             serde_json::to_string(&record.grants)?,
+            record
+                .reconciliation
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()?,
             checked_i64(record.created_at_ms, "budget reservation created at")?,
             checked_i64(record.updated_at_ms, "budget reservation updated at")?,
         ],
@@ -3502,7 +3639,26 @@ impl Store {
         &self,
         ownership: &AdmissionOwnership,
     ) -> Result<OrchestrationQueueRecord, StoreError> {
+        self.release_execution_admission_with_budget(ownership, super::store_now_ms(), None)
+    }
+
+    pub fn release_execution_admission_with_budget(
+        &self,
+        ownership: &AdmissionOwnership,
+        released_at_ms: u64,
+        failpoint: Option<BudgetExecutionFailpoint>,
+    ) -> Result<OrchestrationQueueRecord, StoreError> {
         validate_admission_ownership(ownership)?;
+        validate_budget_failpoint(
+            failpoint,
+            &[
+                BudgetExecutionFailpoint::BeforeReleaseCommit,
+                BudgetExecutionFailpoint::AfterReleaseCommit,
+            ],
+        )?;
+        if failpoint == Some(BudgetExecutionFailpoint::BeforeReleaseCommit) {
+            return Err(injected_failure("before_budget_release_commit"));
+        }
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let current = load_queue_record_by_id(&tx, &ownership.queue_id)?
@@ -3527,6 +3683,9 @@ impl Store {
         let (_, _) = load_owned_admission(&tx, ownership)?;
         if !matches!(current.state, QueueState::Claimed | QueueState::Dispatched) {
             return Err(data_error("execution admission cannot be released"));
+        }
+        if current.state == QueueState::Claimed && !current.interactive {
+            release_orchestration_budget_before_dispatch(&tx, &current, released_at_ms)?;
         }
         let next_state = if current.state == QueueState::Dispatched {
             "dispatched"
@@ -3578,6 +3737,9 @@ impl Store {
         let updated = load_queue_record_by_id(&tx, &ownership.queue_id)?
             .ok_or_else(|| data_error("released execution queue record disappeared"))?;
         tx.commit()?;
+        if failpoint == Some(BudgetExecutionFailpoint::AfterReleaseCommit) {
+            return Err(injected_failure("after_budget_release_commit"));
+        }
         Ok(updated)
     }
 
@@ -3590,6 +3752,325 @@ impl Store {
         let records = load_all_queue_records(&conn)?;
         let counts = active_admission_counts(&conn, &records)?;
         Ok(capacity_reconciliation(policy, &counts))
+    }
+}
+
+impl Store {
+    pub fn grant_orchestration_budget(
+        &self,
+        grant: &SupplementalBudgetGrant,
+        granted_at_ms: u64,
+        local_control_authenticated: bool,
+        failpoint: Option<BudgetExecutionFailpoint>,
+    ) -> Result<BudgetGrantOutcome, StoreError> {
+        validate_budget_failpoint(
+            failpoint,
+            &[
+                BudgetExecutionFailpoint::BeforeGrantCommit,
+                BudgetExecutionFailpoint::AfterGrantCommit,
+            ],
+        )?;
+        if !local_control_authenticated {
+            return Err(data_error(
+                "supplemental budget grants require connected local control",
+            ));
+        }
+        if grant.action_digest != supplemental_budget_action_digest(grant) {
+            return Err(data_error(
+                "supplemental budget grant action digest does not bind its exact request",
+            ));
+        }
+        if failpoint == Some(BudgetExecutionFailpoint::BeforeGrantCommit) {
+            return Err(injected_failure("before_budget_grant_commit"));
+        }
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = load_verified_transaction_snapshot(&tx, &grant.run_id)?;
+        if current
+            .reservations
+            .values()
+            .find(|reservation| reservation.attempt_id == grant.attempt_id)
+            .is_some_and(|reservation| reservation.state == BudgetReservationState::Released)
+        {
+            return Err(data_error(
+                "supplemental budget cannot target a released attempt",
+            ));
+        }
+        if let Some(existing) = current.budget_grants.get(&grant.id) {
+            if existing != grant {
+                return Err(data_error(
+                    "supplemental budget grant identity changed on replay",
+                ));
+            }
+            let outcome = BudgetGrantOutcome {
+                run: current.clone(),
+                snapshot_sha256: orchestration_snapshot_sha256(&current),
+                grant: existing.clone(),
+                duplicate: true,
+            };
+            tx.commit()?;
+            return Ok(outcome);
+        }
+
+        let kinds = pandamux_orchestrator::decide(
+            &current,
+            RunCommand::GrantSupplementalBudget {
+                grant: grant.clone(),
+            },
+        )
+        .map_err(orchestration_error)?;
+        if kinds.len() != 1 {
+            return Err(data_error(
+                "supplemental budget grant did not produce one event",
+            ));
+        }
+        let event = RunEvent {
+            event_id: RunEventId::new(format!("run-event-budget-grant-{}", grant.id.as_str())),
+            run_id: grant.run_id.clone(),
+            seq: current
+                .last_seq
+                .checked_add(1)
+                .ok_or_else(|| data_error("orchestration event sequence overflow"))?,
+            at_ms: granted_at_ms,
+            idempotency_key: format!("budget-grant:{}", grant.id.as_str()),
+            kind: kinds.into_iter().next().expect("one grant event"),
+        };
+        if transition_events_collide(&tx, std::slice::from_ref(&event))? {
+            return Err(data_error(
+                "supplemental budget event identity already exists",
+            ));
+        }
+        let outcome =
+            pandamux_orchestrator::apply(&current, &event).map_err(orchestration_error)?;
+        insert_event(&tx, &event)?;
+        for effect in outcome.new_effects {
+            insert_effect(
+                &tx,
+                &stored_effect_from_run(&outcome.run, std::slice::from_ref(&event), effect)?,
+            )?;
+        }
+        update_run_snapshot(
+            &tx,
+            &grant.run_id,
+            &outcome.run,
+            current.last_seq,
+            &orchestration_snapshot_sha256(&current),
+        )?;
+        if let Some(mut reservation) = load_budget_reservations(&tx, &grant.run_id)?
+            .into_iter()
+            .find(|record| record.reservation.attempt_id == grant.attempt_id)
+        {
+            if reservation
+                .grants
+                .insert(grant.id.clone(), grant.clone())
+                .is_some()
+            {
+                return Err(data_error("supplemental budget grant was already attached"));
+            }
+            update_budget_grants(&tx, &reservation, granted_at_ms)?;
+            if grant.dimension == BudgetDimension::CostMicroUsd {
+                add_daily_budget_grant(&tx, &reservation, grant.amount, granted_at_ms)?;
+            }
+        }
+        tx.commit()?;
+        if failpoint == Some(BudgetExecutionFailpoint::AfterGrantCommit) {
+            return Err(injected_failure("after_budget_grant_commit"));
+        }
+        Ok(BudgetGrantOutcome {
+            snapshot_sha256: orchestration_snapshot_sha256(&outcome.run),
+            run: outcome.run,
+            grant: grant.clone(),
+            duplicate: false,
+        })
+    }
+
+    pub fn reconcile_orchestration_budget(
+        &self,
+        run_id: &RunId,
+        reservation_id: &BudgetReservationId,
+        reconciled_at_ms: u64,
+        failpoint: Option<BudgetExecutionFailpoint>,
+    ) -> Result<BudgetReconciliationOutcome, StoreError> {
+        validate_budget_failpoint(
+            failpoint,
+            &[
+                BudgetExecutionFailpoint::BeforeReconciliationCommit,
+                BudgetExecutionFailpoint::AfterReconciliationCommit,
+            ],
+        )?;
+        if failpoint == Some(BudgetExecutionFailpoint::BeforeReconciliationCommit) {
+            return Err(injected_failure("before_budget_reconciliation_commit"));
+        }
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = load_verified_transaction_snapshot(&tx, run_id)?;
+        let mut stored = load_budget_reservations(&tx, run_id)?
+            .into_iter()
+            .find(|record| record.reservation.id == *reservation_id)
+            .ok_or_else(|| data_error("budget reservation was not found"))?;
+        if reconciled_at_ms < stored.updated_at_ms {
+            return Err(data_error(
+                "budget reconciliation timestamp moved backwards",
+            ));
+        }
+        let evidence = normalize_managed_attempt_usage(&tx, &current, &stored)?;
+        if stored.reconciliation.as_ref() == Some(&evidence)
+            && stored.reservation.actual == evidence.actual
+            && stored.reservation.state != BudgetReservationState::Reserved
+        {
+            let daily = load_daily_budget(
+                &tx,
+                &stored.organization_id,
+                &stored.reservation.ledger_utc_date,
+            )?
+            .ok_or_else(|| data_error("budget reservation UTC ledger was not found"))?;
+            let outcome = BudgetReconciliationOutcome {
+                run: current.clone(),
+                snapshot_sha256: orchestration_snapshot_sha256(&current),
+                reservation: stored,
+                daily_budget: daily,
+                duplicate: true,
+            };
+            tx.commit()?;
+            return Ok(outcome);
+        }
+        if stored
+            .reconciliation
+            .as_ref()
+            .is_some_and(|existing| existing.source_sha256 == evidence.source_sha256)
+        {
+            return Err(data_error(
+                "budget reconciliation source identity changed durable bytes",
+            ));
+        }
+
+        let previous_stored = stored.clone();
+        let reconcile_kind = pandamux_orchestrator::decide(
+            &current,
+            RunCommand::ReconcileBudget {
+                reservation_id: reservation_id.clone(),
+                actual: evidence.actual,
+            },
+        )
+        .map_err(orchestration_error)?;
+        if reconcile_kind.len() != 1 {
+            return Err(data_error(
+                "budget reconciliation did not produce one event",
+            ));
+        }
+        let digest_prefix = evidence.source_sha256[..16].to_string();
+        let reconcile_event = RunEvent {
+            event_id: RunEventId::new(format!(
+                "run-event-budget-reconcile-{}-{digest_prefix}",
+                reservation_id.as_str()
+            )),
+            run_id: run_id.clone(),
+            seq: current
+                .last_seq
+                .checked_add(1)
+                .ok_or_else(|| data_error("orchestration event sequence overflow"))?,
+            at_ms: reconciled_at_ms,
+            idempotency_key: format!(
+                "budget-reconcile:{}:{digest_prefix}",
+                reservation_id.as_str()
+            ),
+            kind: reconcile_kind
+                .into_iter()
+                .next()
+                .expect("one reconciliation event"),
+        };
+        let applied = pandamux_orchestrator::apply(&current, &reconcile_event)
+            .map_err(orchestration_error)?;
+        let mut next = applied.run;
+        let mut events = vec![reconcile_event];
+        let mut effects = applied.new_effects;
+        let next_reservation = next
+            .reservations
+            .get(reservation_id)
+            .cloned()
+            .ok_or_else(|| data_error("reconciled reservation disappeared from run"))?;
+        let daily = reconcile_daily_budget(&tx, &stored, &next_reservation, reconciled_at_ms)?;
+        stored.reservation = next_reservation;
+        stored.reconciliation = Some(evidence);
+        stored.updated_at_ms = reconciled_at_ms;
+        let agent_overage = agent_budget_overage(&tx, &stored)?;
+        let daily_overage = daily_budget_overage(&daily)?;
+        if (amount_nonzero_server(agent_overage) || daily_overage != 0)
+            && matches!(next.status, RunStatus::Ready | RunStatus::Running)
+        {
+            let kinds = pandamux_orchestrator::decide(
+                &next,
+                RunCommand::Pause {
+                    reason: "budget_scope_overage".to_string(),
+                },
+            )
+            .map_err(orchestration_error)?;
+            if kinds.len() != 1 {
+                return Err(data_error("budget overage pause did not produce one event"));
+            }
+            let event = RunEvent {
+                event_id: RunEventId::new(format!(
+                    "run-event-budget-pause-{}-{digest_prefix}",
+                    reservation_id.as_str()
+                )),
+                run_id: run_id.clone(),
+                seq: next
+                    .last_seq
+                    .checked_add(1)
+                    .ok_or_else(|| data_error("orchestration event sequence overflow"))?,
+                at_ms: reconciled_at_ms,
+                idempotency_key: format!(
+                    "budget-pause:{}:{digest_prefix}",
+                    reservation_id.as_str()
+                ),
+                kind: kinds.into_iter().next().expect("one pause event"),
+            };
+            let applied =
+                pandamux_orchestrator::apply(&next, &event).map_err(orchestration_error)?;
+            next = applied.run;
+            effects.extend(applied.new_effects);
+            events.push(event);
+        }
+        if transition_events_collide(&tx, &events)? {
+            return Err(data_error(
+                "budget reconciliation event identity already exists",
+            ));
+        }
+        for event in &events {
+            insert_event(&tx, event)?;
+        }
+        for effect in effects {
+            insert_effect(&tx, &stored_effect_from_run(&next, &events, effect)?)?;
+        }
+        update_run_snapshot(
+            &tx,
+            run_id,
+            &next,
+            current.last_seq,
+            &orchestration_snapshot_sha256(&current),
+        )?;
+        update_reconciled_budget_reservation(&tx, &previous_stored, &stored)?;
+        tx.commit()?;
+        if failpoint == Some(BudgetExecutionFailpoint::AfterReconciliationCommit) {
+            return Err(injected_failure("after_budget_reconciliation_commit"));
+        }
+        Ok(BudgetReconciliationOutcome {
+            snapshot_sha256: orchestration_snapshot_sha256(&next),
+            run: next,
+            reservation: stored,
+            daily_budget: daily,
+            duplicate: false,
+        })
+    }
+
+    pub fn audit_budget_conservation(
+        &self,
+        run_id: &RunId,
+    ) -> Result<BudgetConservationReport, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let run = load_verified_transaction_snapshot(&conn, run_id)?;
+        let reservations = load_budget_reservations(&conn, run_id)?;
+        budget_conservation_report(&conn, &run, &reservations)
     }
 }
 
@@ -4007,6 +4488,9 @@ fn apply_admission_orchestration_transition(
             .selected_provider_instance_id
             .as_ref()
             != Some(&queue.provider_instance_id)
+        || reservation.reconciliation.is_some()
+        || amount_exceeds_sqlite(&reservation.agent_budget_limit)
+        || reservation.reservation.ledger_utc_date != execution_ledger_utc_date(at_ms)?
     {
         return Err(data_error(
             "orchestrated admission transition differs from its queue identity",
@@ -4023,6 +4507,14 @@ fn apply_admission_orchestration_transition(
         ));
     }
     verify_effect_rows(&effects, &load_effects(tx, &queue.run_id)?)?;
+    if grants_for_attempt_at(&current, &reservation.reservation.attempt_id, Some(at_ms))
+        != reservation.grants
+    {
+        return Err(data_error(
+            "execution admission grants differ from the canonical run",
+        ));
+    }
+    validate_agent_budget_for_admission(tx, reservation)?;
     let expected_last_seq = current.last_seq;
     let expected_snapshot_sha256 = orchestration_snapshot_sha256(&current);
     let commands = [
@@ -4110,12 +4602,24 @@ fn reserve_daily_budget_for_admission(
     limit_micro_usd: u64,
     updated_at_ms: u64,
 ) -> Result<(), StoreError> {
-    if limit_micro_usd == 0 || limit_micro_usd > i64::MAX as u64 {
+    if limit_micro_usd > i64::MAX as u64 {
         return Err(data_error(
             "execution admission daily budget limit is malformed",
         ));
     }
     let amount = reservation.reservation.amount.cost_micro_usd;
+    let granted = reservation
+        .grants
+        .values()
+        .try_fold(0_u64, |total, grant| {
+            if grant.dimension == BudgetDimension::CostMicroUsd {
+                total
+                    .checked_add(grant.amount)
+                    .ok_or_else(|| data_error("daily budget grant overflow"))
+            } else {
+                Ok(total)
+            }
+        })?;
     let current = load_daily_budget(
         tx,
         &reservation.organization_id,
@@ -4131,13 +4635,17 @@ fn reserve_daily_budget_for_admission(
             .reserved_micro_usd
             .checked_add(amount)
             .ok_or_else(|| data_error("daily budget reservation overflow"))?;
+        let granted_micro_usd = current
+            .granted_micro_usd
+            .checked_add(granted)
+            .ok_or_else(|| data_error("daily budget grant overflow"))?;
         let revision = current
             .revision
             .checked_add(1)
             .ok_or_else(|| data_error("daily budget revision overflow"))?;
         let available = current
             .limit_micro_usd
-            .checked_add(current.granted_micro_usd)
+            .checked_add(granted_micro_usd)
             .ok_or_else(|| data_error("daily budget available amount overflow"))?;
         let committed = reserved_micro_usd
             .checked_add(current.reconciled_micro_usd)
@@ -4147,13 +4655,15 @@ fn reserve_daily_budget_for_admission(
         }
         let changed = tx.execute(
             "UPDATE orchestration_daily_budgets
-                SET reserved_micro_usd = ?1, revision = ?2, updated_at_ms = ?3
-              WHERE organization_id = ?4 AND ledger_utc_date = ?5
-                AND limit_micro_usd = ?6 AND reserved_micro_usd = ?7
-                AND reconciled_micro_usd = ?8 AND granted_micro_usd = ?9
-                AND revision = ?10 AND updated_at_ms = ?11",
+                SET reserved_micro_usd = ?1, granted_micro_usd = ?2,
+                    revision = ?3, updated_at_ms = ?4
+              WHERE organization_id = ?5 AND ledger_utc_date = ?6
+                AND limit_micro_usd = ?7 AND reserved_micro_usd = ?8
+                AND reconciled_micro_usd = ?9 AND granted_micro_usd = ?10
+                AND revision = ?11 AND updated_at_ms = ?12",
             params![
                 checked_i64(reserved_micro_usd, "daily budget reserved")?,
+                checked_i64(granted_micro_usd, "daily budget granted")?,
                 checked_i64(revision, "daily budget revision")?,
                 checked_i64(updated_at_ms, "daily budget updated at")?,
                 current.organization_id.as_str(),
@@ -4176,12 +4686,16 @@ fn reserve_daily_budget_for_admission(
         }
         DailyBudgetRecord {
             reserved_micro_usd,
+            granted_micro_usd,
             revision,
             updated_at_ms,
             ..current
         }
     } else {
-        if amount > limit_micro_usd {
+        let available = limit_micro_usd
+            .checked_add(granted)
+            .ok_or_else(|| data_error("daily budget available amount overflow"))?;
+        if amount > available {
             return Err(data_error("daily budget limit would be exceeded"));
         }
         let record = DailyBudgetRecord {
@@ -4190,7 +4704,7 @@ fn reserve_daily_budget_for_admission(
             limit_micro_usd,
             reserved_micro_usd: amount,
             reconciled_micro_usd: 0,
-            granted_micro_usd: 0,
+            granted_micro_usd: granted,
             revision: 1,
             updated_at_ms,
         };
@@ -4201,6 +4715,1202 @@ fn reserve_daily_budget_for_admission(
         return Err(data_error("daily budget reservation was not recorded"));
     }
     Ok(())
+}
+
+fn validate_agent_budget_for_admission(
+    conn: &rusqlite::Connection,
+    incoming: &StoredBudgetReservation,
+) -> Result<(), StoreError> {
+    let existing = load_budget_reservations(conn, &incoming.run_id)?;
+    let mut required = BudgetAmount::default();
+    for record in existing
+        .iter()
+        .filter(|record| record.agent_id == incoming.agent_id)
+    {
+        if record.agent_budget_limit != incoming.agent_budget_limit {
+            return Err(data_error(
+                "execution admission compiled agent budget changed",
+            ));
+        }
+        required = checked_add_budget(required, committed_budget_after_grants(record)?)?;
+    }
+    required = checked_add_budget(required, committed_budget_after_grants(incoming)?)?;
+    if !budget_within(required, incoming.agent_budget_limit) {
+        return Err(data_error("compiled agent budget limit would be exceeded"));
+    }
+    Ok(())
+}
+
+fn committed_budget_after_grants(
+    record: &StoredBudgetReservation,
+) -> Result<BudgetAmount, StoreError> {
+    let reservation = &record.reservation;
+    let retains_unknown = matches!(
+        reservation.state,
+        BudgetReservationState::Reserved | BudgetReservationState::PartiallyReconciled
+    );
+    let committed = BudgetAmount {
+        tokens: reservation.actual.tokens.unwrap_or(if retains_unknown {
+            reservation.amount.tokens
+        } else {
+            0
+        }),
+        cost_micro_usd: reservation
+            .actual
+            .cost_micro_usd
+            .unwrap_or(if retains_unknown {
+                reservation.amount.cost_micro_usd
+            } else {
+                0
+            }),
+        runtime_ms: reservation.actual.runtime_ms.unwrap_or(if retains_unknown {
+            reservation.amount.runtime_ms
+        } else {
+            0
+        }),
+    };
+    let grants = grant_amount(&record.grants)?;
+    Ok(BudgetAmount {
+        tokens: committed.tokens.saturating_sub(grants.tokens),
+        cost_micro_usd: committed
+            .cost_micro_usd
+            .saturating_sub(grants.cost_micro_usd),
+        runtime_ms: committed.runtime_ms.saturating_sub(grants.runtime_ms),
+    })
+}
+
+fn grant_amount(
+    grants: &BTreeMap<BudgetGrantId, SupplementalBudgetGrant>,
+) -> Result<BudgetAmount, StoreError> {
+    grants
+        .values()
+        .try_fold(BudgetAmount::default(), |mut total, grant| {
+            let target = match grant.dimension {
+                BudgetDimension::Tokens => &mut total.tokens,
+                BudgetDimension::CostMicroUsd => &mut total.cost_micro_usd,
+                BudgetDimension::RuntimeMs => &mut total.runtime_ms,
+            };
+            *target = target
+                .checked_add(grant.amount)
+                .ok_or_else(|| data_error("supplemental budget grant overflow"))?;
+            Ok(total)
+        })
+}
+
+fn checked_add_budget(left: BudgetAmount, right: BudgetAmount) -> Result<BudgetAmount, StoreError> {
+    Ok(BudgetAmount {
+        tokens: left
+            .tokens
+            .checked_add(right.tokens)
+            .ok_or_else(|| data_error("budget token total overflow"))?,
+        cost_micro_usd: left
+            .cost_micro_usd
+            .checked_add(right.cost_micro_usd)
+            .ok_or_else(|| data_error("budget cost total overflow"))?,
+        runtime_ms: left
+            .runtime_ms
+            .checked_add(right.runtime_ms)
+            .ok_or_else(|| data_error("budget runtime total overflow"))?,
+    })
+}
+
+fn budget_within(value: BudgetAmount, limit: BudgetAmount) -> bool {
+    value.tokens <= limit.tokens
+        && value.cost_micro_usd <= limit.cost_micro_usd
+        && value.runtime_ms <= limit.runtime_ms
+}
+
+/// Converts a Unix millisecond timestamp to the exact UTC ledger date without
+/// depending on a host locale or wall-clock timezone.
+pub fn execution_ledger_utc_date(at_ms: u64) -> Result<String, StoreError> {
+    let days = at_ms / 86_400_000;
+    let z = i128::from(days) + 719_468;
+    let era = z / 146_097;
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    if month <= 2 {
+        year += 1;
+    }
+    if !(1970..=9999).contains(&year) {
+        return Err(data_error(
+            "execution admission UTC ledger date is out of range",
+        ));
+    }
+    Ok(format!("{year:04}-{month:02}-{day:02}"))
+}
+
+fn load_verified_transaction_snapshot(
+    conn: &rusqlite::Connection,
+    run_id: &RunId,
+) -> Result<Run, StoreError> {
+    let snapshot = load_snapshot(conn, run_id)?;
+    let events = load_events(conn, run_id)?;
+    let (replayed, effects) = replay_with_effects(&events)?;
+    if pandamux_orchestrator::canonical_run_bytes(&snapshot)
+        != pandamux_orchestrator::canonical_run_bytes(&replayed)
+    {
+        return Err(data_error(
+            "orchestration replay differs from stored snapshot during budget operation",
+        ));
+    }
+    verify_effect_rows(&effects, &load_effects(conn, run_id)?)?;
+    Ok(snapshot)
+}
+
+fn release_orchestration_budget_before_dispatch(
+    tx: &Transaction<'_>,
+    queue: &OrchestrationQueueRecord,
+    released_at_ms: u64,
+) -> Result<(), StoreError> {
+    let current = load_verified_transaction_snapshot(tx, &queue.run_id)?;
+    if load_effects(tx, &queue.run_id)?.iter().any(|effect| {
+        effect.delivery.dispatch_started_at_ms.is_some()
+            && effect_matches_attempt(
+                &effect.effect,
+                &queue.run_id,
+                &queue.task_id,
+                &queue.attempt_id,
+                None,
+            )
+    }) {
+        return Err(data_error(
+            "budget cannot be released after the durable dispatch marker",
+        ));
+    }
+    let previous = load_budget_reservations(tx, &queue.run_id)?
+        .into_iter()
+        .find(|record| record.reservation.attempt_id == queue.attempt_id)
+        .ok_or_else(|| data_error("pre-dispatch admission has no budget reservation"))?;
+    if previous.reservation.state != BudgetReservationState::Reserved
+        || previous.reservation.task_id != queue.task_id
+        || previous.agent_id != queue.agent_id
+        || released_at_ms < previous.updated_at_ms
+        || current
+            .reservations
+            .get(&previous.reservation.id)
+            .is_none_or(|reservation| reservation != &previous.reservation)
+    {
+        return Err(data_error(
+            "pre-dispatch budget release differs from its admission ownership",
+        ));
+    }
+    let kinds = pandamux_orchestrator::decide(
+        &current,
+        RunCommand::ReleaseBudget {
+            reservation_id: previous.reservation.id.clone(),
+        },
+    )
+    .map_err(orchestration_error)?;
+    if kinds.len() != 1 {
+        return Err(data_error(
+            "pre-dispatch budget release did not produce one event",
+        ));
+    }
+    let event = RunEvent {
+        event_id: RunEventId::new(format!(
+            "run-event-budget-release-{}",
+            previous.reservation.id.as_str()
+        )),
+        run_id: queue.run_id.clone(),
+        seq: current
+            .last_seq
+            .checked_add(1)
+            .ok_or_else(|| data_error("orchestration event sequence overflow"))?,
+        at_ms: released_at_ms,
+        idempotency_key: format!("budget-release:{}", previous.reservation.id.as_str()),
+        kind: kinds.into_iter().next().expect("one budget release event"),
+    };
+    if transition_events_collide(tx, std::slice::from_ref(&event))? {
+        return Err(data_error("pre-dispatch budget release identity collided"));
+    }
+    let applied = pandamux_orchestrator::apply(&current, &event).map_err(orchestration_error)?;
+    insert_event(tx, &event)?;
+    for effect in applied.new_effects {
+        insert_effect(
+            tx,
+            &stored_effect_from_run(&applied.run, std::slice::from_ref(&event), effect)?,
+        )?;
+    }
+    update_run_snapshot(
+        tx,
+        &queue.run_id,
+        &applied.run,
+        current.last_seq,
+        &orchestration_snapshot_sha256(&current),
+    )?;
+    release_daily_budget(tx, &previous, released_at_ms)?;
+    let mut released = previous.clone();
+    released.reservation = applied
+        .run
+        .reservations
+        .get(&previous.reservation.id)
+        .cloned()
+        .ok_or_else(|| data_error("released budget reservation disappeared"))?;
+    released.updated_at_ms = released_at_ms;
+    update_budget_reservation_row(tx, &previous, &released)?;
+    Ok(())
+}
+
+fn update_budget_grants(
+    tx: &Transaction<'_>,
+    record: &StoredBudgetReservation,
+    updated_at_ms: u64,
+) -> Result<(), StoreError> {
+    if updated_at_ms < record.updated_at_ms {
+        return Err(data_error(
+            "supplemental budget grant timestamp moved backwards",
+        ));
+    }
+    let changed = tx.execute(
+        "UPDATE orchestration_budget_reservations
+            SET grants_json = ?1, updated_at_ms = ?2
+          WHERE reservation_id = ?3 AND run_id = ?4 AND updated_at_ms = ?5",
+        params![
+            serde_json::to_string(&record.grants)?,
+            checked_i64(updated_at_ms, "budget grant updated at")?,
+            record.reservation.id.as_str(),
+            record.run_id.as_str(),
+            checked_i64(record.updated_at_ms, "prior budget grant updated at")?,
+        ],
+    )?;
+    if changed != 1 {
+        return Err(data_error(
+            "supplemental budget grant lost its reservation compare-and-swap",
+        ));
+    }
+    Ok(())
+}
+
+fn add_daily_budget_grant(
+    tx: &Transaction<'_>,
+    reservation: &StoredBudgetReservation,
+    amount: u64,
+    updated_at_ms: u64,
+) -> Result<(), StoreError> {
+    let current = load_daily_budget(
+        tx,
+        &reservation.organization_id,
+        &reservation.reservation.ledger_utc_date,
+    )?
+    .ok_or_else(|| data_error("supplemental budget grant has no UTC daily ledger"))?;
+    if updated_at_ms < current.updated_at_ms {
+        return Err(data_error(
+            "supplemental daily grant timestamp moved backwards",
+        ));
+    }
+    let granted = current
+        .granted_micro_usd
+        .checked_add(amount)
+        .ok_or_else(|| data_error("supplemental daily budget grant overflow"))?;
+    let revision = current
+        .revision
+        .checked_add(1)
+        .ok_or_else(|| data_error("daily budget revision overflow"))?;
+    let changed = tx.execute(
+        "UPDATE orchestration_daily_budgets
+            SET granted_micro_usd = ?1, revision = ?2, updated_at_ms = ?3
+          WHERE organization_id = ?4 AND ledger_utc_date = ?5
+            AND granted_micro_usd = ?6 AND revision = ?7 AND updated_at_ms = ?8",
+        params![
+            checked_i64(granted, "daily budget granted")?,
+            checked_i64(revision, "daily budget revision")?,
+            checked_i64(updated_at_ms, "daily budget updated at")?,
+            current.organization_id.as_str(),
+            current.ledger_utc_date,
+            checked_i64(current.granted_micro_usd, "prior daily budget granted")?,
+            checked_i64(current.revision, "prior daily budget revision")?,
+            checked_i64(current.updated_at_ms, "prior daily budget updated at")?,
+        ],
+    )?;
+    if changed != 1 {
+        return Err(data_error(
+            "supplemental daily budget grant lost its compare-and-swap",
+        ));
+    }
+    Ok(())
+}
+
+fn release_daily_budget(
+    tx: &Transaction<'_>,
+    reservation: &StoredBudgetReservation,
+    updated_at_ms: u64,
+) -> Result<DailyBudgetRecord, StoreError> {
+    let current = load_daily_budget(
+        tx,
+        &reservation.organization_id,
+        &reservation.reservation.ledger_utc_date,
+    )?
+    .ok_or_else(|| data_error("budget release has no UTC daily ledger"))?;
+    if updated_at_ms < current.updated_at_ms {
+        return Err(data_error("daily budget release timestamp moved backwards"));
+    }
+    let cost_grants = grant_amount(&reservation.grants)?.cost_micro_usd;
+    let reserved = current
+        .reserved_micro_usd
+        .checked_sub(reservation.reservation.amount.cost_micro_usd)
+        .ok_or_else(|| data_error("daily budget release underflow"))?;
+    let granted = current
+        .granted_micro_usd
+        .checked_sub(cost_grants)
+        .ok_or_else(|| data_error("daily budget grant release underflow"))?;
+    let revision = current
+        .revision
+        .checked_add(1)
+        .ok_or_else(|| data_error("daily budget revision overflow"))?;
+    let changed = tx.execute(
+        "UPDATE orchestration_daily_budgets
+            SET reserved_micro_usd = ?1, granted_micro_usd = ?2,
+                revision = ?3, updated_at_ms = ?4
+          WHERE organization_id = ?5 AND ledger_utc_date = ?6
+            AND reserved_micro_usd = ?7 AND granted_micro_usd = ?8
+            AND revision = ?9 AND updated_at_ms = ?10",
+        params![
+            checked_i64(reserved, "released daily budget reserved")?,
+            checked_i64(granted, "released daily budget granted")?,
+            checked_i64(revision, "released daily budget revision")?,
+            checked_i64(updated_at_ms, "released daily budget updated at")?,
+            current.organization_id.as_str(),
+            current.ledger_utc_date,
+            checked_i64(current.reserved_micro_usd, "prior daily budget reserved")?,
+            checked_i64(current.granted_micro_usd, "prior daily budget granted")?,
+            checked_i64(current.revision, "prior daily budget revision")?,
+            checked_i64(current.updated_at_ms, "prior daily budget updated at")?,
+        ],
+    )?;
+    if changed != 1 {
+        return Err(data_error("daily budget release lost its compare-and-swap"));
+    }
+    Ok(DailyBudgetRecord {
+        reserved_micro_usd: reserved,
+        granted_micro_usd: granted,
+        revision,
+        updated_at_ms,
+        ..current
+    })
+}
+
+fn reconcile_daily_budget(
+    tx: &Transaction<'_>,
+    previous: &StoredBudgetReservation,
+    next: &BudgetReservation,
+    updated_at_ms: u64,
+) -> Result<DailyBudgetRecord, StoreError> {
+    let current = load_daily_budget(
+        tx,
+        &previous.organization_id,
+        &previous.reservation.ledger_utc_date,
+    )?
+    .ok_or_else(|| data_error("budget reconciliation has no UTC daily ledger"))?;
+    if updated_at_ms < current.updated_at_ms {
+        return Err(data_error(
+            "daily budget reconciliation timestamp moved backwards",
+        ));
+    }
+    if previous.reservation.actual.cost_micro_usd.is_some() || next.actual.cost_micro_usd.is_none()
+    {
+        return Ok(current);
+    }
+    let actual = next
+        .actual
+        .cost_micro_usd
+        .expect("known reconciled cost was checked");
+    let reserved = current
+        .reserved_micro_usd
+        .checked_sub(previous.reservation.amount.cost_micro_usd)
+        .ok_or_else(|| data_error("daily budget reconciliation underflow"))?;
+    let reconciled = current
+        .reconciled_micro_usd
+        .checked_add(actual)
+        .ok_or_else(|| data_error("daily budget reconciliation overflow"))?;
+    let revision = current
+        .revision
+        .checked_add(1)
+        .ok_or_else(|| data_error("daily budget revision overflow"))?;
+    let changed = tx.execute(
+        "UPDATE orchestration_daily_budgets
+            SET reserved_micro_usd = ?1, reconciled_micro_usd = ?2,
+                revision = ?3, updated_at_ms = ?4
+          WHERE organization_id = ?5 AND ledger_utc_date = ?6
+            AND reserved_micro_usd = ?7 AND reconciled_micro_usd = ?8
+            AND revision = ?9 AND updated_at_ms = ?10",
+        params![
+            checked_i64(reserved, "reconciled daily budget reserved")?,
+            checked_i64(reconciled, "reconciled daily budget actual")?,
+            checked_i64(revision, "reconciled daily budget revision")?,
+            checked_i64(updated_at_ms, "reconciled daily budget updated at")?,
+            current.organization_id.as_str(),
+            current.ledger_utc_date,
+            checked_i64(current.reserved_micro_usd, "prior daily budget reserved")?,
+            checked_i64(
+                current.reconciled_micro_usd,
+                "prior daily budget reconciled"
+            )?,
+            checked_i64(current.revision, "prior daily budget revision")?,
+            checked_i64(current.updated_at_ms, "prior daily budget updated at")?,
+        ],
+    )?;
+    if changed != 1 {
+        return Err(data_error(
+            "daily budget reconciliation lost its compare-and-swap",
+        ));
+    }
+    Ok(DailyBudgetRecord {
+        reserved_micro_usd: reserved,
+        reconciled_micro_usd: reconciled,
+        revision,
+        updated_at_ms,
+        ..current
+    })
+}
+
+fn update_reconciled_budget_reservation(
+    tx: &Transaction<'_>,
+    previous: &StoredBudgetReservation,
+    next: &StoredBudgetReservation,
+) -> Result<(), StoreError> {
+    update_budget_reservation_row(tx, previous, next)
+}
+
+fn update_budget_reservation_row(
+    tx: &Transaction<'_>,
+    previous: &StoredBudgetReservation,
+    next: &StoredBudgetReservation,
+) -> Result<(), StoreError> {
+    if previous.run_id != next.run_id
+        || previous.reservation.id != next.reservation.id
+        || previous.reservation.task_id != next.reservation.task_id
+        || previous.reservation.attempt_id != next.reservation.attempt_id
+        || previous.agent_id != next.agent_id
+        || previous.organization_id != next.organization_id
+        || previous.agent_budget_limit != next.agent_budget_limit
+        || previous.reservation.amount != next.reservation.amount
+        || previous.reservation.ledger_utc_date != next.reservation.ledger_utc_date
+        || previous.created_at_ms != next.created_at_ms
+        || next.updated_at_ms < previous.updated_at_ms
+    {
+        return Err(data_error("budget reservation immutable identity changed"));
+    }
+    let changed = tx.execute(
+        "UPDATE orchestration_budget_reservations
+            SET actual_tokens = ?1, actual_micro_usd = ?2, actual_runtime_ms = ?3,
+                state = ?4, grants_json = ?5, reconciliation_json = ?6,
+                updated_at_ms = ?7
+          WHERE reservation_id = ?8 AND run_id = ?9 AND state = ?10
+            AND updated_at_ms = ?11",
+        params![
+            next.reservation
+                .actual
+                .tokens
+                .map(|value| checked_i64(value, "actual tokens"))
+                .transpose()?,
+            next.reservation
+                .actual
+                .cost_micro_usd
+                .map(|value| checked_i64(value, "actual cost"))
+                .transpose()?,
+            next.reservation
+                .actual
+                .runtime_ms
+                .map(|value| checked_i64(value, "actual runtime"))
+                .transpose()?,
+            enum_text(next.reservation.state)?,
+            serde_json::to_string(&next.grants)?,
+            next.reconciliation
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()?,
+            checked_i64(next.updated_at_ms, "budget reservation updated at")?,
+            previous.reservation.id.as_str(),
+            previous.run_id.as_str(),
+            enum_text(previous.reservation.state)?,
+            checked_i64(
+                previous.updated_at_ms,
+                "prior budget reservation updated at"
+            )?,
+        ],
+    )?;
+    if changed != 1 {
+        return Err(data_error(
+            "budget reservation update lost its compare-and-swap",
+        ));
+    }
+    Ok(())
+}
+
+fn agent_budget_overage(
+    conn: &rusqlite::Connection,
+    updated: &StoredBudgetReservation,
+) -> Result<BudgetAmount, StoreError> {
+    let mut reservations = load_budget_reservations(conn, &updated.run_id)?;
+    let stored = reservations
+        .iter_mut()
+        .find(|record| record.reservation.id == updated.reservation.id)
+        .ok_or_else(|| data_error("reconciled agent reservation disappeared"))?;
+    *stored = updated.clone();
+    let committed = reservations
+        .iter()
+        .filter(|record| record.agent_id == updated.agent_id)
+        .try_fold(BudgetAmount::default(), |total, record| {
+            if record.agent_budget_limit != updated.agent_budget_limit {
+                return Err(data_error(
+                    "compiled agent budget changed during reconciliation",
+                ));
+            }
+            checked_add_budget(total, committed_budget_after_grants(record)?)
+        })?;
+    Ok(BudgetAmount {
+        tokens: committed
+            .tokens
+            .saturating_sub(updated.agent_budget_limit.tokens),
+        cost_micro_usd: committed
+            .cost_micro_usd
+            .saturating_sub(updated.agent_budget_limit.cost_micro_usd),
+        runtime_ms: committed
+            .runtime_ms
+            .saturating_sub(updated.agent_budget_limit.runtime_ms),
+    })
+}
+
+fn daily_budget_overage(daily: &DailyBudgetRecord) -> Result<u64, StoreError> {
+    let committed = daily
+        .reserved_micro_usd
+        .checked_add(daily.reconciled_micro_usd)
+        .ok_or_else(|| data_error("daily budget committed total overflow"))?;
+    let available = daily
+        .limit_micro_usd
+        .checked_add(daily.granted_micro_usd)
+        .ok_or_else(|| data_error("daily budget available total overflow"))?;
+    Ok(committed.saturating_sub(available))
+}
+
+fn amount_nonzero_server(amount: BudgetAmount) -> bool {
+    amount.tokens != 0 || amount.cost_micro_usd != 0 || amount.runtime_ms != 0
+}
+
+fn normalize_managed_attempt_usage(
+    conn: &rusqlite::Connection,
+    run: &Run,
+    stored: &StoredBudgetReservation,
+) -> Result<BudgetReconciliationEvidence, StoreError> {
+    let attempt = run
+        .attempts
+        .get(&stored.reservation.attempt_id)
+        .ok_or_else(|| data_error("budget reservation attempt was not found"))?;
+    if !matches!(
+        attempt.status,
+        AttemptStatus::Succeeded
+            | AttemptStatus::Failed
+            | AttemptStatus::Cancelled
+            | AttemptStatus::Interrupted
+    ) || attempt.ended_at_ms.is_none()
+    {
+        return Err(data_error(
+            "budget usage can reconcile only after the exact attempt settles",
+        ));
+    }
+    let thread_id = attempt
+        .thread_id
+        .as_ref()
+        .ok_or_else(|| data_error("settled budget attempt has no thread identity"))?;
+    let turn_attempt_id = attempt
+        .turn_attempt_id
+        .as_ref()
+        .ok_or_else(|| data_error("settled budget attempt has no turn-attempt identity"))?;
+    let selected_provider = attempt
+        .route
+        .provider
+        .selected_provider_instance_id
+        .as_ref()
+        .ok_or_else(|| data_error("settled budget attempt has no provider identity"))?;
+
+    let turn_attempt = conn
+        .query_row(
+            "SELECT turn_id, thread_id, environment_id, provider_instance_id,
+                    model, status, started_at_ms, ended_at_ms
+               FROM turn_attempts WHERE id = ?1",
+            [turn_attempt_id.as_str()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, Option<i64>>(7)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or_else(|| data_error("settled budget turn attempt was not found"))?;
+    let turn_id = TurnId::from(turn_attempt.0);
+    let stored_thread_id = ThreadId::from(turn_attempt.1);
+    let environment_id = EnvironmentId::from(turn_attempt.2);
+    let provider_instance_id = ProviderInstanceId::from(turn_attempt.3);
+    let turn_model = turn_attempt.4;
+    let turn_status: TurnAttemptStatus = serde_json::from_str(&turn_attempt.5)
+        .map_err(|_| data_error("turn attempt status is invalid"))?;
+    let turn_started_at_ms = checked_u64(turn_attempt.6, "turn attempt started at")?;
+    let turn_ended_at_ms = turn_attempt
+        .7
+        .map(|value| checked_u64(value, "turn attempt ended at"))
+        .transpose()?;
+    if stored_thread_id != *thread_id
+        || provider_instance_id != *selected_provider
+        || !matches!(
+            turn_status,
+            TurnAttemptStatus::Completed
+                | TurnAttemptStatus::Failed
+                | TurnAttemptStatus::InterruptedForCapacity
+        )
+    {
+        return Err(data_error(
+            "settled budget turn attempt differs from the canonical attempt",
+        ));
+    }
+    let runtime_ms = turn_ended_at_ms
+        .map(|ended| {
+            ended
+                .checked_sub(turn_started_at_ms)
+                .ok_or_else(|| data_error("turn attempt runtime underflow"))
+        })
+        .transpose()?;
+
+    let mut statement = conn.prepare(
+        "SELECT observation_id, source_kind, parser_version,
+                provider_native_session_id, provider_native_turn_id,
+                occurred_at_ms, provider, provider_instance_id, subscription_key,
+                model, input_tokens, cached_input_tokens, cache_write_tokens,
+                output_tokens, reasoning_tokens, other_tokens_json,
+                unknown_fields_json, provider_reported_micro_usd, source_record_count,
+                thread_id, turn_id, agent_id, schedule_id, fact_kind
+           FROM usage_observations
+          WHERE environment_id = ?1 AND source_kind = ?2 AND turn_id = ?3
+          ORDER BY observation_id",
+    )?;
+    let mut rows = statement.query(params![
+        environment_id.as_str(),
+        UsageSourceKind::ManagedTurn.as_str(),
+        turn_id.as_str(),
+    ])?;
+    let mut observations = Vec::new();
+    while let Some(row) = rows.next()? {
+        observations.push(decode_usage_observation(row, 0)?);
+    }
+    drop(rows);
+    drop(statement);
+    for observation in &observations {
+        if observation.provider_instance_id != provider_instance_id
+            || observation.thread_id.as_ref() != Some(thread_id)
+            || observation.turn_id.as_ref() != Some(&turn_id)
+            || observation.agent_id.as_ref() != Some(&stored.agent_id)
+        {
+            return Err(data_error(
+                "managed usage fact differs from the exact attempt identity",
+            ));
+        }
+    }
+
+    let components = observations
+        .iter()
+        .filter(|observation| observation.fact_kind == UsageFactKind::TokenComponent)
+        .collect::<Vec<_>>();
+    let aggregates = observations
+        .iter()
+        .filter(|observation| observation.fact_kind == UsageFactKind::Aggregate)
+        .collect::<Vec<_>>();
+    if components.is_empty() && aggregates.len() > 1 {
+        return Err(data_error(
+            "managed usage contains ambiguous aggregate facts",
+        ));
+    }
+    let token_facts = if components.is_empty() {
+        aggregates
+    } else {
+        components
+    };
+    let token_unknown = token_facts.iter().any(|observation| {
+        [
+            UsageUnknownField::InputTokens,
+            UsageUnknownField::OutputTokens,
+            UsageUnknownField::CacheReadTokens,
+            UsageUnknownField::CacheWriteTokens,
+        ]
+        .iter()
+        .any(|field| observation.unknown_fields.contains(field))
+    });
+    let tokens = if token_facts.is_empty() || token_unknown {
+        None
+    } else {
+        let mut total = TokenCounts::default();
+        for observation in &token_facts {
+            total
+                .checked_accumulate(&observation.tokens)
+                .map_err(|error| data_error(error.to_string()))?;
+        }
+        Some(
+            total
+                .checked_total()
+                .map_err(|error| data_error(error.to_string()))?,
+        )
+    };
+
+    let provider_costs = observations
+        .iter()
+        .filter_map(|observation| observation.provider_reported_micro_usd)
+        .collect::<Vec<_>>();
+    if provider_costs.len() > 1 {
+        return Err(data_error(
+            "managed usage contains multiple provider-reported turn costs",
+        ));
+    }
+    let mut pricing_version_ids = BTreeSet::new();
+    let (cost_micro_usd, cost_source) = if let Some(cost) = provider_costs.first().copied() {
+        (Some(cost), BudgetCostSource::ProviderReported)
+    } else if token_facts.is_empty() || token_unknown {
+        (None, BudgetCostSource::Unknown)
+    } else {
+        let mut estimated = Some(0_u64);
+        for observation in &token_facts {
+            let Some((pricing_version_id, rates)) =
+                pricing_for_usage_observation(conn, observation)?
+            else {
+                estimated = None;
+                break;
+            };
+            let Some(fact_cost) = estimate_usage_micro_usd(&observation.tokens, &rates)
+                .map_err(|error| data_error(error.to_string()))?
+            else {
+                estimated = None;
+                break;
+            };
+            pricing_version_ids.insert(pricing_version_id);
+            estimated = Some(
+                estimated
+                    .expect("known accumulated usage estimate")
+                    .checked_add(fact_cost)
+                    .ok_or_else(|| data_error("usage price estimate overflow"))?,
+            );
+        }
+        if estimated.is_none() {
+            pricing_version_ids.clear();
+        }
+        (
+            estimated,
+            if estimated.is_some() {
+                BudgetCostSource::EffectiveDatedEstimate
+            } else {
+                BudgetCostSource::Unknown
+            },
+        )
+    };
+    let actual = BudgetUsage {
+        tokens,
+        cost_micro_usd,
+        runtime_ms,
+    };
+    let observation_ids = observations
+        .iter()
+        .map(|observation| observation.id.clone())
+        .collect::<BTreeSet<_>>();
+    let source_bytes = serde_json::to_vec(&(
+        &stored.run_id,
+        &stored.reservation.id,
+        &stored.reservation.attempt_id,
+        &turn_id,
+        turn_attempt_id,
+        thread_id,
+        selected_provider,
+        &turn_model,
+        turn_started_at_ms,
+        turn_ended_at_ms,
+        &observations,
+        actual,
+        cost_source,
+        &pricing_version_ids,
+    ))?;
+    Ok(BudgetReconciliationEvidence {
+        turn_id,
+        turn_attempt_id: turn_attempt_id.clone(),
+        usage_observation_ids: observation_ids,
+        source_sha256: sha256_hex(&source_bytes),
+        cost_source,
+        pricing_version_ids,
+        actual,
+    })
+}
+
+fn pricing_for_usage_observation(
+    conn: &rusqlite::Connection,
+    observation: &UsageObservation,
+) -> Result<Option<(PricingVersionId, UsagePricingRates)>, StoreError> {
+    if observation
+        .unknown_fields
+        .contains(&UsageUnknownField::OccurredAt)
+        || observation
+            .unknown_fields
+            .contains(&UsageUnknownField::Model)
+    {
+        return Ok(None);
+    }
+    let (Some(occurred_at_ms), Some(model)) = (observation.occurred_at_ms, &observation.model)
+    else {
+        return Ok(None);
+    };
+    let row = conn
+        .query_row(
+            "WITH selected_version AS (
+                SELECT id
+                  FROM usage_pricing_versions
+                 WHERE provider = ?1 AND effective_from_ms <= ?2
+                 ORDER BY effective_from_ms DESC, id DESC
+                 LIMIT 1
+             )
+             SELECT selected_version.id,
+                    rule.input_micro_usd_per_million,
+                    rule.cached_input_micro_usd_per_million,
+                    rule.cache_write_micro_usd_per_million,
+                    rule.output_micro_usd_per_million,
+                    rule.reasoning_micro_usd_per_million
+               FROM selected_version
+               LEFT JOIN usage_pricing_aliases model_alias
+                 ON model_alias.pricing_version_id = selected_version.id
+                AND model_alias.alias_model_id = ?3
+               JOIN usage_pricing_rules rule
+                 ON rule.pricing_version_id = selected_version.id
+                AND rule.canonical_model_id = COALESCE(
+                    model_alias.canonical_model_id,
+                    ?3
+                )",
+            params![
+                observation.provider.as_str(),
+                checked_i64(occurred_at_ms, "usage occurrence time")?,
+                model,
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<i64>>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                ))
+            },
+        )
+        .optional()?;
+    row.map(|row| {
+        Ok((
+            PricingVersionId::from(row.0),
+            UsagePricingRates {
+                input_micro_usd_per_million: row
+                    .1
+                    .map(|value| checked_u64(value, "pricing input rate"))
+                    .transpose()?,
+                cached_input_micro_usd_per_million: row
+                    .2
+                    .map(|value| checked_u64(value, "pricing cached-input rate"))
+                    .transpose()?,
+                cache_write_micro_usd_per_million: row
+                    .3
+                    .map(|value| checked_u64(value, "pricing cache-write rate"))
+                    .transpose()?,
+                output_micro_usd_per_million: row
+                    .4
+                    .map(|value| checked_u64(value, "pricing output rate"))
+                    .transpose()?,
+                reasoning_micro_usd_per_million: row
+                    .5
+                    .map(|value| checked_u64(value, "pricing reasoning rate"))
+                    .transpose()?,
+            },
+        ))
+    })
+    .transpose()
+}
+
+fn budget_conservation_report(
+    conn: &rusqlite::Connection,
+    run: &Run,
+    reservations: &[StoredBudgetReservation],
+) -> Result<BudgetConservationReport, StoreError> {
+    let mut mismatches = Vec::new();
+    let mut expected_reserved = BudgetAmount::default();
+    let mut expected_reconciled = BudgetAmount::default();
+    for reservation in run.reservations.values() {
+        if matches!(
+            reservation.state,
+            BudgetReservationState::Reserved | BudgetReservationState::PartiallyReconciled
+        ) {
+            if reservation.actual.tokens.is_none() {
+                expected_reserved.tokens = expected_reserved
+                    .tokens
+                    .checked_add(reservation.amount.tokens)
+                    .ok_or_else(|| data_error("conservation reserved token overflow"))?;
+            }
+            if reservation.actual.cost_micro_usd.is_none() {
+                expected_reserved.cost_micro_usd = expected_reserved
+                    .cost_micro_usd
+                    .checked_add(reservation.amount.cost_micro_usd)
+                    .ok_or_else(|| data_error("conservation reserved cost overflow"))?;
+            }
+            if reservation.actual.runtime_ms.is_none() {
+                expected_reserved.runtime_ms = expected_reserved
+                    .runtime_ms
+                    .checked_add(reservation.amount.runtime_ms)
+                    .ok_or_else(|| data_error("conservation reserved runtime overflow"))?;
+            }
+        }
+        expected_reconciled = checked_add_budget(
+            expected_reconciled,
+            BudgetAmount {
+                tokens: reservation.actual.tokens.unwrap_or_default(),
+                cost_micro_usd: reservation.actual.cost_micro_usd.unwrap_or_default(),
+                runtime_ms: reservation.actual.runtime_ms.unwrap_or_default(),
+            },
+        )?;
+        match reservations
+            .iter()
+            .find(|stored| stored.reservation.id == reservation.id)
+        {
+            Some(stored) if stored.reservation == *reservation => {
+                if matches!(
+                    reservation.state,
+                    BudgetReservationState::PartiallyReconciled
+                        | BudgetReservationState::Reconciled
+                ) && stored.reconciliation.is_none()
+                {
+                    mismatches.push(BudgetConservationMismatch {
+                        scope: format!("reservation:{}:source", reservation.id.as_str()),
+                        dimension: BudgetDimension::Tokens,
+                        expected: 1,
+                        actual: 0,
+                    });
+                }
+            }
+            _ => mismatches.push(BudgetConservationMismatch {
+                scope: format!("reservation:{}:snapshot", reservation.id.as_str()),
+                dimension: BudgetDimension::Tokens,
+                expected: 1,
+                actual: 0,
+            }),
+        }
+    }
+    for stored in reservations {
+        if !run.reservations.contains_key(&stored.reservation.id) {
+            mismatches.push(BudgetConservationMismatch {
+                scope: format!("reservation:{}:orphan", stored.reservation.id.as_str()),
+                dimension: BudgetDimension::Tokens,
+                expected: 0,
+                actual: 1,
+            });
+        }
+    }
+    push_amount_mismatches(
+        &mut mismatches,
+        "run:reserved",
+        expected_reserved,
+        run.budget.reserved,
+    );
+    push_amount_mismatches(
+        &mut mismatches,
+        "run:reconciled",
+        expected_reconciled,
+        run.budget.reconciled,
+    );
+
+    let mut scope_overages = Vec::new();
+    if amount_nonzero_server(run.budget.overage) {
+        scope_overages.push(BudgetScopeOverage {
+            scope: "run_or_task".to_string(),
+            resource_id: run.id.as_str().to_string(),
+            amount: run.budget.overage,
+        });
+    }
+    let agent_ids = reservations
+        .iter()
+        .map(|record| record.agent_id.clone())
+        .collect::<BTreeSet<_>>();
+    for agent_id in agent_ids {
+        let representative = reservations
+            .iter()
+            .find(|record| record.agent_id == agent_id)
+            .expect("agent identity came from a reservation");
+        let overage = agent_budget_overage(conn, representative)?;
+        if amount_nonzero_server(overage) {
+            scope_overages.push(BudgetScopeOverage {
+                scope: "agent".to_string(),
+                resource_id: agent_id.as_str().to_string(),
+                amount: overage,
+            });
+        }
+    }
+
+    for daily in load_daily_budgets(conn, reservations)? {
+        let all_scope_reservations = load_budget_reservations_for_daily_scope(
+            conn,
+            &daily.organization_id,
+            &daily.ledger_utc_date,
+        )?;
+        let mut expected_daily_reserved = 0_u64;
+        let mut expected_daily_reconciled = 0_u64;
+        let mut expected_daily_granted = 0_u64;
+        for record in &all_scope_reservations {
+            if record.reservation.state != BudgetReservationState::Released {
+                expected_daily_granted = expected_daily_granted
+                    .checked_add(grant_amount(&record.grants)?.cost_micro_usd)
+                    .ok_or_else(|| data_error("conservation daily grant overflow"))?;
+            }
+            if matches!(
+                record.reservation.state,
+                BudgetReservationState::Reserved | BudgetReservationState::PartiallyReconciled
+            ) && record.reservation.actual.cost_micro_usd.is_none()
+            {
+                expected_daily_reserved = expected_daily_reserved
+                    .checked_add(record.reservation.amount.cost_micro_usd)
+                    .ok_or_else(|| data_error("conservation daily reserved overflow"))?;
+            }
+            expected_daily_reconciled = expected_daily_reconciled
+                .checked_add(record.reservation.actual.cost_micro_usd.unwrap_or_default())
+                .ok_or_else(|| data_error("conservation daily reconciled overflow"))?;
+        }
+        let scope = format!(
+            "daily:{}:{}",
+            daily.organization_id.as_str(),
+            daily.ledger_utc_date
+        );
+        push_budget_mismatch(
+            &mut mismatches,
+            &format!("{scope}:reserved"),
+            BudgetDimension::CostMicroUsd,
+            expected_daily_reserved,
+            daily.reserved_micro_usd,
+        );
+        push_budget_mismatch(
+            &mut mismatches,
+            &format!("{scope}:reconciled"),
+            BudgetDimension::CostMicroUsd,
+            expected_daily_reconciled,
+            daily.reconciled_micro_usd,
+        );
+        push_budget_mismatch(
+            &mut mismatches,
+            &format!("{scope}:granted"),
+            BudgetDimension::CostMicroUsd,
+            expected_daily_granted,
+            daily.granted_micro_usd,
+        );
+        let overage = daily_budget_overage(&daily)?;
+        if overage != 0 {
+            scope_overages.push(BudgetScopeOverage {
+                scope: "daily".to_string(),
+                resource_id: format!(
+                    "{}:{}",
+                    daily.organization_id.as_str(),
+                    daily.ledger_utc_date
+                ),
+                amount: BudgetAmount {
+                    cost_micro_usd: overage,
+                    ..BudgetAmount::default()
+                },
+            });
+        }
+    }
+    mismatches
+        .sort_by(|left, right| (&left.scope, left.dimension).cmp(&(&right.scope, right.dimension)));
+    scope_overages.sort_by(|left, right| {
+        (&left.scope, &left.resource_id).cmp(&(&right.scope, &right.resource_id))
+    });
+    Ok(BudgetConservationReport {
+        run_id: run.id.clone(),
+        verdict: if mismatches.is_empty() {
+            BudgetConservationVerdict::BalancedSourceUnverified
+        } else {
+            BudgetConservationVerdict::Mismatch
+        },
+        mismatches,
+        incomplete: run.budget.incomplete,
+        run_overage: run.budget.overage,
+        scope_overages,
+    })
+}
+
+fn load_budget_reservations_for_daily_scope(
+    conn: &rusqlite::Connection,
+    organization_id: &OrganizationId,
+    ledger_utc_date: &str,
+) -> Result<Vec<StoredBudgetReservation>, StoreError> {
+    let mut statement = conn.prepare(
+        "SELECT DISTINCT run_id
+           FROM orchestration_budget_reservations
+          WHERE organization_id = ?1 AND ledger_utc_date = ?2
+          ORDER BY run_id",
+    )?;
+    let rows = statement.query_map(params![organization_id.as_str(), ledger_utc_date], |row| {
+        row.get::<_, String>(0)
+    })?;
+    let mut run_ids = Vec::new();
+    for row in rows {
+        run_ids.push(RunId::from(row?));
+    }
+    drop(statement);
+    let mut reservations = Vec::new();
+    for run_id in run_ids {
+        reservations.extend(load_budget_reservations(conn, &run_id)?.into_iter().filter(
+            |record| {
+                record.organization_id == *organization_id
+                    && record.reservation.ledger_utc_date == ledger_utc_date
+            },
+        ));
+    }
+    Ok(reservations)
+}
+
+fn push_amount_mismatches(
+    mismatches: &mut Vec<BudgetConservationMismatch>,
+    scope: &str,
+    expected: BudgetAmount,
+    actual: BudgetAmount,
+) {
+    for (dimension, expected, actual) in [
+        (BudgetDimension::Tokens, expected.tokens, actual.tokens),
+        (
+            BudgetDimension::CostMicroUsd,
+            expected.cost_micro_usd,
+            actual.cost_micro_usd,
+        ),
+        (
+            BudgetDimension::RuntimeMs,
+            expected.runtime_ms,
+            actual.runtime_ms,
+        ),
+    ] {
+        push_budget_mismatch(mismatches, scope, dimension, expected, actual);
+    }
+}
+
+fn push_budget_mismatch(
+    mismatches: &mut Vec<BudgetConservationMismatch>,
+    scope: &str,
+    dimension: BudgetDimension,
+    expected: u64,
+    actual: u64,
+) {
+    if expected != actual {
+        mismatches.push(BudgetConservationMismatch {
+            scope: scope.to_string(),
+            dimension,
+            expected,
+            actual,
+        });
+    }
 }
 
 fn load_worktree_by_id(
@@ -4340,8 +6050,10 @@ fn validate_runtime_bindings(
         if snapshot.organization_id != reservation.organization_id
             || snapshot.reservations.get(&reservation.reservation.id)
                 != Some(&reservation.reservation)
-            || grants_for_attempt(snapshot, &reservation.reservation.attempt_id)
-                != reservation.grants
+            || reservation
+                .grants
+                .iter()
+                .any(|(id, grant)| snapshot.budget_grants.get(id) != Some(grant))
         {
             return Err(data_error(
                 "budget reservation differs from the canonical run snapshot",
@@ -4402,14 +6114,17 @@ fn validate_runtime_bindings(
     Ok(())
 }
 
-fn grants_for_attempt(
+fn grants_for_attempt_at(
     snapshot: &Run,
     attempt_id: &RunAttemptId,
+    at_ms: Option<u64>,
 ) -> BTreeMap<BudgetGrantId, SupplementalBudgetGrant> {
     snapshot
         .budget_grants
         .iter()
-        .filter(|(_, grant)| grant.attempt_id == *attempt_id)
+        .filter(|(_, grant)| {
+            grant.attempt_id == *attempt_id && at_ms.is_none_or(|at_ms| grant.expires_at_ms > at_ms)
+        })
         .map(|(id, grant)| (id.clone(), grant.clone()))
         .collect()
 }
@@ -4858,9 +6573,10 @@ fn load_budget_reservations(
 ) -> Result<Vec<StoredBudgetReservation>, StoreError> {
     let mut statement = conn.prepare(
         "SELECT reservation_id, task_id, attempt_id, agent_id, organization_id,
+                agent_limit_tokens, agent_limit_micro_usd, agent_limit_runtime_ms,
                 ledger_utc_date, reserved_tokens, reserved_micro_usd, reserved_runtime_ms,
                 actual_tokens, actual_micro_usd, actual_runtime_ms, state, grants_json,
-                created_at_ms, updated_at_ms
+                reconciliation_json, created_at_ms, updated_at_ms
            FROM orchestration_budget_reservations WHERE run_id = ?1
           ORDER BY created_at_ms, reservation_id",
     )?;
@@ -4871,17 +6587,21 @@ fn load_budget_reservations(
             row.get::<_, String>(2)?,
             row.get::<_, String>(3)?,
             row.get::<_, String>(4)?,
-            row.get::<_, String>(5)?,
+            row.get::<_, i64>(5)?,
             row.get::<_, i64>(6)?,
             row.get::<_, i64>(7)?,
-            row.get::<_, i64>(8)?,
-            row.get::<_, Option<i64>>(9)?,
-            row.get::<_, Option<i64>>(10)?,
-            row.get::<_, Option<i64>>(11)?,
-            row.get::<_, String>(12)?,
-            row.get::<_, String>(13)?,
-            row.get::<_, i64>(14)?,
-            row.get::<_, i64>(15)?,
+            row.get::<_, String>(8)?,
+            row.get::<_, i64>(9)?,
+            row.get::<_, i64>(10)?,
+            row.get::<_, i64>(11)?,
+            row.get::<_, Option<i64>>(12)?,
+            row.get::<_, Option<i64>>(13)?,
+            row.get::<_, Option<i64>>(14)?,
+            row.get::<_, String>(15)?,
+            row.get::<_, String>(16)?,
+            row.get::<_, Option<String>>(17)?,
+            row.get::<_, i64>(18)?,
+            row.get::<_, i64>(19)?,
         ))
     })?;
     let mut records = Vec::new();
@@ -4892,6 +6612,9 @@ fn load_budget_reservations(
             attempt_id,
             agent_id,
             organization_id,
+            agent_limit_tokens,
+            agent_limit_micro_usd,
+            agent_limit_runtime_ms,
             ledger_utc_date,
             reserved_tokens,
             reserved_micro_usd,
@@ -4901,6 +6624,7 @@ fn load_budget_reservations(
             actual_runtime_ms,
             state,
             grants_json,
+            reconciliation_json,
             created_at_ms,
             updated_at_ms,
         ) = row?;
@@ -4912,6 +6636,11 @@ fn load_budget_reservations(
             run_id: run_id.clone(),
             agent_id: AgentId::from(agent_id),
             organization_id: OrganizationId::from(organization_id),
+            agent_budget_limit: BudgetAmount {
+                tokens: checked_u64(agent_limit_tokens, "agent token limit")?,
+                cost_micro_usd: checked_u64(agent_limit_micro_usd, "agent cost limit")?,
+                runtime_ms: checked_u64(agent_limit_runtime_ms, "agent runtime limit")?,
+            },
             reservation: BudgetReservation {
                 id: pandamux_core::BudgetReservationId::from(reservation_id),
                 task_id,
@@ -4936,11 +6665,17 @@ fn load_budget_reservations(
                 state: parse_enum(&state, "budget reservation state")?,
             },
             grants,
+            reconciliation: reconciliation_json
+                .as_deref()
+                .map(serde_json::from_str)
+                .transpose()?,
             created_at_ms: checked_u64(created_at_ms, "budget reservation created at")?,
             updated_at_ms: checked_u64(updated_at_ms, "budget reservation updated at")?,
         };
         if !valid_utc_date(&record.reservation.ledger_utc_date)
+            || amount_exceeds_sqlite(&record.agent_budget_limit)
             || record.updated_at_ms < record.created_at_ms
+            || !valid_budget_reconciliation(&record)
             || record.grants.iter().any(|(grant_id, grant)| {
                 grant_id != &grant.id
                     || grant.run_id != record.run_id
@@ -5479,6 +7214,59 @@ fn valid_utc_date(value: &str) -> bool {
     (1..=days).contains(&day)
 }
 
+fn amount_exceeds_sqlite(amount: &BudgetAmount) -> bool {
+    amount.tokens > i64::MAX as u64
+        || amount.cost_micro_usd > i64::MAX as u64
+        || amount.runtime_ms > i64::MAX as u64
+}
+
+fn valid_budget_reconciliation(record: &StoredBudgetReservation) -> bool {
+    let actual = record.reservation.actual;
+    let has_any =
+        actual.tokens.is_some() || actual.cost_micro_usd.is_some() || actual.runtime_ms.is_some();
+    let complete =
+        actual.tokens.is_some() && actual.cost_micro_usd.is_some() && actual.runtime_ms.is_some();
+    let state_matches = match record.reservation.state {
+        BudgetReservationState::Reserved | BudgetReservationState::Released => {
+            !has_any && record.reconciliation.is_none()
+        }
+        BudgetReservationState::PartiallyReconciled => {
+            has_any && !complete && record.reconciliation.is_some()
+        }
+        BudgetReservationState::Reconciled => complete && record.reconciliation.is_some(),
+    };
+    state_matches
+        && record.reconciliation.as_ref().is_none_or(|evidence| {
+            let cost_matches = match evidence.cost_source {
+                BudgetCostSource::ProviderReported => {
+                    evidence.actual.cost_micro_usd.is_some()
+                        && evidence.pricing_version_ids.is_empty()
+                }
+                BudgetCostSource::EffectiveDatedEstimate => {
+                    evidence.actual.cost_micro_usd.is_some()
+                        && !evidence.pricing_version_ids.is_empty()
+                }
+                BudgetCostSource::Unknown => {
+                    evidence.actual.cost_micro_usd.is_none()
+                        && evidence.pricing_version_ids.is_empty()
+                }
+            };
+            is_sha256(&evidence.source_sha256)
+                && evidence.actual == actual
+                && !evidence.turn_id.as_str().is_empty()
+                && !evidence.turn_attempt_id.as_str().is_empty()
+                && evidence
+                    .usage_observation_ids
+                    .iter()
+                    .all(|id| !id.as_str().is_empty())
+                && evidence
+                    .pricing_version_ids
+                    .iter()
+                    .all(|id| !id.as_str().is_empty())
+                && cost_matches
+        })
+}
+
 fn data_error(message: impl Into<String>) -> StoreError {
     StoreError::Data(message.into())
 }
@@ -5487,12 +7275,16 @@ fn data_error(message: impl Into<String>) -> StoreError {
 mod tests {
     use super::*;
     use pandamux_core::{
-        AccessMode, AgentTask, Attempt, AttemptStatus, BlackboardArtifact, BudgetAmount,
+        AccessMode, AgentTask, ApprovalDecisionProvenance, ApprovalId, ApprovalRequirement,
+        Attempt, AttemptExecutionEvidence, AttemptStatus, BlackboardArtifact, BudgetAmount,
         BudgetReservationId, BudgetReservationState, BudgetUsage, CleanupState,
         ConfigurationRevision, EffectReceipt, LeaseResourceKind, OrchestrationMode, OutputContract,
-        ProjectRepositoryRecord, ProviderInstanceId, RoutingDecision, RunCommand, RunSeed,
-        RunTaskStatus, RunTrigger, SubscriptionKey, ValidatedPlan, WorktreeCleanupEligibility,
-        WorktreeDirtyState,
+        PricingVersionId, ProjectRepositoryRecord, ProviderCapabilities, ProviderInstanceId,
+        ProviderKind, RoutingDecision, RunApprovalKind, RunApprovalStatus, RunCommand, RunSeed,
+        RunTaskStatus, RunTrigger, SubscriptionKey, Thread, ThreadOrigin, ThreadStatus,
+        ThreadWorkspace, Turn, TurnAttempt, TurnAttemptStatus, TurnInput, TurnStatus,
+        UsagePricingRule, UsagePricingVersion, UsageProvider, UsageSubscription, ValidatedPlan,
+        WorktreeCleanupEligibility, WorktreeDirtyState,
     };
     use std::collections::BTreeMap;
     use std::sync::{Arc, Barrier};
@@ -5837,6 +7629,310 @@ mod tests {
         store
     }
 
+    fn fixture_settled_unreconciled() -> (Run, Vec<RunEvent>) {
+        let seed = seed();
+        let mut run = Run::draft(RunId::new("run-phase5c"), seed.clone(), 10_001);
+        let mut events = Vec::new();
+        execute(
+            &mut run,
+            &mut events,
+            RunCommand::AcceptPlan { seed, plan: plan() },
+        );
+        execute(
+            &mut run,
+            &mut events,
+            RunCommand::SelectRoute { decision: route() },
+        );
+        execute(
+            &mut run,
+            &mut events,
+            RunCommand::ReserveBudget {
+                reservation: reservation(),
+            },
+        );
+        execute(
+            &mut run,
+            &mut events,
+            RunCommand::RequestDispatch { attempt: attempt() },
+        );
+        execute(
+            &mut run,
+            &mut events,
+            RunCommand::AssignAttemptWorktree {
+                attempt_id: RunAttemptId::new("run-attempt-phase5c"),
+                worktree_id: AttemptWorktreeId::new("attempt-worktree-phase5c"),
+            },
+        );
+        execute(
+            &mut run,
+            &mut events,
+            RunCommand::StartAttempt {
+                attempt_id: RunAttemptId::new("run-attempt-phase5c"),
+                thread_id: ThreadId::new("thread-phase5c-orchestration"),
+                turn_attempt_id: TurnAttemptId::new("attempt-phase5c-orchestration"),
+            },
+        );
+        execute(
+            &mut run,
+            &mut events,
+            RunCommand::SettleAttempt {
+                attempt_id: RunAttemptId::new("run-attempt-phase5c"),
+                status: AttemptStatus::Succeeded,
+                failure: None,
+                usage_reconciled: false,
+            },
+        );
+        (run, events)
+    }
+
+    fn settled_budget_store() -> Store {
+        let store = store_with_repository();
+        let (run, events) = fixture_settled_unreconciled();
+        store
+            .insert_orchestration_run(&run_record(run), &events)
+            .expect("insert settled budget run");
+        store
+            .insert_orchestration_runtime_records(&OrchestrationRuntimeRecords {
+                budget_reservations: vec![StoredBudgetReservation {
+                    run_id: RunId::new("run-phase5c"),
+                    agent_id: AgentId::new("agent-phase5c"),
+                    organization_id: OrganizationId::new("org-phase5c"),
+                    agent_budget_limit: BudgetAmount {
+                        tokens: 1_000,
+                        cost_micro_usd: 2_000,
+                        runtime_ms: 3_000,
+                    },
+                    reservation: reservation(),
+                    grants: BTreeMap::new(),
+                    reconciliation: None,
+                    created_at_ms: 30_000,
+                    updated_at_ms: 30_000,
+                }],
+                daily_budgets: vec![DailyBudgetRecord {
+                    organization_id: OrganizationId::new("org-phase5c"),
+                    ledger_utc_date: "2026-10-09".to_string(),
+                    limit_micro_usd: 10_000,
+                    reserved_micro_usd: 200,
+                    reconciled_micro_usd: 0,
+                    granted_micro_usd: 0,
+                    revision: 1,
+                    updated_at_ms: 30_000,
+                }],
+                ..OrchestrationRuntimeRecords::default()
+            })
+            .expect("insert settled budget ledger");
+        store
+            .save_thread(&Thread {
+                id: ThreadId::new("thread-phase5c-orchestration"),
+                project_id: Some(ProjectId::new("project-phase5c")),
+                environment_id: EnvironmentId::new("env-phase5c"),
+                parent_thread_id: None,
+                title: "Budget reconciliation".to_string(),
+                provider_instance_id: ProviderInstanceId::new("provider-phase5c"),
+                model: "model-phase5c".to_string(),
+                effort: None,
+                access_mode: AccessMode::WorkspaceOnly,
+                workspace: ThreadWorkspace {
+                    cwd: "/fixture".to_string(),
+                    worktree: None,
+                },
+                status: ThreadStatus::Idle,
+                agent: None,
+                origin: ThreadOrigin::Orchestrator {
+                    run_id: RunId::new("run-phase5c"),
+                    task_id: "task-phase5c".to_string(),
+                },
+                created_at_ms: 31_000,
+                updated_at_ms: 31_100,
+            })
+            .expect("save budget thread");
+        store
+            .save_turn(&Turn {
+                id: TurnId::new("turn-phase5c-orchestration"),
+                thread_id: ThreadId::new("thread-phase5c-orchestration"),
+                environment_id: EnvironmentId::new("env-phase5c"),
+                provider_instance_id: ProviderInstanceId::new("provider-phase5c"),
+                seq: 1,
+                input: TurnInput {
+                    text: "fixture".to_string(),
+                    attachments: Vec::new(),
+                    attachment_ids: Vec::new(),
+                    model: Some("model-phase5c".to_string()),
+                    effort: None,
+                },
+                status: TurnStatus::Completed,
+                started_at_ms: 31_000,
+                ended_at_ms: Some(31_250),
+                usage: Some(pandamux_core::TurnUsage {
+                    cost_usd: Some(999.0),
+                    ..pandamux_core::TurnUsage::default()
+                }),
+                checkpoint_before: None,
+                checkpoint_after: None,
+            })
+            .expect("save budget turn");
+        store
+            .save_turn_attempt(&TurnAttempt {
+                id: TurnAttemptId::new("attempt-phase5c-orchestration"),
+                turn_id: TurnId::new("turn-phase5c-orchestration"),
+                thread_id: ThreadId::new("thread-phase5c-orchestration"),
+                ordinal: 1,
+                environment_id: EnvironmentId::new("env-phase5c"),
+                provider_instance_id: ProviderInstanceId::new("provider-phase5c"),
+                subscription_key: Some(SubscriptionKey::new("subscription-phase5c")),
+                model: "model-phase5c".to_string(),
+                boundary: AttemptBoundary::VisibleOutputBegun,
+                status: TurnAttemptStatus::Completed,
+                routing: route().provider,
+                execution: Some(AttemptExecutionEvidence {
+                    provider_kind: ProviderKind::Codex,
+                    profile_dir: "/fixture/profile".to_string(),
+                    binary_path: Some("/fixture/codex".to_string()),
+                    capabilities: ProviderCapabilities::default(),
+                    provider_version: Some("fixture".to_string()),
+                }),
+                checkpoint: None,
+                partial_output: String::new(),
+                capacity_evidence: None,
+                started_at_ms: 31_000,
+                ended_at_ms: Some(31_250),
+            })
+            .expect("save budget turn attempt");
+        store
+            .save_usage_subscription_mapping(
+                &UsageSubscription {
+                    key: SubscriptionKey::new("subscription-phase5c"),
+                    provider: UsageProvider::Codex,
+                    display_name: "Budget fixture".to_string(),
+                    masked_account_label: None,
+                },
+                &EnvironmentId::new("env-phase5c"),
+                &ProviderInstanceId::new("provider-phase5c"),
+                31_000,
+            )
+            .expect("save budget usage mapping");
+        store
+    }
+
+    fn managed_usage(
+        id: &str,
+        tokens: TokenCounts,
+        provider_reported_micro_usd: Option<u64>,
+    ) -> UsageObservation {
+        UsageObservation {
+            id: UsageObservationId::new(id),
+            source_kind: UsageSourceKind::ManagedTurn,
+            parser_version: 1,
+            provider_native_session_id: Some("native-session-phase5c".to_string()),
+            provider_native_turn_id: Some("native-turn-phase5c".to_string()),
+            occurred_at_ms: Some(31_200),
+            provider: UsageProvider::Codex,
+            provider_instance_id: ProviderInstanceId::new("provider-phase5c"),
+            subscription_key: SubscriptionKey::new("subscription-phase5c"),
+            model: Some("model-phase5c".to_string()),
+            tokens,
+            unknown_fields: BTreeSet::new(),
+            provider_reported_micro_usd,
+            source_record_count: 1,
+            thread_id: Some(ThreadId::new("thread-phase5c-orchestration")),
+            turn_id: Some(TurnId::new("turn-phase5c-orchestration")),
+            agent_id: Some(AgentId::new("agent-phase5c")),
+            schedule_id: None,
+            fact_kind: UsageFactKind::Aggregate,
+        }
+    }
+
+    fn save_pricing(store: &Store, rate: u64) {
+        store
+            .save_usage_pricing_version(&UsagePricingVersion {
+                id: PricingVersionId::new("pricing-phase5c"),
+                provider: UsageProvider::Codex,
+                source_published_at_ms: 30_000,
+                effective_from_ms: 30_000,
+                rules: vec![UsagePricingRule {
+                    canonical_model_id: "model-phase5c".to_string(),
+                    aliases: BTreeSet::new(),
+                    rates: UsagePricingRates {
+                        input_micro_usd_per_million: Some(rate),
+                        cached_input_micro_usd_per_million: Some(rate),
+                        cache_write_micro_usd_per_million: Some(rate),
+                        output_micro_usd_per_million: Some(rate),
+                        reasoning_micro_usd_per_million: Some(rate),
+                    },
+                }],
+            })
+            .expect("save budget pricing");
+    }
+
+    fn approved_budget_grant_store(
+        decision: RunApprovalStatus,
+    ) -> (Store, SupplementalBudgetGrant) {
+        let store = store_with_repository();
+        let seed = seed();
+        let mut run = Run::draft(RunId::new("run-phase5c"), seed.clone(), 10_001);
+        let mut events = Vec::new();
+        execute(
+            &mut run,
+            &mut events,
+            RunCommand::AcceptPlan { seed, plan: plan() },
+        );
+        execute(
+            &mut run,
+            &mut events,
+            RunCommand::SelectRoute { decision: route() },
+        );
+        let mut grant = SupplementalBudgetGrant {
+            id: BudgetGrantId::new("budget-grant-phase5c"),
+            run_id: RunId::new("run-phase5c"),
+            task_id: RunTaskId::new("task-phase5c"),
+            attempt_id: RunAttemptId::new("run-attempt-phase5c"),
+            approval_id: ApprovalId::new("approval-budget-phase5c"),
+            dimension: BudgetDimension::CostMicroUsd,
+            amount: 75,
+            policy_revision: "policy-phase5c".to_string(),
+            action_digest: String::new(),
+            expires_at_ms: 80_000,
+        };
+        grant.action_digest = supplemental_budget_action_digest(&grant);
+        execute(
+            &mut run,
+            &mut events,
+            RunCommand::RequestApproval {
+                approval: ApprovalRequirement {
+                    id: grant.approval_id.clone(),
+                    run_id: grant.run_id.clone(),
+                    task_id: grant.task_id.clone(),
+                    kind: RunApprovalKind::Budget,
+                    policy_revision: grant.policy_revision.clone(),
+                    action_digest: grant.action_digest.clone(),
+                    safe_summary: "Increase exact attempt budget".to_string(),
+                    reason_codes: vec!["budget_limit".to_string()],
+                    expires_at_ms: 90_000,
+                    status: RunApprovalStatus::Pending,
+                    decision: None,
+                },
+            },
+        );
+        execute(
+            &mut run,
+            &mut events,
+            RunCommand::ResolveApproval {
+                approval_id: grant.approval_id.clone(),
+                action_digest: grant.action_digest.clone(),
+                status: decision,
+                provenance: ApprovalDecisionProvenance {
+                    actor: "local-control".to_string(),
+                    decided_at_ms: 20_000,
+                    decision_id: "decision-budget-phase5c".to_string(),
+                },
+            },
+        );
+        store
+            .insert_orchestration_run(&run_record(run), &events)
+            .expect("insert budget approval run");
+        (store, grant)
+    }
+
     fn runtime_records(dispatch_effect_id: OrchestrationEffectId) -> OrchestrationRuntimeRecords {
         let capacity_lease = ExecutionLease {
             id: ExecutionLeaseId::new("execution-lease-capacity-phase5c"),
@@ -5933,8 +8029,14 @@ mod tests {
                 run_id: RunId::new("run-phase5c"),
                 agent_id: AgentId::new("agent-phase5c"),
                 organization_id: OrganizationId::new("org-phase5c"),
+                agent_budget_limit: BudgetAmount {
+                    tokens: 1_000,
+                    cost_micro_usd: 2_000,
+                    runtime_ms: 3_000,
+                },
                 reservation: reservation(),
                 grants: BTreeMap::new(),
+                reconciliation: None,
                 created_at_ms: 30_000,
                 updated_at_ms: 30_000,
             }],
@@ -6609,6 +8711,408 @@ mod tests {
                 .iter()
                 .all(|record| record.effect.id != effect.effect.id)
         );
+    }
+
+    #[test]
+    fn bud_05_independent_connections_cannot_overreserve_one_daily_ledger() {
+        let temp = tempfile::tempdir().expect("temporary store");
+        let database = temp.path().join("budget-race.db");
+        let first = Store::open(&database).expect("first connection");
+        let second = Store::open(&database).expect("second connection");
+        let record = |suffix: &str| StoredBudgetReservation {
+            run_id: RunId::new(format!("run-{suffix}")),
+            agent_id: AgentId::new(format!("agent-{suffix}")),
+            organization_id: OrganizationId::new("org-race"),
+            agent_budget_limit: BudgetAmount {
+                tokens: 10_000,
+                cost_micro_usd: 10_000,
+                runtime_ms: 10_000,
+            },
+            reservation: BudgetReservation {
+                id: BudgetReservationId::new(format!("budget-{suffix}")),
+                task_id: RunTaskId::new(format!("task-{suffix}")),
+                attempt_id: RunAttemptId::new(format!("attempt-{suffix}")),
+                amount: BudgetAmount {
+                    tokens: 1,
+                    cost_micro_usd: 600,
+                    runtime_ms: 1,
+                },
+                actual: BudgetUsage::default(),
+                ledger_utc_date: "2026-10-09".to_string(),
+                state: BudgetReservationState::Reserved,
+            },
+            grants: BTreeMap::new(),
+            reconciliation: None,
+            created_at_ms: 40_000,
+            updated_at_ms: 40_000,
+        };
+        let left_record = record("left");
+        let right_record = record("right");
+        let barrier = Arc::new(Barrier::new(2));
+        let results = std::thread::scope(|scope| {
+            let left_barrier = barrier.clone();
+            let left_store = first.clone();
+            let left = scope.spawn(move || {
+                left_barrier.wait();
+                let mut conn = left_store.conn.lock().unwrap();
+                let tx = conn
+                    .transaction_with_behavior(TransactionBehavior::Immediate)
+                    .expect("left transaction");
+                reserve_daily_budget_for_admission(&tx, &left_record, 1_000, 40_000)
+                    .and_then(|()| tx.commit().map_err(StoreError::from))
+            });
+            let right_barrier = barrier.clone();
+            let right_store = second.clone();
+            let right = scope.spawn(move || {
+                right_barrier.wait();
+                let mut conn = right_store.conn.lock().unwrap();
+                let tx = conn
+                    .transaction_with_behavior(TransactionBehavior::Immediate)
+                    .expect("right transaction");
+                reserve_daily_budget_for_admission(&tx, &right_record, 1_000, 40_000)
+                    .and_then(|()| tx.commit().map_err(StoreError::from))
+            });
+            [
+                left.join().expect("left join"),
+                right.join().expect("right join"),
+            ]
+        });
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(results.iter().filter(|result| result.is_err()).count(), 1);
+        let daily = load_daily_budget(
+            &first.conn.lock().unwrap(),
+            &OrganizationId::new("org-race"),
+            "2026-10-09",
+        )
+        .expect("load raced daily ledger")
+        .expect("daily ledger");
+        assert_eq!(daily.reserved_micro_usd, 600);
+    }
+
+    #[test]
+    fn bud_08_to_10_grants_require_exact_live_local_approval_and_replay_once() {
+        let (disconnected_store, disconnected_grant) =
+            approved_budget_grant_store(RunApprovalStatus::Approved);
+        assert!(
+            disconnected_store
+                .grant_orchestration_budget(&disconnected_grant, 40_000, false, None)
+                .expect_err("disconnected local control")
+                .to_string()
+                .contains("connected local control")
+        );
+
+        let (rejected_store, rejected_grant) =
+            approved_budget_grant_store(RunApprovalStatus::Rejected);
+        assert!(
+            rejected_store
+                .grant_orchestration_budget(&rejected_grant, 40_000, true, None)
+                .is_err()
+        );
+
+        let (store, grant) = approved_budget_grant_store(RunApprovalStatus::Approved);
+        assert!(
+            store
+                .grant_orchestration_budget(&grant, grant.expires_at_ms, true, None)
+                .expect_err("expired grant")
+                .to_string()
+                .contains("transition rejected")
+        );
+        let mut changed_amount = grant.clone();
+        changed_amount.amount += 1;
+        assert!(
+            store
+                .grant_orchestration_budget(&changed_amount, 40_000, true, None)
+                .expect_err("changed amount with stale digest")
+                .to_string()
+                .contains("action digest")
+        );
+        let mut changed_policy = grant.clone();
+        changed_policy.policy_revision = "policy-drift".to_string();
+        changed_policy.action_digest = supplemental_budget_action_digest(&changed_policy);
+        assert!(
+            store
+                .grant_orchestration_budget(&changed_policy, 40_000, true, None)
+                .expect_err("policy drift")
+                .to_string()
+                .contains("transition rejected")
+        );
+        let initial_events = store
+            .load_orchestration_events(&grant.run_id)
+            .expect("load initial grant events")
+            .len();
+        assert!(
+            store
+                .grant_orchestration_budget(
+                    &grant,
+                    40_000,
+                    true,
+                    Some(BudgetExecutionFailpoint::BeforeGrantCommit),
+                )
+                .expect_err("before-grant failpoint")
+                .to_string()
+                .contains("before_budget_grant_commit")
+        );
+        assert_eq!(
+            store
+                .load_orchestration_events(&grant.run_id)
+                .expect("load rolled-back grant events")
+                .len(),
+            initial_events
+        );
+        assert!(
+            store
+                .grant_orchestration_budget(
+                    &grant,
+                    40_000,
+                    true,
+                    Some(BudgetExecutionFailpoint::AfterGrantCommit),
+                )
+                .expect_err("after-grant failpoint")
+                .to_string()
+                .contains("after_budget_grant_commit")
+        );
+        let replay = store
+            .grant_orchestration_budget(&grant, 40_000, true, None)
+            .expect("exact grant replay");
+        assert!(replay.duplicate);
+        assert_eq!(
+            store
+                .load_orchestration_events(&grant.run_id)
+                .expect("load committed grant events")
+                .len(),
+            initial_events + 1
+        );
+    }
+
+    #[test]
+    fn bud_11_provider_reported_cost_wins_and_reconciliation_recovers_exactly() {
+        let store = settled_budget_store();
+        save_pricing(&store, 2_000_000);
+        let observation = managed_usage(
+            "usage-provider-cost",
+            TokenCounts {
+                input: 80,
+                output: 20,
+                ..TokenCounts::default()
+            },
+            Some(123),
+        );
+        store
+            .record_usage_batch(&EnvironmentId::new("env-phase5c"), &[observation], None)
+            .expect("record provider-reported usage");
+        assert!(
+            store
+                .reconcile_orchestration_budget(
+                    &RunId::new("run-phase5c"),
+                    &BudgetReservationId::new("budget-phase5c"),
+                    40_000,
+                    Some(BudgetExecutionFailpoint::BeforeReconciliationCommit),
+                )
+                .expect_err("before-reconciliation failpoint")
+                .to_string()
+                .contains("before_budget_reconciliation_commit")
+        );
+        let before = store
+            .load_orchestration_runtime_records(&RunId::new("run-phase5c"))
+            .expect("load rolled-back reconciliation");
+        assert_eq!(
+            before.budget_reservations[0].reservation.state,
+            BudgetReservationState::Reserved
+        );
+        assert!(
+            store
+                .reconcile_orchestration_budget(
+                    &RunId::new("run-phase5c"),
+                    &BudgetReservationId::new("budget-phase5c"),
+                    40_000,
+                    Some(BudgetExecutionFailpoint::AfterReconciliationCommit),
+                )
+                .expect_err("after-reconciliation failpoint")
+                .to_string()
+                .contains("after_budget_reconciliation_commit")
+        );
+        let replay = store
+            .reconcile_orchestration_budget(
+                &RunId::new("run-phase5c"),
+                &BudgetReservationId::new("budget-phase5c"),
+                40_000,
+                None,
+            )
+            .expect("exact reconciliation replay");
+        assert!(replay.duplicate);
+        assert_eq!(replay.reservation.reservation.actual.tokens, Some(100));
+        assert_eq!(
+            replay.reservation.reservation.actual.cost_micro_usd,
+            Some(123)
+        );
+        assert_eq!(replay.reservation.reservation.actual.runtime_ms, Some(250));
+        assert_eq!(
+            replay
+                .reservation
+                .reconciliation
+                .as_ref()
+                .expect("reconciliation evidence")
+                .cost_source,
+            BudgetCostSource::ProviderReported
+        );
+        assert_eq!(replay.daily_budget.reserved_micro_usd, 0);
+        assert_eq!(replay.daily_budget.reconciled_micro_usd, 123);
+        assert_eq!(replay.daily_budget.ledger_utc_date, "2026-10-09");
+    }
+
+    #[test]
+    fn bud_12_effective_dated_integer_pricing_reconciles_without_legacy_float() {
+        let store = settled_budget_store();
+        save_pricing(&store, 1_000_000);
+        let observation = managed_usage(
+            "usage-estimated-cost",
+            TokenCounts {
+                input: 70,
+                output: 30,
+                ..TokenCounts::default()
+            },
+            None,
+        );
+        store
+            .record_usage_batch(&EnvironmentId::new("env-phase5c"), &[observation], None)
+            .expect("record estimated usage");
+        let outcome = store
+            .reconcile_orchestration_budget(
+                &RunId::new("run-phase5c"),
+                &BudgetReservationId::new("budget-phase5c"),
+                40_000,
+                None,
+            )
+            .expect("reconcile estimated usage");
+        assert_eq!(
+            outcome.reservation.reservation.actual.cost_micro_usd,
+            Some(100)
+        );
+        let evidence = outcome
+            .reservation
+            .reconciliation
+            .expect("estimated reconciliation evidence");
+        assert_eq!(
+            evidence.cost_source,
+            BudgetCostSource::EffectiveDatedEstimate
+        );
+        assert_eq!(
+            evidence.pricing_version_ids,
+            BTreeSet::from([PricingVersionId::new("pricing-phase5c")])
+        );
+    }
+
+    #[test]
+    fn bud_13_unknown_cost_retains_reservation_and_ignores_legacy_float() {
+        let store = settled_budget_store();
+        let observation = managed_usage(
+            "usage-unknown-cost",
+            TokenCounts {
+                input: 60,
+                output: 20,
+                ..TokenCounts::default()
+            },
+            None,
+        );
+        store
+            .record_usage_batch(&EnvironmentId::new("env-phase5c"), &[observation], None)
+            .expect("record unknown-cost usage");
+        let outcome = store
+            .reconcile_orchestration_budget(
+                &RunId::new("run-phase5c"),
+                &BudgetReservationId::new("budget-phase5c"),
+                100_000_000,
+                None,
+            )
+            .expect("reconcile unknown cost");
+        assert_eq!(
+            outcome.reservation.reservation.state,
+            BudgetReservationState::PartiallyReconciled
+        );
+        assert_eq!(outcome.reservation.reservation.actual.tokens, Some(80));
+        assert_eq!(outcome.reservation.reservation.actual.cost_micro_usd, None);
+        assert_eq!(outcome.run.budget.reserved.cost_micro_usd, 200);
+        assert!(outcome.run.budget.incomplete.cost_micro_usd);
+        assert_eq!(outcome.run.status, RunStatus::Paused);
+        assert_eq!(outcome.daily_budget.reserved_micro_usd, 200);
+        assert_eq!(outcome.daily_budget.reconciled_micro_usd, 0);
+        assert_eq!(outcome.daily_budget.ledger_utc_date, "2026-10-09");
+        assert_eq!(
+            outcome
+                .reservation
+                .reconciliation
+                .expect("unknown-cost evidence")
+                .cost_source,
+            BudgetCostSource::Unknown
+        );
+    }
+
+    #[test]
+    fn bud_14_actual_overage_is_recorded_and_pauses_before_more_dispatch() {
+        let store = settled_budget_store();
+        let observation = managed_usage(
+            "usage-overage",
+            TokenCounts {
+                input: 120,
+                output: 30,
+                ..TokenCounts::default()
+            },
+            Some(250),
+        );
+        store
+            .record_usage_batch(&EnvironmentId::new("env-phase5c"), &[observation], None)
+            .expect("record over-budget usage");
+        let outcome = store
+            .reconcile_orchestration_budget(
+                &RunId::new("run-phase5c"),
+                &BudgetReservationId::new("budget-phase5c"),
+                40_000,
+                None,
+            )
+            .expect("reconcile over-budget usage");
+        assert_eq!(outcome.reservation.reservation.actual.tokens, Some(150));
+        assert_eq!(
+            outcome.reservation.reservation.actual.cost_micro_usd,
+            Some(250)
+        );
+        assert_eq!(outcome.run.budget.overage.tokens, 50);
+        assert_eq!(outcome.run.budget.overage.cost_micro_usd, 50);
+        assert_eq!(outcome.run.status, RunStatus::Paused);
+        assert_eq!(outcome.daily_budget.reconciled_micro_usd, 250);
+    }
+
+    #[test]
+    fn bud_15_conservation_reports_mismatch_without_certifying_source_truth() {
+        let store = settled_budget_store();
+        let balanced = store
+            .audit_budget_conservation(&RunId::new("run-phase5c"))
+            .expect("audit balanced ledger");
+        assert_eq!(
+            balanced.verdict,
+            BudgetConservationVerdict::BalancedSourceUnverified
+        );
+        assert!(balanced.mismatches.is_empty());
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE orchestration_daily_budgets
+                    SET reserved_micro_usd = reserved_micro_usd + 1
+                  WHERE organization_id = ?1 AND ledger_utc_date = ?2",
+                params!["org-phase5c", "2026-10-09"],
+            )
+            .expect("inject conservation mismatch");
+        let mismatch = store
+            .audit_budget_conservation(&RunId::new("run-phase5c"))
+            .expect("audit mismatched ledger");
+        assert_eq!(mismatch.verdict, BudgetConservationVerdict::Mismatch);
+        assert!(mismatch.mismatches.iter().any(|item| {
+            item.scope.contains("daily:org-phase5c:2026-10-09:reserved")
+                && item.dimension == BudgetDimension::CostMicroUsd
+                && item.expected == 200
+                && item.actual == 201
+        }));
     }
 
     #[test]

@@ -5,6 +5,7 @@ workspace. Read the root [`Cargo.toml`](../Cargo.toml) for the version;
 documentation does not duplicate it.
 
 > **Latest Updates (October 2026):**
+> - **v0.60.96:** Checked Phase 5C budget reservations, grants, usage reconciliation, and conservation diagnostics.
 > - **v0.60.95:** Durable shared execution admission, multi-scope caps, interactive reserve, and lease recovery.
 > - **v0.60.94:** Crash-safe Phase 5C attempt worktrees and private checkpoints.
 > - **v0.60.93:** Replay-safe Phase 5C run transitions and effect outbox.

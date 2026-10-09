@@ -8,6 +8,7 @@ pub mod data_paths;
 pub mod driver_registry;
 pub mod environment_router;
 pub mod execution_admission;
+pub mod execution_budget;
 pub mod fs;
 pub mod git;
 pub mod hark;
@@ -63,6 +64,10 @@ pub use execution_admission::{
     MAX_EXECUTION_ADMISSION_TTL_MS, MAX_EXECUTION_RETRY_DELAY_MS, MIN_EXECUTION_ADMISSION_TTL_MS,
     bounded_execution_retry_delay_ms,
 };
+pub use execution_budget::{
+    ExecutionBudgetError, ExecutionBudgetService, GrantExecutionBudgetRequest,
+    PlanExecutionBudgetRequest, bind_supplemental_budget_grant_digest,
+};
 pub use git::{get_git_status, git_commit, git_create_pr, git_push};
 pub use hark::HarkBridge;
 pub use instructions_service::{
@@ -95,7 +100,10 @@ pub use store::{
     AdmissionCapacityOverage, AdmissionCapacityReconciliation, AdmissionClaimStoreOutcome,
     AdmissionClaimStoreRequest, AdmissionOwnership, AdmissionPolicySnapshot,
     AdmissionRenewStoreRequest, AdmissionRequeueStoreRequest, AssignedRunEvent,
-    AttemptDispatchRecord, AttemptDispatchState, BundleActivationFailpoint,
+    AttemptDispatchRecord, AttemptDispatchState, BudgetConservationMismatch,
+    BudgetConservationReport, BudgetConservationVerdict, BudgetCostSource,
+    BudgetExecutionFailpoint, BudgetGrantOutcome, BudgetReconciliationEvidence,
+    BudgetReconciliationOutcome, BudgetScopeOverage, BundleActivationFailpoint,
     BundleDistributionRecord, BundleObjectRecord, DailyBudgetRecord, EffectClaimOutcome,
     EffectClaimRequest, EffectDispatchOutcome, EffectDispatchRequest, EffectOutcomeRecord,
     EffectOutcomeRequest, EffectOwnership, EffectPreparationOutcome, NodeReceiptKind,
@@ -104,7 +112,8 @@ pub use store::{
     OrchestrationRuntimeRecords, OwnedAttemptWorktreeRecord, PersonalRepoStateRecord,
     ProviderExecutionAudit, QueueState, RevisionedSettings, RunTransition, RunTransitionRequest,
     RunTransitionRows, Store, StoreError, StoredBudgetReservation, StoredInstructionCandidate,
-    StoredOrchestrationEffect, orchestration_snapshot_sha256,
+    StoredOrchestrationEffect, execution_ledger_utc_date, orchestration_snapshot_sha256,
+    supplemental_budget_action_digest,
 };
 pub use terminal::TerminalServerManager;
 pub use thread_manager::ThreadManager;

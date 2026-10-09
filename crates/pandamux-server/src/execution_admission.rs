@@ -1,8 +1,8 @@
 use crate::store::{
     AdmissionCapacityReconciliation, AdmissionClaimStoreOutcome, AdmissionClaimStoreRequest,
     AdmissionOwnership, AdmissionPolicySnapshot, AdmissionRenewStoreRequest,
-    AdmissionRequeueStoreRequest, OrchestratedAdmissionTransition, OrchestrationQueueRecord,
-    QueueState, Store, StoreError,
+    AdmissionRequeueStoreRequest, BudgetExecutionFailpoint, OrchestratedAdmissionTransition,
+    OrchestrationQueueRecord, QueueState, Store, StoreError,
 };
 use pandamux_core::{
     AgentId, EnvironmentId, ExecutionLease, ExecutionLeaseId, OrganizationId, ProviderInstanceId,
@@ -276,6 +276,20 @@ impl ExecutionAdmissionService {
         let ownership = claim.ownership();
         let store = self.store.clone();
         run_blocking(move || store.release_execution_admission(&ownership)).await
+    }
+
+    pub async fn release_at(
+        &self,
+        claim: &ExecutionAdmissionClaim,
+        released_at_ms: u64,
+        failpoint: Option<BudgetExecutionFailpoint>,
+    ) -> Result<OrchestrationQueueRecord, ExecutionAdmissionError> {
+        let ownership = claim.ownership();
+        let store = self.store.clone();
+        run_blocking(move || {
+            store.release_execution_admission_with_budget(&ownership, released_at_ms, failpoint)
+        })
+        .await
     }
 
     pub async fn cancel_queued(

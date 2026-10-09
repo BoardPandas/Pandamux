@@ -12,11 +12,11 @@ use pandamux_core::{
 use pandamux_protocol::{RpcRequest, ServerRole};
 use pandamux_providers::MockProviderDriver;
 use pandamux_server::{
-    AdmissionOwnership, AdmissionRenewStoreRequest, AdmissionRequeueStoreRequest, DriverRegistry,
-    EnqueueManualAdmissionRequest, EnqueueOrchestratedAdmissionRequest, ExecutionAdmissionClaim,
-    ExecutionAdmissionClaimRequest, ExecutionAdmissionService, OrchestratedAdmissionTransition,
-    OrchestrationRunRecord, QueueState, Router, Store, StoredBudgetReservation,
-    bounded_execution_retry_delay_ms,
+    AdmissionOwnership, AdmissionRenewStoreRequest, AdmissionRequeueStoreRequest,
+    BudgetExecutionFailpoint, DriverRegistry, EnqueueManualAdmissionRequest,
+    EnqueueOrchestratedAdmissionRequest, ExecutionAdmissionClaim, ExecutionAdmissionClaimRequest,
+    ExecutionAdmissionService, OrchestratedAdmissionTransition, OrchestrationRunRecord, QueueState,
+    Router, Store, StoredBudgetReservation, bounded_execution_retry_delay_ms,
 };
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
@@ -350,6 +350,11 @@ fn transition(fixture: &OrchestratedTaskFixture, at_ms: u64) -> OrchestratedAdmi
             run_id: fixture.run_id.clone(),
             agent_id: fixture.agent_id.clone(),
             organization_id: fixture.organization_id.clone(),
+            agent_budget_limit: BudgetAmount {
+                tokens: 1_000,
+                cost_micro_usd: 1_000,
+                runtime_ms: 10_000,
+            },
             reservation: BudgetReservation {
                 id: BudgetReservationId::new(format!("budget-{}", fixture.attempt_id.as_str())),
                 task_id: fixture.task_id.clone(),
@@ -360,10 +365,11 @@ fn transition(fixture: &OrchestratedTaskFixture, at_ms: u64) -> OrchestratedAdmi
                     runtime_ms: 30,
                 },
                 actual: BudgetUsage::default(),
-                ledger_utc_date: "2026-10-09".to_string(),
+                ledger_utc_date: "1970-01-01".to_string(),
                 state: BudgetReservationState::Reserved,
             },
             grants: BTreeMap::new(),
+            reconciliation: None,
             created_at_ms: at_ms,
             updated_at_ms: at_ms,
         },
@@ -1223,4 +1229,261 @@ async fn atomic_capacity_budget_dispatch_rolls_back_and_replays_exactly() {
         })
         .await;
     assert!(changed_replay.is_err());
+}
+
+#[tokio::test]
+async fn bud_04_compiled_agent_ceiling_is_checked_inside_the_claim_transaction() {
+    let store = Store::in_memory().expect("open store");
+    configure(&store, 8, &[("env-a", 8)], &[("provider-a", 8)], None);
+    let service = ExecutionAdmissionService::new(store.clone());
+    let fixtures = insert_ready_run(
+        &store,
+        "budget-agent",
+        &["agent-shared", "agent-shared"],
+        &["provider-a", "provider-a"],
+        "env-a",
+        2,
+    );
+    let first = enqueue_orchestrated(&service, &fixtures[0], 2, BASE_TIME + 1).await;
+    let second = enqueue_orchestrated(&service, &fixtures[1], 2, BASE_TIME + 2).await;
+    let budget = BudgetAmount {
+        tokens: 600,
+        cost_micro_usd: 600,
+        runtime_ms: 600,
+    };
+    let mut first_transition = transition(&fixtures[0], BASE_TIME + 10);
+    first_transition.reservation.reservation.amount = budget;
+    first_transition.reservation.agent_budget_limit = BudgetAmount {
+        tokens: 1_000,
+        cost_micro_usd: 1_000,
+        runtime_ms: 1_000,
+    };
+    assert!(
+        service
+            .try_claim_record(&first, BASE_TIME + 10, Some(first_transition))
+            .await
+            .expect("first agent-budget claim")
+            .is_some()
+    );
+
+    let mut second_transition = transition(&fixtures[1], BASE_TIME + 11);
+    second_transition.reservation.reservation.amount = budget;
+    second_transition.reservation.agent_budget_limit = BudgetAmount {
+        tokens: 1_000,
+        cost_micro_usd: 1_000,
+        runtime_ms: 1_000,
+    };
+    let error = service
+        .try_claim_record(&second, BASE_TIME + 11, Some(second_transition))
+        .await
+        .expect_err("second claim exceeds the compiled agent budget");
+    assert!(error.to_string().contains("agent budget limit"));
+    let runtime = store
+        .load_orchestration_runtime_records(&fixtures[0].run_id)
+        .expect("load agent-budget runtime");
+    assert_eq!(runtime.budget_reservations.len(), 1);
+    assert_eq!(runtime.queue_records[1].state, QueueState::Queued);
+}
+
+#[tokio::test]
+async fn bud_05_daily_ceiling_rolls_back_capacity_and_budget_together() {
+    let store = Store::in_memory().expect("open store");
+    configure(&store, 8, &[("env-a", 8)], &[("provider-a", 8)], None);
+    let service = ExecutionAdmissionService::new(store.clone());
+    let fixtures = insert_ready_run(
+        &store,
+        "budget-daily",
+        &["agent-a", "agent-b"],
+        &["provider-a", "provider-a"],
+        "env-a",
+        2,
+    );
+    let first = enqueue_orchestrated(&service, &fixtures[0], 2, BASE_TIME + 1).await;
+    let second = enqueue_orchestrated(&service, &fixtures[1], 2, BASE_TIME + 2).await;
+    let mut first_transition = transition(&fixtures[0], BASE_TIME + 10);
+    first_transition
+        .reservation
+        .reservation
+        .amount
+        .cost_micro_usd = 600;
+    first_transition.daily_budget_limit_micro_usd = 1_000;
+    service
+        .try_claim_record(&first, BASE_TIME + 10, Some(first_transition))
+        .await
+        .expect("first daily-budget claim")
+        .expect("first daily-budget admission");
+
+    let event_count = store
+        .load_orchestration_events(&fixtures[0].run_id)
+        .expect("load pre-failure events")
+        .len();
+    let mut second_transition = transition(&fixtures[1], BASE_TIME + 11);
+    second_transition
+        .reservation
+        .reservation
+        .amount
+        .cost_micro_usd = 600;
+    second_transition.daily_budget_limit_micro_usd = 1_000;
+    let error = service
+        .try_claim_record(&second, BASE_TIME + 11, Some(second_transition))
+        .await
+        .expect_err("second claim exceeds the UTC-day budget");
+    assert!(error.to_string().contains("daily budget limit"));
+    let runtime = store
+        .load_orchestration_runtime_records(&fixtures[0].run_id)
+        .expect("load daily-budget runtime");
+    assert_eq!(runtime.budget_reservations.len(), 1);
+    assert_eq!(runtime.daily_budgets[0].reserved_micro_usd, 600);
+    assert_eq!(runtime.queue_records[1].state, QueueState::Queued);
+    assert_eq!(
+        store
+            .load_orchestration_events(&fixtures[0].run_id)
+            .expect("load post-failure events")
+            .len(),
+        event_count
+    );
+}
+
+#[tokio::test]
+async fn bud_07_midnight_claims_stay_on_their_fixed_utc_ledgers() {
+    let store = Store::in_memory().expect("open store");
+    configure(&store, 8, &[("env-a", 8)], &[("provider-a", 8)], None);
+    let service = ExecutionAdmissionService::new(store.clone());
+    let fixtures = insert_ready_run(
+        &store,
+        "budget-midnight",
+        &["agent-a", "agent-b"],
+        &["provider-a", "provider-a"],
+        "env-a",
+        2,
+    );
+    let first = enqueue_orchestrated(&service, &fixtures[0], 2, BASE_TIME + 1).await;
+    let second = enqueue_orchestrated(&service, &fixtures[1], 2, BASE_TIME + 2).await;
+    let before_midnight = 86_399_999;
+    let after_midnight = 86_400_000;
+    let mut first_transition = transition(&fixtures[0], before_midnight);
+    first_transition.reservation.reservation.ledger_utc_date = "1970-01-01".to_string();
+    service
+        .try_claim_record(&first, before_midnight, Some(first_transition))
+        .await
+        .expect("claim before UTC midnight")
+        .expect("before-midnight admission");
+    let mut second_transition = transition(&fixtures[1], after_midnight);
+    second_transition.reservation.reservation.ledger_utc_date = "1970-01-02".to_string();
+    service
+        .try_claim_record(&second, after_midnight, Some(second_transition))
+        .await
+        .expect("claim after UTC midnight")
+        .expect("after-midnight admission");
+    let runtime = store
+        .load_orchestration_runtime_records(&fixtures[0].run_id)
+        .expect("load midnight runtime");
+    assert_eq!(
+        runtime
+            .daily_budgets
+            .iter()
+            .map(|record| record.ledger_utc_date.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["1970-01-01", "1970-01-02"])
+    );
+}
+
+#[tokio::test]
+async fn budget_release_failpoints_rollback_or_resume_without_leaking_a_claim() {
+    let store = Store::in_memory().expect("open store");
+    configure(&store, 8, &[("env-a", 8)], &[("provider-a", 8)], None);
+    let service = ExecutionAdmissionService::new(store.clone());
+    let fixture = insert_ready_run(
+        &store,
+        "budget-release-crash",
+        &["agent-a"],
+        &["provider-a"],
+        "env-a",
+        1,
+    )
+    .remove(0);
+    let record = enqueue_orchestrated(&service, &fixture, 1, BASE_TIME + 1).await;
+    let claim = claim_orchestrated(&service, &record, &fixture, BASE_TIME + 10)
+        .await
+        .expect("claim budget before release crash");
+
+    assert!(
+        service
+            .release_at(
+                &claim,
+                BASE_TIME + 20,
+                Some(BudgetExecutionFailpoint::BeforeReleaseCommit),
+            )
+            .await
+            .expect_err("pre-commit release failpoint")
+            .to_string()
+            .contains("before_budget_release_commit")
+    );
+    let before = store
+        .load_orchestration_runtime_records(&fixture.run_id)
+        .expect("load rolled-back release");
+    assert_eq!(before.queue_records[0].state, QueueState::Claimed);
+    assert_eq!(
+        before.budget_reservations[0].reservation.state,
+        BudgetReservationState::Reserved
+    );
+    assert_eq!(before.daily_budgets[0].reserved_micro_usd, 20);
+
+    assert!(
+        service
+            .release_at(
+                &claim,
+                BASE_TIME + 21,
+                Some(BudgetExecutionFailpoint::AfterReleaseCommit),
+            )
+            .await
+            .expect_err("post-commit release failpoint")
+            .to_string()
+            .contains("after_budget_release_commit")
+    );
+    let replay = service
+        .release_at(&claim, BASE_TIME + 22, None)
+        .await
+        .expect("database-only release retry");
+    assert_eq!(replay.state, QueueState::Cancelled);
+    let after = store
+        .load_orchestration_runtime_records(&fixture.run_id)
+        .expect("load committed release");
+    assert_eq!(
+        after.budget_reservations[0].reservation.state,
+        BudgetReservationState::Released
+    );
+    assert_eq!(after.daily_budgets[0].reserved_micro_usd, 0);
+    assert!(after.leases.is_empty());
+}
+
+#[tokio::test]
+async fn orchestrated_claim_cannot_dispatch_without_an_active_complete_reservation() {
+    let store = Store::in_memory().expect("open store");
+    configure(&store, 8, &[("env-a", 8)], &[("provider-a", 8)], None);
+    let service = ExecutionAdmissionService::new(store.clone());
+    let fixture = insert_ready_run(
+        &store,
+        "budget-required",
+        &["agent-a"],
+        &["provider-a"],
+        "env-a",
+        1,
+    )
+    .remove(0);
+    let record = enqueue_orchestrated(&service, &fixture, 1, BASE_TIME + 1).await;
+    let error = service
+        .try_claim_record(&record, BASE_TIME + 10, None)
+        .await
+        .expect_err("orchestration claim omitted its budget transition");
+    assert!(
+        error
+            .to_string()
+            .contains("class does not match its transition")
+    );
+    let runtime = store
+        .load_orchestration_runtime_records(&fixture.run_id)
+        .expect("load refused admission");
+    assert!(runtime.budget_reservations.is_empty());
+    assert_eq!(runtime.queue_records[0].state, QueueState::Queued);
 }

@@ -28,6 +28,7 @@ The following files were used as evidence for this page:
 - [thread_manager.rs:107-3110](../../crates/pandamux-server/src/thread_manager.rs#L107-L3110)
 - [run_execution_service.rs](../../crates/pandamux-server/src/run_execution_service.rs)
 - [execution_admission.rs](../../crates/pandamux-server/src/execution_admission.rs)
+- [execution_budget.rs](../../crates/pandamux-server/src/execution_budget.rs)
 - [attempt_worktree.rs](../../crates/pandamux-server/src/attempt_worktree.rs)
 - [orchestration_phase5c.rs](../../crates/pandamux-server/src/store/orchestration_phase5c.rs)
 - [attempt_worktrees.rs](../../crates/pandamux-server/tests/attempt_worktrees.rs)
@@ -81,7 +82,7 @@ Sources: [lib.rs:9-55](../../crates/pandamux-orchestrator/src/lib.rs#L9-L55), [s
 <!-- BEGIN:AUTOGEN pandamux_12_agent-orchestration_phase5c-foundation -->
 ## Phase 5C Durable Execution Foundation
 
-Phase 5C checkpoints C-B through C-E connect the pure run model to a private
+Phase 5C checkpoints C-B through C-F connect the pure run model to a private
 durable foundation without starting a provider. Migration 14 stores canonical
 snapshots, immutable events, derived effects, queue and lease records,
 attempt-owned worktrees, budgets, artifacts, progress, recovery reviews, and
@@ -132,6 +133,28 @@ active owners intact and block new claims until capacity drains. Expired claims
 can be requeued only by exact owner and lease identity with bounded backoff
 ([execution_admission.rs:217-401](../../crates/pandamux-server/src/execution_admission.rs#L217-L401), [execution_admission.rs:531-1165](../../crates/pandamux-server/tests/execution_admission.rs#L531-L1165)).
 
+`ExecutionBudgetService` plans the exact attempt reservation without mutating
+state; the shared admission transaction then repeats the authoritative task,
+run, compiled-agent, and organization UTC-day checks before it creates a
+dispatch effect. With no trusted smaller estimate, the plan reserves the
+task's remaining ceiling, and retries can reserve only the unreconciled
+remainder. The UTC ledger date is fixed at claim even when reconciliation
+crosses midnight
+([execution_budget.rs](../../crates/pandamux-server/src/execution_budget.rs),
+[orchestration_phase5c.rs](../../crates/pandamux-server/src/store/orchestration_phase5c.rs)).
+
+One-time supplemental grants require connected local control and an approved,
+unexpired action digest bound to the exact grant identity, run, task, attempt,
+dimension, amount, policy revision, and expiry. Reconciliation reads only the
+exact settled turn-attempt and its durable managed-turn facts. Provider-reported
+micro-USD wins; otherwise effective-dated integer pricing supplies an
+API-equivalent estimate. Unknown cost remains reserved and incomplete, while
+representable actual overage is retained and pauses further dispatch.
+Conservation compares run, reservation, agent, and UTC-day totals, but a
+balanced result is explicitly source-unverified rather than a replacement for
+usage facts. Grant, reconciliation, and pre-dispatch release transactions have
+before/after-commit recovery fixtures.
+
 `ThreadManager` remains the sole provider-session owner. Every new manual
 session now commits an interactive admission before
 `ProviderResolver::acquire_execution`; start failures, losing session races,
@@ -139,11 +162,10 @@ cancellation, terminal failure, and shutdown release the exact claim. A
 successful reusable session keeps its existing process-lifetime claim
 ([thread_manager.rs:848-1010](../../crates/pandamux-server/src/thread_manager.rs#L848-L1010)).
 
-This is still an internal runtime checkpoint. C-E does not yet interpret a run
-dispatch effect through a provider, finish grant and usage reconciliation,
-settle artifacts, own watchdog recovery, authenticate remote dispatch, expose
-public run RPC or CLI, or add desktop UI. Native and live-provider acceptance
-remain open.
+This is still an internal runtime checkpoint. C-F does not yet interpret a run
+dispatch effect through a provider, settle artifacts, own watchdog recovery,
+authenticate remote dispatch, expose public run RPC or CLI, or add desktop UI.
+Native and live-provider acceptance remain open.
 <!-- END:AUTOGEN pandamux_12_agent-orchestration_phase5c-foundation -->
 
 ---
