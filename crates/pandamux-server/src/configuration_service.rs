@@ -1,4 +1,6 @@
-use crate::{InstructionsService, PersonalRepoService, Store, StoreError};
+use crate::{
+    BundleMaterializationInput, InstructionsService, PersonalRepoService, Store, StoreError,
+};
 use pandamux_core::{
     BundleSourceManifest, CompiledInstructionBundleV1, ConfigurationRevision, ContentSha256,
     InstructionSourceId, OrganizationId, ProjectId, ProjectLayerTrustId, ProjectLayerTrustRecord,
@@ -34,6 +36,8 @@ pub struct ProjectLayerSnapshot {
 pub struct ConfigurationCompilation {
     pub bundle: CompiledInstructionBundleV1,
     pub project_layer: ProjectLayerSnapshot,
+    pub instructions_documents: Vec<SourceDocument>,
+    pub personal_documents: Vec<SourceDocument>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -325,6 +329,69 @@ impl ConfigurationService {
         Ok(ConfigurationCompilation {
             bundle,
             project_layer,
+            instructions_documents: instruction_documents,
+            personal_documents,
+        })
+    }
+
+    pub fn materialization_for_project(
+        &self,
+        project_id: &ProjectId,
+        workspace_root: &Path,
+        instruction_source_id: &InstructionSourceId,
+        compiled_at_ms: u64,
+    ) -> Result<BundleMaterializationInput, ConfigurationServiceError> {
+        let compilation = self.compile_for_project(
+            project_id,
+            workspace_root,
+            instruction_source_id,
+            compiled_at_ms,
+        )?;
+        let instructions_commit = compilation
+            .bundle
+            .source_manifest
+            .instructions_commit_sha
+            .clone();
+        let personal_commit = compilation
+            .bundle
+            .source_manifest
+            .personal_commit_sha
+            .clone()
+            .ok_or_else(state_error)?;
+        let (instructions_ref, instructions_git_bundle) = self
+            .instructions
+            .export_active_git_bundle(instruction_source_id, &instructions_commit)
+            .map_err(|error| ConfigurationServiceError {
+                reason: error.reason,
+                safe_message: error.safe_message,
+                retryable: error.retryable,
+                issues: Vec::new(),
+            })?;
+        let (personal_ref, personal_git_bundle) = self
+            .personal
+            .export_head_git_bundle(&personal_commit)
+            .map_err(|error| ConfigurationServiceError {
+                reason: error.reason,
+                safe_message: error.safe_message,
+                retryable: error.retryable,
+                issues: Vec::new(),
+            })?;
+        let project_documents = compilation
+            .bundle
+            .source_manifest
+            .project_layer_content_sha256
+            .as_ref()
+            .map(|_| compilation.project_layer.documents.clone())
+            .unwrap_or_default();
+        Ok(BundleMaterializationInput {
+            bundle: compilation.bundle,
+            instructions_documents: compilation.instructions_documents,
+            project_documents,
+            personal_documents: compilation.personal_documents,
+            instructions_ref,
+            instructions_git_bundle,
+            personal_ref,
+            personal_git_bundle,
         })
     }
 

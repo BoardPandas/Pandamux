@@ -1,4 +1,6 @@
 pub mod attachment;
+pub mod bundle_store;
+pub mod bundle_sync;
 pub mod checkpoint;
 pub mod configuration_service;
 pub mod data_paths;
@@ -28,6 +30,11 @@ pub mod windows_security;
 pub mod worktree;
 
 pub use attachment::AttachmentManager;
+pub use bundle_store::{
+    BUNDLE_ARCHIVE_SCHEMA_VERSION, BundleMaterializationInput, BundleStore, BundleStoreError,
+    MaterializedBundle,
+};
+pub use bundle_sync::{BundleSyncError, BundleSyncReport, BundleSyncService};
 pub use checkpoint::{
     ChangedFileStat, CheckpointPhase, compute_changed_files, create_checkpoint, is_git_repository,
     prune_old_checkpoints, prune_thread_checkpoints, rollback_to_checkpoint,
@@ -63,6 +70,7 @@ pub use router::Router;
 pub use runtime::{RUNTIME_FILENAME, RuntimeInfo};
 pub use server::{Server, ServerConfig};
 pub use store::{
+    BundleActivationFailpoint, BundleDistributionRecord, BundleObjectRecord,
     PersonalRepoStateRecord, ProviderExecutionAudit, RevisionedSettings, Store, StoreError,
     StoredInstructionCandidate,
 };

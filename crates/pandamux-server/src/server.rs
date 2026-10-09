@@ -20,6 +20,13 @@ use crate::request_context::{CapabilityAuthority, ClientIdentity};
 use crate::usage_scanner::{UsageScannerRuntimeConfig, UsageScannerService};
 use crate::usage_sync::{UsageHubSyncService, UsageSyncRuntimeConfig};
 
+fn current_time_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
 pub struct ServerConfig {
     pub role: ServerRole,
     pub environment_id: String,
@@ -236,8 +243,15 @@ impl Server {
             .expect("usage synchronization service lock")
             .as_ref()
         {
-            sync.handle().trigger_environment(environment_id);
+            sync.handle().trigger_environment(environment_id.clone());
         }
+        let bundle_sync = self.router.bundle_sync().clone();
+        let bundle_environment = environment_id.clone();
+        tokio::spawn(async move {
+            let _ = bundle_sync
+                .drain_environment(&bundle_environment, current_time_ms())
+                .await;
+        });
         Ok(transport)
     }
 
@@ -350,6 +364,7 @@ impl Server {
         if !self.is_shutting_down.swap(true, Ordering::SeqCst) {
             self.router.personal_repo().shutdown();
             self.router.instructions().shutdown();
+            self.router.bundle_store().shutdown();
             if let Some(polling) = self
                 .instructions_polling
                 .lock()

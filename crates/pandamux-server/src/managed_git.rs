@@ -1,5 +1,6 @@
 use crate::DataPaths;
 use pandamux_core::SecretsPolicy;
+use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -10,6 +11,7 @@ use std::time::{Duration, Instant};
 
 pub const MAX_GIT_STDERR_BYTES: usize = 16 * 1024;
 pub const MAX_GIT_TREE_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+pub const MAX_CONFIGURATION_GIT_BUNDLE_BYTES: u64 = 32 * 1024 * 1024;
 pub const LOCAL_GIT_TIMEOUT: Duration = Duration::from_secs(30);
 pub const FETCH_GIT_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -110,6 +112,15 @@ pub enum ManagedGitCommand {
         git_dir: PathBuf,
         commit: String,
     },
+    CreateBundle {
+        git_dir: PathBuf,
+        output_path: PathBuf,
+        revision: String,
+    },
+    VerifyBundle {
+        git_dir: PathBuf,
+        bundle_path: PathBuf,
+    },
 }
 
 impl ManagedGitCommand {
@@ -132,7 +143,17 @@ impl ManagedGitCommand {
             | Self::IsAncestor { git_dir, .. }
             | Self::LsRemote { git_dir, .. }
             | Self::Fetch { git_dir, .. }
-            | Self::VerifyCommit { git_dir, .. } => git_dir,
+            | Self::VerifyCommit { git_dir, .. }
+            | Self::CreateBundle { git_dir, .. }
+            | Self::VerifyBundle { git_dir, .. } => git_dir,
+        }
+    }
+
+    fn additional_managed_path(&self) -> Option<&Path> {
+        match self {
+            Self::CreateBundle { output_path, .. } => Some(output_path),
+            Self::VerifyBundle { bundle_path, .. } => Some(bundle_path),
+            _ => None,
         }
     }
 
@@ -219,6 +240,48 @@ impl ManagedGitRunner {
         self.shutdown.store(true, Ordering::Release);
     }
 
+    pub fn create_bundle_bytes(
+        &self,
+        git_dir: &Path,
+        revision: &str,
+    ) -> Result<Vec<u8>, ManagedGitError> {
+        self.data_paths
+            .ensure_private_roots()
+            .map_err(|_| bundle_io_error())?;
+        let output_path = self
+            .data_paths
+            .bundle_staging()
+            .join(format!(".git-bundle-{}", uuid::Uuid::new_v4().simple()));
+        let result = (|| {
+            self.run(ManagedGitCommand::CreateBundle {
+                git_dir: git_dir.to_path_buf(),
+                output_path: output_path.clone(),
+                revision: revision.to_string(),
+            })?;
+            let metadata = fs::symlink_metadata(&output_path).map_err(|_| bundle_io_error())?;
+            if !metadata.is_file()
+                || metadata.file_type().is_symlink()
+                || metadata.len() == 0
+                || metadata.len() > MAX_CONFIGURATION_GIT_BUNDLE_BYTES
+            {
+                return Err(ManagedGitError {
+                    reason: "git_bundle_size_invalid",
+                    safe_message: "The configuration Git bundle has an invalid size".to_string(),
+                    retryable: false,
+                });
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&output_path, fs::Permissions::from_mode(0o600))
+                    .map_err(|_| bundle_io_error())?;
+            }
+            fs::read(&output_path).map_err(|_| bundle_io_error())
+        })();
+        let _ = fs::remove_file(&output_path);
+        result
+    }
+
     pub fn run(&self, command: ManagedGitCommand) -> Result<ManagedGitOutput, ManagedGitError> {
         if self.shutdown.load(Ordering::Acquire) {
             return Err(ManagedGitError {
@@ -227,7 +290,11 @@ impl ManagedGitRunner {
                 retryable: true,
             });
         }
-        if !managed_path_is_safe(&self.data_paths, command.git_dir()) {
+        if !managed_path_is_safe(&self.data_paths, command.git_dir())
+            || command
+                .additional_managed_path()
+                .is_some_and(|path| !managed_file_path_is_safe(&self.data_paths, path))
+        {
             return Err(ManagedGitError {
                 reason: "managed_path_unsafe",
                 safe_message: "The managed Git path is outside the app-data root".to_string(),
@@ -287,7 +354,9 @@ impl ManagedGitRunner {
 
         let started = Instant::now();
         let timeout = match command {
-            ManagedGitCommand::Fetch { .. } => self.fetch_timeout,
+            ManagedGitCommand::Fetch { .. } | ManagedGitCommand::VerifyBundle { .. } => {
+                self.fetch_timeout
+            }
             _ => self.local_timeout,
         };
         let (status, cancelled, timed_out) = loop {
@@ -629,6 +698,26 @@ fn configure_process(
             git_dir_args(process, git_dir);
             process.arg("verify-commit").arg("--raw").arg(commit);
         }
+        ManagedGitCommand::CreateBundle {
+            git_dir,
+            output_path,
+            revision,
+        } => {
+            validate_ref(revision)?;
+            git_dir_args(process, git_dir);
+            process
+                .arg("bundle")
+                .arg("create")
+                .arg(output_path)
+                .arg(revision);
+        }
+        ManagedGitCommand::VerifyBundle {
+            git_dir,
+            bundle_path,
+        } => {
+            git_dir_args(process, git_dir);
+            process.arg("bundle").arg("verify").arg(bundle_path);
+        }
     }
     Ok(stdin)
 }
@@ -679,6 +768,39 @@ fn managed_path_is_safe(data_paths: &DataPaths, path: &Path) -> bool {
         }
     }
     true
+}
+
+fn managed_file_path_is_safe(data_paths: &DataPaths, path: &Path) -> bool {
+    if !data_paths.owns(path)
+        || path
+            .parent()
+            .is_none_or(|parent| !managed_path_is_safe(data_paths, parent))
+    {
+        return false;
+    }
+    let Ok(root_metadata) = std::fs::symlink_metadata(data_paths.root()) else {
+        return false;
+    };
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink()
+                || !metadata.is_file()
+                || !same_managed_owner(&root_metadata, &metadata)
+            {
+                return false;
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+                if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                    return false;
+                }
+            }
+            true
+        }
+        Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+    }
 }
 
 fn same_managed_owner(root: &std::fs::Metadata, candidate: &std::fs::Metadata) -> bool {
@@ -777,6 +899,14 @@ fn invalid_command(message: &str) -> ManagedGitError {
         reason: "git_command_invalid",
         safe_message: message.to_string(),
         retryable: false,
+    }
+}
+
+fn bundle_io_error() -> ManagedGitError {
+    ManagedGitError {
+        reason: "git_bundle_io_failed",
+        safe_message: "The configuration Git bundle could not be read or written".to_string(),
+        retryable: true,
     }
 }
 

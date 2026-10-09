@@ -408,6 +408,37 @@ impl InstructionsService {
         Ok(Some((source, documents)))
     }
 
+    pub fn export_active_git_bundle(
+        &self,
+        source_id: &InstructionSourceId,
+        expected_commit: &SourceCommitSha,
+    ) -> Result<(String, Vec<u8>), InstructionsServiceError> {
+        let source = self
+            .store
+            .get_instruction_source(source_id)?
+            .ok_or_else(source_not_found)?;
+        if source.active_source_commit_sha.as_ref() != Some(expected_commit) {
+            return Err(InstructionsServiceError {
+                reason: "active_instructions_changed",
+                safe_message: "The active instructions changed before bundle materialization"
+                    .to_string(),
+                retryable: true,
+                actual_revision: Some(source.revision),
+            });
+        }
+        let mirror = self.mirror_path(&source.canonical_remote_identity);
+        let owner = repository_owner(&mirror);
+        let _owner = owner.lock().expect("instructions mirror owner lock");
+        let export_ref = format!(
+            "refs/pandamux/exports/{}/{}",
+            sha256_hex(source_id.as_str().as_bytes()),
+            expected_commit.as_str()
+        );
+        self.pin_candidate_commit(&mirror, &export_ref, expected_commit)?;
+        let bytes = self.git.create_bundle_bytes(&mirror, &export_ref)?;
+        Ok((export_ref, bytes))
+    }
+
     fn finish_failed_check(
         &self,
         source: &InstructionsSourceRecord,

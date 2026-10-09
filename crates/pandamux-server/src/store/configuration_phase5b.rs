@@ -1,6 +1,8 @@
 use super::{Store, StoreError, checked_i64, checked_u64, configuration_revision};
 use pandamux_core::{
-    BundleSha, ConfigurationAuditRecord, ContentSha256, InstructionCandidateId,
+    ArchiveSha256, BundleActivationKind, BundleActivationRecord, BundleDistributionReceipt,
+    BundleDistributionState, BundleSha, BundleSourceManifest, BundleTransferId,
+    ConfigurationAuditRecord, ContentSha256, EnvironmentId, InstructionCandidateId,
     InstructionCandidateRecord, InstructionSourceId, InstructionsSourceRecord, OrganizationId,
     ProjectId, ProjectLayerTrustRecord, ProjectRepositoryRecord, SourceCommitSha, TrackingRef,
 };
@@ -20,6 +22,37 @@ pub struct PersonalRepoStateRecord {
     pub last_request_digest: Option<ContentSha256>,
     pub last_result: Option<serde_json::Value>,
     pub updated_at_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleObjectRecord {
+    pub bundle_sha: BundleSha,
+    pub source_manifest: BundleSourceManifest,
+    pub payload_sha256: ContentSha256,
+    pub archive_sha256: ArchiveSha256,
+    pub archive_bytes: u64,
+    pub compiler_version: String,
+    pub object_path: String,
+    pub verified_at_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleDistributionRecord {
+    pub transfer_id: BundleTransferId,
+    pub environment_id: EnvironmentId,
+    pub bundle_sha: BundleSha,
+    pub archive_sha256: ArchiveSha256,
+    pub expected_prior_bundle_sha: Option<BundleSha>,
+    pub state: BundleDistributionState,
+    pub receipt: Option<BundleDistributionReceipt>,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BundleActivationFailpoint {
+    BeforeTransaction,
+    AfterTransaction,
 }
 
 impl Store {
@@ -957,6 +990,384 @@ impl Store {
         .map_err(StoreError::from)
     }
 
+    pub fn save_bundle_object(&self, object: &BundleObjectRecord) -> Result<(), StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let existing = load_bundle_object(&conn, &object.bundle_sha)?;
+        if let Some(existing) = existing {
+            if existing == *object {
+                return Ok(());
+            }
+            return Err(StoreError::Data(
+                "bundle object identity conflicts with stored metadata".to_string(),
+            ));
+        }
+        conn.execute(
+            "INSERT INTO bundle_objects (
+                bundle_sha, source_manifest_json, payload_sha256, archive_sha256,
+                archive_bytes, compiler_version, object_path, verified_at_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                object.bundle_sha.as_str(),
+                serde_json::to_string(&object.source_manifest)?,
+                object.payload_sha256.as_str(),
+                object.archive_sha256.as_str(),
+                checked_i64(object.archive_bytes, "bundle archive bytes")?,
+                object.compiler_version,
+                object.object_path,
+                checked_i64(object.verified_at_ms, "bundle verified_at_ms")?,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_bundle_object(
+        &self,
+        bundle_sha: &BundleSha,
+    ) -> Result<Option<BundleObjectRecord>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        load_bundle_object(&conn, bundle_sha)
+    }
+
+    pub fn current_bundle_activation(&self) -> Result<Option<BundleActivationRecord>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        load_current_bundle_activation(&conn)
+    }
+
+    pub fn activate_bundle_with_outbox(
+        &self,
+        activation: &BundleActivationRecord,
+        candidate_id: Option<&InstructionCandidateId>,
+        audit: &ConfigurationAuditRecord,
+        distributions: &[BundleDistributionRecord],
+        failpoint: Option<BundleActivationFailpoint>,
+    ) -> Result<(), StoreError> {
+        if failpoint == Some(BundleActivationFailpoint::BeforeTransaction) {
+            return Err(StoreError::Data(
+                "injected failure before bundle activation".to_string(),
+            ));
+        }
+        if audit.bundle_sha.as_ref() != Some(&activation.bundle_sha) {
+            return Err(StoreError::Data(
+                "bundle activation audit identity does not match".to_string(),
+            ));
+        }
+        if distributions.iter().any(|distribution| {
+            distribution.bundle_sha != activation.bundle_sha
+                || distribution.expected_prior_bundle_sha != activation.prior_bundle_sha
+                || distribution.state != BundleDistributionState::Pending
+                || distribution.receipt.is_some()
+        }) {
+            return Err(StoreError::Data(
+                "bundle distribution does not match its activation".to_string(),
+            ));
+        }
+
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let duplicate = tx
+            .query_row(
+                "SELECT bundle_sha, source_manifest_json, kind, actor, prior_bundle_sha,
+                        activated_at_ms
+                 FROM bundle_activations WHERE id = ?1",
+                [activation.id.as_str()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, i64>(5)?,
+                    ))
+                },
+            )
+            .optional()?;
+        if let Some((bundle, manifest, kind, actor, prior, activated_at_ms)) = duplicate {
+            let stored = BundleActivationRecord {
+                id: activation.id.clone(),
+                bundle_sha: BundleSha::parse(bundle)
+                    .map_err(|_| StoreError::Data("invalid stored bundle identity".to_string()))?,
+                source_manifest: serde_json::from_str(&manifest)?,
+                activated_at_ms: checked_u64(
+                    activated_at_ms,
+                    "bundle_activations.activated_at_ms",
+                )?,
+                kind: parse_enum(&kind)?,
+                actor,
+                prior_bundle_sha: prior.map(BundleSha::parse).transpose().map_err(|_| {
+                    StoreError::Data("invalid stored prior bundle identity".to_string())
+                })?,
+            };
+            if stored == *activation {
+                return Ok(());
+            }
+            return Err(StoreError::Data(
+                "bundle activation identity was reused with different content".to_string(),
+            ));
+        }
+
+        let current = load_current_bundle_activation(&tx)?;
+        if current.as_ref().map(|record| &record.bundle_sha) != activation.prior_bundle_sha.as_ref()
+        {
+            return Err(StoreError::Data(
+                "active bundle changed before activation".to_string(),
+            ));
+        }
+        if load_bundle_object(&tx, &activation.bundle_sha)?.is_none() {
+            return Err(StoreError::Data(
+                "bundle activation references a missing object".to_string(),
+            ));
+        }
+        tx.execute(
+            "UPDATE bundle_activations SET deactivated_at_ms = ?1
+             WHERE deactivated_at_ms IS NULL",
+            [checked_i64(
+                activation.activated_at_ms,
+                "bundle deactivated_at_ms",
+            )?],
+        )?;
+        insert_bundle_activation(&tx, activation, candidate_id)?;
+        if let Some(candidate_id) = candidate_id {
+            let changed = tx.execute(
+                "UPDATE instruction_candidates
+                 SET state = 'activated', updated_at_ms = ?1
+                 WHERE id = ?2 AND activatable = 1
+                   AND state IN ('approved', 'awaiting_approval')",
+                params![
+                    checked_i64(activation.activated_at_ms, "candidate updated_at_ms")?,
+                    candidate_id.as_str(),
+                ],
+            )?;
+            if changed != 1 {
+                return Err(StoreError::Data(
+                    "instruction candidate is not activatable".to_string(),
+                ));
+            }
+            tx.execute(
+                "UPDATE instruction_sources
+                 SET active_source_commit_sha = (
+                         SELECT observed_source_commit_sha
+                         FROM instruction_candidates WHERE id = ?1
+                     ),
+                     active_bundle_sha = ?2
+                 WHERE id = (
+                     SELECT source_id FROM instruction_candidates WHERE id = ?1
+                 )",
+                params![candidate_id.as_str(), activation.bundle_sha.as_str()],
+            )?;
+        }
+        insert_configuration_audit(&tx, audit)?;
+        for distribution in distributions {
+            tx.execute(
+                "INSERT INTO bundle_distribution (
+                    transfer_id, environment_id, bundle_sha, archive_sha256,
+                    expected_prior_bundle_sha, state, receipt_json,
+                    created_at_ms, updated_at_ms
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, 'pending', NULL, ?6, ?7)",
+                params![
+                    distribution.transfer_id.as_str(),
+                    distribution.environment_id.as_str(),
+                    distribution.bundle_sha.as_str(),
+                    distribution.archive_sha256.as_str(),
+                    distribution
+                        .expected_prior_bundle_sha
+                        .as_ref()
+                        .map(BundleSha::as_str),
+                    checked_i64(distribution.created_at_ms, "distribution created_at_ms")?,
+                    checked_i64(distribution.updated_at_ms, "distribution updated_at_ms")?,
+                ],
+            )?;
+        }
+        tx.commit()?;
+        if failpoint == Some(BundleActivationFailpoint::AfterTransaction) {
+            return Err(StoreError::Data(
+                "injected failure after bundle activation".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn list_incomplete_bundle_distributions(
+        &self,
+        environment_id: Option<&EnvironmentId>,
+    ) -> Result<Vec<BundleDistributionRecord>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut statement = conn.prepare(
+            "SELECT transfer_id, environment_id, bundle_sha, archive_sha256,
+                    expected_prior_bundle_sha, state, receipt_json,
+                    created_at_ms, updated_at_ms
+             FROM bundle_distribution
+             WHERE state IN ('pending', 'uploading')
+               AND (?1 IS NULL OR environment_id = ?1)
+             ORDER BY created_at_ms, transfer_id",
+        )?;
+        let rows = statement.query_map(
+            [environment_id.map(EnvironmentId::as_str)],
+            distribution_from_row,
+        )?;
+        rows.collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(bundle_distribution_from_sql)
+            .collect()
+    }
+
+    pub fn mark_bundle_distribution_uploading(
+        &self,
+        transfer_id: &BundleTransferId,
+        updated_at_ms: u64,
+    ) -> Result<bool, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.execute(
+            "UPDATE bundle_distribution SET state = 'uploading', updated_at_ms = ?1
+             WHERE transfer_id = ?2 AND state IN ('pending', 'uploading')",
+            params![
+                checked_i64(updated_at_ms, "distribution updated_at_ms")?,
+                transfer_id.as_str(),
+            ],
+        )? == 1)
+    }
+
+    pub fn reset_bundle_distribution_pending(
+        &self,
+        transfer_id: &BundleTransferId,
+        updated_at_ms: u64,
+    ) -> Result<(), StoreError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE bundle_distribution SET state = 'pending', updated_at_ms = ?1
+             WHERE transfer_id = ?2 AND state = 'uploading'",
+            params![
+                checked_i64(updated_at_ms, "distribution updated_at_ms")?,
+                transfer_id.as_str(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn complete_bundle_distribution(
+        &self,
+        receipt: &BundleDistributionReceipt,
+    ) -> Result<(), StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let existing = load_bundle_distribution(&conn, &receipt.transfer_id)?.ok_or_else(|| {
+            StoreError::Data("bundle distribution receipt has no outbox row".to_string())
+        })?;
+        if existing.environment_id != receipt.environment_id
+            || existing.bundle_sha != receipt.bundle_sha
+            || existing.archive_sha256 != receipt.archive_sha256
+            || existing.expected_prior_bundle_sha != receipt.prior_bundle_sha
+            || receipt.stored_bundle_sha != receipt.bundle_sha
+            || receipt.active_bundle_sha != receipt.bundle_sha
+            || receipt.state != BundleDistributionState::Active
+        {
+            return Err(StoreError::Data(
+                "bundle distribution receipt does not match its outbox row".to_string(),
+            ));
+        }
+        if let Some(stored) = existing.receipt {
+            if stored == *receipt {
+                return Ok(());
+            }
+            return Err(StoreError::Data(
+                "bundle distribution receipt identity conflicts".to_string(),
+            ));
+        }
+        let changed = conn.execute(
+            "UPDATE bundle_distribution
+             SET state = 'active', receipt_json = ?1, updated_at_ms = ?2
+             WHERE transfer_id = ?3 AND state IN ('pending', 'uploading')",
+            params![
+                serde_json::to_string(receipt)?,
+                checked_i64(receipt.received_at_ms, "distribution received_at_ms")?,
+                receipt.transfer_id.as_str(),
+            ],
+        )?;
+        if changed != 1 {
+            return Err(StoreError::Data(
+                "bundle distribution could not be completed".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn accept_received_bundle(
+        &self,
+        object: &BundleObjectRecord,
+        activation: &BundleActivationRecord,
+        receipt: &BundleDistributionReceipt,
+    ) -> Result<BundleDistributionReceipt, StoreError> {
+        if activation.bundle_sha != object.bundle_sha
+            || receipt.bundle_sha != object.bundle_sha
+            || receipt.archive_sha256 != object.archive_sha256
+            || receipt.stored_bundle_sha != object.bundle_sha
+            || receipt.active_bundle_sha != object.bundle_sha
+            || receipt.prior_bundle_sha != activation.prior_bundle_sha
+            || receipt.state != BundleDistributionState::Active
+        {
+            return Err(StoreError::Data(
+                "received bundle identities do not agree".to_string(),
+            ));
+        }
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        if let Some(existing) = load_bundle_distribution(&tx, &receipt.transfer_id)? {
+            if existing.environment_id == receipt.environment_id
+                && existing.bundle_sha == receipt.bundle_sha
+                && existing.archive_sha256 == receipt.archive_sha256
+                && existing.expected_prior_bundle_sha == receipt.prior_bundle_sha
+                && let Some(stored_receipt) = existing.receipt
+            {
+                return Ok(stored_receipt);
+            }
+            return Err(StoreError::Data(
+                "bundle transfer identity was reused with different content".to_string(),
+            ));
+        }
+        if let Some(existing) = load_bundle_object(&tx, &object.bundle_sha)? {
+            if existing != *object {
+                return Err(StoreError::Data(
+                    "received bundle object conflicts with stored metadata".to_string(),
+                ));
+            }
+        } else {
+            insert_bundle_object(&tx, object)?;
+        }
+        let current = load_current_bundle_activation(&tx)?;
+        if current.as_ref().map(|record| &record.bundle_sha) != activation.prior_bundle_sha.as_ref()
+        {
+            return Err(StoreError::Data(
+                "node active bundle does not match the expected prior bundle".to_string(),
+            ));
+        }
+        tx.execute(
+            "UPDATE bundle_activations SET deactivated_at_ms = ?1
+             WHERE deactivated_at_ms IS NULL",
+            [checked_i64(
+                activation.activated_at_ms,
+                "bundle deactivated_at_ms",
+            )?],
+        )?;
+        insert_bundle_activation(&tx, activation, None)?;
+        tx.execute(
+            "INSERT INTO bundle_distribution (
+                transfer_id, environment_id, bundle_sha, archive_sha256,
+                expected_prior_bundle_sha, state, receipt_json,
+                created_at_ms, updated_at_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7, ?7)",
+            params![
+                receipt.transfer_id.as_str(),
+                receipt.environment_id.as_str(),
+                receipt.bundle_sha.as_str(),
+                receipt.archive_sha256.as_str(),
+                receipt.prior_bundle_sha.as_ref().map(BundleSha::as_str),
+                serde_json::to_string(receipt)?,
+                checked_i64(receipt.received_at_ms, "distribution received_at_ms")?,
+            ],
+        )?;
+        tx.commit()?;
+        Ok(receipt.clone())
+    }
+
     pub fn append_configuration_audit(
         &self,
         audit: &ConfigurationAuditRecord,
@@ -983,6 +1394,236 @@ impl Store {
         )?;
         Ok(())
     }
+}
+
+fn insert_bundle_object(
+    conn: &rusqlite::Connection,
+    object: &BundleObjectRecord,
+) -> Result<(), StoreError> {
+    conn.execute(
+        "INSERT INTO bundle_objects (
+            bundle_sha, source_manifest_json, payload_sha256, archive_sha256,
+            archive_bytes, compiler_version, object_path, verified_at_ms
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            object.bundle_sha.as_str(),
+            serde_json::to_string(&object.source_manifest)?,
+            object.payload_sha256.as_str(),
+            object.archive_sha256.as_str(),
+            checked_i64(object.archive_bytes, "bundle archive bytes")?,
+            object.compiler_version,
+            object.object_path,
+            checked_i64(object.verified_at_ms, "bundle verified_at_ms")?,
+        ],
+    )?;
+    Ok(())
+}
+
+fn load_bundle_object(
+    conn: &rusqlite::Connection,
+    bundle_sha: &BundleSha,
+) -> Result<Option<BundleObjectRecord>, StoreError> {
+    conn.query_row(
+        "SELECT source_manifest_json, payload_sha256, archive_sha256,
+                archive_bytes, compiler_version, object_path, verified_at_ms
+         FROM bundle_objects WHERE bundle_sha = ?1",
+        [bundle_sha.as_str()],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<i64>>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, i64>(6)?,
+            ))
+        },
+    )
+    .optional()?
+    .map(
+        |(manifest, payload, archive, archive_bytes, compiler, path, verified_at_ms)| {
+            let archive = archive.ok_or_else(|| {
+                StoreError::Data("bundle object is missing its archive identity".to_string())
+            })?;
+            let archive_bytes = archive_bytes.ok_or_else(|| {
+                StoreError::Data("bundle object is missing its archive length".to_string())
+            })?;
+            Ok(BundleObjectRecord {
+                bundle_sha: bundle_sha.clone(),
+                source_manifest: serde_json::from_str(&manifest)?,
+                payload_sha256: ContentSha256::parse(payload).map_err(|_| {
+                    StoreError::Data("invalid stored bundle payload identity".to_string())
+                })?,
+                archive_sha256: ArchiveSha256::parse(archive).map_err(|_| {
+                    StoreError::Data("invalid stored bundle archive identity".to_string())
+                })?,
+                archive_bytes: checked_u64(archive_bytes, "bundle_objects.archive_bytes")?,
+                compiler_version: compiler,
+                object_path: path,
+                verified_at_ms: checked_u64(verified_at_ms, "bundle_objects.verified_at_ms")?,
+            })
+        },
+    )
+    .transpose()
+}
+
+fn insert_bundle_activation(
+    conn: &rusqlite::Connection,
+    activation: &BundleActivationRecord,
+    candidate_id: Option<&InstructionCandidateId>,
+) -> Result<(), StoreError> {
+    conn.execute(
+        "INSERT INTO bundle_activations (
+            id, bundle_sha, candidate_id, source_manifest_json, kind, actor,
+            prior_bundle_sha, activated_at_ms, deactivated_at_ms
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL)",
+        params![
+            activation.id.as_str(),
+            activation.bundle_sha.as_str(),
+            candidate_id.map(InstructionCandidateId::as_str),
+            serde_json::to_string(&activation.source_manifest)?,
+            enum_text(&activation.kind)?,
+            activation.actor,
+            activation.prior_bundle_sha.as_ref().map(BundleSha::as_str),
+            checked_i64(activation.activated_at_ms, "bundle activated_at_ms")?,
+        ],
+    )?;
+    Ok(())
+}
+
+fn load_current_bundle_activation(
+    conn: &rusqlite::Connection,
+) -> Result<Option<BundleActivationRecord>, StoreError> {
+    conn.query_row(
+        "SELECT id, bundle_sha, source_manifest_json, kind, actor,
+                prior_bundle_sha, activated_at_ms
+         FROM bundle_activations WHERE deactivated_at_ms IS NULL",
+        [],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, i64>(6)?,
+            ))
+        },
+    )
+    .optional()?
+    .map(
+        |(id, bundle, manifest, kind, actor, prior, activated_at_ms)| {
+            Ok(BundleActivationRecord {
+                id: pandamux_core::BundleActivationId::from(id),
+                bundle_sha: BundleSha::parse(bundle)
+                    .map_err(|_| StoreError::Data("invalid stored bundle identity".to_string()))?,
+                source_manifest: serde_json::from_str(&manifest)?,
+                activated_at_ms: checked_u64(
+                    activated_at_ms,
+                    "bundle_activations.activated_at_ms",
+                )?,
+                kind: parse_enum::<BundleActivationKind>(&kind)?,
+                actor,
+                prior_bundle_sha: prior.map(BundleSha::parse).transpose().map_err(|_| {
+                    StoreError::Data("invalid stored prior bundle identity".to_string())
+                })?,
+            })
+        },
+    )
+    .transpose()
+}
+
+type BundleDistributionSql = (
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+    String,
+    Option<String>,
+    i64,
+    i64,
+);
+
+fn distribution_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<BundleDistributionSql> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+        row.get(7)?,
+        row.get(8)?,
+    ))
+}
+
+fn bundle_distribution_from_sql(
+    (transfer, environment, bundle, archive, prior, state, receipt, created, updated): BundleDistributionSql,
+) -> Result<BundleDistributionRecord, StoreError> {
+    Ok(BundleDistributionRecord {
+        transfer_id: BundleTransferId::from(transfer),
+        environment_id: EnvironmentId::from(environment),
+        bundle_sha: BundleSha::parse(bundle)
+            .map_err(|_| StoreError::Data("invalid distribution bundle identity".to_string()))?,
+        archive_sha256: ArchiveSha256::parse(archive)
+            .map_err(|_| StoreError::Data("invalid distribution archive identity".to_string()))?,
+        expected_prior_bundle_sha: prior.map(BundleSha::parse).transpose().map_err(|_| {
+            StoreError::Data("invalid distribution prior bundle identity".to_string())
+        })?,
+        state: parse_enum::<BundleDistributionState>(&state)?,
+        receipt: receipt
+            .map(|value| serde_json::from_str(&value))
+            .transpose()?,
+        created_at_ms: checked_u64(created, "bundle_distribution.created_at_ms")?,
+        updated_at_ms: checked_u64(updated, "bundle_distribution.updated_at_ms")?,
+    })
+}
+
+fn load_bundle_distribution(
+    conn: &rusqlite::Connection,
+    transfer_id: &BundleTransferId,
+) -> Result<Option<BundleDistributionRecord>, StoreError> {
+    conn.query_row(
+        "SELECT transfer_id, environment_id, bundle_sha, archive_sha256,
+                expected_prior_bundle_sha, state, receipt_json,
+                created_at_ms, updated_at_ms
+         FROM bundle_distribution WHERE transfer_id = ?1",
+        [transfer_id.as_str()],
+        distribution_from_row,
+    )
+    .optional()?
+    .map(bundle_distribution_from_sql)
+    .transpose()
+}
+
+fn insert_configuration_audit(
+    conn: &rusqlite::Connection,
+    audit: &ConfigurationAuditRecord,
+) -> Result<(), StoreError> {
+    conn.execute(
+        "INSERT INTO configuration_audit (
+            id, kind, actor, source_id, candidate_id, bundle_sha,
+            details_json, created_at_ms
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            audit.id.as_str(),
+            audit.kind,
+            audit.actor,
+            audit.source_id.as_ref().map(InstructionSourceId::as_str),
+            audit
+                .candidate_id
+                .as_ref()
+                .map(InstructionCandidateId::as_str),
+            audit.bundle_sha.as_ref().map(BundleSha::as_str),
+            serde_json::to_string(&audit.details)?,
+            checked_i64(audit.created_at_ms, "configuration audit created_at_ms")?,
+        ],
+    )?;
+    Ok(())
 }
 
 fn enum_text(value: &impl serde::Serialize) -> Result<String, StoreError> {
@@ -1092,6 +1733,64 @@ mod tests {
             approved_by: "local-control".to_string(),
             approved_at_ms,
             revoked_at_ms: None,
+        }
+    }
+
+    fn test_bundle_object(identity: char, verified_at_ms: u64) -> BundleObjectRecord {
+        let digest = identity.to_string().repeat(64);
+        BundleObjectRecord {
+            bundle_sha: BundleSha::parse(digest.clone()).expect("bundle identity"),
+            source_manifest: BundleSourceManifest {
+                instructions_commit_sha: SourceCommitSha::parse(identity.to_string().repeat(40))
+                    .expect("source identity"),
+                project_layer_content_sha256: None,
+                personal_commit_sha: None,
+                settings_revision: ConfigurationRevision::new(1).expect("revision"),
+            },
+            payload_sha256: ContentSha256::parse(digest).expect("payload identity"),
+            archive_sha256: ArchiveSha256::parse(
+                (if identity == 'a' { 'c' } else { 'd' })
+                    .to_string()
+                    .repeat(64),
+            )
+            .expect("archive identity"),
+            archive_bytes: 42,
+            compiler_version: "test-compiler".to_string(),
+            object_path: format!("bundles/{}", identity.to_string().repeat(64)),
+            verified_at_ms,
+        }
+    }
+
+    fn test_activation(
+        object: &BundleObjectRecord,
+        id: &str,
+        prior: Option<BundleSha>,
+        activated_at_ms: u64,
+    ) -> BundleActivationRecord {
+        BundleActivationRecord {
+            id: pandamux_core::BundleActivationId::new(id),
+            bundle_sha: object.bundle_sha.clone(),
+            source_manifest: object.source_manifest.clone(),
+            activated_at_ms,
+            kind: BundleActivationKind::TrustedBranch,
+            actor: "local-control".to_string(),
+            prior_bundle_sha: prior,
+        }
+    }
+
+    fn test_activation_audit(
+        activation: &BundleActivationRecord,
+        id: &str,
+    ) -> ConfigurationAuditRecord {
+        ConfigurationAuditRecord {
+            id: pandamux_core::ConfigurationAuditId::new(id),
+            kind: "bundle_activated".to_string(),
+            actor: activation.actor.clone(),
+            source_id: None,
+            candidate_id: None,
+            bundle_sha: Some(activation.bundle_sha.clone()),
+            details: serde_json::json!({ "activationId": activation.id }),
+            created_at_ms: activation.activated_at_ms,
         }
     }
 
@@ -1368,5 +2067,93 @@ mod tests {
         let mut wrong_scope = test_project_trust(&repository, "trust-wrong-scope", 'c', 31);
         wrong_scope.organization_id = OrganizationId::new("organization-other");
         assert!(store.insert_project_layer_trust(&wrong_scope).is_err());
+    }
+
+    #[test]
+    fn activation_crash_boundaries_leave_old_or_new_complete_state() {
+        let store = Store::in_memory().expect("store");
+        let first_object = test_bundle_object('a', 10);
+        store
+            .save_bundle_object(&first_object)
+            .expect("save first object");
+        let first = test_activation(&first_object, "activation-first", None, 10);
+        store
+            .activate_bundle_with_outbox(
+                &first,
+                None,
+                &test_activation_audit(&first, "audit-first"),
+                &[],
+                None,
+            )
+            .expect("activate first bundle");
+
+        let second_object = test_bundle_object('b', 20);
+        store
+            .save_bundle_object(&second_object)
+            .expect("save second object");
+        let second = test_activation(
+            &second_object,
+            "activation-second",
+            Some(first_object.bundle_sha.clone()),
+            20,
+        );
+        let distribution = BundleDistributionRecord {
+            transfer_id: BundleTransferId::new("transfer-second"),
+            environment_id: EnvironmentId::new("environment-remote"),
+            bundle_sha: second_object.bundle_sha.clone(),
+            archive_sha256: second_object.archive_sha256.clone(),
+            expected_prior_bundle_sha: Some(first_object.bundle_sha.clone()),
+            state: BundleDistributionState::Pending,
+            receipt: None,
+            created_at_ms: 20,
+            updated_at_ms: 20,
+        };
+        assert!(
+            store
+                .activate_bundle_with_outbox(
+                    &second,
+                    None,
+                    &test_activation_audit(&second, "audit-second-before"),
+                    std::slice::from_ref(&distribution),
+                    Some(BundleActivationFailpoint::BeforeTransaction),
+                )
+                .is_err()
+        );
+        assert_eq!(
+            store
+                .current_bundle_activation()
+                .expect("current activation"),
+            Some(first.clone())
+        );
+        assert!(
+            store
+                .list_incomplete_bundle_distributions(None)
+                .expect("pending distributions")
+                .is_empty()
+        );
+
+        assert!(
+            store
+                .activate_bundle_with_outbox(
+                    &second,
+                    None,
+                    &test_activation_audit(&second, "audit-second-after"),
+                    std::slice::from_ref(&distribution),
+                    Some(BundleActivationFailpoint::AfterTransaction),
+                )
+                .is_err()
+        );
+        assert_eq!(
+            store
+                .current_bundle_activation()
+                .expect("current activation"),
+            Some(second)
+        );
+        assert_eq!(
+            store
+                .list_incomplete_bundle_distributions(None)
+                .expect("pending distributions"),
+            vec![distribution]
+        );
     }
 }

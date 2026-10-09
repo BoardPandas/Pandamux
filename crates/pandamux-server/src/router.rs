@@ -19,12 +19,14 @@ use pandamux_protocol::antigravity_rpc::{
 };
 use pandamux_protocol::{
     AttachmentGetParams, AttachmentImportPathParams, AttachmentListParams,
-    AttachmentPutChunkParams, CapacityPushParams, CapacityPushResult, CapacityQueryParams,
-    CapacityRefreshParams, CapacityRefreshResult, CheckpointDiffParams, CheckpointListParams,
-    CheckpointRollbackParams, EnvironmentImportSshConfigParams, EnvironmentImportSshConfigResult,
-    EnvironmentListResult, GitCommitParams, GitCreatePrParams, GitPushParams, GitStatusParams,
-    HarkDictatePromptParams, HarkSpellbookSyncParams, HelloParams, HelloResult, HubRoutingContext,
-    IdentifyResult, InstructionsCheckParams, InstructionsCheckResult, InstructionsDiffParams,
+    AttachmentPutChunkParams, BUNDLE_PUSH_SCHEMA_VERSION, BundleDiscardUploadParams,
+    BundlePrepareUploadParams, BundlePrepareUploadResult, BundlePushParams, CapacityPushParams,
+    CapacityPushResult, CapacityQueryParams, CapacityRefreshParams, CapacityRefreshResult,
+    CheckpointDiffParams, CheckpointListParams, CheckpointRollbackParams,
+    EnvironmentImportSshConfigParams, EnvironmentImportSshConfigResult, EnvironmentListResult,
+    GitCommitParams, GitCreatePrParams, GitPushParams, GitStatusParams, HarkDictatePromptParams,
+    HarkSpellbookSyncParams, HelloParams, HelloResult, HubRoutingContext, IdentifyResult,
+    InstructionsCheckParams, InstructionsCheckResult, InstructionsDiffParams,
     InstructionsDiffResult, InstructionsStatusParams, InstructionsStatusResult, McpCallToolParams,
     PROTOCOL_VERSION, PingResult, ProjectLayerDiffParams, ProjectLayerDiffResult,
     ProjectLayerStatusParams, ProjectLayerStatusResult, ProviderHealthParams, ProviderHealthReport,
@@ -43,6 +45,8 @@ use pandamux_protocol::{
 };
 
 use crate::attachment::AttachmentManager;
+use crate::bundle_store::{BundleStore, BundleStoreError};
+use crate::bundle_sync::BundleSyncService;
 use crate::configuration_service::{ConfigurationService, ConfigurationServiceError};
 use crate::data_paths::DataPaths;
 use crate::driver_registry::DriverRegistry;
@@ -75,6 +79,8 @@ pub struct Router {
     personal_repo: PersonalRepoService,
     instructions: InstructionsService,
     configuration: ConfigurationService,
+    bundle_store: BundleStore,
+    bundle_sync: BundleSyncService,
     data_paths: DataPaths,
     role: ServerRole,
     environment_id: String,
@@ -445,6 +451,23 @@ fn require_local_configuration_peer(context: &RequestContext) -> Result<(), RpcE
     }
 }
 
+fn require_bundle_node_proxy(
+    context: &RequestContext,
+    local_environment_id: &str,
+) -> Result<(), RpcError> {
+    if matches!(context.peer_role, PeerRole::NodeProxy)
+        && context.authenticated_environment_id.as_str() == local_environment_id
+    {
+        Ok(())
+    } else {
+        Err(RpcError::with_data(
+            -32001,
+            "Bundle transfer methods require this node's authenticated proxy",
+            json!({ "reason": "bundle_node_proxy_required" }),
+        ))
+    }
+}
+
 fn instructions_rpc_error(
     error: InstructionsServiceError,
     source_id: Option<&pandamux_core::InstructionSourceId>,
@@ -471,6 +494,17 @@ fn configuration_rpc_error(error: ConfigurationServiceError) -> RpcError {
             "reason": error.reason,
             "retryable": error.retryable,
             "issues": error.issues,
+        }),
+    )
+}
+
+fn bundle_rpc_error(error: BundleStoreError) -> RpcError {
+    RpcError::with_data(
+        -32042,
+        error.safe_message,
+        json!({
+            "reason": error.reason,
+            "retryable": error.retryable,
         }),
     )
 }
@@ -577,6 +611,13 @@ impl Router {
         let environment_router = Arc::new(crate::environment_router::EnvironmentRouter::new(
             pandamux_core::ids::EnvironmentId::new(environment_id.clone()),
         ));
+        let bundle_store = BundleStore::new(data_paths.clone(), store.clone());
+        let bundle_sync = BundleSyncService::new(
+            store.clone(),
+            bundle_store.clone(),
+            environment_router.clone(),
+            EnvironmentId::new(environment_id.clone()),
+        );
         Self {
             store,
             mcp,
@@ -597,6 +638,8 @@ impl Router {
             personal_repo,
             instructions,
             configuration,
+            bundle_store,
+            bundle_sync,
             data_paths,
             role,
             environment_id,
@@ -652,6 +695,14 @@ impl Router {
             self.instructions.clone(),
             self.personal_repo.clone(),
         );
+        self.bundle_store.shutdown();
+        self.bundle_store = BundleStore::new(data_paths.clone(), self.store.clone());
+        self.bundle_sync = BundleSyncService::new(
+            self.store.clone(),
+            self.bundle_store.clone(),
+            self.environment_router.clone(),
+            EnvironmentId::new(self.environment_id.clone()),
+        );
         self.data_paths = data_paths;
         self
     }
@@ -680,6 +731,14 @@ impl Router {
         &self.configuration
     }
 
+    pub fn bundle_store(&self) -> &BundleStore {
+        &self.bundle_store
+    }
+
+    pub fn bundle_sync(&self) -> &BundleSyncService {
+        &self.bundle_sync
+    }
+
     pub async fn shutdown_antigravity_auth(&self) {
         self.antigravity_auth.shutdown().await;
     }
@@ -693,6 +752,12 @@ impl Router {
         environment_router: Arc<crate::environment_router::EnvironmentRouter>,
     ) -> Self {
         self.environment_router = environment_router;
+        self.bundle_sync = BundleSyncService::new(
+            self.store.clone(),
+            self.bundle_store.clone(),
+            self.environment_router.clone(),
+            EnvironmentId::new(self.environment_id.clone()),
+        );
         self
     }
 
@@ -1149,6 +1214,19 @@ impl Router {
             }
             return Some(RpcResponse::error(id, error));
         }
+        if method.starts_with("bundle.") && !matches!(context.peer_role, PeerRole::NodeProxy) {
+            if is_notification {
+                return None;
+            }
+            return Some(RpcResponse::error(
+                id,
+                RpcError::with_data(
+                    -32001,
+                    "Bundle transfer methods require the authenticated node proxy",
+                    json!({ "reason": "bundle_node_proxy_required" }),
+                ),
+            ));
+        }
 
         // Hub environment routing: if targeted to a remote environment, forward across transport
         let requires_hub_preprocessing = matches!(
@@ -1328,6 +1406,13 @@ impl Router {
             "instructions.diff" => self.handle_instructions_diff(context, params),
             "projectLayer.status" => self.handle_project_layer_status(context, params).await,
             "projectLayer.diff" => self.handle_project_layer_diff(context, params).await,
+            "bundle.prepareUpload" | "bundle.prepare_upload" => {
+                self.handle_bundle_prepare_upload(context, params)
+            }
+            "bundle.discardUpload" | "bundle.discard_upload" => {
+                self.handle_bundle_discard_upload(context, params)
+            }
+            "bundle.push" => self.handle_bundle_push(context, params).await,
             "provider.health" | "provider.probe" => self.handle_provider_health(params).await,
             "provider.models" => self.handle_provider_models(params).await,
             "provider.login.preview" => self.handle_provider_login_preview(params).await,
@@ -1717,6 +1802,83 @@ impl Router {
                     }),
                 )
             })
+    }
+
+    fn handle_bundle_prepare_upload(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_bundle_node_proxy(context, &self.environment_id)?;
+        let params = serde_json::from_value::<BundlePrepareUploadParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        if params.schema_version != BUNDLE_PUSH_SCHEMA_VERSION
+            || params.environment_id != context.authenticated_environment_id
+            || params.archive_bytes == 0
+            || params.archive_bytes > crate::bundle_store::MAX_BUNDLE_ARCHIVE_BYTES
+        {
+            return Err(RpcError::with_data(
+                -32009,
+                "The bundle upload reservation is invalid for this node",
+                json!({ "reason": "bundle_upload_invalid", "retryable": false }),
+            ));
+        }
+        let path = self
+            .bundle_store
+            .prepare_upload(&params.transfer_id)
+            .map_err(bundle_rpc_error)?;
+        serde_json::to_value(BundlePrepareUploadResult {
+            transfer_id: params.transfer_id,
+            private_artifact_ref: path.to_string_lossy().into_owned(),
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn handle_bundle_discard_upload(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_bundle_node_proxy(context, &self.environment_id)?;
+        let params = serde_json::from_value::<BundleDiscardUploadParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        if params.environment_id != context.authenticated_environment_id {
+            return Err(RpcError::with_data(
+                -32001,
+                "The bundle upload environment does not match this node",
+                json!({ "reason": "bundle_environment_mismatch" }),
+            ));
+        }
+        self.bundle_store
+            .discard_upload(&params.transfer_id)
+            .map_err(bundle_rpc_error)?;
+        Ok(json!({ "discarded": true }))
+    }
+
+    async fn handle_bundle_push(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_bundle_node_proxy(context, &self.environment_id)?;
+        let params = serde_json::from_value::<BundlePushParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let environment_id = context.authenticated_environment_id.clone();
+        let bundle_store = self.bundle_store.clone();
+        let received_at_ms = Self::now_ms();
+        let result = tokio::task::spawn_blocking(move || {
+            bundle_store.receive_uploaded_bundle(&environment_id, &params, received_at_ms)
+        })
+        .await
+        .map_err(|_| {
+            RpcError::with_data(
+                -32000,
+                "The bundle verification worker did not join cleanly",
+                json!({ "reason": "bundle_worker_join_failed", "retryable": true }),
+            )
+        })?
+        .map_err(bundle_rpc_error)?;
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
     }
 
     fn handle_hello(&self, params: Value) -> Result<Value, RpcError> {
@@ -4094,6 +4256,80 @@ impl Router {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn bundle_upload_rpc_is_node_proxy_only_and_environment_bound() {
+        let root = tempfile::tempdir().expect("temporary bundle RPC root");
+        let router = Router::new(
+            Store::in_memory().expect("store"),
+            ServerRole::Node,
+            "env-node".to_string(),
+        )
+        .with_data_dir(root.path().join("app"));
+        let params = json!({
+            "schemaVersion": BUNDLE_PUSH_SCHEMA_VERSION,
+            "transferId": "bundle-transfer-rpc",
+            "environmentId": "env-node",
+            "archiveSha256": "a".repeat(64),
+            "archiveBytes": 42,
+        });
+        let denied = router
+            .handle_request(RpcRequest::new(
+                1,
+                "bundle.prepareUpload",
+                Some(params.clone()),
+            ))
+            .await
+            .expect("internal denial response");
+        assert_eq!(
+            denied
+                .error
+                .as_ref()
+                .and_then(|error| error.data.as_ref())
+                .and_then(|data| data.get("reason"))
+                .and_then(Value::as_str),
+            Some("bundle_node_proxy_required")
+        );
+
+        let node = RequestContext::node_proxy(
+            EnvironmentId::new("env-node"),
+            crate::ClientIdentity::default(),
+        );
+        let prepared = router
+            .handle_request_with_context(
+                &node,
+                RpcRequest::new(2, "bundle.prepareUpload", Some(params)),
+            )
+            .await
+            .expect("prepare response");
+        let result = prepared.result.expect("prepare result");
+        let artifact = PathBuf::from(
+            result["privateArtifactRef"]
+                .as_str()
+                .expect("private artifact path"),
+        );
+        assert!(artifact.starts_with(root.path().join("app/bundle-staging")));
+        assert!(!artifact.exists());
+
+        let forged = router
+            .handle_request_with_context(
+                &node,
+                RpcRequest::new(
+                    3,
+                    "bundle.prepareUpload",
+                    Some(json!({
+                        "schemaVersion": BUNDLE_PUSH_SCHEMA_VERSION,
+                        "transferId": "bundle-transfer-forged",
+                        "environmentId": "env-other",
+                        "archiveSha256": "b".repeat(64),
+                        "archiveBytes": 42,
+                    })),
+                ),
+            )
+            .await
+            .expect("forged response");
+        assert_eq!(forged.error.as_ref().map(|error| error.code), Some(-32001));
+    }
 
     #[tokio::test]
     async fn project_layer_rpc_is_local_exact_hash_and_origin_aware() {

@@ -335,6 +335,26 @@ impl PersonalRepoService {
         Ok((head, documents))
     }
 
+    pub fn export_head_git_bundle(
+        &self,
+        expected_head: &SourceCommitSha,
+    ) -> Result<(String, Vec<u8>), PersonalRepoError> {
+        let _owner = self.owner.lock().expect("personal repository owner lock");
+        let head = self.ensure_initialized_owned(None)?;
+        if &head != expected_head {
+            return Err(PersonalRepoError {
+                reason: "personal_head_changed",
+                safe_message: "The personal configuration changed before bundle materialization"
+                    .to_string(),
+                retryable: true,
+            });
+        }
+        let bytes = self
+            .git
+            .create_bundle_bytes(&self.git_dir(), PERSONAL_MAIN_REF)?;
+        Ok((PERSONAL_MAIN_REF.to_string(), bytes))
+    }
+
     fn ensure_initialized_owned(
         &self,
         failpoint: Option<PersonalRepoFailpoint>,

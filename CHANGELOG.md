@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Added
 
+- **Added verified bundle activation and durable node distribution in version
+  0.60.82.** PandaMUX now materializes each compiled configuration as one
+  content-addressed private object containing the canonical payload, exact
+  instructions and personal Git objects, and bounded project snapshots. Local
+  activation commits the active pointer, immutable audit, candidate state, and
+  remote outbox together, so interruption leaves either the complete old state
+  or the complete new state. Authenticated node proxies receive private SFTP
+  uploads, independently verify every archive, source, layer, payload, and
+  prior-bundle identity before atomic activation, and return replay-stable
+  receipts. Pending transfers resume on reconnect exactly once, while existing
+  run records retain their originally pinned bundle.
+
 - **Added exact project-layer trust and trusted local agent controls in version
   0.60.81.** PandaMUX now discovers a project repository from its server-owned
   workspace, binds approval to the exact organization, project, credential-free

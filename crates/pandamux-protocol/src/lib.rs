@@ -36,7 +36,10 @@ pub use attachment_rpc::{
     AttachmentGetParams, AttachmentGetResult, AttachmentImportPathParams, AttachmentImportResult,
     AttachmentListParams, AttachmentListResult, AttachmentPutChunkParams, AttachmentPutResult,
 };
-pub use bundle_rpc::{BUNDLE_PUSH_SCHEMA_VERSION, BundlePushParams, BundlePushResult};
+pub use bundle_rpc::{
+    BUNDLE_PUSH_SCHEMA_VERSION, BundleDiscardUploadParams, BundlePrepareUploadParams,
+    BundlePrepareUploadResult, BundlePushParams, BundlePushResult,
+};
 pub use checkpoint_rpc::{CheckpointDiffParams, CheckpointListParams, CheckpointRollbackParams};
 pub use environment_rpc::{
     EnvironmentImportSshConfigParams, EnvironmentImportSshConfigResult, EnvironmentListParams,
