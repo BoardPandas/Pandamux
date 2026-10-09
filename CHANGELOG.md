@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Published the detailed Phase 5A implementation contract.** The plan now
+  fixes ownership for canonical run and agent records, versioned authored
+  schemas, composite bundle identity, deterministic DAG and routing policy,
+  replay and approval invariants, commit-sized implementation checkpoints, and
+  an acceptance matrix. Version 0.60.67 is planning-only and adds no runtime
+  orchestration, persistence, provider dispatch, push, deployment, activation,
+  packaging, signing, or release claim.
+
 - **Recorded exact physical-laptop P4-C6 acceptance.** Exact 0.60.64 commit
   `a41c5bd40861fb37de7a53252d96dcb055828362` passed the required 30-minute
   provider disconnect and full-screen terminal Modern Standby rows on the

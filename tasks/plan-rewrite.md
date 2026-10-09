@@ -2937,6 +2937,8 @@ Acceptance:
 
 #### Checkpoint 5A: schemas, deterministic policy, DAG, and run state machine
 
+Detailed implementation contract: [`2026-10-09-phase-5a-deterministic-orchestrator.md`](2026-10-09-phase-5a-deterministic-orchestrator.md).
+
 1. Version schemas for `orchestrator.yaml`, `agents/*.md`, knowledge references, prompts, routing rules, and compiled instruction bundles. Unknown schema versions fail closed; errors carry file, field, code, and safe explanation.
 2. Define pure domain records: `Run`, `AgentTask`, `Attempt`, `DependencyEdge`, `BlackboardEntry`, `BudgetReservation`, `ApprovalRequirement`, `CheckpointRef`, `RouteDecision`, and terminal run states. State transitions are explicit, total, replayable, and idempotent. Existing similarly named core records are adapted or migrated through one documented boundary, not left as a second run model.
 3. Implement two-step routing: task to PandaMUX agent, then agent to provider/model/environment/instance. Organization and capability filters are hard constraints; deterministic scores and tie-breakers are recorded. An LLM may classify or propose a DAG, but schema parse and policy reconciliation fail closed.
