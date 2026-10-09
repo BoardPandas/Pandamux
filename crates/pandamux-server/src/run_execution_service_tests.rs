@@ -987,10 +987,30 @@ async fn life_service_shutdown_drains_active_owner_and_reports_zero_debt() {
         .expect("dispatch shutdown provider attempt");
 
     let report = harness.service.shutdown(Duration::from_secs(5)).await;
+    let shutdown_run = harness.run();
+    let shutdown_runtime = harness
+        .store
+        .load_orchestration_runtime_records(&harness.run_id)
+        .expect("load shutdown diagnostics");
+    let shutdown_turn = harness
+        .store
+        .get_turn(&prepared.turn.id)
+        .expect("load shutdown turn");
+    let shutdown_turn_attempt = harness
+        .store
+        .get_turn_attempt(&prepared.turn_attempt.id)
+        .expect("load shutdown turn attempt");
     assert!(report.intake_closed);
     assert!(report.claims_stopped);
     assert_eq!(report.attempts_total, 1);
-    assert_eq!(report.attempts_verified, 1);
+    assert_eq!(
+        report.attempts_verified,
+        1,
+        "{report:?}; attempt={:?}; turn={shutdown_turn:?}; turn_attempt={shutdown_turn_attempt:?}; progress={:?}; reviews={:?}",
+        shutdown_run.attempts[&prepared.run_attempt_id],
+        shutdown_runtime.progress,
+        shutdown_runtime.recovery_reviews
+    );
     assert_eq!(report.attempts_quarantined, 0);
     assert!(!report.timed_out);
     assert_eq!(report.live_owned_tasks, 0);

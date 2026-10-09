@@ -4153,6 +4153,27 @@ impl Store {
         &self,
         progress: &AttemptProgressRecord,
     ) -> Result<AttemptProgressOutcome, StoreError> {
+        self.record_attempt_progress_with_clock_policy(progress, false)
+    }
+
+    /// Records provider-originated progress without letting a concurrently
+    /// persisted server control event make the provider writer fail. Provider
+    /// event timestamps are sampled before this transaction, so cancellation
+    /// may legitimately advance the durable attempt clock in between. Only
+    /// this owner-internal path clamps that stale sample to the durable clock;
+    /// ordinary callers continue to fail closed on clock regression.
+    pub(crate) fn record_provider_attempt_progress(
+        &self,
+        progress: &AttemptProgressRecord,
+    ) -> Result<AttemptProgressOutcome, StoreError> {
+        self.record_attempt_progress_with_clock_policy(progress, true)
+    }
+
+    fn record_attempt_progress_with_clock_policy(
+        &self,
+        progress: &AttemptProgressRecord,
+        clamp_to_durable_clock: bool,
+    ) -> Result<AttemptProgressOutcome, StoreError> {
         const STREAM_INTERVAL_MS: u64 = 1_000;
         const STREAM_BYTES: u64 = 4 * 1024;
         const RETAINED_NONTERMINAL: i64 = 256;
@@ -4215,8 +4236,13 @@ impl Store {
             });
         }
 
+        let mut progress = progress.clone();
         if progress.at_ms < dispatch.last_progress_at_ms {
-            return Err(data_error("attempt progress timestamp moved backwards"));
+            if clamp_to_durable_clock {
+                progress.at_ms = dispatch.last_progress_at_ms;
+            } else {
+                return Err(data_error("attempt progress timestamp moved backwards"));
+            }
         }
         if progress.terminal
             && !matches!(
@@ -4286,7 +4312,7 @@ impl Store {
             }
         }
 
-        insert_progress(&tx, progress)?;
+        insert_progress(&tx, &progress)?;
         let changed = tx.execute(
             "UPDATE orchestration_attempt_dispatch
                 SET last_progress_at_ms = ?1, updated_at_ms = max(updated_at_ms, ?1)
@@ -11783,6 +11809,91 @@ mod tests {
             256
         );
         assert_eq!(retained.len(), 257);
+    }
+
+    #[test]
+    fn life_01_provider_progress_survives_cancel_clock_race_without_relaxing_strict_clock() {
+        let store = store_with_repository();
+        let (run, events) = fixture_lifecycle(false);
+        let effects = store
+            .insert_orchestration_run(&run_record(run), &events)
+            .expect("insert provider progress run");
+        let dispatch_effect = effects
+            .iter()
+            .find(|record| {
+                matches!(
+                    record.effect.kind,
+                    pandamux_core::OrchestrationEffectKind::DispatchTask { .. }
+                )
+            })
+            .expect("provider progress dispatch effect")
+            .effect
+            .id
+            .clone();
+        let mut runtime = runtime_records(dispatch_effect);
+        runtime.progress.clear();
+        runtime.recovery_reviews.clear();
+        store
+            .insert_orchestration_runtime_records(&runtime)
+            .expect("insert provider progress runtime");
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE orchestration_attempt_dispatch
+                    SET state = 'accepted'
+                  WHERE attempt_id = 'run-attempt-phase5c'",
+                [],
+            )
+            .expect("accept provider progress dispatch");
+        store
+            .record_attempt_cancel_intent(&RunAttemptId::new("run-attempt-phase5c"), 31_000)
+            .expect("advance durable clock with cancellation intent");
+
+        let provider_progress = AttemptProgressRecord {
+            id: AttemptProgressId::new("progress-provider-after-cancel"),
+            run_id: RunId::new("run-phase5c"),
+            task_id: RunTaskId::new("task-phase5c"),
+            attempt_id: RunAttemptId::new("run-attempt-phase5c"),
+            kind: AttemptProgressKind::ApprovalTransition,
+            payload_digest: "a".repeat(64),
+            at_ms: 30_500,
+            cumulative_stream_bytes: None,
+            terminal: false,
+        };
+        let persisted = store
+            .record_provider_attempt_progress(&provider_progress)
+            .expect("clamp provider event sampled before cancellation");
+        assert_eq!(persisted.disposition, AttemptProgressDisposition::Persisted);
+        assert_eq!(persisted.last_progress_at_ms, 31_000);
+        assert_eq!(persisted.record.expect("persisted progress").at_ms, 31_000);
+
+        let replay = store
+            .record_provider_attempt_progress(&provider_progress)
+            .expect("replay clamped provider progress");
+        assert_eq!(replay.disposition, AttemptProgressDisposition::Duplicate);
+        assert_eq!(replay.last_progress_at_ms, 31_000);
+        assert_eq!(replay.record.expect("replayed progress").at_ms, 31_000);
+
+        let strict_regression = AttemptProgressRecord {
+            id: AttemptProgressId::new("progress-strict-after-cancel"),
+            payload_digest: "b".repeat(64),
+            ..provider_progress
+        };
+        assert!(
+            store
+                .record_attempt_progress(&strict_regression)
+                .expect_err("ordinary caller still rejects a regressed timestamp")
+                .to_string()
+                .contains("moved backwards")
+        );
+        let retained = store
+            .load_attempt_progress(&RunAttemptId::new("run-attempt-phase5c"))
+            .expect("load clamped provider progress");
+        assert_eq!(retained.len(), 1);
+        assert_eq!(retained[0].id.as_str(), "progress-provider-after-cancel");
+        assert_eq!(retained[0].at_ms, 31_000);
     }
 
     #[test]

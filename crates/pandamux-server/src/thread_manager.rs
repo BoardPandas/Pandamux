@@ -576,7 +576,7 @@ fn record_prepared_progress(
         )
     );
     store
-        .record_attempt_progress(&AttemptProgressRecord {
+        .record_provider_attempt_progress(&AttemptProgressRecord {
             id: AttemptProgressId::new(format!("attempt-progress-{id_digest}")),
             run_id: dispatch.run_id,
             task_id: dispatch.task_id,

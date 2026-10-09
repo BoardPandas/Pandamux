@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Prevented shutdown cancellation from dropping provider terminal usage in
+  version 0.60.101.** Provider events sampled immediately before a durable
+  cancellation intent now clamp their owner-internal progress timestamp to the
+  attempt's newer durable clock within the same transaction. The public store
+  API still rejects regressed timestamps. Deterministic cancellation, replay,
+  and strict-clock tests plus repeated shutdown coverage retain usage
+  reconciliation, verified worktree cleanup, and zero lifecycle debt under
+  load.
+
 - **Reported terminal confirmation actions as disabled to native accessibility
   clients in version 0.60.88.** Resolved trusted-configuration cards retain
   their visible disabled controls while a narrow AccessKit wrapper now exposes
