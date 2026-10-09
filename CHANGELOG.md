@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Added
 
+- **Completed the Phase 5A CI and documentation checkpoint in version
+  0.60.75.** The macOS job now explicitly tests the pure orchestrator, while
+  compile-only all-target checks cover its musl x64 and arm64 graphs without
+  weakening the Windows workspace, x64 remote-binary, or Rust 1.89 MSRV jobs.
+  The active plan and maintained wiki now use the implemented V1 schema and
+  tier vocabulary, map every canonical orchestration module, and clearly
+  separate pure-domain evidence from the still-absent persistence, effect
+  interpreter, runtime dispatch, worktree, RPC, CLI, desktop, and live-provider
+  paths.
+
 - **Added bounded model proposals and replayable Phase 5 run state in version
   0.60.74.** Model output now accepts only one size- and depth-bounded strict
   V1 JSON object, allows one parse-only correction, and cannot grant authority

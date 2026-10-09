@@ -34,21 +34,21 @@ Sources: [README.md:1-6](../README.md#L1-L6)
 <!-- BEGIN:AUTOGEN pandamux_01_overview_product -->
 ## Product Model
 
-PandaMUX centers work on durable chat threads and visible terminal sessions rather than embedding provider state in the desktop process. This separation lets the same Hub serve the GPUI desktop, the interactive CLI, and a separately scoped MCP adapter ([CLAUDE.md:215-239](../CLAUDE.md#L215-L239)).
+PandaMUX centers work on durable chat threads and visible terminal sessions rather than embedding provider state in the desktop process. This separation lets the same Hub serve the GPUI desktop, the interactive CLI, and a separately scoped MCP adapter ([CLAUDE.md:219-241](../CLAUDE.md#L219-L241)).
 
 | Concern | Owning component | Practical result |
 |---|---|---|
-| Threads, turns, events, settings, provider processes, PTYs | `pandamux-server` | Work survives desktop projection changes and clients submit intents rather than mutating canonical state ([CLAUDE.md:215-223](../CLAUDE.md#L215-L223)) |
-| Chat, settings, side surfaces, timeline, terminal grid | `pandamux-desktop` | The native UI renders server state and terminal bytes with GPUI ([CLAUDE.md:188-215](../CLAUDE.md#L188-L215)) |
-| Local automation and inspection | `pandamux-cli` | Commands use the same authenticated protocol as the desktop ([CLAUDE.md:200-200](../CLAUDE.md#L200-L200), [CLAUDE.md:225-233](../CLAUDE.md#L225-L233)) |
-| Remote Linux execution | Hub plus node daemon | A Hub reaches the node through SSH and a private proxy rather than a public node listener ([README.md:258-260](../README.md#L258-L260)) |
+| Threads, turns, events, settings, provider processes, PTYs | `pandamux-server` | Work survives desktop projection changes and clients submit intents rather than mutating canonical state ([CLAUDE.md:219-227](../CLAUDE.md#L219-L227)) |
+| Chat, settings, side surfaces, timeline, terminal grid | `pandamux-desktop` | The native UI renders server state and terminal bytes with GPUI ([CLAUDE.md:192-219](../CLAUDE.md#L192-L219)) |
+| Local automation and inspection | `pandamux-cli` | Commands use the same authenticated protocol as the desktop ([CLAUDE.md:194-208](../CLAUDE.md#L194-L208), [CLAUDE.md:225-237](../CLAUDE.md#L225-L237)) |
+| Remote Linux execution | Hub plus node daemon | A Hub reaches the node through SSH and a private proxy rather than a public node listener ([README.md:204-205](../README.md#L204-L205)) |
 
 - Provider instances are stored configurations, not interchangeable provider kinds.
 - Local and remote execution environments are explicit routing targets.
 - The MCP adapter receives a distinct read-only capability surface.
-- FullAccess providers have host-user authority and are not process-isolated ([CLAUDE.md:235-237](../CLAUDE.md#L235-L237)).
+- FullAccess providers have host-user authority and are not process-isolated ([CLAUDE.md:239-241](../CLAUDE.md#L239-L241)).
 
-Sources: [CLAUDE.md:188-239](../CLAUDE.md#L188-L239), [README.md:258-260](../README.md#L258-L260)
+Sources: [CLAUDE.md:192-241](../CLAUDE.md#L192-L241), [README.md:204-205](../README.md#L204-L205)
 <!-- END:AUTOGEN pandamux_01_overview_product -->
 
 ---
@@ -56,21 +56,21 @@ Sources: [CLAUDE.md:188-239](../CLAUDE.md#L188-L239), [README.md:258-260](../REA
 <!-- BEGIN:AUTOGEN pandamux_01_overview_stack -->
 ## Technology Stack
 
-The workspace uses Rust 2024, inherits one workspace version across all crates, declares Rust 1.89 as its scoped minimum, and pins Rust 1.98.1 for development and evidence ([Cargo.toml:25-30](../Cargo.toml#L25-L30), [README.md:204-209](../README.md#L204-L209)).
+The workspace uses Rust 2024, inherits one workspace version across all crates, declares Rust 1.89 as its scoped minimum, and pins Rust 1.98.1 for development and evidence ([Cargo.toml:25-30](../Cargo.toml#L25-L30), [README.md:207-212](../README.md#L207-L212)).
 
 | Layer | Technology | Evidence |
 |---|---|---|
 | Desktop UI | GPUI through `gpui-kit` | The desktop entry point initializes GPUI Kit and opens the PandaMUX window ([main.rs:3-5](../crates/pandamux-desktop/src/main.rs#L3-L5), [main.rs:26-61](../crates/pandamux-desktop/src/main.rs#L26-L61)) |
-| Terminal grid | `alacritty_terminal` | The desktop owns grid rendering rather than PTY processes ([CLAUDE.md:1-3](../CLAUDE.md#L1-L3), [CLAUDE.md:199-215](../CLAUDE.md#L199-L215)) |
-| Local PTYs | `portable-pty` | PTY ownership stays behind the server ([CLAUDE.md:1-3](../CLAUDE.md#L1-L3), [CLAUDE.md:197-215](../CLAUDE.md#L197-L215)) |
-| Durable store | SQLite through bundled `rusqlite` 0.33 | The shared manifest declares the database dependency and the server owns durable state ([Cargo.toml:32-46](../Cargo.toml#L32-L46), [CLAUDE.md:197-197](../CLAUDE.md#L197-L197)) |
-| Remote composition | `russh` | The server composes SSH-connected Linux nodes through the remote crate ([CLAUDE.md:1-3](../CLAUDE.md#L1-L3), [CLAUDE.md:196-197](../CLAUDE.md#L196-L197)) |
+| Terminal grid | `alacritty_terminal` | The desktop owns grid rendering rather than PTY processes ([CLAUDE.md:1-3](../CLAUDE.md#L1-L3), [CLAUDE.md:201-218](../CLAUDE.md#L201-L218)) |
+| Local PTYs | `portable-pty` | PTY ownership stays behind the server ([CLAUDE.md:1-3](../CLAUDE.md#L1-L3), [CLAUDE.md:201-219](../CLAUDE.md#L201-L219)) |
+| Durable store | SQLite through bundled `rusqlite` 0.33 | The shared manifest declares the database dependency and the server owns durable state ([Cargo.toml:32-46](../Cargo.toml#L32-L46), [CLAUDE.md:201-219](../CLAUDE.md#L201-L219)) |
+| Remote composition | `russh` | The server composes SSH-connected Linux nodes through the remote crate ([CLAUDE.md:1-3](../CLAUDE.md#L1-L3), [CLAUDE.md:200-216](../CLAUDE.md#L200-L216)) |
 | Async runtime | Tokio 1.52.3 | Shared workspace dependency with per-crate features ([Cargo.toml:32-48](../Cargo.toml#L32-L48)) |
 | Wire and policy formats | Serde, JSON, JSON Schema, and typed YAML | Exact-pinned shared serialization dependencies support protocol values and the pure orchestrator boundary ([Cargo.toml:32-48](../Cargo.toml#L32-L48)) |
 
-The dependency boundary is intentional: the server owns PTYs and remote composition, the desktop owns grid rendering and projections, and the orchestrator remains a pure serializable policy layer ([CLAUDE.md:188-219](../CLAUDE.md#L188-L219)).
+The dependency boundary is intentional: the server owns PTYs and remote composition, the desktop owns grid rendering and projections, and the orchestrator remains a pure schema, bundle, DAG, routing, policy, and run-state engine that emits only serializable values ([CLAUDE.md:192-223](../CLAUDE.md#L192-L223)).
 
-Sources: [Cargo.toml:25-48](../Cargo.toml#L25-L48), [README.md:204-209](../README.md#L204-L209), [CLAUDE.md:188-219](../CLAUDE.md#L188-L219), [main.rs:3-61](../crates/pandamux-desktop/src/main.rs#L3-L61)
+Sources: [Cargo.toml:25-48](../Cargo.toml#L25-L48), [README.md:207-212](../README.md#L207-L212), [CLAUDE.md:192-223](../CLAUDE.md#L192-L223), [main.rs:3-61](../crates/pandamux-desktop/src/main.rs#L3-L61)
 <!-- END:AUTOGEN pandamux_01_overview_stack -->
 
 ---
@@ -83,7 +83,7 @@ The root manifest declares ten product crates plus one workspace validation tool
 | Crate | Responsibility |
 |---|---|
 | `pandamux-core` | Framework-free domain types, policies, IDs, settings, threads, turns, and events |
-| `pandamux-orchestrator` | Pure Phase 5 run-domain, compatibility, and policy-engine boundary |
+| `pandamux-orchestrator` | Pure Phase 5A schema, bundle, DAG, routing, approval, model-parse, and replay engine |
 | `pandamux-protocol` | Versioned JSON-RPC, subscriptions, terminal contracts, settings contracts, and proxy wire types |
 | `pandamux-client` | Client-side event projections and rendering-oriented state |
 | `pandamux-providers` | Provider drivers, profiles, parsing, and process supervision |
@@ -94,7 +94,7 @@ The root manifest declares ten product crates plus one workspace validation tool
 | `pandamux-desktop` | GPUI chat shell, timeline, settings, side surfaces, and terminal rendering |
 | `pandamux-boundary-check` | Tooling crate that validates target-resolved dependency and feature ownership |
 
-These responsibilities and their hard dependency boundaries are defined by the development guide and manifests ([CLAUDE.md:188-219](../CLAUDE.md#L188-L219)).
+These responsibilities and their hard dependency boundaries are defined by the development guide and manifests ([CLAUDE.md:192-223](../CLAUDE.md#L192-L223)).
 
 ```mermaid
 graph TD
@@ -116,7 +116,7 @@ graph TD
     Checker -. validates .-> Desktop
 ```
 
-Sources: [Cargo.toml:1-23](../Cargo.toml#L1-L23), [CLAUDE.md:188-219](../CLAUDE.md#L188-L219)
+Sources: [Cargo.toml:1-23](../Cargo.toml#L1-L23), [CLAUDE.md:192-223](../CLAUDE.md#L192-L223)
 <!-- END:AUTOGEN pandamux_01_overview_layout -->
 
 ---

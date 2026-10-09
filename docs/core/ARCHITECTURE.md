@@ -8,8 +8,10 @@ The following files were used as evidence for this page:
 - [CLAUDE.md:188-237](../../CLAUDE.md#L188-L237)
 - [crates/pandamux-client/src/lib.rs:1-702](../../crates/pandamux-client/src/lib.rs#L1-L702)
 - [crates/pandamux-desktop/src/lib.rs:1-558](../../crates/pandamux-desktop/src/lib.rs#L1-L558)
-- [crates/pandamux-orchestrator/src/lib.rs:1-13](../../crates/pandamux-orchestrator/src/lib.rs#L1-L13)
-- [crates/pandamux-orchestrator/src/compatibility.rs:1-115](../../crates/pandamux-orchestrator/src/compatibility.rs#L1-L115)
+- [crates/pandamux-orchestrator/src/lib.rs:1-55](../../crates/pandamux-orchestrator/src/lib.rs#L1-L55)
+- [crates/pandamux-orchestrator/src/compatibility.rs:1-501](../../crates/pandamux-orchestrator/src/compatibility.rs#L1-L501)
+- [crates/pandamux-orchestrator/src/bundle.rs:1-1157](../../crates/pandamux-orchestrator/src/bundle.rs#L1-L1157)
+- [crates/pandamux-orchestrator/src/state.rs:1-1320](../../crates/pandamux-orchestrator/src/state.rs#L1-L1320)
 - [crates/pandamux-protocol/src/lib.rs:1-245](../../crates/pandamux-protocol/src/lib.rs#L1-L245)
 - [crates/pandamux-server/src/lib.rs:1-101](../../crates/pandamux-server/src/lib.rs#L1-L101)
 - [tools/pandamux-boundary-check/src/lib.rs:1-761](../../tools/pandamux-boundary-check/src/lib.rs#L1-L761)
@@ -30,7 +32,7 @@ PandaMUX has ten product crates plus one workspace validation tool. Domain, orch
 | Crate | Primary responsibility | Boundary evidence |
 |---|---|---|
 | `pandamux-core` | Framework-free IDs, threads, events, policy, settings, routing, and usage types | Foundation for pure domain consumers ([CLAUDE.md:208-208](../../CLAUDE.md#L208-L208)) |
-| `pandamux-orchestrator` | Pure Phase 5 policy and run-domain boundary | Its current dependency surface is only core plus serialization/schema parsers; forbidden transitive implementations are rejected ([lib.rs:3-7](../../crates/pandamux-orchestrator/src/lib.rs#L3-L7), [lib.rs:614-647](../../tools/pandamux-boundary-check/src/lib.rs#L614-L647)) |
+| `pandamux-orchestrator` | Pure Phase 5A schema, bundle, DAG, routing, approval, proposal-parse, and run-state engine | Its public surface is value-to-value behavior, and forbidden transitive runtime implementations are rejected ([lib.rs:3-55](../../crates/pandamux-orchestrator/src/lib.rs#L3-L55), [lib.rs:614-647](../../tools/pandamux-boundary-check/src/lib.rs#L614-L647)) |
 | `pandamux-protocol` | Versioned JSON-RPC, subscriptions, terminal, settings, usage, and proxy messages | Carries wire values without importing implementation crates ([CLAUDE.md:211-211](../../CLAUDE.md#L211-L211)) |
 | `pandamux-providers` | Provider drivers and process supervision | Runtime implementation remains outside the pure orchestrator ([CLAUDE.md:195-195](../../CLAUDE.md#L195-L195)) |
 | `pandamux-remote` | SSH pool, bootstrap, command execution, SFTP, proxy tunnels, and worktree bundles | Server remains the production composition owner ([CLAUDE.md:212-212](../../CLAUDE.md#L212-L212)) |
@@ -61,7 +63,7 @@ graph TD
     Checker -. validates resolved graphs .-> Desktop
 ```
 
-Sources: [Cargo.toml:1-48](../../Cargo.toml#L1-L48), [CLAUDE.md:188-219](../../CLAUDE.md#L188-L219), [lib.rs:1-13](../../crates/pandamux-orchestrator/src/lib.rs#L1-L13), [lib.rs:368-449](../../tools/pandamux-boundary-check/src/lib.rs#L368-L449), [lib.rs:524-647](../../tools/pandamux-boundary-check/src/lib.rs#L524-L647)
+Sources: [Cargo.toml:1-48](../../Cargo.toml#L1-L48), [CLAUDE.md:190-221](../../CLAUDE.md#L190-L221), [lib.rs:1-55](../../crates/pandamux-orchestrator/src/lib.rs#L1-L55), [lib.rs:368-449](../../tools/pandamux-boundary-check/src/lib.rs#L368-L449), [lib.rs:524-647](../../tools/pandamux-boundary-check/src/lib.rs#L524-L647)
 <!-- END:AUTOGEN pandamux_03_architecture_crates -->
 
 ---
@@ -74,13 +76,14 @@ The server owns durable and executable state; clients own projections and presen
 | Owner | State or process | Client-facing consequence |
 |---|---|---|
 | Server | SQLite store, provider drivers, terminal manager, attachments, environment router, usage services | Mutations are submitted as RPC requests; state is not written directly by the desktop ([lib.rs:25-58](../../crates/pandamux-server/src/lib.rs#L25-L58)) |
+| Pure orchestrator | Authored-schema parsing, canonical bundles, validated plans, deterministic routes, command decisions, event reduction, and replay | Produces serializable events and effects but does not persist or execute them ([lib.rs:9-55](../../crates/pandamux-orchestrator/src/lib.rs#L9-L55), [state.rs:55-356](../../crates/pandamux-orchestrator/src/state.rs#L55-L356)) |
 | Client crate | Thread/run projections, token smoothing, usage view state | Rendering state is derived from server events and can be rebuilt ([lib.rs:7-19](../../crates/pandamux-client/src/lib.rs#L7-L19)) |
 | Desktop | GPUI views, composer, picker, terminal view, tray, and bridge handle | UI modules consume projections and send commands through the bridge ([lib.rs:21-60](../../crates/pandamux-desktop/src/lib.rs#L21-L60)) |
 | Protocol | Serializable request, response, event, and proxy contracts | Both sides share data types without importing the other's implementation ([lib.rs:1-22](../../crates/pandamux-protocol/src/lib.rs#L1-L22)) |
 
 The server's public composition surface makes these responsibilities explicit: `Store`, `Router`, `ThreadManager`, `TerminalServerManager`, `EnvironmentRouter`, and `ProxyEnvironmentTransport` are server exports, while the client exports projection and formatting types ([lib.rs:31-58](../../crates/pandamux-server/src/lib.rs#L31-L58), [lib.rs:7-19](../../crates/pandamux-client/src/lib.rs#L7-L19)).
 
-Sources: [CLAUDE.md:188-223](../../CLAUDE.md#L188-L223), [lib.rs:25-58](../../crates/pandamux-server/src/lib.rs#L25-L58), [lib.rs:7-19](../../crates/pandamux-client/src/lib.rs#L7-L19)
+Sources: [CLAUDE.md:190-225](../../CLAUDE.md#L190-L225), [lib.rs:9-55](../../crates/pandamux-orchestrator/src/lib.rs#L9-L55), [state.rs:55-356](../../crates/pandamux-orchestrator/src/state.rs#L55-L356), [lib.rs:25-58](../../crates/pandamux-server/src/lib.rs#L25-L58), [lib.rs:7-19](../../crates/pandamux-client/src/lib.rs#L7-L19)
 <!-- END:AUTOGEN pandamux_03_architecture_ownership -->
 
 ---

@@ -6,7 +6,19 @@ The following files were used as evidence for this page:
 
 - [thread.rs:1-235](../../crates/pandamux-core/src/thread.rs#L1-L235)
 - [event.rs:1-196](../../crates/pandamux-core/src/event.rs#L1-L196)
-- [agent_def.rs:1-86](../../crates/pandamux-core/src/agent_def.rs#L1-L86)
+- [agent_def.rs:1-154](../../crates/pandamux-core/src/agent_def.rs#L1-L154)
+- [run.rs:1-725](../../crates/pandamux-core/src/run.rs#L1-L725)
+- [instruction_bundle.rs:1-165](../../crates/pandamux-core/src/instruction_bundle.rs#L1-L165)
+- [lib.rs:1-55](../../crates/pandamux-orchestrator/src/lib.rs#L1-L55)
+- [schema/mod.rs:1-1022](../../crates/pandamux-orchestrator/src/schema/mod.rs#L1-L1022)
+- [schema/v1.rs:1-308](../../crates/pandamux-orchestrator/src/schema/v1.rs#L1-L308)
+- [diagnostics.rs:1-446](../../crates/pandamux-orchestrator/src/diagnostics.rs#L1-L446)
+- [bundle.rs:1-1157](../../crates/pandamux-orchestrator/src/bundle.rs#L1-L1157)
+- [dag.rs:1-742](../../crates/pandamux-orchestrator/src/dag.rs#L1-L742)
+- [policy.rs:1-402](../../crates/pandamux-orchestrator/src/policy.rs#L1-L402)
+- [routing.rs:1-371](../../crates/pandamux-orchestrator/src/routing.rs#L1-L371)
+- [model_output.rs:1-327](../../crates/pandamux-orchestrator/src/model_output.rs#L1-L327)
+- [state.rs:1-1320](../../crates/pandamux-orchestrator/src/state.rs#L1-L1320)
 - [thread_rpc.rs:1-156](../../crates/pandamux-protocol/src/thread_rpc.rs#L1-L156)
 - [subagent_rpc.rs:1-47](../../crates/pandamux-protocol/src/subagent_rpc.rs#L1-L47)
 - [attachment_rpc.rs:1-69](../../crates/pandamux-protocol/src/attachment_rpc.rs#L1-L69)
@@ -20,6 +32,39 @@ The following files were used as evidence for this page:
 # Agent Orchestration
 
 > **Related Pages**: [Core Domain](../core/CORE_DOMAIN.md), [Application Runtime](../core/APP_RUNTIME.md), [Provider Routing and Capacity](PROVIDER_ROUTING.md)
+
+---
+
+<!-- BEGIN:AUTOGEN pandamux_12_agent-orchestration_phase5a -->
+## Phase 5A Pure Orchestration Engine
+
+Phase 5A is a pure value-to-value engine. It accepts authored bytes, server-issued trust and policy snapshots, explicit identities, and timestamps; it returns validated records, events, and effects without reading files, observing clocks, opening a database, contacting a provider, or mutating external state. Its public API exposes parsing, compilation, plan validation, routing, command decision, event application, and replay as separate operations ([lib.rs:9-55](../../crates/pandamux-orchestrator/src/lib.rs#L9-L55)).
+
+```mermaid
+flowchart LR
+    A[Authored bytes and trust grants] --> S[Strict V1 parse]
+    S --> B[Canonical bundle]
+    B --> D[Validated task DAG]
+    D --> R[Agent then provider route]
+    R --> C[Command decision]
+    C --> E[Canonical events]
+    E --> P[Replayable run and pending effects]
+    P -. Phase 5C .-> X[Persistence and effect interpreter]
+```
+
+| Stage | Implemented contract |
+|---|---|
+| Authored schemas | Confined logical paths and published file, aggregate, depth, item, and scalar bounds precede strict V1 decoding ([schema/mod.rs:16-30](../../crates/pandamux-orchestrator/src/schema/mod.rs#L16-L30), [schema/mod.rs:153-215](../../crates/pandamux-orchestrator/src/schema/mod.rs#L153-L215)). Every orchestrator, project, agent, knowledge, and prompt record carries an exact version and kind; unknown fields are denied ([schema/v1.rs:5-38](../../crates/pandamux-orchestrator/src/schema/v1.rs#L5-L38), [schema/v1.rs:187-298](../../crates/pandamux-orchestrator/src/schema/v1.rs#L187-L298)). |
+| Bundle compilation | Trusted layer grants are supplied separately from repository content. Sources are stably ordered, references resolve before merge, value origins remain visible, and the canonical payload digest binds every compiled agent ([policy.rs:15-33](../../crates/pandamux-orchestrator/src/policy.rs#L15-L33), [bundle.rs:56-125](../../crates/pandamux-orchestrator/src/bundle.rs#L56-L125), [bundle.rs:185-244](../../crates/pandamux-orchestrator/src/bundle.rs#L185-L244)). |
+| DAG validation | Task and edge caps, identities, cycles, project and organization policy, typed contracts, checked budgets, and capability feasibility are evaluated in a fixed order before a `ValidatedPlan` exists ([dag.rs:14-100](../../crates/pandamux-orchestrator/src/dag.rs#L14-L100), [dag.rs:100-165](../../crates/pandamux-orchestrator/src/dag.rs#L100-L165)). |
+| Routing and approvals | Task-to-agent filters and stable tie-breaks compose the existing provider selector; recorded routes are reused. Auto and Approve-first share one revision- and action-digest-bound reconciler, and only ordinary explicitly permitted work can bypass a pending approval ([routing.rs:52-118](../../crates/pandamux-orchestrator/src/routing.rs#L52-L118), [policy.rs:37-100](../../crates/pandamux-orchestrator/src/policy.rs#L37-L100), [policy.rs:100-188](../../crates/pandamux-orchestrator/src/policy.rs#L100-L188)). |
+| Model proposals | One JSON object is bounded to 1 MiB and structural limits. Invalid content gets at most one parse-only retry; timeout or transport failures do not consume that retry path and never dispatch ([model_output.rs:9-29](../../crates/pandamux-orchestrator/src/model_output.rs#L9-L29), [model_output.rs:74-124](../../crates/pandamux-orchestrator/src/model_output.rs#L74-L124)). |
+| Run state | `decide` rejects illegal commands, `apply` enforces exact sequencing and canonical identity receipts, and `replay` rebuilds state while deterministic effect identifiers prevent duplicate work ([state.rs:55-204](../../crates/pandamux-orchestrator/src/state.rs#L55-L204), [state.rs:206-320](../../crates/pandamux-orchestrator/src/state.rs#L206-L320), [state.rs:322-356](../../crates/pandamux-orchestrator/src/state.rs#L322-L356)). |
+
+The existing provider-session runtime documented below is not yet connected to this engine. No Phase 5A result claims SQLite durability, outbox interpretation, runtime dispatch, worktree isolation, RPC or CLI coverage, desktop behavior, or live provider acceptance; those belong to later checkpoints.
+
+Sources: [lib.rs:9-55](../../crates/pandamux-orchestrator/src/lib.rs#L9-L55), [schema/mod.rs:16-215](../../crates/pandamux-orchestrator/src/schema/mod.rs#L16-L215), [bundle.rs:56-244](../../crates/pandamux-orchestrator/src/bundle.rs#L56-L244), [dag.rs:14-165](../../crates/pandamux-orchestrator/src/dag.rs#L14-L165), [routing.rs:52-118](../../crates/pandamux-orchestrator/src/routing.rs#L52-L118), [policy.rs:37-188](../../crates/pandamux-orchestrator/src/policy.rs#L37-L188), [model_output.rs:9-124](../../crates/pandamux-orchestrator/src/model_output.rs#L9-L124), [state.rs:55-356](../../crates/pandamux-orchestrator/src/state.rs#L55-L356)
+<!-- END:AUTOGEN pandamux_12_agent-orchestration_phase5a -->
 
 ---
 

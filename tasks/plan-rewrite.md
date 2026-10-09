@@ -614,7 +614,7 @@ pub trait ProviderSession: Send {
 - `AccessMode` (ReadOnly, Ask, AutoEdit, FullAccess) maps onto native settings (Codex sandbox/approval policy, Claude `--permission-mode`, ACP permission responses).
 - Supervision: Windows **Job Object** with kill-on-close (Unix: process group); every spawn sets `CREATE_NO_WINDOW` (LL-G `gui-subsystem-console-child-window`); all IO is tokio (LL-G `blocking-io-on-tokio`).
 - Watchdogs: reasoning without content or tool calls for N minutes emits a `Notice` (LL-G `reasoning-model-spiral`); no events for M minutes marks the turn stalled; budget ledger breaches interrupt the turn and emit `BudgetExceeded`.
-- Settings per provider instance: enabled, display name, binary path, config dir (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`), launch args, env vars (secrets in the hub keyring), model list overrides, **tier mapping** (fast, balanced, deep to concrete models), auto-compact threshold (Claude), health-check interval (default 300s). Scope: thread, then project, then environment, then "All environments".
+- Settings per provider instance: enabled, display name, binary path, config dir (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`), launch args, env vars (secrets in the hub keyring), model list overrides, **tier mapping** (`fast`, `smart`, and `reasoning` to concrete models), auto-compact threshold (Claude), health-check interval (default 300s). Scope: thread, then project, then environment, then "All environments".
 
 ### 5.2 Per-provider integration
 
@@ -780,11 +780,13 @@ Run state is event-sourced; approval and dispatch commit in one transaction with
 
 ```markdown
 ---
+schemaVersion: 1
+kind: pandamux.agent
 id: reviewer
 name: Reviewer
 description: Reviews diffs for correctness, maintainability, naming, and project standards. Use after code changes.
 specialties: [code-review, maintainability]
-tier: deep                      # fast | balanced | deep, mapped per provider in settings
+tier: reasoning                 # fast | smart | reasoning, mapped per provider in settings
 effort: high
 accessMode: read_only           # ceiling: read_only | ask | auto_edit | full_access (full_access needs local opt-in)
 requiredCapabilities: [longContext]
@@ -795,7 +797,7 @@ tools: { allow: [read, grep, glob], deny: [write, shell] }   # best effort per p
 output: { kind: review_comments }
 verification: []
 concurrency: 2
-budget: { maxTokens: 400000, maxCostUsd: 5, maxRuntimeMinutes: 30 }
+budget: { maxTokens: 400000, maxCostMicroUsd: 5000000, maxRuntimeMs: 1800000 }
 ---
 You are the Reviewer. Review the changes in this worktree against the task...
 ```
@@ -876,12 +878,18 @@ README.md                  how to fork and customize
 
 ```yaml
 schemaVersion: 1
-minPandamuxVersion: "1.0.0"
+kind: pandamux.orchestrator
+minPandamuxVersion: "0.60.67"
 defaults:
   mode: approve_first
   defaultAgent: builder
   maxParallelTasks: 4
   maxTasksPerRun: 6
+  maxAttemptsPerTask: 2
+prompts:
+  intake: prompts/intake.md
+  planner: prompts/planner.md
+  handoff: prompts/handoff.md
 classes:
   - id: small-fix
     match: { keywords: [fix, bug, typo], maxFilesHint: 5 }
@@ -896,13 +904,13 @@ classes:
   - id: docs
     agents: [builder]
 providerPolicy:
-  minRemaining: 0.15
-  concurrency: { perProvider: { claude: 3, codex: 4 }, perEnvironment: 6 }
+  minRemainingMillionths: 150000
+  concurrency: { claude: 3, codex: 4 }
 fallbacks: { onRateLimit: next_provider, onNoProvider: queue, onFailure: ask }
 verification: { useProjectCommands: true }
 ```
 
-Tiers (`fast`, `balanced`, `deep`) map to concrete models in PandaMUX settings, so the repo never hard-codes churning model names. Plan budgets for capacity estimation live in settings, not the repo. PandaMUX publishes `instructions.schema.json` (schemars) covering all files for editor validation.
+Tiers (`fast`, `smart`, `reasoning`) map to concrete models in PandaMUX settings, so the repo never hard-codes churning model names. Plan budgets for capacity estimation live in settings, not the repo. PandaMUX publishes `instructions.schema.json` (schemars) covering all files for editor validation.
 
 ### 7.9 Sync and approval flow
 

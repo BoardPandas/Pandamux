@@ -10,8 +10,8 @@ This repository began as an Electron prototype, then had an Iced multiplexer imp
 The workspace version comes only from `[workspace.package] version` in [`Cargo.toml`](Cargo.toml). Do not infer the current version from documentation prose.
 
 The codebase retains an open provider-controlled Phase 4 acceptance row while
-implementing the explicitly authorized Phase 5 dependency and boundary gate
-after the R0 development gate:
+implementing the explicitly authorized pure-domain Phase 5A orchestrator after
+the R0 development gate:
 
 - R0.1 preserves and verifies the unfinished Phase 4 usage prototype without treating it as accepted production code.
 - R0.2 implements Hub-to-node routing through a versioned SSH exec proxy, reconnect semantics, event replay, and joined cleanup.
@@ -180,10 +180,13 @@ after the R0 development gate:
   evidence. Real pre-output provider capacity exhaustion and the final P4-C7
   archive after that row stabilizes keep P4-C5 Partial and the Phase 4 exit
   matrix open.
-- Phase 5 dependency work proceeds as an explicit sequencing exception without
-  marking P4-C5 or P4-C7 complete. The initial slice adds only the pure
-  orchestrator ownership boundary, fail-closed legacy compatibility inputs,
-  resolved dependency enforcement, and pinned toolchain/MSRV policy.
+- Phase 5 work proceeds as an explicit sequencing exception without marking
+  P4-C5 or P4-C7 complete. Phase 5A adds versioned authored schemas, a
+  trust-aware canonical instruction bundle, validated task DAGs, deterministic
+  task-to-agent and existing provider routing, durable approval identity,
+  bounded model-output parsing, and replayable run state in the pure
+  orchestrator crate. It does not add persistence, effect execution, provider
+  dispatch, worktrees, run RPC, CLI commands, or desktop surfaces.
 
 See the [Phase 4 live acceptance record](docs/operations/PHASE4_ACCEPTANCE.md)
 and the completion criteria in [`tasks/plan-rewrite.md`](tasks/plan-rewrite.md).
@@ -242,7 +245,7 @@ Cargo builds and tests should run serially in one checkout because they share th
 ```text
 crates/
   pandamux-core/       Framework-free domain types and policy data
-  pandamux-orchestrator/ Pure run-domain and policy engine boundary
+  pandamux-orchestrator/ Pure schema, bundle, DAG, routing, policy, and run-state engine
   pandamux-protocol/   Versioned JSON-RPC, subscription, and proxy wire contracts
   pandamux-providers/  Provider drivers, profiles, process supervision, and parsing
   pandamux-remote/     SSH pooling, exec, SFTP, bootstrap, and proxy tunnels

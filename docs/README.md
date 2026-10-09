@@ -69,7 +69,7 @@ sections with stable AUTOGEN identifiers.
 | Area | Source of truth | Responsibility |
 |---|---|---|
 | Domain | [`crates/pandamux-core`](../crates/pandamux-core) | Framework-free IDs, threads, events, organizations, provider policy, routing, and usage types |
-| Orchestration | [`crates/pandamux-orchestrator`](../crates/pandamux-orchestrator) | Pure Phase 5 policy boundary and fail-closed legacy compatibility inputs |
+| Orchestration | [`crates/pandamux-orchestrator`](../crates/pandamux-orchestrator) | Pure Phase 5A schema, bundle, DAG, routing, approval, model-parse, and replay engine |
 | Wire protocol | [`crates/pandamux-protocol`](../crates/pandamux-protocol) | Versioned JSON-RPC, subscriptions, capabilities, and Hub-to-node proxy contracts |
 | Providers | [`crates/pandamux-providers`](../crates/pandamux-providers) | Provider drivers, profiles, discovery, parsing, and process supervision |
 | SSH and bootstrap | [`crates/pandamux-remote`](../crates/pandamux-remote) | SSH pool, exec, SFTP, bootstrap, worktree synchronization, and proxy tunnels |
@@ -85,7 +85,7 @@ and CLI are clients. Remote Linux nodes run `pandamux-server daemon` and are
 reached through a versioned SSH exec proxy; PandaMUX does not open a remote TCP
 control listener.
 
-## Phase 4 records and current boundary
+## Acceptance records and current boundary
 
 Two manually maintained pages remain the detailed authority for the ongoing
 Phase 4 closeout:
@@ -112,10 +112,13 @@ The following gates remain open:
   failover behavior;
 - final P4-C7 synchronization after the remaining P4-C5 row stabilizes.
 
-Phase 5 dependency-boundary work is proceeding under the explicit sequencing
-exception recorded in the active plan. It does not convert either open Phase 4
-row into a pass, and Phase 5 evidence remains separate from exact 0.60.64 Phase
-4 runtime evidence and the retained Galahad databases. This generated-wiki
+Phase 5A pure-domain work is proceeding under the explicit sequencing exception
+recorded in the active plan. Its versioned schemas, canonical bundle, DAG and
+routing policy, approvals, bounded model parsing, and replay state do not
+convert either open Phase 4 row into a pass. They also do not establish a
+database, effect interpreter, provider dispatch, worktree, RPC, CLI, desktop,
+or live-provider path. Phase 5 evidence remains separate from exact 0.60.64
+Phase 4 runtime evidence and the retained Galahad databases. This generated-wiki
 refresh remains an interim P4-C7 synchronization; it does not claim that Phase
 4 is complete, released, deployed, signed, published, or served.
 

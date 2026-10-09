@@ -88,9 +88,12 @@ keep Phase 4 open.
 On 2026-10-09 the user explicitly authorized the Phase 5 dependency and
 boundary gate to proceed while that provider-controlled P4-C5 row remains
 unavailable. This sequencing exception does not mark P4-C5 or P4-C7 complete.
-The first Phase 5 slice is limited to pure-crate ownership, explicit legacy
-compatibility rejection, resolved dependency enforcement, and toolchain/MSRV
-policy; runtime orchestration still requires its own checkpoint evidence.
+Phase 5A now implements the pure, versioned orchestration domain: authored
+schema validation, canonical bundle compilation, DAG validation, deterministic
+two-step routing, approval reconciliation, bounded model-output parsing, and
+replayable command/event state. SQLite persistence, outbox interpretation,
+provider dispatch, worktrees, RPC, CLI, and desktop orchestration remain later
+checkpoints and require their own evidence.
 
 Exact 0.60.38 commit `d328ad8` supersedes the preceding source-candidate note:
 its complete local gate, native build, host smoke, remote lifecycle, and
@@ -180,8 +183,9 @@ cargo check -p pandamux-protocol -p pandamux-client -p pandamux-cli -p pandamux-
 The CI workflow in `.github/workflows/rust.yml` checks Windows formatting,
 Clippy, resolved crate boundaries, the complete cargo-deny policy, tests, and
 release binaries on Rust 1.98.1. Separate jobs compile the Windows product
-graph and Linux headless graph at Rust 1.89; Apple Silicon and x86_64 Linux
-musl retain their platform-specific gates.
+graph and Linux headless graph at Rust 1.89; Apple Silicon explicitly tests the
+pure orchestrator, and compile-only all-target checks cover its musl x64 and
+arm64 graphs in addition to the existing x64 remote-binary build.
 
 Before any long or potentially silent command, explain what will run, estimate its duration, and state whether it is safe to interrupt.
 
@@ -190,7 +194,7 @@ Before any long or potentially silent command, explain what will run, estimate i
 ```text
 crates/
   pandamux-core/       Framework-free domain types, IDs, settings, threads, turns, events, policy
-  pandamux-orchestrator/ Pure run-domain and policy engine; serializable inputs and effects only
+  pandamux-orchestrator/ Pure schema, bundle, DAG, routing, policy, and run-state engine
   pandamux-protocol/   Versioned RPC, subscription, terminal, settings, and proxy contracts
   pandamux-providers/  Provider drivers, profiles, parser fixtures, and process supervision
   pandamux-remote/     SSH auth and pooling, exec, SFTP, bootstrap, ProxyJump, proxy tunnels

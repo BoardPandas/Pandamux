@@ -2,7 +2,7 @@ project:
   name: "PandaMUX"
   description: "Native chat-first desktop for supervising local and remote AI coding agents through a GPUI client, authenticated JSON-RPC Hub, provider drivers, durable SQLite state, and SSH-connected Linux nodes."
   repo_base_url: "https://github.com/BoardPandas/Pandamux/blob"
-  ref_commit_hash: "b0e5f744c1a76f1e6d1a90f3d8d881a869c86b7a"
+  ref_commit_hash: "1bc014fa597638bad2020768e327f058f8f1ba67"
   branch: "codex/recovery-r0"
   updated_at: "2026-10-09"
 
@@ -118,6 +118,8 @@ pages:
       - "crates/pandamux-desktop/src/lib.rs"
       - "crates/pandamux-orchestrator/src/lib.rs"
       - "crates/pandamux-orchestrator/src/compatibility.rs"
+      - "crates/pandamux-orchestrator/src/bundle.rs"
+      - "crates/pandamux-orchestrator/src/state.rs"
       - "crates/pandamux-protocol/src/lib.rs"
       - "crates/pandamux-server/src/lib.rs"
       - "tools/pandamux-boundary-check/src/lib.rs"
@@ -161,13 +163,14 @@ pages:
     title: "Core Domain"
     folder: "core"
     filename: "CORE_DOMAIN.md"
-    description: "Framework-free domain types for threads, events, organizations, providers, routing, projects, settings, and usage."
+    description: "Framework-free domain types for threads, events, orchestration runs and bundles, organizations, providers, routing, projects, settings, and usage."
     category: data-model
     source_files:
       - "crates/pandamux-core/src/lib.rs"
       - "crates/pandamux-core/src/thread.rs"
       - "crates/pandamux-core/src/event.rs"
       - "crates/pandamux-core/src/agent_def.rs"
+      - "crates/pandamux-core/src/instruction_bundle.rs"
       - "crates/pandamux-orchestrator/src/lib.rs"
       - "crates/pandamux-orchestrator/src/compatibility.rs"
       - "crates/pandamux-orchestrator/tests/compatibility_fixtures.rs"
@@ -190,6 +193,11 @@ pages:
     sections:
       - id: pandamux_04_core-domain_modules
         title: "Module Map"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_04_core-domain_orchestration
+        title: "Canonical Orchestration Records"
         autogen: true
         diagrams_needed: false
         diagram_types: []
@@ -622,12 +630,24 @@ pages:
     title: "Agent Orchestration"
     folder: "features"
     filename: "AGENT_ORCHESTRATION.md"
-    description: "Thread lifecycle, provider sessions, streaming events, tools and approvals, subagents, cancellation, and recovery."
+    description: "Pure Phase 5A orchestration plus the existing thread, provider-session, approval, subagent, cancellation, and recovery runtime."
     category: feature
     source_files:
       - "crates/pandamux-core/src/thread.rs"
       - "crates/pandamux-core/src/event.rs"
       - "crates/pandamux-core/src/agent_def.rs"
+      - "crates/pandamux-core/src/run.rs"
+      - "crates/pandamux-core/src/instruction_bundle.rs"
+      - "crates/pandamux-orchestrator/src/lib.rs"
+      - "crates/pandamux-orchestrator/src/schema/mod.rs"
+      - "crates/pandamux-orchestrator/src/schema/v1.rs"
+      - "crates/pandamux-orchestrator/src/diagnostics.rs"
+      - "crates/pandamux-orchestrator/src/bundle.rs"
+      - "crates/pandamux-orchestrator/src/dag.rs"
+      - "crates/pandamux-orchestrator/src/policy.rs"
+      - "crates/pandamux-orchestrator/src/routing.rs"
+      - "crates/pandamux-orchestrator/src/model_output.rs"
+      - "crates/pandamux-orchestrator/src/state.rs"
       - "crates/pandamux-protocol/src/thread_rpc.rs"
       - "crates/pandamux-protocol/src/subagent_rpc.rs"
       - "crates/pandamux-protocol/src/attachment_rpc.rs"
@@ -636,6 +656,11 @@ pages:
       - "crates/pandamux-providers/src/models.rs"
       - "crates/pandamux-server/src/thread_manager.rs"
     sections:
+      - id: pandamux_12_agent-orchestration_phase5a
+        title: "Phase 5A Pure Orchestration Engine"
+        autogen: true
+        diagrams_needed: true
+        diagram_types: ["flowchart"]
       - id: pandamux_12_agent-orchestration_threads
         title: "Thread and Turn Lifecycle"
         autogen: true

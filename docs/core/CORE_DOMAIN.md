@@ -4,24 +4,25 @@
 
 The following files were used as evidence for this page:
 
-- [crates/pandamux-core/src/lib.rs:1-114](../../crates/pandamux-core/src/lib.rs#L1-L114)
+- [crates/pandamux-core/src/lib.rs:1-129](../../crates/pandamux-core/src/lib.rs#L1-L129)
 - [crates/pandamux-core/src/thread.rs:1-235](../../crates/pandamux-core/src/thread.rs#L1-L235)
 - [crates/pandamux-core/src/event.rs:1-196](../../crates/pandamux-core/src/event.rs#L1-L196)
-- [crates/pandamux-core/src/agent_def.rs:1-86](../../crates/pandamux-core/src/agent_def.rs#L1-L86)
-- [crates/pandamux-orchestrator/src/lib.rs:1-13](../../crates/pandamux-orchestrator/src/lib.rs#L1-L13)
-- [crates/pandamux-orchestrator/src/compatibility.rs:1-115](../../crates/pandamux-orchestrator/src/compatibility.rs#L1-L115)
-- [crates/pandamux-orchestrator/tests/compatibility_fixtures.rs:1-50](../../crates/pandamux-orchestrator/tests/compatibility_fixtures.rs#L1-L50)
+- [crates/pandamux-core/src/agent_def.rs:1-154](../../crates/pandamux-core/src/agent_def.rs#L1-L154)
+- [crates/pandamux-core/src/instruction_bundle.rs:1-165](../../crates/pandamux-core/src/instruction_bundle.rs#L1-L165)
+- [crates/pandamux-orchestrator/src/lib.rs:1-55](../../crates/pandamux-orchestrator/src/lib.rs#L1-L55)
+- [crates/pandamux-orchestrator/src/compatibility.rs:1-501](../../crates/pandamux-orchestrator/src/compatibility.rs#L1-L501)
+- [crates/pandamux-orchestrator/tests/compatibility_fixtures.rs:1-105](../../crates/pandamux-orchestrator/tests/compatibility_fixtures.rs#L1-L105)
 - [crates/pandamux-core/src/ast_diff.rs:1-533](../../crates/pandamux-core/src/ast_diff.rs#L1-L533)
 - [crates/pandamux-core/src/attachment.rs:1-240](../../crates/pandamux-core/src/attachment.rs#L1-L240)
 - [crates/pandamux-core/src/home.rs:1-188](../../crates/pandamux-core/src/home.rs#L1-L188)
 - [crates/pandamux-core/src/i18n.rs:1-135](../../crates/pandamux-core/src/i18n.rs#L1-L135)
-- [crates/pandamux-core/src/ids.rs:1-63](../../crates/pandamux-core/src/ids.rs#L1-L63)
+- [crates/pandamux-core/src/ids.rs:1-71](../../crates/pandamux-core/src/ids.rs#L1-L71)
 - [crates/pandamux-core/src/notification.rs:1-238](../../crates/pandamux-core/src/notification.rs#L1-L238)
 - [crates/pandamux-core/src/organization.rs:1-755](../../crates/pandamux-core/src/organization.rs#L1-L755)
 - [crates/pandamux-core/src/provider_config.rs:1-149](../../crates/pandamux-core/src/provider_config.rs#L1-L149)
 - [crates/pandamux-core/src/project_registry.rs:1-416](../../crates/pandamux-core/src/project_registry.rs#L1-L416)
 - [crates/pandamux-core/src/routing.rs:1-585](../../crates/pandamux-core/src/routing.rs#L1-L585)
-- [crates/pandamux-core/src/run.rs:1-121](../../crates/pandamux-core/src/run.rs#L1-L121)
+- [crates/pandamux-core/src/run.rs:1-725](../../crates/pandamux-core/src/run.rs#L1-L725)
 - [crates/pandamux-core/src/schedule.rs:1-230](../../crates/pandamux-core/src/schedule.rs#L1-L230)
 - [crates/pandamux-core/src/secrets.rs:1-267](../../crates/pandamux-core/src/secrets.rs#L1-L267)
 - [crates/pandamux-core/src/terminal.rs:1-45](../../crates/pandamux-core/src/terminal.rs#L1-L45)
@@ -39,21 +40,41 @@ The following files were used as evidence for this page:
 <!-- BEGIN:AUTOGEN pandamux_04_core-domain_modules -->
 ## Module Map
 
-`pandamux-core` defines serializable, framework-free domain data and pure policy helpers. The crate root is the canonical inventory of public modules and re-exports ([lib.rs:1-24](../../crates/pandamux-core/src/lib.rs#L1-L24), [lib.rs:25-114](../../crates/pandamux-core/src/lib.rs#L25-L114)).
+`pandamux-core` defines serializable, framework-free domain data and pure policy helpers. The crate root is the canonical inventory of public modules and re-exports ([lib.rs:1-24](../../crates/pandamux-core/src/lib.rs#L1-L24), [lib.rs:26-129](../../crates/pandamux-core/src/lib.rs#L26-L129)).
 
 | Area | Modules | Representative public types |
 |---|---|---|
-| Conversation | `thread`, `event`, `attachment` | `Thread`, `Turn`, `ThreadEvent`, `AttachmentRecord` ([lib.rs:33-43](../../crates/pandamux-core/src/lib.rs#L33-L43), [lib.rs:103-106](../../crates/pandamux-core/src/lib.rs#L103-L106)) |
-| Identity and policy | `ids`, `organization`, `provider_config`, `routing` | Typed IDs, `OrganizationPolicy`, `ProviderInstanceConfig`, `RoutingDecision` ([lib.rs:46-57](../../crates/pandamux-core/src/lib.rs#L46-L57), [lib.rs:69-83](../../crates/pandamux-core/src/lib.rs#L69-L83)) |
-| Projects and automation | `project`, `project_registry`, `run`, `schedule` | `ProjectSpec`, `ProjectRecord`, `Run`, `ScheduleRecord` ([lib.rs:58-68](../../crates/pandamux-core/src/lib.rs#L58-L68), [lib.rs:84-89](../../crates/pandamux-core/src/lib.rs#L84-L89)) |
-| Agent presentation | `agent_def`, `ast_diff`, `home`, `i18n`, `notification` | Agent definitions, structured diffs, home layout, localization, notices ([lib.rs:25-32](../../crates/pandamux-core/src/lib.rs#L25-L32), [lib.rs:44-52](../../crates/pandamux-core/src/lib.rs#L44-L52)) |
-| Local safety | `secrets`, `terminal` | `SecretStore`, redaction helpers, ring-buffer configuration ([lib.rs:90-102](../../crates/pandamux-core/src/lib.rs#L90-L102)) |
-| Cost and quota | `usage` | Usage observations, integer pricing, capacity snapshots and projections ([lib.rs:107-114](../../crates/pandamux-core/src/lib.rs#L107-L114)) |
+| Conversation | `thread`, `event`, `attachment` | `Thread`, `Turn`, `ThreadEvent`, `AttachmentRecord` ([lib.rs:34-44](../../crates/pandamux-core/src/lib.rs#L34-L44), [lib.rs:118-121](../../crates/pandamux-core/src/lib.rs#L118-L121)) |
+| Identity and policy | `ids`, `organization`, `provider_config`, `routing` | Typed IDs, `OrganizationPolicy`, `ProviderInstanceConfig`, `RoutingDecision` ([lib.rs:47-53](../../crates/pandamux-core/src/lib.rs#L47-L53), [lib.rs:60-64](../../crates/pandamux-core/src/lib.rs#L60-L64), [lib.rs:76-89](../../crates/pandamux-core/src/lib.rs#L76-L89)) |
+| Projects and automation | `project`, `project_registry`, `run`, `schedule` | `ProjectSpec`, `ProjectRecord`, canonical orchestration records, `ScheduleRecord` ([lib.rs:65-75](../../crates/pandamux-core/src/lib.rs#L65-L75), [lib.rs:91-104](../../crates/pandamux-core/src/lib.rs#L91-L104)) |
+| Agent presentation | `agent_def`, `ast_diff`, `home`, `i18n`, `notification` | Agent definitions, structured diffs, home layout, localization, notices ([lib.rs:26-33](../../crates/pandamux-core/src/lib.rs#L26-L33), [lib.rs:45-59](../../crates/pandamux-core/src/lib.rs#L45-L59)) |
+| Local safety | `secrets`, `terminal` | `SecretStore`, redaction helpers, ring-buffer configuration ([lib.rs:105-117](../../crates/pandamux-core/src/lib.rs#L105-L117)) |
+| Cost and quota | `usage` | Usage observations, integer pricing, capacity snapshots and projections ([lib.rs:122-129](../../crates/pandamux-core/src/lib.rs#L122-L129)) |
 
-The core crate does not own persistence, process launch, network transport, or rendering. The new pure orchestrator consumes retained core shapes through an explicit compatibility boundary: recognized unversioned run, agent-definition, memory, and schedule records are classified as migration input and rejected with stable next actions until their versioned adapters exist ([compatibility.rs:5-43](../../crates/pandamux-orchestrator/src/compatibility.rs#L5-L43), [compatibility.rs:69-115](../../crates/pandamux-orchestrator/src/compatibility.rs#L69-L115)). Fixture tests prove those historical shapes cannot silently become canonical Phase 5 state and malformed input is not echoed into diagnostics ([compatibility_fixtures.rs:3-50](../../crates/pandamux-orchestrator/tests/compatibility_fixtures.rs#L3-L50)).
+The core crate does not own persistence, process launch, network transport, or rendering. It now owns the canonical Phase 5A run, event, effect, compiled-agent, and instruction-bundle values, while behavior remains in the pure orchestrator ([run.rs:30-86](../../crates/pandamux-core/src/run.rs#L30-L86), [instruction_bundle.rs:121-165](../../crates/pandamux-core/src/instruction_bundle.rs#L121-L165)). The explicit compatibility boundary still freezes recognized unversioned run, agent-definition, memory, and schedule records as migration inputs; it never silently treats them as canonical Phase 5 state ([compatibility.rs:5-43](../../crates/pandamux-orchestrator/src/compatibility.rs#L5-L43), [compatibility.rs:69-115](../../crates/pandamux-orchestrator/src/compatibility.rs#L69-L115)).
 
-Sources: [lib.rs:1-114](../../crates/pandamux-core/src/lib.rs#L1-L114), [compatibility.rs:5-115](../../crates/pandamux-orchestrator/src/compatibility.rs#L5-L115), [compatibility_fixtures.rs:3-50](../../crates/pandamux-orchestrator/tests/compatibility_fixtures.rs#L3-L50)
+Sources: [lib.rs:1-129](../../crates/pandamux-core/src/lib.rs#L1-L129), [run.rs:30-86](../../crates/pandamux-core/src/run.rs#L30-L86), [instruction_bundle.rs:121-165](../../crates/pandamux-core/src/instruction_bundle.rs#L121-L165), [compatibility.rs:5-115](../../crates/pandamux-orchestrator/src/compatibility.rs#L5-L115)
 <!-- END:AUTOGEN pandamux_04_core-domain_modules -->
+
+---
+
+<!-- BEGIN:AUTOGEN pandamux_04_core-domain_orchestration -->
+## Canonical Orchestration Records
+
+`Run` is the single replayable Phase 5A authority. It pins policy and bundle identity and stores plans, tasks, attempts, edges, approvals, blackboard entries, budget reservations, routes, replay receipts, and pending or settled effects in ordered maps so serialization is deterministic ([run.rs:30-86](../../crates/pandamux-core/src/run.rs#L30-L86)). `RunStatus` makes terminal absorption explicit, while tasks and attempts retain their own lifecycle and safe-retry boundary ([run.rs:129-190](../../crates/pandamux-core/src/run.rs#L129-L190), [run.rs:228-281](../../crates/pandamux-core/src/run.rs#L228-L281)).
+
+| Record group | Purpose | Boundary |
+|---|---|---|
+| Plan and graph | Ordered tasks, dependency edges, topological order, typed inputs and outputs | Validation completes before a plan can become runnable ([run.rs:150-201](../../crates/pandamux-core/src/run.rs#L150-L201), [run.rs:283-311](../../crates/pandamux-core/src/run.rs#L283-L311)) |
+| Budget and approval | Integer token, micro-USD, and millisecond reservations plus revision- and digest-bound decisions | No floating-point policy and no approval detached from its action ([run.rs:313-391](../../crates/pandamux-core/src/run.rs#L313-L391)) |
+| Route | Every agent evaluation plus the existing provider-routing decision | The recorded task route contains both routing steps and can be replayed without fresh capacity input ([run.rs:411-442](../../crates/pandamux-core/src/run.rs#L411-L442)) |
+| Event and effect | Commands request transitions, events are durable facts, and effects are serializable work for a later interpreter | Phase 5A defines values only; it does not persist or execute effects ([run.rs:444-632](../../crates/pandamux-core/src/run.rs#L444-L632)) |
+| Compiled bundle | Source manifest, agents, prompts, knowledge, references, policy, origins, and payload digest | Canonical bundle identity is separate from source revision identity ([instruction_bundle.rs:13-24](../../crates/pandamux-core/src/instruction_bundle.rs#L13-L24), [instruction_bundle.rs:140-165](../../crates/pandamux-core/src/instruction_bundle.rs#L140-L165)) |
+
+These records are serializable contracts, not runtime evidence. SQLite tables, an outbox, provider processes, worktrees, RPC, CLI, and desktop run views are intentionally absent from Phase 5A.
+
+Sources: [run.rs:30-86](../../crates/pandamux-core/src/run.rs#L30-L86), [run.rs:129-201](../../crates/pandamux-core/src/run.rs#L129-L201), [run.rs:228-442](../../crates/pandamux-core/src/run.rs#L228-L442), [run.rs:444-632](../../crates/pandamux-core/src/run.rs#L444-L632), [instruction_bundle.rs:13-165](../../crates/pandamux-core/src/instruction_bundle.rs#L13-L165)
+<!-- END:AUTOGEN pandamux_04_core-domain_orchestration -->
 
 ---
 

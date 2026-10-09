@@ -7,7 +7,7 @@ The following files were used as evidence for this page:
 - [CLAUDE.md:121-407](../CLAUDE.md#L121-L407)
 - [Cargo.toml:1-48](../Cargo.toml#L1-L48)
 - [rust-toolchain.toml:1-4](../rust-toolchain.toml#L1-L4)
-- [.github/workflows/rust.yml:1-171](../.github/workflows/rust.yml#L1-L171)
+- [.github/workflows/rust.yml:1-207](../.github/workflows/rust.yml#L1-L207)
 - [tools/pandamux-boundary-check/src/lib.rs:1-761](../tools/pandamux-boundary-check/src/lib.rs#L1-L761)
 - [tools/pandamux-boundary-check/tests/fixture_workspaces.rs:1-80](../tools/pandamux-boundary-check/tests/fixture_workspaces.rs#L1-L80)
 - [scripts/check-claude-wiring.mjs:1-233](../scripts/check-claude-wiring.mjs#L1-L233)
@@ -32,11 +32,11 @@ PandaMUX is a Rust workspace with native desktop and operating-system integratio
 | Windows build tools | MSVC toolchain | Build the native Windows desktop and IPC implementation ([CLAUDE.md:121-127](../CLAUDE.md#L121-L127)) |
 | Node.js | 24 for parity with CI | Run the repository wiring guard; Node is not an application runtime dependency ([CLAUDE.md:121-127](../CLAUDE.md#L121-L127), [rust.yml:47-54](../.github/workflows/rust.yml#L47-L54)) |
 | `cargo-deny` | Current local installation, optional outside CI | Reproduce the advisory, license, ban, and source policy enforced by CI ([rust.yml:81-85](../.github/workflows/rust.yml#L81-L85)) |
-| musl tools | Linux x86_64 artifact builds only | Build the server and CLI for `x86_64-unknown-linux-musl` ([rust.yml:121-145](../.github/workflows/rust.yml#L121-L145)) |
+| musl tools | Linux x86_64 artifact builds only | Build the server and CLI for `x86_64-unknown-linux-musl`; pure-orchestrator musl checks use `cargo check` and require only the Rust targets ([rust.yml:124-148](../.github/workflows/rust.yml#L124-L148), [rust.yml:150-181](../.github/workflows/rust.yml#L150-L181)) |
 
 The workspace has no package-manager install step. Cargo resolves the dependencies declared in the root and crate manifests.
 
-Sources: [Cargo.toml:25-48](../Cargo.toml#L25-L48), [rust-toolchain.toml:1-4](../rust-toolchain.toml#L1-L4), [CLAUDE.md:121-127](../CLAUDE.md#L121-L127), [rust.yml:39-85](../.github/workflows/rust.yml#L39-L85), [rust.yml:121-171](../.github/workflows/rust.yml#L121-L171)
+Sources: [Cargo.toml:25-48](../Cargo.toml#L25-L48), [rust-toolchain.toml:1-4](../rust-toolchain.toml#L1-L4), [CLAUDE.md:123-129](../CLAUDE.md#L123-L129), [rust.yml:39-85](../.github/workflows/rust.yml#L39-L85), [rust.yml:124-207](../.github/workflows/rust.yml#L124-L207)
 <!-- END:AUTOGEN pandamux_02_getting-started_prerequisites -->
 
 ---
@@ -114,9 +114,9 @@ cargo deny check advisories licenses bans sources
 | Claude wiring guard | Detects dead rule globs, invalid hook matchers, silenced hooks, and excessive always-on context ([check-claude-wiring.mjs:3-22](../scripts/check-claude-wiring.mjs#L3-L22)) |
 | `cargo-deny` | Applies the advisory, license, duplicate-version, and dependency-source policy ([rust.yml:81-85](../.github/workflows/rust.yml#L81-L85)) |
 
-CI also evaluates built Windows artifacts and compiles the product and headless graphs at the declared MSRV ([rust.yml:87-95](../.github/workflows/rust.yml#L87-L95), [rust.yml:147-171](../.github/workflows/rust.yml#L147-L171)). The boundary command analyzes declared target graphs; it does not replace native builds or live platform acceptance.
+CI also evaluates built Windows artifacts, compiles the product and headless graphs at the declared MSRV, tests the pure orchestrator on macOS, and compiles its library and test targets for musl x64 and arm64 ([rust.yml:87-95](../.github/workflows/rust.yml#L87-L95), [rust.yml:118-119](../.github/workflows/rust.yml#L118-L119), [rust.yml:150-207](../.github/workflows/rust.yml#L150-L207)). The boundary command and cross-target `cargo check` analyze or compile declared graphs; they do not replace native builds, execute cross-target tests, or establish live platform acceptance.
 
-Sources: [CLAUDE.md:152-186](../CLAUDE.md#L152-L186), [rust.yml:69-95](../.github/workflows/rust.yml#L69-L95), [rust.yml:147-171](../.github/workflows/rust.yml#L147-L171), [lib.rs:140-449](../tools/pandamux-boundary-check/src/lib.rs#L140-L449), [fixture_workspaces.rs:39-62](../tools/pandamux-boundary-check/tests/fixture_workspaces.rs#L39-L62), [check-claude-wiring.mjs:3-22](../scripts/check-claude-wiring.mjs#L3-L22)
+Sources: [CLAUDE.md:154-188](../CLAUDE.md#L154-L188), [rust.yml:69-95](../.github/workflows/rust.yml#L69-L95), [rust.yml:118-119](../.github/workflows/rust.yml#L118-L119), [rust.yml:150-207](../.github/workflows/rust.yml#L150-L207), [lib.rs:140-449](../tools/pandamux-boundary-check/src/lib.rs#L140-L449), [fixture_workspaces.rs:39-62](../tools/pandamux-boundary-check/tests/fixture_workspaces.rs#L39-L62), [check-claude-wiring.mjs:3-22](../scripts/check-claude-wiring.mjs#L3-L22)
 <!-- END:AUTOGEN pandamux_02_getting-started_testing -->
 
 ---
@@ -124,20 +124,20 @@ Sources: [CLAUDE.md:152-186](../CLAUDE.md#L152-L186), [rust.yml:69-95](../.githu
 <!-- BEGIN:AUTOGEN pandamux_02_getting-started_platforms -->
 ## Platform Notes
 
-Platform coverage differs by component. The Windows job is the full native gate; macOS validates the core client/server/desktop set; Linux musl produces only the remote node binaries.
+Platform coverage differs by component. The Windows job is the full native gate; macOS validates the core client/server/desktop set plus the pure orchestrator; Linux musl builds the x64 remote-node binaries and compile-checks the pure orchestrator on x64 and arm64.
 
 | Platform | Current automated coverage |
 |---|---|
-| Windows MSVC | Development-toolchain wiring, formatting, Clippy, resolved boundaries, complete cargo-deny policy, workspace tests, release binary build, and built-artifact smoke; a separate job checks the complete product graph at Rust 1.89 ([rust.yml:39-95](../.github/workflows/rust.yml#L39-L95), [rust.yml:147-158](../.github/workflows/rust.yml#L147-L158)) |
-| macOS Apple Silicon | Tests the listed core/client/server/desktop set and builds server, CLI, and desktop release binaries with Rust 1.98.1 ([rust.yml:97-119](../.github/workflows/rust.yml#L97-L119)) |
-| Linux x86_64 musl | Cross-builds `pandamux-server` and `pandamux-cli`; a separate Linux job checks the headless workspace graph at Rust 1.89 ([rust.yml:121-145](../.github/workflows/rust.yml#L121-L145), [rust.yml:160-171](../.github/workflows/rust.yml#L160-L171)) |
+| Windows MSVC | Development-toolchain wiring, formatting, Clippy, resolved boundaries, complete cargo-deny policy, workspace tests, release binary build, and built-artifact smoke; a separate job checks the complete product graph at Rust 1.89 ([rust.yml:39-95](../.github/workflows/rust.yml#L39-L95), [rust.yml:183-194](../.github/workflows/rust.yml#L183-L194)) |
+| macOS job | Tests the listed core/client/server/desktop set, explicitly tests `pandamux-orchestrator`, and builds server, CLI, and desktop release binaries with Rust 1.98.1 ([rust.yml:97-122](../.github/workflows/rust.yml#L97-L122)) |
+| Linux musl | Cross-builds x64 `pandamux-server` and `pandamux-cli`; compile-checks the pure orchestrator and all of its test targets for x64 and arm64; and separately checks the headless workspace graph at Rust 1.89 ([rust.yml:124-181](../.github/workflows/rust.yml#L124-L181), [rust.yml:196-207](../.github/workflows/rust.yml#L196-L207)) |
 
 - The GPUI desktop is the local interactive surface.
 - The server supports a Hub role and a Linux node-daemon role.
 - A successful Linux build does not establish native Windows UI behavior.
 - Before a long or silent command, state what will run, estimate its duration, and say whether cancellation is safe ([CLAUDE.md:180-186](../CLAUDE.md#L180-L186)).
 
-Sources: [rust.yml:39-171](../.github/workflows/rust.yml#L39-L171), [CLAUDE.md:180-186](../CLAUDE.md#L180-L186)
+Sources: [rust.yml:39-207](../.github/workflows/rust.yml#L39-L207), [CLAUDE.md:182-188](../CLAUDE.md#L182-L188)
 <!-- END:AUTOGEN pandamux_02_getting-started_platforms -->
 
 ---

@@ -88,6 +88,33 @@
   configured duplicate and yanked-transitive warnings. The Windows MSRV job is
   implemented but remains unexecuted until CI runs it.
 
+## Phase 5A Pure-Orchestrator Update - 2026-10-09
+
+- **Mode:** incremental update from clean source baseline `1bc014fa` plus the
+  current 0.60.75 documentation and CI working tree on `codex/recovery-r0`
+- **Generated pages updated:** Overview, Getting Started, Architecture, Core
+  Domain, Application Runtime, and Agent Orchestration
+- **Implementation coverage:** all canonical run and instruction-bundle records
+  plus strict schemas, safe diagnostics, trusted compilation, validated DAGs,
+  deterministic routing, approval reconciliation, bounded model proposals, and
+  replayable state and effects are mapped into the active wiki
+- **CI coverage configured:** the macOS job explicitly tests the pure
+  orchestrator, and compile-only `--all-targets` checks cover musl x64 and arm64
+  while the Windows workspace, x64 musl binaries, and Linux/Windows MSRV jobs
+  remain intact
+- **Acceptance boundary:** Phase 5A contains no SQLite migration, outbox or
+  effect interpreter, provider dispatch, worktree owner, run RPC, CLI, desktop
+  orchestration UI, or live-provider path. P4-C5 stays Partial and P4-C7 stays
+  open.
+- **Documentation validation:** 16 pages, 98 ordered AUTOGEN sections, 1,513
+  active local links, 1,389 line-range citations, all 154 current crate source
+  files, and 19 Mermaid blocks pass with zero structural errors. `mmdc` remains
+  unavailable, so renderer-level Mermaid validation was not performed.
+- **Code-gate status:** checkpoint commits through 0.60.74 passed their focused
+  gates. The complete Phase 5A Section 12 matrix is pending on the exact 0.60.75
+  commit and will be recorded separately without claiming CI or native-platform
+  execution.
+
 ## Historical context
 
 The previous generated wiki described the removed Iced multiplexer architecture.

@@ -20,7 +20,7 @@ The following files were used as evidence for this page:
 - [crates/pandamux-server/src/store/mod.rs:1-6033](../../crates/pandamux-server/src/store/mod.rs#L1-L6033)
 - [crates/pandamux-server/src/worktree.rs:1-260](../../crates/pandamux-server/src/worktree.rs#L1-L260)
 - [crates/pandamux-client/src/client.rs:1-103](../../crates/pandamux-client/src/client.rs#L1-L103)
-- [crates/pandamux-client/src/projections.rs:1-925](../../crates/pandamux-client/src/projections.rs#L1-L925)
+- [crates/pandamux-client/src/projections.rs:1-919](../../crates/pandamux-client/src/projections.rs#L1-L919)
 - [crates/pandamux-client/src/token_queue.rs:1-186](../../crates/pandamux-client/src/token_queue.rs#L1-L186)
 - [crates/pandamux-client/src/transport.rs:1-86](../../crates/pandamux-client/src/transport.rs#L1-L86)
 - [crates/pandamux-client/src/usage.rs:1-861](../../crates/pandamux-client/src/usage.rs#L1-L861)
