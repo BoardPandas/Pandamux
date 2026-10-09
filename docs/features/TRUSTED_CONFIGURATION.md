@@ -8,7 +8,9 @@ The following files were used as evidence for this page:
 - [crates/pandamux-core/src/mutation.rs:1-113](../../crates/pandamux-core/src/mutation.rs#L1-L113)
 - [crates/pandamux-core/src/settings.rs:20-51](../../crates/pandamux-core/src/settings.rs#L20-L51)
 - [crates/pandamux-orchestrator/src/configuration.rs:18-234](../../crates/pandamux-orchestrator/src/configuration.rs#L18-L234)
-- [crates/pandamux-server/src/data_paths.rs:1-145](../../crates/pandamux-server/src/data_paths.rs#L1-L145)
+- [crates/pandamux-server/src/data_paths.rs:1-328](../../crates/pandamux-server/src/data_paths.rs#L1-L328)
+- [crates/pandamux-server/src/windows_security.rs:119-445](../../crates/pandamux-server/src/windows_security.rs#L119-L445)
+- [crates/pandamux-server/src/managed_git.rs:285-869](../../crates/pandamux-server/src/managed_git.rs#L285-L869)
 - [crates/pandamux-server/src/personal_repo.rs:98-355](../../crates/pandamux-server/src/personal_repo.rs#L98-L355)
 - [crates/pandamux-server/src/instructions_service.rs:102-510](../../crates/pandamux-server/src/instructions_service.rs#L102-L510)
 - [crates/pandamux-server/src/configuration_service.rs:66-520](../../crates/pandamux-server/src/configuration_service.rs#L66-L520)
@@ -20,9 +22,9 @@ The following files were used as evidence for this page:
 - [crates/pandamux-server/src/store/mutation_phase5b.rs:44-365](../../crates/pandamux-server/src/store/mutation_phase5b.rs#L44-L365)
 - [crates/pandamux-server/src/mcp_server.rs:21-332](../../crates/pandamux-server/src/mcp_server.rs#L21-L332)
 - [crates/pandamux-client/src/configuration_projection.rs:12-110](../../crates/pandamux-client/src/configuration_projection.rs#L12-L110)
-- [crates/pandamux-desktop/src/mutation_confirmation.rs:8-123](../../crates/pandamux-desktop/src/mutation_confirmation.rs#L8-L123)
+- [crates/pandamux-desktop/src/mutation_confirmation.rs:9-440](../../crates/pandamux-desktop/src/mutation_confirmation.rs#L9-L440)
 - [crates/pandamux-desktop/src/trusted_configuration_view.rs:10-235](../../crates/pandamux-desktop/src/trusted_configuration_view.rs#L10-L235)
-- [tasks/2026-10-09-phase-5b-trusted-configuration.md:515-549](../../tasks/2026-10-09-phase-5b-trusted-configuration.md#L515-L549)
+- [tasks/2026-10-09-phase-5b-trusted-configuration.md:509-552](../../tasks/2026-10-09-phase-5b-trusted-configuration.md#L509-L552)
 
 </details>
 
@@ -87,7 +89,7 @@ graph TD
 | Orchestrator | Deterministic candidate file and behavioral diff, issue collection, safety classification, and local-approval decision | ([configuration.rs:18-234](../../crates/pandamux-orchestrator/src/configuration.rs#L18-L234)) |
 | Server | Private path ownership, managed Git, candidate acquisition, trust, compilation, persistence, activation, distribution, and mutation resolution | ([data_paths.rs:6-132](../../crates/pandamux-server/src/data_paths.rs#L6-L132), [configuration_service.rs:66-520](../../crates/pandamux-server/src/configuration_service.rs#L66-L520)) |
 | Protocol | Typed local-control and node-transfer contracts with deny-unknown-field decoding | ([bundle_rpc.rs:7-56](../../crates/pandamux-protocol/src/bundle_rpc.rs#L7-L56), [mutation_rpc.rs:4-45](../../crates/pandamux-protocol/src/mutation_rpc.rs#L4-L45)) |
-| Client and desktop | Redacted projections, pessimistic loading, accessible confirmation cards, and explicit intents | ([configuration_projection.rs:12-110](../../crates/pandamux-client/src/configuration_projection.rs#L12-L110), [mutation_confirmation.rs:8-123](../../crates/pandamux-desktop/src/mutation_confirmation.rs#L8-L123)) |
+| Client and desktop | Redacted projections, pessimistic loading, accessible confirmation cards, and explicit intents | ([configuration_projection.rs:12-110](../../crates/pandamux-client/src/configuration_projection.rs#L12-L110), [mutation_confirmation.rs:9-277](../../crates/pandamux-desktop/src/mutation_confirmation.rs#L9-L277)) |
 
 Only the server mutates durable configuration. Request capabilities keep MCP,
 provider-child, node-proxy, local-control, and internal callers distinct, and
@@ -106,9 +108,21 @@ Sources: [configuration.rs:18-234](../../crates/pandamux-orchestrator/src/config
 One injected `DataPaths` graph names the database, backups, runtime,
 attachments, managed personal repository, instructions mirrors, candidate
 snapshots, immutable bundles, upload staging, and recovery locations. Root and
-child directories are validated before use, and an injected database path must
-remain below the owned root
-([data_paths.rs:6-82](../../crates/pandamux-server/src/data_paths.rs#L6-L82)).
+child directories are validated before use, an injected database path must
+remain below the owned root, and Windows reparse points are rejected
+([data_paths.rs:45-82](../../crates/pandamux-server/src/data_paths.rs#L45-L82),
+[data_paths.rs:164-235](../../crates/pandamux-server/src/data_paths.rs#L164-L235)).
+
+On Windows, newly created managed directories use a protected, inheritable
+DACL owned by the current user. Existing managed paths fail closed unless the
+owner and every access-allow ACE belong to that user or the explicit SYSTEM or
+Administrators recovery principals; broad access, unsupported ACEs, and
+insufficient current-user access are rejected
+([windows_security.rs:119-255](../../crates/pandamux-server/src/windows_security.rs#L119-L255)).
+Native tests exercise both the descriptor rejection cases and directory
+creation, while the path graph has a Windows-only junction-substitution test
+([windows_security.rs:407-445](../../crates/pandamux-server/src/windows_security.rs#L407-L445),
+[data_paths.rs:294-327](../../crates/pandamux-server/src/data_paths.rs#L294-L327)).
 
 The identity boundary is explicit in code
 ([configuration.rs:98-107](../../crates/pandamux-core/src/configuration.rs#L98-L107)):
@@ -134,7 +148,7 @@ Migration 13 is one SQLite transaction and records its migration number only
 after every additive statement succeeds
 ([migrations.rs:1492-1705](../../crates/pandamux-server/src/store/migrations.rs#L1492-L1705)).
 
-Sources: [data_paths.rs:6-145](../../crates/pandamux-server/src/data_paths.rs#L6-L145), [configuration.rs:98-159](../../crates/pandamux-core/src/configuration.rs#L98-L159), [migrations.rs:1492-1705](../../crates/pandamux-server/src/store/migrations.rs#L1492-L1705)
+Sources: [data_paths.rs:45-235](../../crates/pandamux-server/src/data_paths.rs#L45-L235), [windows_security.rs:119-255](../../crates/pandamux-server/src/windows_security.rs#L119-L255), [configuration.rs:98-159](../../crates/pandamux-core/src/configuration.rs#L98-L159), [migrations.rs:1492-1705](../../crates/pandamux-server/src/store/migrations.rs#L1492-L1705)
 <!-- END:AUTOGEN pandamux_17_trusted-configuration_storage -->
 
 ---
@@ -152,6 +166,16 @@ widen the local access ceiling.
 | Personal | Private plumbing-only repository with one active main ref and revisioned request identity | Edits use expected-HEAD compare-and-swap; history and exact inverse commits make rollback forward-only ([personal_repo.rs:120-355](../../crates/pandamux-server/src/personal_repo.rs#L120-L355)) |
 | Project | Strict `.pandamux/` snapshot discovered from the server-owned workspace | Approval binds organization, project, repository identity, canonical root, and exact content digest; changed identity invalidates trust ([configuration_service.rs:85-190](../../crates/pandamux-server/src/configuration_service.rs#L85-L190)) |
 | Local settings | Revisioned trusted-configuration subset containing disabled agents and exact FullAccess opt-ins | Applied after repository policy validation; unrelated provider paths, environment overrides, and arbitrary provider settings are excluded from durable proposals ([settings.rs:20-51](../../crates/pandamux-core/src/settings.rs#L20-L51), [mutation.rs:19-35](../../crates/pandamux-core/src/mutation.rs#L19-L35)) |
+
+Every managed Git command first validates each existing path component and any
+additional artifact path against the owned app-data graph. It rejects links,
+Windows reparse points, unsafe ownership or ACLs, and paths outside the root;
+Windows children also use `CREATE_NO_WINDOW`
+([managed_git.rs:285-323](../../crates/pandamux-server/src/managed_git.rs#L285-L323),
+[managed_git.rs:754-869](../../crates/pandamux-server/src/managed_git.rs#L754-L869)).
+All invocations force long-path support and durable Git writes while disabling
+hooks, signing, automatic GC, and maintenance
+([managed_git.rs:726-752](../../crates/pandamux-server/src/managed_git.rs#L726-L752)).
 
 Tracking mode is typed rather than inferred from a free-form ref
 ([configuration.rs:162-180](../../crates/pandamux-core/src/configuration.rs#L162-L180)):
@@ -171,7 +195,7 @@ origins, plus a digest-bound ordered issue set
 ([configuration.rs:44-122](../../crates/pandamux-orchestrator/src/configuration.rs#L44-L122),
 [configuration.rs:167-234](../../crates/pandamux-orchestrator/src/configuration.rs#L167-L234)).
 
-Sources: [instructions_service.rs:135-365](../../crates/pandamux-server/src/instructions_service.rs#L135-L365), [personal_repo.rs:120-355](../../crates/pandamux-server/src/personal_repo.rs#L120-L355), [configuration_service.rs:85-377](../../crates/pandamux-server/src/configuration_service.rs#L85-L377), [configuration.rs:44-234](../../crates/pandamux-orchestrator/src/configuration.rs#L44-L234)
+Sources: [managed_git.rs:285-323](../../crates/pandamux-server/src/managed_git.rs#L285-L323), [managed_git.rs:726-869](../../crates/pandamux-server/src/managed_git.rs#L726-L869), [instructions_service.rs:135-365](../../crates/pandamux-server/src/instructions_service.rs#L135-L365), [personal_repo.rs:120-355](../../crates/pandamux-server/src/personal_repo.rs#L120-L355), [configuration_service.rs:85-377](../../crates/pandamux-server/src/configuration_service.rs#L85-L377), [configuration.rs:44-234](../../crates/pandamux-orchestrator/src/configuration.rs#L44-L234)
 <!-- END:AUTOGEN pandamux_17_trusted-configuration_layers -->
 
 ---
@@ -274,11 +298,16 @@ expiry, textual status, and resolvability. Raw old and new values are replaced
 with safe changed-section labels
 ([configuration_projection.rs:12-90](../../crates/pandamux-client/src/configuration_projection.rs#L12-L90)).
 
-The generic confirmation card exposes a named group, textual status, every
+The generic confirmation card exposes a named tab group, textual status, every
 review dimension, expiry, and separately named `Approve once` and `Reject`
-buttons. Terminal cards disable both actions, so color is not the sole carrier
-of state
-([mutation_confirmation.rs:8-123](../../crates/pandamux-desktop/src/mutation_confirmation.rs#L8-L123)).
+buttons. Pending actions are keyboard-focusable and activatable; terminal cards
+keep the visible controls while exposing them as disabled, non-focusable, and
+non-invokable through AccessKit, so color is not the sole carrier of state
+([mutation_confirmation.rs:9-143](../../crates/pandamux-desktop/src/mutation_confirmation.rs#L9-L143),
+[mutation_confirmation.rs:192-277](../../crates/pandamux-desktop/src/mutation_confirmation.rs#L192-L277)).
+Render-level tests cover Tab traversal plus Enter and Space activation and the
+terminal disabled semantics
+([mutation_confirmation.rs:369-439](../../crates/pandamux-desktop/src/mutation_confirmation.rs#L369-L439)).
 
 The Trusted Configuration view provides explicit intents for refresh, proposal
 approval and rejection, candidate approval, exact project trust and revocation,
@@ -293,7 +322,7 @@ personal history as separate sections. Refresh and action controls are disabled
 while a request is pending, and status messages use an accessible status role
 ([trusted_configuration_view.rs:112-235](../../crates/pandamux-desktop/src/trusted_configuration_view.rs#L112-L235)).
 
-Sources: [configuration_projection.rs:12-110](../../crates/pandamux-client/src/configuration_projection.rs#L12-L110), [mutation_confirmation.rs:8-123](../../crates/pandamux-desktop/src/mutation_confirmation.rs#L8-L123), [trusted_configuration_view.rs:10-235](../../crates/pandamux-desktop/src/trusted_configuration_view.rs#L10-L235)
+Sources: [configuration_projection.rs:12-110](../../crates/pandamux-client/src/configuration_projection.rs#L12-L110), [mutation_confirmation.rs:9-439](../../crates/pandamux-desktop/src/mutation_confirmation.rs#L9-L439), [trusted_configuration_view.rs:10-235](../../crates/pandamux-desktop/src/trusted_configuration_view.rs#L10-L235)
 <!-- END:AUTOGEN pandamux_17_trusted-configuration_desktop -->
 
 ---
@@ -307,6 +336,7 @@ guessing that an interrupted operation completed.
 
 | Failure | Durable result | Recovery behavior |
 |---|---|---|
+| Managed root, descendant, or Git path has unsafe ownership, ACLs, a link, or a Windows reparse point | Startup or command fails before using the path | Repair the exact private path boundary; never continue through an untrusted alias ([data_paths.rs:164-235](../../crates/pandamux-server/src/data_paths.rs#L164-L235), [managed_git.rs:754-869](../../crates/pandamux-server/src/managed_git.rs#L754-L869)) |
 | Candidate fetch, authentication, signature, validation, or history check fails | Candidate is blocked or check records a safe reason; last-good source remains active | Repair the source or policy, then check again against its current revision ([instructions_service.rs:135-365](../../crates/pandamux-server/src/instructions_service.rs#L135-L365)) |
 | Project identity or content changes | Existing exact trust no longer matches and the layer stays visible but inactive | Inspect and approve the newly displayed identity and digest ([configuration_service.rs:85-190](../../crates/pandamux-server/src/configuration_service.rs#L85-L190)) |
 | Activation transaction fails | Prior active bundle remains current | Retry verified materialization and one atomic activation transaction ([bundle_sync.rs:80-156](../../crates/pandamux-server/src/bundle_sync.rs#L80-L156)) |
@@ -314,16 +344,19 @@ guessing that an interrupted operation completed.
 | Proposal expires, disconnects, is rejected, or drifts | Terminal proposal with no target mutation | Refresh the current state and create a new reviewed proposal ([mutation_service.rs:203-302](../../crates/pandamux-server/src/mutation_service.rs#L203-L302)) |
 | DB-backed proposal apply fails | Target change, audit, and resolution roll back together | Retry the same proposal while its predicates remain current ([mutation_phase5b.rs:246-319](../../crates/pandamux-server/src/store/mutation_phase5b.rs#L246-L319)) |
 
-Local Linux tests, checks, and lints do not establish native Windows behavior.
-The Phase 5B contract specifically requires native verification for hidden Git
-children, private path ownership and reparse rejection, atomic replacement,
-and confirmation accessibility, and it forbids claiming physical acceptance
+The Phase 5B contract requires native verification for hidden Git children,
+private path ownership and reparse rejection, atomic replacement, and
+confirmation accessibility, and it forbids claiming physical acceptance
 without physical evidence
-([2026-10-09-phase-5b-trusted-configuration.md:527-549](../../tasks/2026-10-09-phase-5b-trusted-configuration.md#L527-L549)).
-The exact executed matrix and absent live evidence are recorded in
+([2026-10-09-phase-5b-trusted-configuration.md:509-552](../../tasks/2026-10-09-phase-5b-trusted-configuration.md#L509-L552)).
+Exact 0.60.88 passed those required native rows on a physical Windows host with
+a limited interactive user. That run did not exercise an external Git host or
+SFTP node, and Phase 5B-specific High Contrast, scaling, reduced-motion, and
+Narrator checks were not run. The exact local and native evidence plus every
+absent external or production claim are recorded in
 [Phase 5B Trusted Configuration Acceptance](../operations/PHASE5B_ACCEPTANCE.md).
 
-Sources: [instructions_service.rs:135-365](../../crates/pandamux-server/src/instructions_service.rs#L135-L365), [configuration_service.rs:85-190](../../crates/pandamux-server/src/configuration_service.rs#L85-L190), [bundle_sync.rs:80-195](../../crates/pandamux-server/src/bundle_sync.rs#L80-L195), [mutation_service.rs:203-302](../../crates/pandamux-server/src/mutation_service.rs#L203-L302), [mutation_phase5b.rs:246-319](../../crates/pandamux-server/src/store/mutation_phase5b.rs#L246-L319), [2026-10-09-phase-5b-trusted-configuration.md:527-549](../../tasks/2026-10-09-phase-5b-trusted-configuration.md#L527-L549)
+Sources: [data_paths.rs:164-235](../../crates/pandamux-server/src/data_paths.rs#L164-L235), [managed_git.rs:754-869](../../crates/pandamux-server/src/managed_git.rs#L754-L869), [instructions_service.rs:135-365](../../crates/pandamux-server/src/instructions_service.rs#L135-L365), [configuration_service.rs:85-190](../../crates/pandamux-server/src/configuration_service.rs#L85-L190), [bundle_sync.rs:80-195](../../crates/pandamux-server/src/bundle_sync.rs#L80-L195), [mutation_service.rs:203-302](../../crates/pandamux-server/src/mutation_service.rs#L203-L302), [mutation_phase5b.rs:246-319](../../crates/pandamux-server/src/store/mutation_phase5b.rs#L246-L319), [2026-10-09-phase-5b-trusted-configuration.md:509-552](../../tasks/2026-10-09-phase-5b-trusted-configuration.md#L509-L552)
 <!-- END:AUTOGEN pandamux_17_trusted-configuration_failure-modes -->
 
 ---

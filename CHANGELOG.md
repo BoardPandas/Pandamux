@@ -40,6 +40,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Completed Phase 5B trusted-configuration acceptance in version 0.60.89.**
+  The maintained guides and acceptance record now capture the full checkpoint
+  chain, the exact 0.60.88 local matrix, native Windows storage hardening, and
+  physical limited-user confirmation evidence. The record keeps external Git
+  and SFTP, CI, production activation, push, deployment, packaging, signing,
+  publication, release, and the independent P4-C5/P4-C7 gates explicitly
+  separate.
+
 - **Recorded Phase 5B trusted configuration evidence in version 0.60.84.**
   Root guidance and the maintained wiki now map the private source graph,
   layered trust, immutable activation, authenticated distribution, durable

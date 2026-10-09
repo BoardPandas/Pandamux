@@ -1,6 +1,9 @@
 # Phase 5B: Trusted Configuration, Layers, and Durable Approvals
 
-Status: **Planned. Not implemented.**
+Status: **Implemented and accepted for the authorized local and native Windows
+scope.** The exact checkpoint chain and remaining non-production boundaries are
+recorded in
+[`docs/operations/PHASE5B_ACCEPTANCE.md`](../docs/operations/PHASE5B_ACCEPTANCE.md).
 
 Date: 2026-10-09
 

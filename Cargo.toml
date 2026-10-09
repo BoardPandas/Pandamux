@@ -23,7 +23,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.60.88"
+version = "0.60.89"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/BoardPandas/Pandamux"

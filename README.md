@@ -190,10 +190,13 @@ trusted configuration control plane after the R0 development gate:
 - Phase 5B adds one private app-data graph, revisioned settings, a managed
   personal Git repository, bounded instructions mirrors, exact project-layer
   trust, immutable compiled bundles, authenticated node distribution, durable
-  mutation proposals, and a Trusted Configuration desktop surface. Its local
-  Linux matrix verifies the retained implementation, but native Windows path,
-  Git-child, atomic-replacement, and accessibility evidence plus live remote
-  distribution remain unverified. This does not close P4-C5 or P4-C7.
+  mutation proposals, and a Trusted Configuration desktop surface. Exact
+  0.60.88 commit `a0e6def` passes the complete local matrix plus the required
+  native Windows private-path, ownership, reparse, atomic-recovery,
+  no-console-Git, physical keyboard, and UI Automation checks. External Git or
+  SFTP distribution, CI, production activation, push, deployment, packaging,
+  signing, publication, and release were not exercised. This does not close
+  P4-C5 or P4-C7.
 
 See the [Phase 4 live acceptance record](docs/operations/PHASE4_ACCEPTANCE.md),
 the [Phase 5A pure-domain acceptance record](docs/operations/PHASE5A_ACCEPTANCE.md),

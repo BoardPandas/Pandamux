@@ -165,6 +165,42 @@
   signature, publication, release, served-version check, GitHub write, or pull
   request occurred.
 
+## Phase 5B Native-Acceptance Reconciliation - 2026-10-09
+
+- **Mode:** incremental update from initial B-G documentation commit
+  `285e7680` through clean deciding implementation and native-acceptance source
+  `a0e6defb`, version 0.60.88, plus the documentation-only 0.60.89 working tree
+  on `codex/recovery-r0`
+- **Generated page updated:** Trusted Configuration; five affected AUTOGEN
+  sections now map the revised desktop evidence plus Windows private-directory
+  security, complete managed-Git path and durability policy, keyboard and
+  AccessKit semantics, and the exact evidence boundary
+- **Source-map change:** `windows_security.rs` was added to the Trusted
+  Configuration TOC sources; all 175 current Rust source files remain mapped
+- **Maintained records updated:** the task status, changelog, root README and
+  CLAUDE guide, docs index, TOC, generation metadata, this summary, and the
+  Phase 5B acceptance record
+- **Acceptance outcome:** exact 0.60.88 passed the complete local matrix and
+  the contract's native Windows private-path, ownership, reparse, atomic
+  recovery, no-console Git, keyboard, and UI Automation rows. The v0.60.87
+  physical candidate was rejected because terminal controls still appeared
+  enabled to UI Automation; v0.60.88 corrected and passed that state.
+- **Evidence boundary:** no external Git or SFTP path, CI, production
+  activation, push, deployment, packaging, signing, publication, release, or
+  served-version check was exercised. High Contrast, scaling, reduced-motion,
+  and Narrator were not rerun specifically for Phase 5B. P4-C5 remains Partial
+  and P4-C7 remains open.
+- **Documentation validation:** 17 TOC pages, 106 ordered AUTOGEN sections,
+  1,630 active local links, 1,514 valid line-range citations, all 175 current
+  Rust source files, and 21 Mermaid blocks passed with
+  zero structural errors. `mmdc` is unavailable, so renderer-level Mermaid
+  validation was not performed.
+- **Code-gate status:** exact 0.60.88 passed formatting, every focused crate
+  test, the five-target boundary checker, 603 workspace tests with 2 intentional
+  real-shell ignores, all-target checks, strict Clippy, and diff hygiene. The
+  identical complete matrix passed on the v0.60.89 documentation tree before
+  commit and is rerun at the exact documentation commit before completion.
+
 ## Historical context
 
 The previous generated wiki described the removed Iced multiplexer architecture.

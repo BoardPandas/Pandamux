@@ -5,10 +5,11 @@ workspace. Read the root [`Cargo.toml`](../Cargo.toml) for the version;
 documentation does not duplicate it.
 
 > **Latest Updates (October 2026):**
+> - **v0.60.89:** Final Phase 5B local and native Windows acceptance reconciliation.
+> - **v0.60.88:** Native terminal confirmation controls now publish their disabled UI Automation state.
+> - **v0.60.87:** Physical keyboard traversal restored for both confirmation actions.
+> - **v0.60.85:** Native Windows trusted storage, ACL, reparse, Git durability, and long-path hardening.
 > - **v0.60.84:** Phase 5B maintained documentation and exact local acceptance record.
-> - **v0.60.83:** Durable mutation proposals, local confirmation, history, trust, diff, and revert controls.
-> - **v0.60.82:** Immutable bundle activation and authenticated node distribution.
-> - **v0.60.81:** Exact project-layer trust and local agent access controls.
 
 ## Authority order
 
@@ -109,8 +110,8 @@ Phase 5A pure-domain checkpoint and Phase 5B local implementation evidence:
   native evidence.
 - [Phase 5B Trusted Configuration Acceptance](operations/PHASE5B_ACCEPTANCE.md)
   maps every AC-B01 through AC-B18 row to retained evidence, records the exact
-  checkpoint chain and local matrix, and keeps native and live limitations
-  explicit.
+  checkpoint and native-repair chain, and keeps external and production
+  limitations explicit.
 
 The current recovery branch includes exact evidence for accounting,
 reconciliation, provider and model discovery, native Windows accessibility and
@@ -136,11 +137,12 @@ convert either open Phase 4 row into a pass. They also do not establish a
 database, effect interpreter, provider dispatch, worktree, RPC, CLI, desktop,
 or live-provider path. Phase 5B now supplies trusted configuration persistence,
 managed Git, source inspection, exact project trust, immutable activation,
-node-distribution contracts, mutation review, and desktop controls. Its local
-Linux matrix does not establish native Windows Git-child, path, replacement,
-or accessibility behavior, or a live remote-node transfer. Phase 5 evidence
-remains separate from exact 0.60.64 Phase 4 runtime evidence and the retained
-Galahad databases. This generated-wiki refresh remains an interim P4-C7
+node-distribution contracts, mutation review, and desktop controls. Exact
+0.60.88 passes its complete local matrix and the required native Windows
+storage, hidden-Git-child, atomic-recovery, keyboard, and UI Automation checks.
+No external Git/SFTP transfer or production activation was exercised. Phase 5
+evidence remains separate from exact 0.60.64 Phase 4 runtime evidence and the
+retained Galahad databases. This generated-wiki refresh remains an interim P4-C7
 synchronization; it does not claim that Phase 4 is complete, released,
 deployed, signed, published, or served.
 

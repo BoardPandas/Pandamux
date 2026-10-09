@@ -96,15 +96,18 @@ SQLite, filesystem effects, network transport, provider dispatch, worktrees,
 RPC, CLI, or desktop orchestration.
 
 Phase 5B now implements the trusted configuration control plane around that
-pure compiler. Exact 0.60.83 commit
-`ce30ce7c5e9fa2c9ee6978dafe715093028cf29c` owns private app-data paths,
+pure compiler. Exact 0.60.88 commit
+`a0e6defb859ee0809737b464e90e730ff8373d05` owns private app-data paths,
 migration 13, revisioned settings, managed personal Git, bounded instructions
 mirrors, exact project-layer trust, immutable bundle activation, authenticated
 node distribution, durable mutation proposals, and local confirmation and
-history surfaces. Its complete local Linux command matrix passes. Native
-Windows Git-child, path ownership, reparse-point, atomic-replacement, and
-accessibility rows plus live remote distribution remain unverified, so this is
-not production acceptance and does not close P4-C5 or P4-C7.
+history surfaces. Its complete local Linux matrix passes. Native Windows
+verification covers protected ownership and DACLs, reparse rejection, managed
+Git durability and hidden child processes, atomic personal-repository recovery,
+and physical limited-user keyboard and UI Automation confirmation behavior.
+External Git and SFTP distribution, CI, and production activation remain
+unexercised, so this is not production or release evidence and does not close
+P4-C5 or P4-C7.
 
 Exact 0.60.38 commit `d328ad8` supersedes the preceding source-candidate note:
 its complete local gate, native build, host smoke, remote lifecycle, and
@@ -300,9 +303,11 @@ The desktop Trusted Configuration category loads source and candidate status,
 safe diffs, exact project trust, pending and recent proposals, activation
 history, and personal history. It uses redacted projections, non-color-only
 status text, named actions, exact revision and digest values, pessimistic
-loading, and forward-only revert operations. Linux tests and compilation do
-not substitute for the required native Windows keyboard, screen-reader, path,
-Git-child, or atomic-replacement evidence.
+loading, and forward-only revert operations. Exact 0.60.88 physical Windows
+evidence covers Tab traversal, Enter approval, UI Automation names and states,
+and terminal controls that are disabled, non-focusable, and non-invokable.
+High Contrast, scaling, reduced-motion, and Narrator were not rerun specifically
+for this Phase 5B surface and must not be inferred from that result.
 
 ## Provider execution
 
@@ -456,8 +461,9 @@ Release authorization is not implied by implementation work. Keep implementation
 The current GPUI rewrite has passed R0.5, including both physical P4-C6 rows,
 but it has not passed the complete Phase 4 exit matrix. The real pre-output
 provider-capacity row and final post-P4-C5 documentation archive remain open.
-Phase 5B has complete local implementation evidence but not its required
-native Windows or live remote-distribution evidence.
+Phase 5B has complete evidence for its authorized local and required native
+Windows scope. It has no external Git/SFTP or production-distribution evidence;
+those absent claims do not reopen its authorized acceptance scope.
 `.github/workflows/release.yml` still contains historical packaging references
 and must not be used as evidence that the current workspace is releasable.
 Phase 7 owns the final Windows packaging, signing, publication, and update
