@@ -26,6 +26,10 @@ The following files were used as evidence for this page:
 - [traits.rs:1-72](../../crates/pandamux-providers/src/traits.rs#L1-L72)
 - [models.rs:93-292](../../crates/pandamux-providers/src/models.rs#L93-L292)
 - [thread_manager.rs:107-3110](../../crates/pandamux-server/src/thread_manager.rs#L107-L3110)
+- [run_execution_service.rs](../../crates/pandamux-server/src/run_execution_service.rs)
+- [attempt_worktree.rs](../../crates/pandamux-server/src/attempt_worktree.rs)
+- [orchestration_phase5c.rs](../../crates/pandamux-server/src/store/orchestration_phase5c.rs)
+- [attempt_worktrees.rs](../../crates/pandamux-server/tests/attempt_worktrees.rs)
 
 </details>
 
@@ -61,10 +65,61 @@ graph TD
 | Model proposals | One JSON object is bounded to 1 MiB and structural limits. Invalid content gets at most one parse-only retry; timeout or transport failures do not consume that retry path and never dispatch ([model_output.rs:9-29](../../crates/pandamux-orchestrator/src/model_output.rs#L9-L29), [model_output.rs:74-124](../../crates/pandamux-orchestrator/src/model_output.rs#L74-L124)). |
 | Run state | `decide` rejects illegal commands, `apply` enforces exact sequencing and canonical identity receipts, and `replay` rebuilds state while deterministic effect identifiers prevent duplicate work ([state.rs:55-204](../../crates/pandamux-orchestrator/src/state.rs#L55-L204), [state.rs:206-320](../../crates/pandamux-orchestrator/src/state.rs#L206-L320), [state.rs:322-356](../../crates/pandamux-orchestrator/src/state.rs#L322-L356)). |
 
-The existing provider-session runtime documented below is not yet connected to this engine. No Phase 5A result claims SQLite durability, outbox interpretation, runtime dispatch, worktree isolation, RPC or CLI coverage, desktop behavior, or live provider acceptance; those belong to later checkpoints.
+The pure engine itself still performs no I/O. The later Phase 5C foundation now
+persists and interprets its run transitions and owns isolated attempt
+worktrees, as described below. Provider dispatch, public run RPC/CLI, desktop
+behavior, and live-provider acceptance remain outside the completed
+foundation checkpoints.
 
 Sources: [lib.rs:9-55](../../crates/pandamux-orchestrator/src/lib.rs#L9-L55), [schema/mod.rs:16-215](../../crates/pandamux-orchestrator/src/schema/mod.rs#L16-L215), [bundle.rs:56-244](../../crates/pandamux-orchestrator/src/bundle.rs#L56-L244), [dag.rs:14-165](../../crates/pandamux-orchestrator/src/dag.rs#L14-L165), [routing.rs:52-118](../../crates/pandamux-orchestrator/src/routing.rs#L52-L118), [policy.rs:37-188](../../crates/pandamux-orchestrator/src/policy.rs#L37-L188), [model_output.rs:9-124](../../crates/pandamux-orchestrator/src/model_output.rs#L9-L124), [state.rs:55-356](../../crates/pandamux-orchestrator/src/state.rs#L55-L356)
 <!-- END:AUTOGEN pandamux_12_agent-orchestration_phase5a -->
+
+---
+
+<!-- BEGIN:AUTOGEN pandamux_12_agent-orchestration_phase5c-foundation -->
+## Phase 5C Durable Execution Foundation
+
+Phase 5C checkpoints C-B through C-D connect the pure run model to a private
+durable foundation without starting a provider. Migration 14 stores canonical
+snapshots, immutable events, derived effects, queue and lease records,
+attempt-owned worktrees, budgets, artifacts, progress, recovery reviews, and
+node receipts. Verified loads replay the event log and compare its canonical
+bytes and derived effects with the stored rows before returning state
+([orchestration_phase5c.rs](../../crates/pandamux-server/src/store/orchestration_phase5c.rs)).
+
+`RunExecutionService` is the single adapter for canonical transitions and the
+effect outbox. It broadcasts only post-commit identity and digest notices;
+claims, preparation, dispatch markers, outcomes, and acknowledgements remain
+durable and replay-safe
+([run_execution_service.rs](../../crates/pandamux-server/src/run_execution_service.rs)).
+
+Each execution attempt can now bind exactly one app-owned worktree. The service
+derives the path and full branch ref from canonical repository, run, task, and
+attempt identities; records the worktree lease and ambiguous ownership intent
+before Git; and then materializes only the requested commit. Repository hooks,
+global attributes, system configuration, submodule recursion, and custom
+content filters are disabled or rejected. Blocking filesystem and Git work run
+on a bounded blocking pool, and Windows child processes use
+`CREATE_NO_WINDOW`
+([attempt_worktree.rs](../../crates/pandamux-server/src/attempt_worktree.rs)).
+
+Before, after, and recovery checkpoints use a private temporary index and a
+stable checkpoint ref, leaving both the user checkout and the attempt index
+unchanged. Crash recovery distinguishes durable intent from Git completion and
+rejects changed-byte identity reuse. Cleanup is automatic only for a terminal,
+review-free attempt with verified process-death and retained-evidence digests,
+complete checkpoint receipts, and a clean unlocked tree; removal uses ordinary
+non-forced `git worktree remove`. Dirty, locked, foreign, or ambiguous trees are
+retained
+([attempt_worktrees.rs](../../crates/pandamux-server/tests/attempt_worktrees.rs)).
+
+This is still a foundation checkpoint. `ThreadManager` remains the sole
+provider-session owner, and C-D does not yet connect a run effect to provider
+execution. Shared admission, budgets, artifact settlement, watchdogs, recovery
+coordination, authenticated remote dispatch, shutdown ownership, public RPC,
+CLI, desktop UI, and native/live-provider acceptance remain later Phase 5C or
+Phase 5D work.
+<!-- END:AUTOGEN pandamux_12_agent-orchestration_phase5c-foundation -->
 
 ---
 

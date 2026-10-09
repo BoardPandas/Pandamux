@@ -159,6 +159,28 @@ pub fn decide(run: &Run, command: RunCommand) -> Result<Vec<RunEventKind>, Orche
             attempt_id,
             boundary,
         },
+        RunCommand::AssignAttemptWorktree {
+            attempt_id,
+            worktree_id,
+        } => {
+            if let Some(existing) = run
+                .attempts
+                .get(&attempt_id)
+                .and_then(|attempt| attempt.worktree_id.as_ref())
+            {
+                if existing == &worktree_id {
+                    return Ok(Vec::new());
+                }
+                return Err(orchestration_error(
+                    OrchestrationErrorCode::ReplayConflict,
+                    "An attempt worktree identity cannot change",
+                ));
+            }
+            RunEventKind::AttemptWorktreeAssigned {
+                attempt_id,
+                worktree_id,
+            }
+        }
         RunCommand::RecordCheckpoint { checkpoint } => {
             if let Some(existing) = run.checkpoints.get(&checkpoint.id) {
                 if existing == &checkpoint {
@@ -615,6 +637,23 @@ fn validate_kind(
                 return Err(illegal("Attempt boundaries only advance while running"));
             }
         }
+        RunEventKind::AttemptWorktreeAssigned {
+            attempt_id,
+            worktree_id,
+        } => {
+            let attempt = run
+                .attempts
+                .get(attempt_id)
+                .ok_or_else(|| missing("The worktree attempt does not exist"))?;
+            if attempt.status != AttemptStatus::DispatchRequested
+                || attempt.worktree_id.is_some()
+                || worktree_id.as_str().trim().is_empty()
+            {
+                return Err(illegal(
+                    "Only an unstarted dispatched attempt can receive a worktree",
+                ));
+            }
+        }
         RunEventKind::CheckpointRecorded { checkpoint } => {
             validate_checkpoint(run, checkpoint, at_ms)?;
         }
@@ -982,6 +1021,15 @@ fn apply_kind(
                 .expect("validated attempt")
                 .boundary = *boundary;
         }
+        RunEventKind::AttemptWorktreeAssigned {
+            attempt_id,
+            worktree_id,
+        } => {
+            run.attempts
+                .get_mut(attempt_id)
+                .expect("validated attempt")
+                .worktree_id = Some(worktree_id.clone());
+        }
         RunEventKind::CheckpointRecorded { checkpoint } => {
             run.checkpoints
                 .insert(checkpoint.id.clone(), checkpoint.clone());
@@ -1171,6 +1219,7 @@ fn validate_dispatch(
         || attempt.boundary != AttemptBoundary::SafeToRetry
         || attempt.thread_id.is_some()
         || attempt.turn_attempt_id.is_some()
+        || attempt.worktree_id.is_some()
         || task.route.is_none()
         || attempt.route.task_id != attempt.task_id
         || attempt.route.selected_agent_id.is_none()

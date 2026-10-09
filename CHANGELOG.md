@@ -40,6 +40,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Added crash-safe, attempt-owned Phase 5C worktrees and checkpoints in
+  version 0.60.94.** Each attempt now commits an exact repository, baseline,
+  full branch ref, private app-data path, environment, and active lease before
+  bounded Git materialization. Before, after, and recovery checkpoints use
+  private indices and stable refs without changing the user checkout or attempt
+  index; exact replay recovers intent/Git/receipt crashes while changed bytes,
+  foreign ownership, custom filters, unsafe links/reparse points, and
+  case-colliding paths fail closed. Automatic cleanup is ordinary and
+  non-forced only after terminal, process-death, evidence, checkpoint, and
+  review gates; dirty, locked, or ambiguous output remains retained. This
+  checkpoint starts no provider, contacts no node or external repository, and
+  adds no native Windows/live-provider acceptance, push, CI, deployment,
+  activation, packaging, signing, publication, or release claim.
+
 - **Added the crash-safe Phase 5C run engine adapter and effect outbox in
   version 0.60.93.** Canonical transitions now commit immutable events,
   verified snapshots, derived effects, and transaction-owned rows once, with

@@ -807,6 +807,10 @@ pub enum RunEventKind {
         attempt_id: RunAttemptId,
         boundary: AttemptBoundary,
     },
+    AttemptWorktreeAssigned {
+        attempt_id: RunAttemptId,
+        worktree_id: AttemptWorktreeId,
+    },
     CheckpointRecorded {
         checkpoint: CheckpointRef,
     },
@@ -896,6 +900,10 @@ pub enum RunCommand {
     AdvanceAttemptBoundary {
         attempt_id: RunAttemptId,
         boundary: AttemptBoundary,
+    },
+    AssignAttemptWorktree {
+        attempt_id: RunAttemptId,
+        worktree_id: AttemptWorktreeId,
     },
     RecordCheckpoint {
         checkpoint: CheckpointRef,

@@ -2,14 +2,14 @@ use super::{Store, StoreError, checked_i64, checked_u64};
 use pandamux_core::{
     AgentId, ArtifactKey, AttemptBoundary, AttemptProgressId, AttemptProgressKind,
     AttemptProgressRecord, AttemptWorktreeId, BlackboardEntry, BlackboardEntryId, BudgetGrantId,
-    BudgetReservation, EffectDeliveryRecord, EffectDeliveryState, ExecutionLease, ExecutionLeaseId,
-    LeaseResourceKind, MAX_ARTIFACT_BYTES, MAX_ARTIFACT_CONTAINER_ITEMS, MAX_ARTIFACT_JSON_DEPTH,
-    MAX_ARTIFACT_STRING_BYTES, MAX_ARTIFACTS_PER_RUN, MAX_ARTIFACTS_PER_TASK,
-    MAX_RUN_ARTIFACT_BYTES, NodeStoreId, OrchestrationEffect, OrchestrationEffectId,
-    OrganizationId, OwnedAttemptWorktree, ProjectId, ProjectRepositoryId, RecoveryReview,
-    RecoveryReviewStatus, Run, RunAttemptId, RunCommand, RunEvent, RunEventId, RunId, RunStatus,
-    RunTaskId, ServerIncarnationId, SupplementalBudgetGrant, TaskRouteDecision, ThreadId,
-    TurnAttemptId, TurnId,
+    BudgetReservation, CheckpointId, EffectDeliveryRecord, EffectDeliveryState, ExecutionLease,
+    ExecutionLeaseId, LeaseResourceKind, MAX_ARTIFACT_BYTES, MAX_ARTIFACT_CONTAINER_ITEMS,
+    MAX_ARTIFACT_JSON_DEPTH, MAX_ARTIFACT_STRING_BYTES, MAX_ARTIFACTS_PER_RUN,
+    MAX_ARTIFACTS_PER_TASK, MAX_RUN_ARTIFACT_BYTES, NodeStoreId, OrchestrationEffect,
+    OrchestrationEffectId, OrganizationId, OwnedAttemptWorktree, ProjectId, ProjectRepositoryId,
+    RecoveryReview, RecoveryReviewStatus, Run, RunAttemptId, RunCommand, RunEvent, RunEventId,
+    RunId, RunStatus, RunTaskId, ServerIncarnationId, SupplementalBudgetGrant, TaskRouteDecision,
+    ThreadId, TurnAttemptId, TurnId, WorktreeCleanupEligibility, WorktreeDirtyState,
 };
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -101,8 +101,34 @@ pub struct OrchestrationQueueRecord {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OwnedAttemptWorktreeRecord {
     pub worktree: OwnedAttemptWorktree,
+    /// Digest of the immutable checkpoint operation payload keyed by the
+    /// checkpoint identity. This is stored in the existing checkpoint JSON
+    /// column so a crash before Git still leaves a changed-byte replay guard.
+    pub checkpoint_intent_sha256: BTreeMap<CheckpointId, String>,
+    pub verified_process_death_sha256: Option<String>,
+    pub retained_evidence_sha256: Option<String>,
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredWorktreeCheckpoints {
+    #[serde(default)]
+    ids: BTreeSet<CheckpointId>,
+    #[serde(default)]
+    intent_sha256: BTreeMap<CheckpointId, String>,
+    #[serde(default)]
+    verified_process_death_sha256: Option<String>,
+    #[serde(default)]
+    retained_evidence_sha256: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StoredWorktreeCheckpointsCompat {
+    Current(StoredWorktreeCheckpoints),
+    Legacy(BTreeSet<CheckpointId>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -191,6 +217,8 @@ pub struct AssignedRunEvent {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RunTransitionRows {
+    pub leases: Vec<ExecutionLease>,
+    pub worktrees: Vec<OwnedAttemptWorktreeRecord>,
     pub queue_records: Vec<OrchestrationQueueRecord>,
     pub budget_reservations: Vec<StoredBudgetReservation>,
     pub daily_budgets: Vec<DailyBudgetRecord>,
@@ -1053,9 +1081,13 @@ fn validate_transition_row_scope(
     rows: &RunTransitionRows,
 ) -> Result<(), StoreError> {
     if rows
-        .queue_records
+        .worktrees
         .iter()
-        .any(|record| record.run_id != *run_id)
+        .any(|record| record.worktree.run_id != *run_id)
+        || rows
+            .queue_records
+            .iter()
+            .any(|record| record.run_id != *run_id)
         || rows
             .budget_reservations
             .iter()
@@ -1071,6 +1103,26 @@ fn validate_transition_row_scope(
     {
         return Err(data_error(
             "orchestration transition rows belong to a different run",
+        ));
+    }
+    if rows.leases.len() != rows.worktrees.len()
+        || rows.worktrees.iter().any(|record| {
+            rows.leases.iter().all(|lease| {
+                lease.id != record.worktree.lease_id
+                    || lease.resource_kind != LeaseResourceKind::Worktree
+                    || lease.resource_id != record.worktree.id.as_str()
+            })
+        })
+        || rows.leases.iter().any(|lease| {
+            rows.worktrees.iter().all(|record| {
+                record.worktree.lease_id != lease.id
+                    || lease.resource_kind != LeaseResourceKind::Worktree
+                    || lease.resource_id != record.worktree.id.as_str()
+            })
+        })
+    {
+        return Err(data_error(
+            "orchestration transition worktree leases do not match their resources",
         ));
     }
     let organization_id = conn.query_row(
@@ -1097,13 +1149,25 @@ fn verify_transition_rows(
 ) -> Result<(), StoreError> {
     validate_transition_row_scope(conn, run_id, rows)?;
     let stored_queue = load_queue_records(conn, run_id)?;
+    let stored_worktrees = load_worktrees(conn, run_id)?;
     let stored_reservations = load_budget_reservations(conn, run_id)?;
     let stored_artifacts = load_artifacts(conn, run_id)?;
     let stored_reviews = load_recovery_reviews(conn, run_id)?;
+    for lease in &rows.leases {
+        if load_lease(conn, &lease.id)?.as_ref() != Some(lease) {
+            return Err(data_error(
+                "duplicate orchestration worktree lease changed durable bytes",
+            ));
+        }
+    }
     if rows
-        .queue_records
+        .worktrees
         .iter()
-        .any(|record| !stored_queue.contains(record))
+        .any(|record| !stored_worktrees.contains(record))
+        || rows
+            .queue_records
+            .iter()
+            .any(|record| !stored_queue.contains(record))
         || rows
             .budget_reservations
             .iter()
@@ -1138,6 +1202,12 @@ fn insert_transition_rows(
     rows: &RunTransitionRows,
 ) -> Result<(), StoreError> {
     validate_transition_row_scope(tx, run_id, rows)?;
+    for lease in &rows.leases {
+        ensure_execution_lease(tx, lease)?;
+    }
+    for record in &rows.worktrees {
+        insert_worktree(tx, record)?;
+    }
     for record in &rows.queue_records {
         insert_queue_record(tx, record)?;
     }
@@ -2051,6 +2121,20 @@ fn insert_worktree(
         || worktree.branch_ref.trim().is_empty()
         || worktree.path.trim().is_empty()
         || record.updated_at_ms < record.created_at_ms
+        || record
+            .checkpoint_intent_sha256
+            .iter()
+            .any(|(checkpoint_id, digest)| {
+                !worktree.checkpoint_ids.contains(checkpoint_id) || !is_sha256(digest)
+            })
+        || record
+            .verified_process_death_sha256
+            .as_deref()
+            .is_some_and(|digest| !is_sha256(digest))
+        || record
+            .retained_evidence_sha256
+            .as_deref()
+            .is_some_and(|digest| !is_sha256(digest))
     {
         return Err(data_error("owned worktree record is malformed"));
     }
@@ -2058,7 +2142,10 @@ fn insert_worktree(
     if snapshot
         .attempts
         .get(&worktree.attempt_id)
-        .is_none_or(|attempt| attempt.task_id != worktree.task_id)
+        .is_none_or(|attempt| {
+            attempt.task_id != worktree.task_id
+                || attempt.worktree_id.as_ref() != Some(&worktree.id)
+        })
     {
         return Err(data_error(
             "owned worktree differs from the canonical attempt owner",
@@ -2074,6 +2161,21 @@ fn insert_worktree(
             "owned worktree differs from the canonical run repository",
         ));
     }
+    let lease = load_lease(tx, &worktree.lease_id)?
+        .ok_or_else(|| data_error("owned worktree lease was not found"))?;
+    if lease.resource_kind != LeaseResourceKind::Worktree
+        || lease.resource_id != worktree.id.as_str()
+    {
+        return Err(data_error(
+            "owned worktree lease differs from its canonical resource",
+        ));
+    }
+    let checkpoints = StoredWorktreeCheckpoints {
+        ids: worktree.checkpoint_ids.clone(),
+        intent_sha256: record.checkpoint_intent_sha256.clone(),
+        verified_process_death_sha256: record.verified_process_death_sha256.clone(),
+        retained_evidence_sha256: record.retained_evidence_sha256.clone(),
+    };
     tx.execute(
         "INSERT INTO orchestration_worktrees (
             worktree_id, repository_id, run_id, task_id, attempt_id, environment_id,
@@ -2093,7 +2195,7 @@ fn insert_worktree(
             worktree.branch_ref,
             worktree.path,
             worktree.lease_id.as_str(),
-            serde_json::to_string(&worktree.checkpoint_ids)?,
+            serde_json::to_string(&checkpoints)?,
             enum_text(worktree.dirty_state)?,
             enum_text(worktree.cleanup_eligibility)?,
             checked_i64(record.created_at_ms, "worktree created at")?,
@@ -2571,6 +2673,355 @@ impl Store {
             node_receipts,
         })
     }
+
+    pub fn load_owned_attempt_worktree(
+        &self,
+        worktree_id: &AttemptWorktreeId,
+    ) -> Result<Option<OwnedAttemptWorktreeRecord>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        load_worktree_by_id(&conn, worktree_id)
+    }
+
+    pub fn load_attempt_worktree_for_attempt(
+        &self,
+        run_id: &RunId,
+        attempt_id: &RunAttemptId,
+    ) -> Result<Option<OwnedAttemptWorktreeRecord>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        Ok(load_worktrees(&conn, run_id)?
+            .into_iter()
+            .find(|record| record.worktree.attempt_id == *attempt_id))
+    }
+
+    pub fn load_active_attempt_worktree(
+        &self,
+        worktree_id: &AttemptWorktreeId,
+        at_ms: u64,
+    ) -> Result<(OwnedAttemptWorktreeRecord, ExecutionLease), StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let record = load_worktree_by_id(&conn, worktree_id)?
+            .ok_or_else(|| data_error("owned attempt worktree was not found"))?;
+        let lease = load_lease(&conn, &record.worktree.lease_id)?
+            .ok_or_else(|| data_error("owned attempt worktree lease was not found"))?;
+        validate_active_worktree_lease(&record, &lease, at_ms)?;
+        Ok((record, lease))
+    }
+
+    pub fn mark_attempt_worktree_materialized(
+        &self,
+        worktree_id: &AttemptWorktreeId,
+        lease_id: &ExecutionLeaseId,
+        materialized_at_ms: u64,
+    ) -> Result<OwnedAttemptWorktreeRecord, StoreError> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = load_worktree_by_id(&tx, worktree_id)?
+            .ok_or_else(|| data_error("owned attempt worktree was not found"))?;
+        let lease = load_lease(&tx, lease_id)?
+            .ok_or_else(|| data_error("owned attempt worktree lease was not found"))?;
+        validate_active_worktree_lease(&current, &lease, materialized_at_ms)?;
+        if current.worktree.lease_id != *lease_id {
+            return Err(data_error("owned attempt worktree lease identity changed"));
+        }
+        if current.worktree.dirty_state == WorktreeDirtyState::Clean
+            && current.worktree.cleanup_eligibility == WorktreeCleanupEligibility::Ineligible
+        {
+            return Ok(current);
+        }
+        if current.worktree.dirty_state != WorktreeDirtyState::Ambiguous
+            || current.worktree.cleanup_eligibility != WorktreeCleanupEligibility::Ineligible
+            || materialized_at_ms < current.updated_at_ms
+        {
+            return Err(data_error(
+                "owned attempt worktree cannot record materialization",
+            ));
+        }
+        update_worktree_state(
+            &tx,
+            &current,
+            WorktreeDirtyState::Clean,
+            WorktreeCleanupEligibility::Ineligible,
+            materialized_at_ms,
+        )?;
+        let updated = load_worktree_by_id(&tx, worktree_id)?
+            .ok_or_else(|| data_error("materialized attempt worktree disappeared"))?;
+        tx.commit()?;
+        Ok(updated)
+    }
+
+    pub fn record_attempt_worktree_checkpoint_intent(
+        &self,
+        worktree_id: &AttemptWorktreeId,
+        lease_id: &ExecutionLeaseId,
+        checkpoint_id: &CheckpointId,
+        payload_sha256: &str,
+        recorded_at_ms: u64,
+    ) -> Result<OwnedAttemptWorktreeRecord, StoreError> {
+        if checkpoint_id.as_str().trim().is_empty() || !is_sha256(payload_sha256) {
+            return Err(data_error("attempt checkpoint intent is malformed"));
+        }
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut current = load_worktree_by_id(&tx, worktree_id)?
+            .ok_or_else(|| data_error("owned attempt worktree was not found"))?;
+        let lease = load_lease(&tx, lease_id)?
+            .ok_or_else(|| data_error("owned attempt worktree lease was not found"))?;
+        validate_active_worktree_lease(&current, &lease, recorded_at_ms)?;
+        if current.worktree.lease_id != *lease_id {
+            return Err(data_error("owned attempt worktree lease identity changed"));
+        }
+        if let Some(existing) = current.checkpoint_intent_sha256.get(checkpoint_id) {
+            if existing == payload_sha256 {
+                return Ok(current);
+            }
+            return Err(data_error(
+                "attempt checkpoint identity was reused with different bytes",
+            ));
+        }
+        if current.worktree.cleanup_eligibility != WorktreeCleanupEligibility::Ineligible
+            || recorded_at_ms < current.updated_at_ms
+        {
+            return Err(data_error(
+                "owned attempt worktree cannot accept a checkpoint intent",
+            ));
+        }
+        current
+            .worktree
+            .checkpoint_ids
+            .insert(checkpoint_id.clone());
+        current
+            .checkpoint_intent_sha256
+            .insert(checkpoint_id.clone(), payload_sha256.to_string());
+        let checkpoints = StoredWorktreeCheckpoints {
+            ids: current.worktree.checkpoint_ids.clone(),
+            intent_sha256: current.checkpoint_intent_sha256.clone(),
+            verified_process_death_sha256: current.verified_process_death_sha256.clone(),
+            retained_evidence_sha256: current.retained_evidence_sha256.clone(),
+        };
+        let changed = tx.execute(
+            "UPDATE orchestration_worktrees
+                SET checkpoint_ids_json = ?1, updated_at_ms = ?2
+              WHERE worktree_id = ?3 AND lease_id = ?4 AND updated_at_ms = ?5",
+            params![
+                serde_json::to_string(&checkpoints)?,
+                checked_i64(recorded_at_ms, "checkpoint intent timestamp")?,
+                worktree_id.as_str(),
+                lease_id.as_str(),
+                checked_i64(current.updated_at_ms, "prior worktree timestamp")?,
+            ],
+        )?;
+        if changed != 1 {
+            return Err(data_error(
+                "attempt checkpoint intent lost its compare-and-swap",
+            ));
+        }
+        let updated = load_worktree_by_id(&tx, worktree_id)?
+            .ok_or_else(|| data_error("checkpoint attempt worktree disappeared"))?;
+        tx.commit()?;
+        Ok(updated)
+    }
+
+    pub fn retain_attempt_worktree(
+        &self,
+        worktree_id: &AttemptWorktreeId,
+        lease_id: &ExecutionLeaseId,
+        dirty_state: WorktreeDirtyState,
+        retained_at_ms: u64,
+    ) -> Result<OwnedAttemptWorktreeRecord, StoreError> {
+        if dirty_state == WorktreeDirtyState::Clean {
+            return Err(data_error("a clean worktree cannot be retained as dirty"));
+        }
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = load_worktree_by_id(&tx, worktree_id)?
+            .ok_or_else(|| data_error("owned attempt worktree was not found"))?;
+        let lease = load_lease(&tx, lease_id)?
+            .ok_or_else(|| data_error("owned attempt worktree lease was not found"))?;
+        validate_active_worktree_lease(&current, &lease, retained_at_ms)?;
+        if current.worktree.lease_id != *lease_id {
+            return Err(data_error("owned attempt worktree lease identity changed"));
+        }
+        if current.worktree.dirty_state == dirty_state
+            && current.worktree.cleanup_eligibility == WorktreeCleanupEligibility::Retained
+        {
+            return Ok(current);
+        }
+        if current.worktree.cleanup_eligibility == WorktreeCleanupEligibility::Eligible
+            || retained_at_ms < current.updated_at_ms
+        {
+            return Err(data_error("owned attempt worktree cannot be retained"));
+        }
+        update_worktree_state(
+            &tx,
+            &current,
+            dirty_state,
+            WorktreeCleanupEligibility::Retained,
+            retained_at_ms,
+        )?;
+        let updated = load_worktree_by_id(&tx, worktree_id)?
+            .ok_or_else(|| data_error("retained attempt worktree disappeared"))?;
+        tx.commit()?;
+        Ok(updated)
+    }
+
+    pub fn mark_attempt_worktree_cleaned(
+        &self,
+        worktree_id: &AttemptWorktreeId,
+        lease_id: &ExecutionLeaseId,
+        verified_process_death_sha256: &str,
+        retained_evidence_sha256: &str,
+        cleaned_at_ms: u64,
+    ) -> Result<OwnedAttemptWorktreeRecord, StoreError> {
+        if !is_sha256(verified_process_death_sha256) || !is_sha256(retained_evidence_sha256) {
+            return Err(data_error("attempt worktree cleanup evidence is malformed"));
+        }
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = load_worktree_by_id(&tx, worktree_id)?
+            .ok_or_else(|| data_error("owned attempt worktree was not found"))?;
+        if current.worktree.lease_id != *lease_id {
+            return Err(data_error("owned attempt worktree lease identity changed"));
+        }
+        if current.worktree.dirty_state == WorktreeDirtyState::Clean
+            && current.worktree.cleanup_eligibility == WorktreeCleanupEligibility::Eligible
+        {
+            if current.verified_process_death_sha256.as_deref()
+                == Some(verified_process_death_sha256)
+                && current.retained_evidence_sha256.as_deref() == Some(retained_evidence_sha256)
+            {
+                return Ok(current);
+            }
+            return Err(data_error(
+                "attempt worktree cleanup identity was reused with different evidence",
+            ));
+        }
+        let lease = load_lease(&tx, lease_id)?
+            .ok_or_else(|| data_error("owned attempt worktree lease was not found"))?;
+        validate_active_worktree_lease(&current, &lease, cleaned_at_ms)?;
+        if current.worktree.dirty_state != WorktreeDirtyState::Clean
+            || current.worktree.cleanup_eligibility != WorktreeCleanupEligibility::Ineligible
+            || cleaned_at_ms < current.updated_at_ms
+        {
+            return Err(data_error(
+                "owned attempt worktree cannot record clean removal",
+            ));
+        }
+        let checkpoints = StoredWorktreeCheckpoints {
+            ids: current.worktree.checkpoint_ids.clone(),
+            intent_sha256: current.checkpoint_intent_sha256.clone(),
+            verified_process_death_sha256: Some(verified_process_death_sha256.to_string()),
+            retained_evidence_sha256: Some(retained_evidence_sha256.to_string()),
+        };
+        let changed = tx.execute(
+            "UPDATE orchestration_worktrees
+                SET checkpoint_ids_json = ?1, dirty_state = 'clean',
+                    cleanup_eligibility = 'eligible', updated_at_ms = ?2
+              WHERE worktree_id = ?3 AND lease_id = ?4 AND dirty_state = 'clean'
+                AND cleanup_eligibility = 'ineligible' AND updated_at_ms = ?5",
+            params![
+                serde_json::to_string(&checkpoints)?,
+                checked_i64(cleaned_at_ms, "worktree cleanup timestamp")?,
+                worktree_id.as_str(),
+                lease_id.as_str(),
+                checked_i64(current.updated_at_ms, "prior worktree timestamp")?,
+            ],
+        )?;
+        if changed != 1 {
+            return Err(data_error(
+                "attempt worktree cleanup receipt lost its compare-and-swap",
+            ));
+        }
+        let updated = load_worktree_by_id(&tx, worktree_id)?
+            .ok_or_else(|| data_error("cleaned attempt worktree disappeared"))?;
+        tx.commit()?;
+        Ok(updated)
+    }
+
+    pub fn attempt_has_pending_recovery_review(
+        &self,
+        run_id: &RunId,
+        task_id: &RunTaskId,
+        attempt_id: &RunAttemptId,
+    ) -> Result<bool, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let count = conn.query_row(
+            "SELECT COUNT(*) FROM orchestration_recovery_reviews
+              WHERE run_id = ?1 AND task_id = ?2 AND attempt_id = ?3
+                AND status = 'pending'",
+            params![run_id.as_str(), task_id.as_str(), attempt_id.as_str()],
+            |row| row.get::<_, i64>(0),
+        )?;
+        Ok(count != 0)
+    }
+}
+
+fn load_worktree_by_id(
+    conn: &rusqlite::Connection,
+    worktree_id: &AttemptWorktreeId,
+) -> Result<Option<OwnedAttemptWorktreeRecord>, StoreError> {
+    let run_id = conn
+        .query_row(
+            "SELECT run_id FROM orchestration_worktrees WHERE worktree_id = ?1",
+            [worktree_id.as_str()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let Some(run_id) = run_id else {
+        return Ok(None);
+    };
+    Ok(load_worktrees(conn, &RunId::from(run_id))?
+        .into_iter()
+        .find(|record| record.worktree.id == *worktree_id))
+}
+
+fn validate_active_worktree_lease(
+    record: &OwnedAttemptWorktreeRecord,
+    lease: &ExecutionLease,
+    at_ms: u64,
+) -> Result<(), StoreError> {
+    if lease.id != record.worktree.lease_id
+        || lease.resource_kind != LeaseResourceKind::Worktree
+        || lease.resource_id != record.worktree.id.as_str()
+        || lease.revision == 0
+        || at_ms < lease.last_heartbeat_ms
+        || at_ms >= lease.expires_at_ms
+    {
+        return Err(data_error(
+            "owned attempt worktree lease is not active for this operation",
+        ));
+    }
+    Ok(())
+}
+
+fn update_worktree_state(
+    tx: &Transaction<'_>,
+    current: &OwnedAttemptWorktreeRecord,
+    dirty_state: WorktreeDirtyState,
+    cleanup_eligibility: WorktreeCleanupEligibility,
+    updated_at_ms: u64,
+) -> Result<(), StoreError> {
+    let changed = tx.execute(
+        "UPDATE orchestration_worktrees
+            SET dirty_state = ?1, cleanup_eligibility = ?2, updated_at_ms = ?3
+          WHERE worktree_id = ?4 AND lease_id = ?5 AND dirty_state = ?6
+            AND cleanup_eligibility = ?7 AND updated_at_ms = ?8",
+        params![
+            enum_text(dirty_state)?,
+            enum_text(cleanup_eligibility)?,
+            checked_i64(updated_at_ms, "worktree state timestamp")?,
+            current.worktree.id.as_str(),
+            current.worktree.lease_id.as_str(),
+            enum_text(current.worktree.dirty_state)?,
+            enum_text(current.worktree.cleanup_eligibility)?,
+            checked_i64(current.updated_at_ms, "prior worktree timestamp")?,
+        ],
+    )?;
+    if changed != 1 {
+        return Err(data_error(
+            "owned attempt worktree state lost its compare-and-swap",
+        ));
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2624,7 +3075,13 @@ fn validate_runtime_bindings(
         if snapshot
             .attempts
             .get(&record.worktree.attempt_id)
-            .is_none_or(|attempt| attempt.task_id != record.worktree.task_id)
+            .is_none_or(|attempt| {
+                attempt.task_id != record.worktree.task_id
+                    || attempt.worktree_id.as_ref() != Some(&record.worktree.id)
+                    || !attempt
+                        .checkpoint_ids
+                        .is_subset(&record.worktree.checkpoint_ids)
+            })
         {
             return Err(data_error(
                 "owned worktree differs from the canonical attempt owner",
@@ -3031,6 +3488,16 @@ fn load_worktrees(
             created_at_ms,
             updated_at_ms,
         ) = row?;
+        let checkpoints =
+            match serde_json::from_str::<StoredWorktreeCheckpointsCompat>(&checkpoint_ids_json)? {
+                StoredWorktreeCheckpointsCompat::Current(checkpoints) => checkpoints,
+                StoredWorktreeCheckpointsCompat::Legacy(ids) => StoredWorktreeCheckpoints {
+                    ids,
+                    intent_sha256: BTreeMap::new(),
+                    verified_process_death_sha256: None,
+                    retained_evidence_sha256: None,
+                },
+            };
         let record = OwnedAttemptWorktreeRecord {
             worktree: OwnedAttemptWorktree {
                 id: AttemptWorktreeId::from(worktree_id),
@@ -3044,13 +3511,16 @@ fn load_worktrees(
                 branch_ref,
                 path,
                 lease_id: ExecutionLeaseId::from(lease_id),
-                checkpoint_ids: serde_json::from_str(&checkpoint_ids_json)?,
+                checkpoint_ids: checkpoints.ids,
                 dirty_state: parse_enum(&dirty_state, "worktree dirty state")?,
                 cleanup_eligibility: parse_enum(
                     &cleanup_eligibility,
                     "worktree cleanup eligibility",
                 )?,
             },
+            checkpoint_intent_sha256: checkpoints.intent_sha256,
+            verified_process_death_sha256: checkpoints.verified_process_death_sha256,
+            retained_evidence_sha256: checkpoints.retained_evidence_sha256,
             created_at_ms: checked_u64(created_at_ms, "worktree created at")?,
             updated_at_ms: checked_u64(updated_at_ms, "worktree updated at")?,
         };
@@ -3059,6 +3529,20 @@ fn load_worktrees(
             || record.worktree.branch_ref.trim().is_empty()
             || record.worktree.path.trim().is_empty()
             || record.updated_at_ms < record.created_at_ms
+            || record
+                .checkpoint_intent_sha256
+                .iter()
+                .any(|(checkpoint_id, digest)| {
+                    !record.worktree.checkpoint_ids.contains(checkpoint_id) || !is_sha256(digest)
+                })
+            || record
+                .verified_process_death_sha256
+                .as_deref()
+                .is_some_and(|digest| !is_sha256(digest))
+            || record
+                .retained_evidence_sha256
+                .as_deref()
+                .is_some_and(|digest| !is_sha256(digest))
         {
             return Err(data_error("owned worktree row is malformed"));
         }
@@ -3876,6 +4360,14 @@ mod tests {
             &mut events,
             RunCommand::RequestDispatch { attempt: attempt() },
         );
+        execute(
+            &mut run,
+            &mut events,
+            RunCommand::AssignAttemptWorktree {
+                attempt_id: RunAttemptId::new("run-attempt-phase5c"),
+                worktree_id: AttemptWorktreeId::new("attempt-worktree-phase5c"),
+            },
+        );
         if complete {
             execute(
                 &mut run,
@@ -4125,6 +4617,9 @@ mod tests {
                     dirty_state: WorktreeDirtyState::Clean,
                     cleanup_eligibility: WorktreeCleanupEligibility::Ineligible,
                 },
+                checkpoint_intent_sha256: BTreeMap::new(),
+                verified_process_death_sha256: None,
+                retained_evidence_sha256: None,
                 created_at_ms: 30_000,
                 updated_at_ms: 30_000,
             }],

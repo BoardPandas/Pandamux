@@ -1,9 +1,9 @@
 use pandamux_core::{
     AccessMode, AgentEvaluation, AgentSelectionScore, AgentTask, ApprovalDecisionProvenance,
     ApprovalId, ApprovalRequirement, Attempt, AttemptBoundary, AttemptFailure, AttemptStatus,
-    BlackboardArtifact, BlackboardEntryId, BudgetAmount, BudgetDimension, BudgetGrantId,
-    BudgetReservation, BudgetReservationId, BudgetReservationState, BudgetUsage, CheckpointId,
-    CheckpointKind, CheckpointRef, CleanupState, DependencyEdge, DependencyEdgeId,
+    AttemptWorktreeId, BlackboardArtifact, BlackboardEntryId, BudgetAmount, BudgetDimension,
+    BudgetGrantId, BudgetReservation, BudgetReservationId, BudgetReservationState, BudgetUsage,
+    CheckpointId, CheckpointKind, CheckpointRef, CleanupState, DependencyEdge, DependencyEdgeId,
     DependencyRequirement, EffectReceipt, FailureClass, OrchestrationMode, OrganizationId,
     OutputContract, ProjectId, ProviderInstanceId, RoutingDecision, Run, RunApprovalKind,
     RunApprovalStatus, RunAttemptId, RunCommand, RunEvent, RunEventId, RunEventKind, RunId,
@@ -279,6 +279,37 @@ fn successful_lifecycle() -> Lifecycle {
         events.last().expect("dispatch event").event_id
     );
     acknowledge_all(&mut run, &mut events);
+    execute_command(
+        &mut run,
+        &mut events,
+        RunCommand::AssignAttemptWorktree {
+            attempt_id: RunAttemptId::new("attempt-task-one-1"),
+            worktree_id: AttemptWorktreeId::new("attempt-worktree-one"),
+        },
+    );
+    assert!(
+        decide(
+            &run,
+            RunCommand::AssignAttemptWorktree {
+                attempt_id: RunAttemptId::new("attempt-task-one-1"),
+                worktree_id: AttemptWorktreeId::new("attempt-worktree-one"),
+            },
+        )
+        .expect("exact worktree replay")
+        .is_empty()
+    );
+    assert_eq!(
+        decide(
+            &run,
+            RunCommand::AssignAttemptWorktree {
+                attempt_id: RunAttemptId::new("attempt-task-one-1"),
+                worktree_id: AttemptWorktreeId::new("attempt-worktree-other"),
+            },
+        )
+        .expect_err("worktree assignment is immutable")
+        .code,
+        OrchestrationErrorCode::ReplayConflict
+    );
     execute_command(
         &mut run,
         &mut events,
