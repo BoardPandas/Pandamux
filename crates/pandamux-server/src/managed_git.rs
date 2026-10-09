@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 pub const MAX_GIT_STDERR_BYTES: usize = 16 * 1024;
 pub const MAX_GIT_TREE_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 pub const LOCAL_GIT_TIMEOUT: Duration = Duration::from_secs(30);
+pub const FETCH_GIT_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GitTreeEntry {
@@ -78,6 +79,37 @@ pub enum ManagedGitCommand {
         object: String,
         max_bytes: usize,
     },
+    CatFileSize {
+        git_dir: PathBuf,
+        object: String,
+    },
+    ObjectType {
+        git_dir: PathBuf,
+        object: String,
+    },
+    IsBareRepository {
+        git_dir: PathBuf,
+    },
+    IsAncestor {
+        git_dir: PathBuf,
+        ancestor: String,
+        descendant: String,
+    },
+    LsRemote {
+        git_dir: PathBuf,
+        remote: String,
+        references: Vec<String>,
+    },
+    Fetch {
+        git_dir: PathBuf,
+        remote: String,
+        source: String,
+        target: String,
+    },
+    VerifyCommit {
+        git_dir: PathBuf,
+        commit: String,
+    },
 }
 
 impl ManagedGitCommand {
@@ -93,7 +125,14 @@ impl ManagedGitCommand {
             | Self::RevList { git_dir, .. }
             | Self::ShowMessage { git_dir, .. }
             | Self::ListTree { git_dir, .. }
-            | Self::CatFile { git_dir, .. } => git_dir,
+            | Self::CatFile { git_dir, .. }
+            | Self::CatFileSize { git_dir, .. }
+            | Self::ObjectType { git_dir, .. }
+            | Self::IsBareRepository { git_dir }
+            | Self::IsAncestor { git_dir, .. }
+            | Self::LsRemote { git_dir, .. }
+            | Self::Fetch { git_dir, .. }
+            | Self::VerifyCommit { git_dir, .. } => git_dir,
         }
     }
 
@@ -101,8 +140,20 @@ impl ManagedGitCommand {
         match self {
             Self::ListTree { .. } => MAX_GIT_TREE_OUTPUT_BYTES,
             Self::CatFile { max_bytes, .. } => *max_bytes,
+            Self::LsRemote { .. } => 4 * 1024 * 1024,
             _ => 1024 * 1024,
         }
+    }
+
+    fn remote(&self) -> Option<&str> {
+        match self {
+            Self::LsRemote { remote, .. } | Self::Fetch { remote, .. } => Some(remote),
+            _ => None,
+        }
+    }
+
+    fn accepts_exit_code(&self, code: Option<i32>) -> bool {
+        matches!(self, Self::IsAncestor { .. }) && code == Some(1)
     }
 }
 
@@ -110,6 +161,7 @@ impl ManagedGitCommand {
 pub struct ManagedGitOutput {
     pub stdout: Vec<u8>,
     pub safe_stderr: String,
+    pub exit_code: Option<i32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -131,6 +183,9 @@ impl std::error::Error for ManagedGitError {}
 pub struct ManagedGitRunner {
     data_paths: DataPaths,
     shutdown: Arc<AtomicBool>,
+    program: PathBuf,
+    local_timeout: Duration,
+    fetch_timeout: Duration,
 }
 
 impl ManagedGitRunner {
@@ -138,6 +193,25 @@ impl ManagedGitRunner {
         Self {
             data_paths,
             shutdown: Arc::new(AtomicBool::new(false)),
+            program: PathBuf::from("git"),
+            local_timeout: LOCAL_GIT_TIMEOUT,
+            fetch_timeout: FETCH_GIT_TIMEOUT,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_test_process(
+        data_paths: DataPaths,
+        program: PathBuf,
+        local_timeout: Duration,
+        fetch_timeout: Duration,
+    ) -> Self {
+        Self {
+            data_paths,
+            shutdown: Arc::new(AtomicBool::new(false)),
+            program,
+            local_timeout,
+            fetch_timeout,
         }
     }
 
@@ -162,7 +236,7 @@ impl ManagedGitRunner {
         }
 
         let stdout_limit = command.stdout_limit();
-        let mut process = Command::new("git");
+        let mut process = Command::new(&self.program);
         sanitize_git_environment(&mut process);
         process
             .env("GIT_TERMINAL_PROMPT", "0")
@@ -212,7 +286,10 @@ impl ManagedGitRunner {
         }
 
         let started = Instant::now();
-        let timeout = LOCAL_GIT_TIMEOUT;
+        let timeout = match command {
+            ManagedGitCommand::Fetch { .. } => self.fetch_timeout,
+            _ => self.local_timeout,
+        };
         let (status, cancelled, timed_out) = loop {
             if self.shutdown.load(Ordering::Acquire) {
                 let _ = child.kill();
@@ -257,21 +334,31 @@ impl ManagedGitRunner {
                 retryable: false,
             });
         }
-        let safe_stderr = safe_git_stderr(&stderr.bytes, stderr.truncated, self.data_paths.root());
-        if status.as_ref().is_none_or(|status| !status.success()) {
+        let safe_stderr = safe_git_stderr(
+            &stderr.bytes,
+            stderr.truncated,
+            self.data_paths.root(),
+            command.remote(),
+        );
+        let exit_code = status.as_ref().and_then(std::process::ExitStatus::code);
+        if status.as_ref().is_none_or(|status| !status.success())
+            && !command.accepts_exit_code(exit_code)
+        {
+            let (reason, retryable) = classify_git_failure(&command, &stderr.bytes, exit_code);
             return Err(ManagedGitError {
-                reason: "git_command_failed",
+                reason,
                 safe_message: if safe_stderr.is_empty() {
                     "The managed Git command failed".to_string()
                 } else {
                     format!("The managed Git command failed: {safe_stderr}")
                 },
-                retryable: false,
+                retryable,
             });
         }
         Ok(ManagedGitOutput {
             stdout: stdout.bytes,
             safe_stderr,
+            exit_code,
         })
     }
 }
@@ -474,6 +561,74 @@ fn configure_process(
             git_dir_args(process, git_dir);
             process.arg("cat-file").arg("blob").arg(object);
         }
+        ManagedGitCommand::CatFileSize { git_dir, object } => {
+            validate_revision(object)?;
+            git_dir_args(process, git_dir);
+            process.arg("cat-file").arg("-s").arg(object);
+        }
+        ManagedGitCommand::ObjectType { git_dir, object } => {
+            validate_revision(object)?;
+            git_dir_args(process, git_dir);
+            process.arg("cat-file").arg("-t").arg(object);
+        }
+        ManagedGitCommand::IsBareRepository { git_dir } => {
+            git_dir_args(process, git_dir);
+            process.arg("rev-parse").arg("--is-bare-repository");
+        }
+        ManagedGitCommand::IsAncestor {
+            git_dir,
+            ancestor,
+            descendant,
+        } => {
+            validate_revision(ancestor)?;
+            validate_revision(descendant)?;
+            git_dir_args(process, git_dir);
+            process
+                .arg("merge-base")
+                .arg("--is-ancestor")
+                .arg(ancestor)
+                .arg(descendant);
+        }
+        ManagedGitCommand::LsRemote {
+            git_dir,
+            remote,
+            references,
+        } => {
+            validate_remote(remote)?;
+            if references.len() > 4 {
+                return Err(invalid_command("too many managed Git discovery references"));
+            }
+            for reference in references {
+                validate_remote_reference(reference)?;
+            }
+            git_dir_args(process, git_dir);
+            process.arg("ls-remote").arg("--exit-code").arg(remote);
+            process.args(references);
+        }
+        ManagedGitCommand::Fetch {
+            git_dir,
+            remote,
+            source,
+            target,
+        } => {
+            validate_remote(remote)?;
+            validate_fetch_source(source)?;
+            validate_ref(target)?;
+            git_dir_args(process, git_dir);
+            process
+                .arg("fetch")
+                .arg("--no-tags")
+                .arg("--no-write-fetch-head")
+                .arg("--no-recurse-submodules")
+                .arg("--force")
+                .arg(remote)
+                .arg(format!("+{source}:{target}"));
+        }
+        ManagedGitCommand::VerifyCommit { git_dir, commit } => {
+            validate_revision(commit)?;
+            git_dir_args(process, git_dir);
+            process.arg("verify-commit").arg("--raw").arg(commit);
+        }
     }
     Ok(stdin)
 }
@@ -577,6 +732,42 @@ fn validate_revision(revision: &str) -> Result<(), ManagedGitError> {
     Ok(())
 }
 
+fn validate_remote(remote: &str) -> Result<(), ManagedGitError> {
+    if remote.trim() != remote
+        || remote.is_empty()
+        || remote.len() > 4_096
+        || remote.starts_with('-')
+        || remote.bytes().any(|byte| byte.is_ascii_control())
+        || remote.contains("https://")
+            && remote.split_once("https://").is_some_and(|(_, rest)| {
+                rest.split('/')
+                    .next()
+                    .is_some_and(|authority| authority.contains('@'))
+            })
+        || remote.contains("http://")
+            && remote.split_once("http://").is_some_and(|(_, rest)| {
+                rest.split('/')
+                    .next()
+                    .is_some_and(|authority| authority.contains('@'))
+            })
+    {
+        return Err(invalid_command("invalid or credential-bearing Git remote"));
+    }
+    Ok(())
+}
+
+fn validate_remote_reference(reference: &str) -> Result<(), ManagedGitError> {
+    let base = reference.strip_suffix("^{}").unwrap_or(reference);
+    validate_ref(base)
+}
+
+fn validate_fetch_source(source: &str) -> Result<(), ManagedGitError> {
+    if is_git_object_id(source) {
+        return Ok(());
+    }
+    validate_ref(source)
+}
+
 fn is_git_object_id(value: &str) -> bool {
     matches!(value.len(), 40 | 64) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
@@ -633,7 +824,12 @@ fn join_reader(
         })
 }
 
-fn safe_git_stderr(bytes: &[u8], truncated: bool, managed_root: &Path) -> String {
+fn safe_git_stderr(
+    bytes: &[u8],
+    truncated: bool,
+    managed_root: &Path,
+    remote: Option<&str>,
+) -> String {
     let raw = String::from_utf8_lossy(bytes);
     if SecretsPolicy::contains_potential_secret(&raw)
         || raw.contains("https://") && raw.contains('@')
@@ -654,6 +850,17 @@ fn safe_git_stderr(bytes: &[u8], truncated: bool, managed_root: &Path) -> String
     if alternate_root != root {
         safe = safe.replace(&alternate_root, "[managed-path]");
     }
+    if let Some(remote) = remote {
+        safe = safe.replace(remote, "[remote]");
+        let alternate_remote = if remote.contains('\\') {
+            remote.replace('\\', "/")
+        } else {
+            remote.replace('/', "\\")
+        };
+        if alternate_remote != remote {
+            safe = safe.replace(&alternate_remote, "[remote]");
+        }
+    }
     safe = safe.trim().to_string();
     if truncated {
         const SUFFIX: &str = " [truncated]";
@@ -663,6 +870,45 @@ fn safe_git_stderr(bytes: &[u8], truncated: bool, managed_root: &Path) -> String
         truncate_utf8(&mut safe, MAX_GIT_STDERR_BYTES);
     }
     safe
+}
+
+fn classify_git_failure(
+    command: &ManagedGitCommand,
+    stderr: &[u8],
+    exit_code: Option<i32>,
+) -> (&'static str, bool) {
+    if matches!(command, ManagedGitCommand::VerifyCommit { .. }) {
+        return ("signature_verification_failed", false);
+    }
+    if matches!(command, ManagedGitCommand::LsRemote { .. }) && exit_code == Some(2) {
+        return ("tracked_ref_not_found", false);
+    }
+    let diagnostic = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    if diagnostic.contains("authentication failed")
+        || diagnostic.contains("could not read username")
+        || diagnostic.contains("permission denied")
+        || diagnostic.contains("access denied")
+    {
+        return ("instructions_authentication_failed", true);
+    }
+    if diagnostic.contains("couldn't find remote ref")
+        || diagnostic.contains("not our ref")
+        || diagnostic.contains("unadvertised object")
+    {
+        return ("tracked_ref_not_found", false);
+    }
+    if matches!(
+        command,
+        ManagedGitCommand::LsRemote { .. } | ManagedGitCommand::Fetch { .. }
+    ) && (diagnostic.contains("could not resolve host")
+        || diagnostic.contains("connection refused")
+        || diagnostic.contains("connection timed out")
+        || diagnostic.contains("network is unreachable")
+        || diagnostic.contains("does not appear to be a git repository"))
+    {
+        return ("instructions_remote_unavailable", true);
+    }
+    ("git_command_failed", false)
 }
 
 fn truncate_utf8(value: &mut String, limit: usize) {
@@ -761,14 +1007,77 @@ mod tests {
         let root = Path::new("/private/pandamux");
         let secret = format!("fatal: bearer {}", "s".repeat(32));
         assert_eq!(
-            safe_git_stderr(secret.as_bytes(), false, root),
+            safe_git_stderr(secret.as_bytes(), false, root, None),
             "sensitive Git diagnostic was redacted"
         );
         let long = "x".repeat(MAX_GIT_STDERR_BYTES + 100);
-        assert!(safe_git_stderr(long.as_bytes(), true, root).len() <= MAX_GIT_STDERR_BYTES);
+        assert!(safe_git_stderr(long.as_bytes(), true, root, None).len() <= MAX_GIT_STDERR_BYTES);
         assert_eq!(
-            safe_git_stderr(b"fatal: /private/pandamux/personal/.git", false, root),
+            safe_git_stderr(b"fatal: /private/pandamux/personal/.git", false, root, None,),
             "fatal: [managed-path]/personal/.git"
         );
+        assert_eq!(
+            safe_git_stderr(
+                b"fatal: '/outside/private/repo' is unavailable",
+                false,
+                root,
+                Some("/outside/private/repo"),
+            ),
+            "fatal: '[remote]' is unavailable"
+        );
+    }
+
+    #[test]
+    fn remote_failures_have_stable_safe_classifications() {
+        let temp = tempfile::tempdir().expect("temporary root");
+        let command = ManagedGitCommand::LsRemote {
+            git_dir: temp.path().join("mirror.git"),
+            remote: "/private/remote.git".to_string(),
+            references: vec!["refs/heads/main".to_string()],
+        };
+        assert_eq!(
+            classify_git_failure(
+                &command,
+                b"fatal: Authentication failed for '/private/remote.git'",
+                Some(128),
+            ),
+            ("instructions_authentication_failed", true)
+        );
+        assert_eq!(
+            classify_git_failure(
+                &command,
+                b"fatal: couldn't find remote ref refs/heads/main",
+                Some(128),
+            ),
+            ("tracked_ref_not_found", false)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn timeout_terminates_and_joins_the_owned_child() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("temporary root");
+        let paths = DataPaths::from_root(temp.path().join("app")).expect("paths");
+        paths.ensure_private_roots().expect("private roots");
+        let program = temp.path().join("blocking-git");
+        std::fs::write(&program, b"#!/bin/sh\nwhile :; do :; done\n").expect("write helper");
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700))
+            .expect("make helper executable");
+        let runner = ManagedGitRunner::with_test_process(
+            paths.clone(),
+            program,
+            Duration::from_millis(40),
+            Duration::from_millis(40),
+        );
+        let started = Instant::now();
+        let error = runner
+            .run(ManagedGitCommand::InitBare {
+                git_dir: paths.instructions().join("timeout.git"),
+            })
+            .expect_err("blocking child must time out");
+        assert_eq!(error.reason, "git_command_timed_out");
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 }

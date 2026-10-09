@@ -6,6 +6,7 @@ pub mod environment_router;
 pub mod fs;
 pub mod git;
 pub mod hark;
+pub mod instructions_service;
 mod managed_git;
 pub mod mcp_server;
 pub mod personal_repo;
@@ -37,6 +38,10 @@ pub use environment_router::{
 };
 pub use git::{get_git_status, git_commit, git_create_pr, git_push};
 pub use hark::HarkBridge;
+pub use instructions_service::{
+    CandidateAcquisitionIssue, InstructionsCheckOutcome, InstructionsPollingService,
+    InstructionsService, InstructionsServiceError, StoredCandidateInspection,
+};
 pub use mcp_server::McpServer;
 pub use personal_repo::{
     PersonalConfigDiff, PersonalEditRequest, PersonalEditResult, PersonalRepoError,

@@ -43,9 +43,9 @@ pub struct CompileBundleInput {
 }
 
 #[derive(Clone, Debug)]
-struct ParsedLayerDocument {
-    layer: ValueLayer,
-    parsed: ParsedDocumentV1,
+pub(crate) struct ParsedLayerDocument {
+    pub(crate) layer: ValueLayer,
+    pub(crate) parsed: ParsedDocumentV1,
 }
 
 struct CompiledAgents {
@@ -362,7 +362,9 @@ fn validate_grants(
     Ok(grants)
 }
 
-fn validate_document_inventory(parsed: &[ParsedLayerDocument]) -> Result<(), DiagnosticSet> {
+pub(crate) fn validate_document_inventory(
+    parsed: &[ParsedLayerDocument],
+) -> Result<(), DiagnosticSet> {
     let mut issues = Vec::new();
     let mut paths = BTreeSet::new();
     let mut ids = BTreeMap::<(ValueLayer, String), DocumentKind>::new();
@@ -468,7 +470,7 @@ fn kind_allowed_in_layer(layer: ValueLayer, kind: DocumentKind) -> bool {
     }
 }
 
-fn validate_references(
+pub(crate) fn validate_references(
     parsed: &[ParsedLayerDocument],
 ) -> Result<BTreeMap<String, Vec<BundleReference>>, DiagnosticSet> {
     let mut path_index = BTreeMap::new();

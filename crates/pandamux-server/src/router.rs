@@ -24,12 +24,13 @@ use pandamux_protocol::{
     CheckpointRollbackParams, EnvironmentImportSshConfigParams, EnvironmentImportSshConfigResult,
     EnvironmentListResult, GitCommitParams, GitCreatePrParams, GitPushParams, GitStatusParams,
     HarkDictatePromptParams, HarkSpellbookSyncParams, HelloParams, HelloResult, HubRoutingContext,
-    IdentifyResult, McpCallToolParams, PROTOCOL_VERSION, PingResult, ProviderHealthParams,
-    ProviderHealthReport, ProviderHealthResult, ProviderLoginFlow, ProviderLoginGuidance,
-    ProviderLoginLaunchParams, ProviderLoginLaunchResult, ProviderLoginPreview,
-    ProviderLoginPreviewParams, ProviderModelInfo, ProviderModelsParams, ProviderModelsReport,
-    ProviderModelsResult, RoutingProviderCatalogEntry, RpcError, RpcRequest, RpcResponse,
-    ScheduleRunParams, ScheduleRunResult, ScheduleSaveParams, ScheduleValidateParams,
+    IdentifyResult, InstructionsCheckParams, InstructionsCheckResult, InstructionsDiffParams,
+    InstructionsDiffResult, InstructionsStatusParams, InstructionsStatusResult, McpCallToolParams,
+    PROTOCOL_VERSION, PingResult, ProviderHealthParams, ProviderHealthReport, ProviderHealthResult,
+    ProviderLoginFlow, ProviderLoginGuidance, ProviderLoginLaunchParams, ProviderLoginLaunchResult,
+    ProviderLoginPreview, ProviderLoginPreviewParams, ProviderModelInfo, ProviderModelsParams,
+    ProviderModelsReport, ProviderModelsResult, RoutingProviderCatalogEntry, RpcError, RpcRequest,
+    RpcResponse, ScheduleRunParams, ScheduleRunResult, ScheduleSaveParams, ScheduleValidateParams,
     ScheduleValidationResult, ServerCapabilities, ServerRole, SettingsGetParams, SettingsGetResult,
     SettingsSetParams, SubAgentTreeItem, SubAgentTreeParams, SubAgentTreeResult,
     TerminalAttachParams, TerminalCloseParams, TerminalInputParams, TerminalOpenParams,
@@ -43,6 +44,7 @@ use pandamux_protocol::{
 use crate::attachment::AttachmentManager;
 use crate::data_paths::DataPaths;
 use crate::driver_registry::DriverRegistry;
+use crate::instructions_service::{InstructionsService, InstructionsServiceError};
 use crate::mcp_server::McpServer;
 use crate::personal_repo::PersonalRepoService;
 use crate::provider_resolver::ProviderResolver;
@@ -69,6 +71,7 @@ pub struct Router {
     login_previews: Arc<std::sync::Mutex<HashMap<String, LoginPreviewRecord>>>,
     hark: Arc<crate::hark::HarkBridge>,
     personal_repo: PersonalRepoService,
+    instructions: InstructionsService,
     data_paths: DataPaths,
     role: ServerRole,
     environment_id: String,
@@ -409,6 +412,54 @@ fn require_local_query_peer(context: &RequestContext) -> Result<(), RpcError> {
     }
 }
 
+fn require_instructions_status_peer(context: &RequestContext) -> Result<(), RpcError> {
+    if matches!(
+        context.peer_role,
+        PeerRole::Internal | PeerRole::LocalControl | PeerRole::NodeProxy
+    ) {
+        Ok(())
+    } else {
+        Err(RpcError::with_data(
+            -32001,
+            "Instructions status requires authenticated control or node access",
+            json!({ "reason": "instructions_status_scope_denied" }),
+        ))
+    }
+}
+
+fn require_local_configuration_peer(context: &RequestContext) -> Result<(), RpcError> {
+    if matches!(
+        context.peer_role,
+        PeerRole::Internal | PeerRole::LocalControl
+    ) {
+        Ok(())
+    } else {
+        Err(RpcError::with_data(
+            -32001,
+            "Instructions changes require authenticated local control",
+            json!({ "reason": "instructions_local_control_required" }),
+        ))
+    }
+}
+
+fn instructions_rpc_error(
+    error: InstructionsServiceError,
+    source_id: Option<&pandamux_core::InstructionSourceId>,
+    expected_revision: Option<pandamux_core::ConfigurationRevision>,
+) -> RpcError {
+    RpcError::with_data(
+        -32040,
+        error.safe_message,
+        json!({
+            "reason": error.reason,
+            "sourceId": source_id,
+            "expectedRevision": expected_revision,
+            "actualRevision": error.actual_revision,
+            "retryable": error.retryable,
+        }),
+    )
+}
+
 fn provider_rpc_error(error: pandamux_providers::ProviderError) -> RpcError {
     match error {
         pandamux_providers::ProviderError::InstallationError {
@@ -504,6 +555,7 @@ impl Router {
         );
         let attachments = AttachmentManager::new(data_paths.attachments().to_path_buf());
         let personal_repo = PersonalRepoService::new(data_paths.clone(), store.clone());
+        let instructions = InstructionsService::new(data_paths.clone(), store.clone());
         let terminal = TerminalServerManager::new();
         let environment_router = Arc::new(crate::environment_router::EnvironmentRouter::new(
             pandamux_core::ids::EnvironmentId::new(environment_id.clone()),
@@ -526,6 +578,7 @@ impl Router {
             login_previews: Arc::new(std::sync::Mutex::new(HashMap::new())),
             hark: Arc::new(crate::hark::HarkBridge::default()),
             personal_repo,
+            instructions,
             data_paths,
             role,
             environment_id,
@@ -574,6 +627,8 @@ impl Router {
         self.attachments = AttachmentManager::new(data_paths.attachments().to_path_buf());
         self.personal_repo.shutdown();
         self.personal_repo = PersonalRepoService::new(data_paths.clone(), self.store.clone());
+        self.instructions.shutdown();
+        self.instructions = InstructionsService::new(data_paths.clone(), self.store.clone());
         self.data_paths = data_paths;
         self
     }
@@ -592,6 +647,10 @@ impl Router {
 
     pub fn personal_repo(&self) -> &PersonalRepoService {
         &self.personal_repo
+    }
+
+    pub fn instructions(&self) -> &InstructionsService {
+        &self.instructions
     }
 
     pub async fn shutdown_antigravity_auth(&self) {
@@ -1237,6 +1296,9 @@ impl Router {
             "thread.resume" => self.handle_thread_resume(params),
             "settings.get" | "config.get" => self.handle_settings_get(params),
             "settings.set" | "config.set" => self.handle_settings_set(params),
+            "instructions.status" => self.handle_instructions_status(context, params),
+            "instructions.check" => self.handle_instructions_check(context, params).await,
+            "instructions.diff" => self.handle_instructions_diff(context, params),
             "provider.health" | "provider.probe" => self.handle_provider_health(params).await,
             "provider.models" => self.handle_provider_models(params).await,
             "provider.login.preview" => self.handle_provider_login_preview(params).await,
@@ -1323,6 +1385,170 @@ impl Router {
             timestamp_ms: Self::now_ms(),
         };
         serde_json::to_value(ping).map_err(|e| RpcError::internal_error(e.to_string()))
+    }
+
+    fn handle_instructions_status(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_instructions_status_peer(context)?;
+        let params = if params.is_null() {
+            InstructionsStatusParams::default()
+        } else {
+            serde_json::from_value::<InstructionsStatusParams>(params).map_err(|error| {
+                RpcError::with_data(
+                    -32602,
+                    format!("Invalid instructions.status params: {error}"),
+                    json!({ "reason": "instructions_params_invalid" }),
+                )
+            })?
+        };
+        let source = match params.source_id {
+            Some(source_id) => self
+                .store
+                .get_instruction_source(&source_id)
+                .map_err(|error| RpcError::internal_error(error.to_string()))?,
+            None => self
+                .store
+                .list_instruction_sources()
+                .map_err(|error| RpcError::internal_error(error.to_string()))?
+                .into_iter()
+                .next(),
+        };
+        let candidate = source
+            .as_ref()
+            .map(|source| self.store.latest_instruction_candidate(&source.id))
+            .transpose()
+            .map_err(|error| RpcError::internal_error(error.to_string()))?
+            .flatten()
+            .map(|candidate| candidate.record);
+        let result = InstructionsStatusResult {
+            active_bundle_sha: source
+                .as_ref()
+                .and_then(|source| source.active_bundle_sha.clone()),
+            source,
+            candidate,
+        };
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_instructions_check(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_local_configuration_peer(context)?;
+        let params =
+            serde_json::from_value::<InstructionsCheckParams>(params).map_err(|error| {
+                RpcError::with_data(
+                    -32602,
+                    format!("Invalid instructions.check params: {error}"),
+                    json!({ "reason": "instructions_params_invalid" }),
+                )
+            })?;
+        if params.request_id.trim().is_empty()
+            || params.request_id.len() > 256
+            || params.request_id.contains(['\0', '\r', '\n'])
+        {
+            return Err(RpcError::with_data(
+                -32602,
+                "instructions.check requires a bounded requestId",
+                json!({ "reason": "instructions_request_id_invalid" }),
+            ));
+        }
+        let service = self.instructions.clone();
+        let source_id = params.source_id.clone();
+        let expected_revision = params.expected_revision;
+        let outcome = tokio::task::spawn_blocking(move || {
+            service.check_source(&source_id, expected_revision, Self::now_ms())
+        })
+        .await
+        .map_err(|_| {
+            RpcError::with_data(
+                -32000,
+                "The instructions check worker did not join cleanly",
+                json!({ "reason": "instructions_worker_join_failed", "retryable": true }),
+            )
+        })?
+        .map_err(|error| {
+            instructions_rpc_error(error, Some(&params.source_id), Some(expected_revision))
+        })?;
+        let result = InstructionsCheckResult {
+            checked_at_ms: outcome.checked_at_ms,
+            unchanged: outcome.unchanged,
+            candidate: outcome.candidate,
+            safe_error_reason: outcome.safe_error_reason,
+        };
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn handle_instructions_diff(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_local_configuration_peer(context)?;
+        let params = serde_json::from_value::<InstructionsDiffParams>(params).map_err(|error| {
+            RpcError::with_data(
+                -32602,
+                format!("Invalid instructions.diff params: {error}"),
+                json!({ "reason": "instructions_params_invalid" }),
+            )
+        })?;
+        let (candidate, inspection) = self
+            .instructions
+            .load_candidate_inspection(&params.candidate_id)
+            .map_err(|error| instructions_rpc_error(error, None, None))?
+            .ok_or_else(|| {
+                RpcError::with_data(
+                    -32004,
+                    "The instructions candidate was not found",
+                    json!({
+                        "reason": "instructions_candidate_not_found",
+                        "candidateId": params.candidate_id,
+                    }),
+                )
+            })?;
+        let mut issues = inspection
+            .report
+            .issues
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        issues.extend(
+            inspection
+                .acquisition_issues
+                .iter()
+                .map(serde_json::to_value)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| RpcError::internal_error(error.to_string()))?,
+        );
+        if inspection.signature_required && !inspection.signature_verified {
+            issues.push(json!({
+                "code": "signature_verification_failed",
+                "safeReason": "The candidate commit signature could not be verified",
+                "origin": {
+                    "layer": "instructions",
+                    "logicalPath": "<commit>",
+                    "field": "/",
+                },
+            }));
+        }
+        let result = InstructionsDiffResult {
+            candidate_id: candidate.id,
+            observed_source_commit_sha: candidate.observed_source_commit_sha,
+            diff_digest: candidate.diff_digest,
+            safety: candidate.safety,
+            file_diff: serde_json::to_value(&inspection.report.file_diff)
+                .map_err(|error| RpcError::internal_error(error.to_string()))?,
+            behavioral_diff: serde_json::to_value(&inspection.report.behavioral_diff)
+                .map_err(|error| RpcError::internal_error(error.to_string()))?,
+            issues,
+            activatable: candidate.activatable,
+        };
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
     }
 
     fn handle_hello(&self, params: Value) -> Result<Value, RpcError> {
@@ -3700,6 +3926,104 @@ impl Router {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn instructions_rpc_is_bounded_and_local_mutation_is_control_only() {
+        let root = tempfile::tempdir().expect("temporary router root");
+        let store = Store::in_memory().expect("store");
+        let router = Router::new(store.clone(), ServerRole::Hub, "env-local".to_string())
+            .with_data_dir(root.path().join("app"));
+        let source = pandamux_core::InstructionsSourceRecord {
+            id: pandamux_core::InstructionSourceId::new("instruction-source-rpc"),
+            canonical_remote_identity: root
+                .path()
+                .join("missing-remote.git")
+                .to_string_lossy()
+                .into_owned(),
+            tracking: pandamux_core::TrackingRef::Branch("refs/heads/main".to_string()),
+            policy: pandamux_core::InstructionsUpdatePolicy::ApproveEach,
+            require_signed_commit: false,
+            revision: pandamux_core::ConfigurationRevision::INITIAL,
+            last_checked_at_ms: None,
+            last_error_reason: None,
+            active_source_commit_sha: None,
+            active_bundle_sha: None,
+        };
+        store
+            .save_instruction_source(&source, 1, 1)
+            .expect("save source");
+        let node = RequestContext::node_proxy(
+            EnvironmentId::new("env-node"),
+            crate::ClientIdentity::default(),
+        );
+        let status = router
+            .handle_request_with_context(
+                &node,
+                RpcRequest::new(
+                    1,
+                    "instructions.status",
+                    Some(json!({ "sourceId": source.id })),
+                ),
+            )
+            .await
+            .expect("status response");
+        assert!(status.is_success());
+        assert_eq!(
+            status
+                .result
+                .as_ref()
+                .and_then(|value| value.pointer("/source/id"))
+                .and_then(Value::as_str),
+            Some("instruction-source-rpc")
+        );
+
+        let denied = router
+            .handle_request_with_context(
+                &node,
+                RpcRequest::new(
+                    2,
+                    "instructions.check",
+                    Some(json!({
+                        "requestId": "rpc-check-node",
+                        "sourceId": source.id,
+                        "expectedRevision": 1,
+                    })),
+                ),
+            )
+            .await
+            .expect("denied response");
+        assert_eq!(
+            denied
+                .error
+                .as_ref()
+                .and_then(|error| error.data.as_ref())
+                .and_then(|data| data.get("reason"))
+                .and_then(Value::as_str),
+            Some("instructions_local_control_required")
+        );
+
+        let checked = router
+            .handle_request(RpcRequest::new(
+                3,
+                "instructions.check",
+                Some(json!({
+                    "requestId": "rpc-check-local",
+                    "sourceId": source.id,
+                    "expectedRevision": 1,
+                })),
+            ))
+            .await
+            .expect("check response");
+        assert!(checked.is_success());
+        assert_eq!(
+            checked
+                .result
+                .as_ref()
+                .and_then(|value| value.get("safeErrorReason"))
+                .and_then(Value::as_str),
+            Some("instructions_remote_unavailable")
+        );
+    }
 
     #[test]
     fn provider_login_command_uses_the_native_terminal_submit_character() {

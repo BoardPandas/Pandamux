@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::broadcast;
 
+use crate::InstructionsPollingService;
 use crate::ProxyEnvironmentTransport;
 use crate::request_context::{CapabilityAuthority, ClientIdentity};
 use crate::usage_scanner::{UsageScannerRuntimeConfig, UsageScannerService};
@@ -36,6 +37,7 @@ pub struct Server {
     remote_event_cursors: Mutex<HashMap<EnvironmentId, Arc<AtomicU64>>>,
     usage_scanner: Mutex<Option<UsageScannerService>>,
     usage_sync: Mutex<Option<UsageHubSyncService>>,
+    instructions_polling: Mutex<Option<InstructionsPollingService>>,
 }
 
 impl Server {
@@ -81,6 +83,7 @@ impl Server {
             remote_event_cursors: Mutex::new(HashMap::new()),
             usage_scanner: Mutex::new(None),
             usage_sync: Mutex::new(None),
+            instructions_polling: Mutex::new(None),
         })
     }
 
@@ -111,6 +114,22 @@ impl Server {
                 safe_message: "The personal repository worker did not join cleanly".to_string(),
                 retryable: true,
             })?
+    }
+
+    pub fn start_instructions_polling(&self) -> std::io::Result<()> {
+        if self.config.role != ServerRole::Hub {
+            return Ok(());
+        }
+        let mut polling = self
+            .instructions_polling
+            .lock()
+            .expect("instructions polling service lock");
+        if polling.is_none() {
+            *polling = Some(InstructionsPollingService::start(
+                self.router.instructions().clone(),
+            )?);
+        }
+        Ok(())
     }
 
     pub fn runtime_dir(&self) -> &std::path::Path {
@@ -330,6 +349,15 @@ impl Server {
     pub fn shutdown(&self) {
         if !self.is_shutting_down.swap(true, Ordering::SeqCst) {
             self.router.personal_repo().shutdown();
+            self.router.instructions().shutdown();
+            if let Some(polling) = self
+                .instructions_polling
+                .lock()
+                .expect("instructions polling service lock")
+                .take()
+            {
+                let _ = polling.shutdown();
+            }
             let _ = self.shutdown_tx.send(());
         }
     }

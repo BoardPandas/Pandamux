@@ -8,6 +8,7 @@
 
 pub mod bundle;
 pub mod compatibility;
+pub mod configuration;
 pub mod dag;
 pub mod diagnostics;
 pub mod model_output;
@@ -22,6 +23,12 @@ pub use bundle::{
 };
 pub use compatibility::{
     LegacyCompatibilityError, LegacyRecordKind, require_explicit_legacy_migration,
+};
+pub use configuration::{
+    BehavioralChangeSet, ConfigurationBehavioralDiff, ConfigurationCandidateInspection,
+    ConfigurationCandidateInspectionInput, ConfigurationDependencySnapshot,
+    ConfigurationFileChange, ConfigurationFileChangeKind, InspectedConfigurationIssue,
+    inspect_configuration_candidate,
 };
 pub use dag::{
     AgentFeasibilitySnapshot, PlanValidationContext, ProjectPolicySnapshot,

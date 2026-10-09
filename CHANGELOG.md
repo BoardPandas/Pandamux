@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Added
 
+- **Added trusted instructions mirroring and candidate inspection in version
+  0.60.80.** PandaMUX can now poll a configured branch, tag, or exact commit
+  from one private bare mirror, skip fetches when discovery is unchanged, and
+  retain annotated tag identity while keeping pinned commits fixed. Candidate
+  trees are inspected without checkout, filters, submodules, LFS, or repository
+  code execution, with bounded files, complete safe diagnostics, signature
+  blocking, force-push visibility, behavioral diffs, schedule impact, and
+  immutable candidate refs. Launch and five-minute polling, local-control
+  check and diff RPC, bounded node status, safe offline state, and last-good
+  retention establish the acquisition boundary without activating a bundle.
+
 - **Added the managed personal configuration repository in version 0.60.79.**
   PandaMUX now initializes and recovers one private local Git repository under
   its injected app-data root, retains exact authored bytes, and records each
