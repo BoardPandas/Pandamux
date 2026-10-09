@@ -304,6 +304,36 @@ impl BundleStore {
         }))
     }
 
+    /// Loads and re-verifies the exact immutable compiled bundle named by a
+    /// run. This deliberately ignores the currently active bundle so an
+    /// activation change cannot reinterpret an accepted run.
+    pub fn load_exact_compiled_bundle(
+        &self,
+        bundle_sha: &BundleSha,
+    ) -> Result<CompiledInstructionBundleV1, BundleStoreError> {
+        let _owner = self.owner.lock().expect("bundle store owner lock");
+        let object = self
+            .store
+            .get_bundle_object(bundle_sha)?
+            .ok_or_else(|| integrity_error("The pinned bundle object is missing"))?;
+        if &object.bundle_sha != bundle_sha {
+            return Err(integrity_error(
+                "The pinned bundle metadata has another content identity",
+            ));
+        }
+        let archive_path = self.archive_path(&object)?;
+        let bytes = read_private_bounded_file(&archive_path, MAX_BUNDLE_ARCHIVE_BYTES)?;
+        let archive: BundleArchiveV1 = serde_json::from_slice(&bytes)
+            .map_err(|_| integrity_error("The pinned bundle archive is invalid"))?;
+        if &archive.bundle_sha != bundle_sha {
+            return Err(integrity_error(
+                "The pinned bundle archive has another content identity",
+            ));
+        }
+        self.verify_archive(&archive, None)?;
+        Ok(archive.compiled_bundle)
+    }
+
     fn install_archive(
         &self,
         archive: &BundleArchiveV1,
@@ -949,6 +979,64 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn exact_lookup_ignores_a_later_active_bundle() {
+        let temp = tempfile::tempdir().expect("temporary exact bundle fixture");
+        let paths = DataPaths::from_root(temp.path().join("app-data")).expect("paths");
+        paths.ensure_private_roots().expect("private roots");
+        let store = Store::in_memory().expect("store");
+        let service = BundleStore::new(paths, store.clone());
+        let pinned_input = materialization_fixture(&temp.path().join("pinned"));
+        let pinned = service
+            .materialize(&pinned_input, 10)
+            .expect("materialize pinned bundle");
+        let changed_agent = agent().replace(
+            "Build the requested change without widening authority.",
+            "Build the changed fixture without widening authority.",
+        );
+        let active_input =
+            materialization_fixture_with_agent(&temp.path().join("active"), changed_agent);
+        assert_ne!(
+            pinned_input.bundle.payload_sha256,
+            active_input.bundle.payload_sha256
+        );
+        let environment_id = EnvironmentId::new("environment-exact-bundle");
+        let sync = crate::BundleSyncService::new(
+            store.clone(),
+            service.clone(),
+            Arc::new(crate::EnvironmentRouter::new(environment_id.clone())),
+            environment_id,
+        );
+        let active = sync
+            .activate(
+                &active_input,
+                None,
+                None,
+                None,
+                BundleActivationKind::TrustedBranch,
+                "bundle-exact-lookup-test",
+                &[],
+                20,
+                None,
+            )
+            .expect("activate changed bundle");
+        assert_ne!(active.bundle_sha, pinned.object.bundle_sha);
+
+        let loaded = service
+            .load_exact_compiled_bundle(&pinned.object.bundle_sha)
+            .expect("load immutable pinned bundle");
+        assert_eq!(loaded, pinned_input.bundle);
+        assert_eq!(
+            store
+                .current_bundle_activation()
+                .expect("active bundle")
+                .expect("activation")
+                .bundle_sha,
+            active.bundle_sha
+        );
+        service.shutdown();
+    }
+
+    #[test]
     fn node_rejects_corruption_and_replays_the_original_receipt() {
         let hub = Fixture::new("hub");
         let materialized = hub
@@ -1076,7 +1164,15 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn materialization_fixture(root: &Path) -> BundleMaterializationInput {
-        let instructions_documents = instructions_documents();
+        materialization_fixture_with_agent(root, agent())
+    }
+
+    fn materialization_fixture_with_agent(
+        root: &Path,
+        agent_document: String,
+    ) -> BundleMaterializationInput {
+        fs::create_dir_all(root).expect("bundle fixture root");
+        let instructions_documents = instructions_documents_with_agent(agent_document);
         let instructions_repo = root.join("instructions-source");
         let (instructions_commit, instructions_git_bundle) =
             commit_documents(&instructions_repo, &instructions_documents);
@@ -1139,7 +1235,7 @@ pub(crate) mod tests {
         }
     }
 
-    fn instructions_documents() -> Vec<SourceDocument> {
+    fn instructions_documents_with_agent(agent_document: String) -> Vec<SourceDocument> {
         vec![
             SourceDocument::new(
                 "orchestrator.yaml",
@@ -1149,7 +1245,7 @@ pub(crate) mod tests {
                 .to_vec(),
             )
             .expect("orchestrator"),
-            SourceDocument::new("agents/builder.md", agent()).expect("agent"),
+            SourceDocument::new("agents/builder.md", agent_document).expect("agent"),
             SourceDocument::new(
                 "knowledge/review-checklist.md",
                 include_bytes!("../../pandamux-orchestrator/tests/fixtures/schema/knowledge.md")

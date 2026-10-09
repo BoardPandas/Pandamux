@@ -12,8 +12,8 @@ use pandamux_core::{
     ContinuationId, ContinuationRecord, ContinuationState, DEFAULT_CAPACITY_MAX_AGE_MS,
     EnvironmentId, OrganizationId, ProjectId, ProviderInstanceId, ProviderKind,
     RoutingAuthentication, RoutingCandidate, RoutingDecision, RoutingEvaluation, RoutingHealth,
-    RoutingScore, SubscriptionKey, ToolLedgerEntry, ToolLedgerStatus, TurnAttempt, TurnAttemptId,
-    TurnAttemptStatus,
+    RoutingScore, RunAttemptId, SubscriptionKey, ToolLedgerEntry, ToolLedgerStatus, TurnAttempt,
+    TurnAttemptId, TurnAttemptStatus,
     event::{ThreadEvent, ThreadEventKind, ToolCallStatus, TurnOutcome},
     ids::{ThreadId, TurnId},
     project_capacity_revisions, select_route,
@@ -28,7 +28,7 @@ use pandamux_protocol::{
 };
 use pandamux_providers::traits::ProviderSession;
 use pandamux_providers::{
-    ProviderAuthStatus, ProviderEvent, ProviderHealth, ProviderSnapshot, SessionSpec,
+    ProviderAuthStatus, ProviderError, ProviderEvent, ProviderHealth, ProviderSnapshot, SessionSpec,
 };
 
 use crate::execution_admission::{
@@ -117,6 +117,67 @@ pub struct ActiveThreadSession {
     pub capability_authority: Arc<CapabilityAuthority>,
     pub execution_admission: ExecutionAdmissionService,
     pub admission_claim: ExecutionAdmissionClaim,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PreparedTurnDispatchDisposition {
+    Accepted,
+    NotStartedCleanupVerified,
+    Ambiguous,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreparedTurnDispatchReceipt {
+    pub disposition: PreparedTurnDispatchDisposition,
+    pub thread_id: ThreadId,
+    pub turn_id: TurnId,
+    pub turn_attempt_id: TurnAttemptId,
+    pub safe_error_code: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PreparedTurnEvent {
+    Terminal {
+        outcome: TurnOutcome,
+        at_ms: u64,
+    },
+    CapacityInterrupted {
+        continuation_id: ContinuationId,
+        at_ms: u64,
+    },
+    StreamClosed {
+        at_ms: u64,
+    },
+}
+
+pub struct PreparedTurnDispatch {
+    pub receipt: PreparedTurnDispatchReceipt,
+    pub events: mpsc::UnboundedReceiver<PreparedTurnEvent>,
+}
+
+#[derive(Clone)]
+pub struct PreparedOrchestratedTurn {
+    pub run_attempt_id: RunAttemptId,
+    pub thread: Thread,
+    pub turn: Turn,
+    pub turn_attempt: TurnAttempt,
+    pub session_spec: SessionSpec,
+    pub admission_claim: ExecutionAdmissionClaim,
+    pub continuation_id: Option<ContinuationId>,
+}
+
+#[derive(Clone)]
+struct PreparedDispatchContext {
+    request: PreparedOrchestratedTurn,
+    event_tx: mpsc::UnboundedSender<PreparedTurnEvent>,
+    failure_tx: mpsc::UnboundedSender<PreparedTurnDispatchReceipt>,
+}
+
+#[derive(Debug)]
+struct PreparedSessionStartError {
+    error: Box<RpcError>,
+    disposition: PreparedTurnDispatchDisposition,
+    safe_error_code: Option<String>,
 }
 
 async fn shutdown_active_session(active: ActiveThreadSession, interrupt: bool) {
@@ -1012,6 +1073,294 @@ impl ThreadManager {
         }
     }
 
+    async fn start_prepared_session(
+        &self,
+        request: &PreparedOrchestratedTurn,
+    ) -> Result<ActiveThreadSession, PreparedSessionStartError> {
+        if self
+            .active_sessions
+            .lock()
+            .await
+            .contains_key(&request.thread.id)
+        {
+            return Err(PreparedSessionStartError {
+                error: Box::new(RpcError::internal_error(
+                    "The prepared orchestration thread already has a live session",
+                )),
+                disposition: PreparedTurnDispatchDisposition::Ambiguous,
+                safe_error_code: None,
+            });
+        }
+
+        let dispatched_claim = self
+            .execution_admission
+            .mark_dispatched(&request.admission_claim)
+            .await
+            .map_err(|error| PreparedSessionStartError {
+                error: Box::new(RpcError::internal_error(error.to_string())),
+                disposition: PreparedTurnDispatchDisposition::NotStartedCleanupVerified,
+                safe_error_code: Some("admission_dispatch_marker_rejected".to_string()),
+            })?;
+        let execution = match self
+            .provider_resolver
+            .acquire_execution(
+                &request.thread.provider_instance_id,
+                &request.thread.environment_id,
+            )
+            .await
+        {
+            Ok(execution) => Arc::new(execution),
+            Err(error) => {
+                let _ = self.execution_admission.release(&dispatched_claim).await;
+                return Err(PreparedSessionStartError {
+                    error: Box::new(error),
+                    disposition: PreparedTurnDispatchDisposition::NotStartedCleanupVerified,
+                    safe_error_code: Some("provider_execution_permit_rejected".to_string()),
+                });
+            }
+        };
+        if execution.instance.config.id != request.thread.provider_instance_id
+            || execution.instance.config.environment_id.as_ref()
+                != Some(&request.thread.environment_id)
+            || !execution
+                .instance
+                .capabilities
+                .supports_access_mode(request.session_spec.access)
+        {
+            let _ = self.execution_admission.release(&dispatched_claim).await;
+            return Err(PreparedSessionStartError {
+                error: Box::new(RpcError::internal_error(
+                    "The final provider execution permit differs from the prepared route",
+                )),
+                disposition: PreparedTurnDispatchDisposition::NotStartedCleanupVerified,
+                safe_error_code: Some("provider_execution_identity_changed".to_string()),
+            });
+        }
+        let execution_evidence = AttemptExecutionEvidence {
+            provider_kind: execution.instance.config.provider,
+            profile_dir: execution.instance.config.profile_dir.clone(),
+            binary_path: execution.instance.config.binary_path.clone(),
+            capabilities: execution.instance.capabilities,
+            provider_version: execution.snapshot.version.clone(),
+        };
+        if let Err(error) = self
+            .store
+            .bind_turn_attempt_execution(&request.turn_attempt.id, &execution_evidence)
+        {
+            let _ = self.execution_admission.release(&dispatched_claim).await;
+            return Err(PreparedSessionStartError {
+                error: Box::new(RpcError::internal_error(error.to_string())),
+                disposition: PreparedTurnDispatchDisposition::NotStartedCleanupVerified,
+                safe_error_code: Some("provider_execution_evidence_rejected".to_string()),
+            });
+        }
+
+        let child_capability_token = self.capability_authority.issue_provider_child(
+            request.thread.id.clone(),
+            [
+                "notification.post".to_string(),
+                "memory.list".to_string(),
+                "memory.search".to_string(),
+                "memory.add".to_string(),
+                "memory.update".to_string(),
+            ],
+            24 * 60 * 60 * 1000,
+        );
+        let mut launch_config = execution.instance.config.clone();
+        launch_config.env_overrides.insert(
+            "PANDAMUX_CAPABILITY".to_string(),
+            child_capability_token.clone(),
+        );
+        launch_config.env_overrides.insert(
+            "PANDAMUX_THREAD_ID".to_string(),
+            request.thread.id.as_str().to_string(),
+        );
+        if let Some(endpoint) = self.capability_authority.endpoint() {
+            launch_config
+                .env_overrides
+                .insert("PANDAMUX_PIPE".to_string(), endpoint);
+        }
+
+        let start_result = execution
+            .instance
+            .driver
+            .start_session(&launch_config, request.session_spec.clone())
+            .await;
+        let mut session = match start_result {
+            Ok(session) => session,
+            Err(error) => {
+                let disposition = if error.verified_not_started() {
+                    PreparedTurnDispatchDisposition::NotStartedCleanupVerified
+                } else {
+                    PreparedTurnDispatchDisposition::Ambiguous
+                };
+                let safe_error_code = error
+                    .verified_not_started()
+                    .then(|| {
+                        error
+                            .safe_dispatch_code()
+                            .unwrap_or("provider_start_rejected")
+                    })
+                    .map(str::to_string);
+                let rpc_error = RpcError::internal_error(error.to_string());
+                if disposition == PreparedTurnDispatchDisposition::NotStartedCleanupVerified {
+                    self.capability_authority.revoke(&child_capability_token);
+                    let _ = self.execution_admission.release(&dispatched_claim).await;
+                } else {
+                    let quarantined = ActiveThreadSession {
+                        session: Arc::new(Mutex::new(None)),
+                        events_rx: Arc::new(Mutex::new(None)),
+                        event_writer: Arc::new(Mutex::new(())),
+                        execution,
+                        generation: uuid::Uuid::new_v4(),
+                        child_capability_token,
+                        capability_authority: self.capability_authority.clone(),
+                        execution_admission: self.execution_admission.clone(),
+                        admission_claim: dispatched_claim,
+                    };
+                    self.active_sessions
+                        .lock()
+                        .await
+                        .insert(request.thread.id.clone(), quarantined);
+                }
+                return Err(PreparedSessionStartError {
+                    error: Box::new(rpc_error),
+                    disposition,
+                    safe_error_code,
+                });
+            }
+        };
+        let events_rx = session.take_event_receiver();
+        let candidate = ActiveThreadSession {
+            session: Arc::new(Mutex::new(Some(session))),
+            events_rx: Arc::new(Mutex::new(events_rx)),
+            event_writer: Arc::new(Mutex::new(())),
+            execution,
+            generation: uuid::Uuid::new_v4(),
+            child_capability_token,
+            capability_authority: self.capability_authority.clone(),
+            execution_admission: self.execution_admission.clone(),
+            admission_claim: dispatched_claim,
+        };
+        let raced = {
+            let mut active = self.active_sessions.lock().await;
+            if active.contains_key(&request.thread.id) {
+                true
+            } else {
+                active.insert(request.thread.id.clone(), candidate.clone());
+                false
+            }
+        };
+        if raced {
+            shutdown_active_session(candidate, false).await;
+            Err(PreparedSessionStartError {
+                error: Box::new(RpcError::internal_error(
+                    "The prepared orchestration session lost its ownership race",
+                )),
+                disposition: PreparedTurnDispatchDisposition::NotStartedCleanupVerified,
+                safe_error_code: Some("prepared_session_race_cleaned".to_string()),
+            })
+        } else {
+            Ok(candidate)
+        }
+    }
+
+    /// Dispatches a fully persisted orchestration turn. The durable attempt
+    /// marker is re-read before the final provider permit or process can be
+    /// acquired, and ordinary client input cannot override the prepared
+    /// instructions, tools, route, identities, or working directory.
+    pub async fn dispatch_prepared_turn(
+        &self,
+        request: PreparedOrchestratedTurn,
+    ) -> Result<PreparedTurnDispatch, RpcError> {
+        let dispatch = self
+            .store
+            .get_attempt_dispatch(&request.run_attempt_id)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?
+            .ok_or_else(|| RpcError::internal_error("Prepared attempt dispatch was not found"))?;
+        let stored_thread = self
+            .store
+            .get_thread(&request.thread.id)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        let stored_turn = self
+            .store
+            .get_turn(&request.turn.id)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        let stored_attempt = self
+            .store
+            .get_turn_attempt(&request.turn_attempt.id)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        if dispatch.state != crate::store::AttemptDispatchState::DispatchStarted
+            || dispatch.thread_id != request.thread.id
+            || dispatch.turn_id != request.turn.id
+            || dispatch.turn_attempt_id != request.turn_attempt.id
+            || dispatch.provider_instance_id != request.thread.provider_instance_id
+            || stored_thread.as_ref() != Some(&request.thread)
+            || stored_turn.as_ref() != Some(&request.turn)
+            || stored_attempt.as_ref() != Some(&request.turn_attempt)
+            || request.session_spec.cwd.as_path() != request.thread.workspace.effective_path()
+            || request.session_spec.model != request.thread.model
+            || request.session_spec.effort != request.thread.effort
+            || request.session_spec.access != request.thread.access_mode
+            || request.session_spec.resume.is_some()
+            || request.turn.input.model.as_deref() != Some(request.thread.model.as_str())
+        {
+            return Err(RpcError::invalid_params(
+                "Prepared orchestration turn differs from its durable dispatch intent",
+            ));
+        }
+
+        let (event_tx, events) = mpsc::unbounded_channel();
+        let (failure_tx, mut failure_rx) = mpsc::unbounded_channel();
+        let context = PreparedDispatchContext {
+            request: request.clone(),
+            event_tx,
+            failure_tx,
+        };
+        let result = self
+            .send_turn_with_policy(
+                ThreadSendTurnParams {
+                    thread_id: request.thread.id.clone(),
+                    text: request.turn.input.text.clone(),
+                    attachment_ids: request.turn.input.attachment_ids.clone(),
+                    model: request.turn.input.model.clone(),
+                    effort: request.turn.input.effort.clone(),
+                    hub_routing_context: None,
+                },
+                false,
+                Some(&request.thread.provider_instance_id),
+                false,
+                None,
+                request.continuation_id.as_ref(),
+                Some(context),
+            )
+            .await;
+        match result {
+            Ok(result)
+                if result.turn_id == request.turn.id
+                    && result.attempt_id == request.turn_attempt.id =>
+            {
+                Ok(PreparedTurnDispatch {
+                    receipt: PreparedTurnDispatchReceipt {
+                        disposition: PreparedTurnDispatchDisposition::Accepted,
+                        thread_id: request.thread.id,
+                        turn_id: request.turn.id,
+                        turn_attempt_id: request.turn_attempt.id,
+                        safe_error_code: None,
+                    },
+                    events,
+                })
+            }
+            Ok(_) => Err(RpcError::internal_error(
+                "Prepared provider dispatch returned different execution identities",
+            )),
+            Err(error) => match failure_rx.try_recv() {
+                Ok(receipt) => Ok(PreparedTurnDispatch { receipt, events }),
+                Err(_) => Err(error),
+            },
+        }
+    }
+
     /// Creates and persists a new thread with optional git worktree.
     pub fn create_thread(&self, params: ThreadCreateParams) -> Result<Thread, RpcError> {
         self.create_thread_with_policy(params, true)
@@ -1197,7 +1546,7 @@ impl ThreadManager {
         mut params: ThreadSendTurnParams,
     ) -> Result<ThreadSendTurnResult, RpcError> {
         params.hub_routing_context = None;
-        self.send_turn_with_policy(params, true, None, true, None, None)
+        self.send_turn_with_policy(params, true, None, true, None, None, None)
             .await
     }
 
@@ -1208,10 +1557,11 @@ impl ThreadManager {
         mut params: ThreadSendTurnParams,
     ) -> Result<ThreadSendTurnResult, RpcError> {
         let hub_routing_context = params.hub_routing_context.take();
-        self.send_turn_with_policy(params, false, None, true, hub_routing_context, None)
+        self.send_turn_with_policy(params, false, None, true, hub_routing_context, None, None)
             .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn send_turn_with_policy(
         &self,
         params: ThreadSendTurnParams,
@@ -1220,7 +1570,9 @@ impl ThreadManager {
         allow_native_resume: bool,
         hub_routing_context: Option<HubRoutingContext>,
         continuation_id: Option<&ContinuationId>,
+        prepared: Option<PreparedDispatchContext>,
     ) -> Result<ThreadSendTurnResult, RpcError> {
+        let prepared_request = prepared.as_ref().map(|context| &context.request);
         let mut thread = self
             .store
             .get_thread(&params.thread_id)
@@ -1249,17 +1601,30 @@ impl ThreadManager {
                 .map_err(|error| organization_policy_error(project_id, error.to_string()))?;
         }
 
-        let turn_id = TurnId::generate();
+        let turn_id = prepared_request
+            .map(|request| request.turn.id.clone())
+            .unwrap_or_else(TurnId::generate);
         let base_seq = self
             .store
             .get_latest_seq(&params.thread_id)
             .map_err(|e| RpcError::internal_error(e.to_string()))?;
 
-        let turn_seq = base_seq + 1;
-        let started_ms = now_ms();
+        let turn_seq = prepared_request
+            .map(|request| request.turn.seq)
+            .unwrap_or_else(|| base_seq.saturating_add(1));
+        if prepared_request.is_some() && turn_seq != base_seq.saturating_add(1) {
+            return Err(RpcError::invalid_params(
+                "Prepared orchestration turn sequence is not the next durable event sequence",
+            ));
+        }
+        let started_ms = prepared_request
+            .map(|request| request.turn.started_at_ms)
+            .unwrap_or_else(now_ms);
 
         // Resolve and validate attachments if provided
-        let resolved_attachments = if !params.attachment_ids.is_empty() {
+        let resolved_attachments = if let Some(request) = prepared_request {
+            request.turn.input.attachments.clone()
+        } else if !params.attachment_ids.is_empty() {
             let records = self
                 .store
                 .get_attachments_by_ids(&params.thread_id, &params.attachment_ids)
@@ -1283,8 +1648,15 @@ impl ThreadManager {
         };
 
         let previous_provider_instance_id = thread.provider_instance_id.clone();
-        let route = self
-            .select_turn_route(
+        let route = if let Some(request) = prepared_request {
+            SelectedTurnRoute {
+                decision: request.turn_attempt.routing.clone(),
+                provider_instance_id: request.turn_attempt.provider_instance_id.clone(),
+                subscription_key: request.turn_attempt.subscription_key.clone(),
+                model: request.turn_attempt.model.clone(),
+            }
+        } else {
+            self.select_turn_route(
                 &thread,
                 params.model.as_deref(),
                 &BTreeSet::new(),
@@ -1292,63 +1664,110 @@ impl ThreadManager {
                 hub_routing_context.as_ref(),
                 enforce_organization_policy,
             )
-            .await?;
+            .await?
+        };
         let provider_changed = previous_provider_instance_id != route.provider_instance_id;
         thread.provider_instance_id = route.provider_instance_id.clone();
         thread.model = route.model.clone();
 
-        let turn_input = TurnInput {
-            text: params.text.clone(),
-            attachment_ids: params.attachment_ids.clone(),
-            attachments: resolved_attachments,
-            model: Some(route.model.clone()),
-            effort: params.effort.clone().or_else(|| thread.effort.clone()),
-        };
+        let turn_input = prepared_request.map_or_else(
+            || TurnInput {
+                text: params.text.clone(),
+                attachment_ids: params.attachment_ids.clone(),
+                attachments: resolved_attachments,
+                model: Some(route.model.clone()),
+                effort: params.effort.clone().or_else(|| thread.effort.clone()),
+            },
+            |request| request.turn.input.clone(),
+        );
 
         let effective_path = PathBuf::from(thread.workspace.effective_path());
-        let cp_before = crate::checkpoint::create_checkpoint(
-            &effective_path,
-            &params.thread_id,
-            &turn_id,
-            crate::checkpoint::CheckpointPhase::Before,
-        )
-        .unwrap_or(None);
+        let cp_before = if let Some(request) = prepared_request {
+            request.turn.checkpoint_before.clone()
+        } else {
+            crate::checkpoint::create_checkpoint(
+                &effective_path,
+                &params.thread_id,
+                &turn_id,
+                crate::checkpoint::CheckpointPhase::Before,
+            )
+            .unwrap_or(None)
+        };
 
-        let organization_id = self.execution_organization_id(
-            &thread,
-            hub_routing_context.as_ref(),
-            enforce_organization_policy,
-        )?;
-        let active_sess = self
-            .get_or_start_session_with_resume(
+        let active_sess = if let Some(context) = prepared.as_ref() {
+            match self.start_prepared_session(&context.request).await {
+                Ok(session) => session,
+                Err(failure) => {
+                    if failure.disposition
+                        == PreparedTurnDispatchDisposition::NotStartedCleanupVerified
+                    {
+                        let failed_at = now_ms();
+                        let mut failed_turn = context.request.turn.clone();
+                        failed_turn.status = TurnStatus::Failed;
+                        failed_turn.ended_at_ms = Some(failed_at);
+                        let _ = self.store.save_turn(&failed_turn);
+                        let mut failed_attempt = context.request.turn_attempt.clone();
+                        failed_attempt.status = TurnAttemptStatus::Failed;
+                        failed_attempt.ended_at_ms = Some(failed_at);
+                        let _ = self.store.save_turn_attempt(&failed_attempt);
+                        let mut failed_thread = context.request.thread.clone();
+                        failed_thread.status = ThreadStatus::Errored;
+                        failed_thread.updated_at_ms = failed_at;
+                        let _ = self.store.save_thread(&failed_thread);
+                    }
+                    let _ = context.failure_tx.send(PreparedTurnDispatchReceipt {
+                        disposition: failure.disposition,
+                        thread_id: context.request.thread.id.clone(),
+                        turn_id: context.request.turn.id.clone(),
+                        turn_attempt_id: context.request.turn_attempt.id.clone(),
+                        safe_error_code: failure.safe_error_code,
+                    });
+                    return Err(*failure.error);
+                }
+            }
+        } else {
+            let organization_id = self.execution_organization_id(
+                &thread,
+                hub_routing_context.as_ref(),
+                enforce_organization_policy,
+            )?;
+            self.get_or_start_session_with_resume(
                 &thread,
                 allow_native_resume && !provider_changed,
                 &turn_id,
                 organization_id,
             )
-            .await?;
-
-        let turn = Turn {
-            id: turn_id.clone(),
-            thread_id: params.thread_id.clone(),
-            environment_id: thread.environment_id.clone(),
-            provider_instance_id: thread.provider_instance_id.clone(),
-            seq: turn_seq,
-            input: turn_input.clone(),
-            status: TurnStatus::Running,
-            started_at_ms: started_ms,
-            ended_at_ms: None,
-            usage: None,
-            checkpoint_before: cp_before,
-            checkpoint_after: None,
+            .await?
         };
 
-        self.store
-            .save_turn(&turn)
-            .map_err(|e| RpcError::internal_error(e.to_string()))?;
-        let attempt_id = TurnAttemptId::generate();
-        self.store
-            .save_turn_attempt(&TurnAttempt {
+        let turn = prepared_request.map_or_else(
+            || Turn {
+                id: turn_id.clone(),
+                thread_id: params.thread_id.clone(),
+                environment_id: thread.environment_id.clone(),
+                provider_instance_id: thread.provider_instance_id.clone(),
+                seq: turn_seq,
+                input: turn_input.clone(),
+                status: TurnStatus::Running,
+                started_at_ms: started_ms,
+                ended_at_ms: None,
+                usage: None,
+                checkpoint_before: cp_before,
+                checkpoint_after: None,
+            },
+            |request| request.turn.clone(),
+        );
+
+        if prepared_request.is_none() {
+            self.store
+                .save_turn(&turn)
+                .map_err(|e| RpcError::internal_error(e.to_string()))?;
+        }
+        let attempt_id = prepared_request
+            .map(|request| request.turn_attempt.id.clone())
+            .unwrap_or_else(TurnAttemptId::generate);
+        let attempt = prepared_request.map_or_else(
+            || TurnAttempt {
                 id: attempt_id.clone(),
                 turn_id: turn_id.clone(),
                 thread_id: params.thread_id.clone(),
@@ -1372,7 +1791,21 @@ impl ThreadManager {
                 capacity_evidence: None,
                 started_at_ms: started_ms,
                 ended_at_ms: None,
-            })
+            },
+            |request| {
+                let mut attempt = request.turn_attempt.clone();
+                attempt.execution = Some(AttemptExecutionEvidence {
+                    provider_kind: active_sess.execution.instance.config.provider,
+                    profile_dir: active_sess.execution.instance.config.profile_dir.clone(),
+                    binary_path: active_sess.execution.instance.config.binary_path.clone(),
+                    capabilities: active_sess.execution.instance.capabilities,
+                    provider_version: active_sess.execution.snapshot.version.clone(),
+                });
+                attempt
+            },
+        );
+        self.store
+            .save_turn_attempt(&attempt)
             .map_err(|error| RpcError::internal_error(error.to_string()))?;
         let execution_config = &active_sess.execution.instance.config;
         self.store
@@ -1456,19 +1889,28 @@ impl ThreadManager {
         // Send turn prompt into provider session
         let send_result = {
             let mut sess = active_sess.session.lock().await;
-            sess.as_mut()
-                .ok_or_else(|| RpcError::internal_error("Provider session is closed"))?
-                .send_turn(turn_input.clone())
-                .await
-                .map_err(|e| RpcError::internal_error(e.to_string()))
+            match sess.as_mut() {
+                Some(session) => session.send_turn(turn_input.clone()).await,
+                None => Err(ProviderError::Other(
+                    "Provider session is closed before prompt acceptance".to_string(),
+                )),
+            }
         };
-        if let Err(error) = send_result {
-            if let Some(active) = remove_active_generation(
-                &self.active_sessions,
-                &params.thread_id,
-                active_sess.generation,
-            )
-            .await
+        if let Err(provider_error) = send_result {
+            let prepared_disposition = if provider_error.verified_not_started() {
+                PreparedTurnDispatchDisposition::NotStartedCleanupVerified
+            } else {
+                PreparedTurnDispatchDisposition::Ambiguous
+            };
+            if (prepared.is_none()
+                || prepared_disposition
+                    == PreparedTurnDispatchDisposition::NotStartedCleanupVerified)
+                && let Some(active) = remove_active_generation(
+                    &self.active_sessions,
+                    &params.thread_id,
+                    active_sess.generation,
+                )
+                .await
             {
                 shutdown_active_session(active, false).await;
             }
@@ -1486,7 +1928,24 @@ impl ThreadManager {
             thread.status = ThreadStatus::Errored;
             thread.updated_at_ms = failed_at;
             let _ = self.store.save_thread(&thread);
-            return Err(error);
+            if let Some(context) = prepared.as_ref() {
+                let safe_error_code = provider_error
+                    .verified_not_started()
+                    .then(|| {
+                        provider_error
+                            .safe_dispatch_code()
+                            .unwrap_or("provider_prompt_not_accepted")
+                    })
+                    .map(str::to_string);
+                let _ = context.failure_tx.send(PreparedTurnDispatchReceipt {
+                    disposition: prepared_disposition,
+                    thread_id: context.request.thread.id.clone(),
+                    turn_id: context.request.turn.id.clone(),
+                    turn_attempt_id: context.request.turn_attempt.id.clone(),
+                    safe_error_code,
+                });
+            }
+            return Err(RpcError::internal_error(provider_error.to_string()));
         }
 
         // Take receiver for lock-free streaming in background task
@@ -1517,6 +1976,8 @@ impl ThreadManager {
         let turn_input_for_retry = turn_input.clone();
         let hub_routing_context_for_retry = hub_routing_context.clone();
         let use_local_policy_for_retry = enforce_organization_policy;
+        let prepared_event_tx = prepared.as_ref().map(|context| context.event_tx.clone());
+        let prepared_dispatch = prepared.is_some();
 
         tokio::spawn(async move {
             let turn_id = turn_id_for_task;
@@ -2102,6 +2563,7 @@ impl ThreadManager {
                             Err(_) => false,
                         };
                         if automatic_failover_enabled
+                            && !prepared_dispatch
                             && current_attempt.boundary == AttemptBoundary::SafeToRetry
                             && current_attempt.ordinal == 1
                         {
@@ -2344,12 +2806,20 @@ impl ThreadManager {
                             }
                         }
 
-                        let _ = manager.persist_capacity_interruption(
+                        let continuation = manager.persist_capacity_interruption(
                             &thread_id,
                             &turn_id,
                             &current_attempt.id,
                             evidence,
                         );
+                        if let (Some(event_tx), Ok(continuation_id)) =
+                            (prepared_event_tx.as_ref(), continuation)
+                        {
+                            let _ = event_tx.send(PreparedTurnEvent::CapacityInterrupted {
+                                continuation_id,
+                                at_ms: at,
+                            });
+                        }
                         drop(_event_guard);
                         if let Some(active) =
                             remove_active_generation(&active_sessions, &thread_id, generation).await
@@ -2443,17 +2913,26 @@ impl ThreadManager {
             }
 
             let finished_at = now_ms();
+            let event_outcome = terminal_outcome;
             match terminal_outcome {
                 Some(TurnOutcome::Success) => {
-                    let still_active = {
-                        let active = active_sessions.lock().await;
-                        active
-                            .get(&thread_id)
-                            .is_some_and(|session| session.generation == generation)
-                    };
-                    if still_active {
-                        let mut rx_guard = events_rx_holder.lock().await;
-                        *rx_guard = Some(rx);
+                    if prepared_dispatch {
+                        if let Some(active) =
+                            remove_active_generation(&active_sessions, &thread_id, generation).await
+                        {
+                            shutdown_active_session(active, false).await;
+                        }
+                    } else {
+                        let still_active = {
+                            let active = active_sessions.lock().await;
+                            active
+                                .get(&thread_id)
+                                .is_some_and(|session| session.generation == generation)
+                        };
+                        if still_active {
+                            let mut rx_guard = events_rx_holder.lock().await;
+                            *rx_guard = Some(rx);
+                        }
                     }
                     if let Ok(Some(mut thread)) = store.get_thread(&thread_id) {
                         thread.status = ThreadStatus::Idle;
@@ -2493,6 +2972,10 @@ impl ThreadManager {
                             .is_some_and(|session| session.generation == generation)
                     };
                     if !still_active {
+                        if let Some(event_tx) = prepared_event_tx.as_ref() {
+                            let _ = event_tx
+                                .send(PreparedTurnEvent::StreamClosed { at_ms: finished_at });
+                        }
                         return;
                     }
 
@@ -2634,6 +3117,16 @@ impl ThreadManager {
                         shutdown_active_session(active, false).await;
                     }
                 }
+            }
+            if let Some(event_tx) = prepared_event_tx.as_ref() {
+                let event = match event_outcome {
+                    Some(outcome) => PreparedTurnEvent::Terminal {
+                        outcome,
+                        at_ms: finished_at,
+                    },
+                    None => PreparedTurnEvent::StreamClosed { at_ms: finished_at },
+                };
+                let _ = event_tx.send(event);
             }
         });
 
@@ -2831,6 +3324,7 @@ impl ThreadManager {
                 false,
                 hub_routing_context,
                 Some(&continuation.id),
+                None,
             )
             .await;
         let send_result = match send_result {

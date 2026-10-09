@@ -93,7 +93,11 @@ pub use request_context::{
     CapabilityAuthority, CapabilityScope, ClientIdentity, PeerRole, RequestContext,
 };
 pub use router::Router;
-pub use run_execution_service::{RunExecutionService, RunTransitionNotice};
+pub use run_execution_service::{
+    LocalProviderDispatch, LocalProviderDispatchStatus, LocalProviderExecutionError,
+    LocalProviderTerminalOutcome, PrepareLocalProviderAttemptRequest, PreparedLocalProviderAttempt,
+    RunExecutionService, RunTransitionNotice,
+};
 pub use runtime::{RUNTIME_FILENAME, RuntimeInfo};
 pub use server::{Server, ServerConfig};
 pub use store::{
@@ -106,17 +110,21 @@ pub use store::{
     BudgetReconciliationOutcome, BudgetScopeOverage, BundleActivationFailpoint,
     BundleDistributionRecord, BundleObjectRecord, DailyBudgetRecord, EffectClaimOutcome,
     EffectClaimRequest, EffectDispatchOutcome, EffectDispatchRequest, EffectOutcomeRecord,
-    EffectOutcomeRequest, EffectOwnership, EffectPreparationOutcome, NodeReceiptKind,
-    NodeReceiptRecord, OrchestratedAdmissionTransition, OrchestrationExecutionFailpoint,
-    OrchestrationQueueRecord, OrchestrationReplayAudit, OrchestrationRunRecord,
-    OrchestrationRuntimeRecords, OwnedAttemptWorktreeRecord, PersonalRepoStateRecord,
-    ProviderExecutionAudit, QueueState, RevisionedSettings, RunTransition, RunTransitionRequest,
-    RunTransitionRows, Store, StoreError, StoredBudgetReservation, StoredInstructionCandidate,
-    StoredOrchestrationEffect, execution_ledger_utc_date, orchestration_snapshot_sha256,
-    supplemental_budget_action_digest,
+    EffectOutcomeRequest, EffectOwnership, EffectPreparationOutcome, LocalAttemptAcceptanceOutcome,
+    LocalAttemptOutcome, LocalAttemptOutcomeRequest, LocalAttemptPreparationOutcome,
+    NodeReceiptKind, NodeReceiptRecord, OrchestratedAdmissionTransition,
+    OrchestrationExecutionFailpoint, OrchestrationQueueRecord, OrchestrationReplayAudit,
+    OrchestrationRunRecord, OrchestrationRuntimeRecords, OwnedAttemptWorktreeRecord,
+    PersonalRepoStateRecord, ProviderExecutionAudit, QueueState, RevisionedSettings, RunTransition,
+    RunTransitionRequest, RunTransitionRows, Store, StoreError, StoredBudgetReservation,
+    StoredInstructionCandidate, StoredOrchestrationEffect, execution_ledger_utc_date,
+    orchestration_snapshot_sha256, supplemental_budget_action_digest,
 };
 pub use terminal::TerminalServerManager;
-pub use thread_manager::ThreadManager;
+pub use thread_manager::{
+    PreparedOrchestratedTurn, PreparedTurnDispatch, PreparedTurnDispatchDisposition,
+    PreparedTurnDispatchReceipt, PreparedTurnEvent, ThreadManager,
+};
 pub use usage_scanner::{
     PlatformFileIdentity, UsageScanRunReport, UsageScanSource, UsageScanTrigger,
     UsageScannerHandle, UsageScannerLimits, UsageScannerRuntimeConfig, UsageScannerService,

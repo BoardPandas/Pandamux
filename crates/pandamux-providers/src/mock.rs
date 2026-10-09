@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 
+use crate::error::ProviderDispatchStage;
 use crate::error::ProviderError;
 use crate::models::{
     ModelInfo, ProviderAuthConfidence, ProviderAuthStatus, ProviderEvent, ProviderHealth,
@@ -29,6 +30,7 @@ pub struct MockProviderDriver {
     resume_token_to_issue: Arc<Mutex<Option<String>>>,
     received_resume_tokens: Arc<Mutex<Vec<String>>>,
     received_configs: Arc<Mutex<Vec<ProviderInstanceConfig>>>,
+    received_specs: Arc<Mutex<Vec<SessionSpec>>>,
     active_probes: Arc<AtomicUsize>,
     max_active_probes: Arc<AtomicUsize>,
     session_starts: Arc<AtomicUsize>,
@@ -52,6 +54,7 @@ impl MockProviderDriver {
             resume_token_to_issue: Arc::new(Mutex::new(None)),
             received_resume_tokens: Arc::new(Mutex::new(Vec::new())),
             received_configs: Arc::new(Mutex::new(Vec::new())),
+            received_specs: Arc::new(Mutex::new(Vec::new())),
             active_probes: Arc::new(AtomicUsize::new(0)),
             max_active_probes: Arc::new(AtomicUsize::new(0)),
             session_starts: Arc::new(AtomicUsize::new(0)),
@@ -69,6 +72,10 @@ impl MockProviderDriver {
 
     pub fn received_configs(&self) -> Vec<ProviderInstanceConfig> {
         self.received_configs.lock().unwrap().clone()
+    }
+
+    pub fn received_specs(&self) -> Vec<SessionSpec> {
+        self.received_specs.lock().unwrap().clone()
     }
 
     pub fn max_concurrent_probes(&self) -> usize {
@@ -247,12 +254,38 @@ impl ProviderDriver for MockProviderDriver {
     ) -> BoxFuture<'a, Result<Box<dyn ProviderSession>, ProviderError>> {
         self.session_starts.fetch_add(1, Ordering::SeqCst);
         self.received_configs.lock().unwrap().push(cfg.clone());
+        self.received_specs.lock().unwrap().push(spec.clone());
         let resume_to_issue = self.resume_token_to_issue.lock().unwrap().clone();
         if let Some(ref r) = spec.resume {
             self.received_resume_tokens.lock().unwrap().push(r.clone());
         }
 
         Box::pin(async move {
+            match cfg
+                .settings
+                .get("startFailure")
+                .and_then(|value| value.as_str())
+            {
+                Some("verified_not_started") => {
+                    return Err(ProviderError::DispatchRejected {
+                        stage: ProviderDispatchStage::StartSession,
+                        code: "mock_start_not_started".to_string(),
+                        message: "mock start was rejected before process creation".to_string(),
+                        prompt_accepted: false,
+                        cleanup_verified: true,
+                    });
+                }
+                Some("ambiguous") => {
+                    return Err(ProviderError::DispatchRejected {
+                        stage: ProviderDispatchStage::StartSession,
+                        code: "mock_start_ambiguous".to_string(),
+                        message: "mock start response was lost".to_string(),
+                        prompt_accepted: false,
+                        cleanup_verified: false,
+                    });
+                }
+                _ => {}
+            }
             let (tx, rx) = mpsc::channel(64);
             let capacity_failure_mode = cfg
                 .settings
@@ -265,6 +298,16 @@ impl ProviderDriver for MockProviderDriver {
                 resume_token: resume_to_issue,
                 last_turn_text: Arc::new(Mutex::new(None)),
                 capacity_failure_mode,
+                event_script: cfg
+                    .settings
+                    .get("eventScript")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string),
+                send_failure_mode: cfg
+                    .settings
+                    .get("sendFailure")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string),
             };
             Ok(Box::new(session) as Box<dyn ProviderSession>)
         })
@@ -278,14 +321,43 @@ pub struct MockProviderSession {
     resume_token: Option<String>,
     last_turn_text: Arc<Mutex<Option<String>>>,
     capacity_failure_mode: Option<String>,
+    event_script: Option<String>,
+    send_failure_mode: Option<String>,
 }
 
 impl ProviderSession for MockProviderSession {
     fn send_turn<'a>(&'a mut self, input: TurnInput) -> BoxFuture<'a, Result<(), ProviderError>> {
         *self.last_turn_text.lock().unwrap() = Some(input.text.clone());
         let prompt = input.text;
+        let script = self.event_script.clone().unwrap_or_else(|| prompt.clone());
 
-        if prompt == "close_stream" {
+        match self.send_failure_mode.as_deref() {
+            Some("verified_not_started") => {
+                return Box::pin(async {
+                    Err(ProviderError::DispatchRejected {
+                        stage: ProviderDispatchStage::SendTurn,
+                        code: "mock_prompt_not_accepted".to_string(),
+                        message: "mock prompt was rejected before acceptance".to_string(),
+                        prompt_accepted: false,
+                        cleanup_verified: true,
+                    })
+                });
+            }
+            Some("ambiguous") => {
+                return Box::pin(async {
+                    Err(ProviderError::DispatchRejected {
+                        stage: ProviderDispatchStage::SendTurn,
+                        code: "mock_prompt_ambiguous".to_string(),
+                        message: "mock prompt response was lost".to_string(),
+                        prompt_accepted: true,
+                        cleanup_verified: false,
+                    })
+                });
+            }
+            _ => {}
+        }
+
+        if script == "close_stream" {
             let tx = self.tx.take().expect("mock event sender is available");
             return Box::pin(async move {
                 let _ = tx
@@ -352,10 +424,10 @@ impl ProviderSession for MockProviderSession {
                 return Ok(());
             }
 
-            if prompt.starts_with("error:") {
+            if script.starts_with("error:") {
                 let _ = tx
                     .send(ProviderEvent::Error {
-                        message: prompt.trim_start_matches("error:").trim().to_string(),
+                        message: script.trim_start_matches("error:").trim().to_string(),
                         recoverable: false,
                     })
                     .await;
@@ -368,8 +440,8 @@ impl ProviderSession for MockProviderSession {
                 return Ok(());
             }
 
-            if prompt.starts_with("request_approval:") {
-                let cmd = prompt
+            if script.starts_with("request_approval:") {
+                let cmd = script
                     .trim_start_matches("request_approval:")
                     .trim()
                     .to_string();
@@ -386,8 +458,8 @@ impl ProviderSession for MockProviderSession {
                 return Ok(());
             }
 
-            if prompt.starts_with("tool:") {
-                let tool_name = prompt.trim_start_matches("tool:").trim().to_string();
+            if script.starts_with("tool:") {
+                let tool_name = script.trim_start_matches("tool:").trim().to_string();
                 let _ = crate::forward_provider_event(
                     &tx,
                     ProviderEvent::ToolCallStarted {
@@ -408,8 +480,8 @@ impl ProviderSession for MockProviderSession {
                 .await;
             }
 
-            if prompt.starts_with("duplicate_tool_result:") {
-                let tool_name = prompt
+            if script.starts_with("duplicate_tool_result:") {
+                let tool_name = script
                     .trim_start_matches("duplicate_tool_result:")
                     .trim()
                     .to_string();
@@ -435,8 +507,8 @@ impl ProviderSession for MockProviderSession {
                 }
             }
 
-            if prompt.starts_with("unresolved_tool_success:") {
-                let tool_name = prompt
+            if script.starts_with("unresolved_tool_success:") {
+                let tool_name = script
                     .trim_start_matches("unresolved_tool_success:")
                     .trim()
                     .to_string();
@@ -451,8 +523,8 @@ impl ProviderSession for MockProviderSession {
                 .await;
             }
 
-            if prompt.starts_with("subagent:") {
-                let agent_type = prompt.trim_start_matches("subagent:").trim().to_string();
+            if script.starts_with("subagent:") {
+                let agent_type = script.trim_start_matches("subagent:").trim().to_string();
                 let _ = crate::forward_provider_event(
                     &tx,
                     ProviderEvent::SubAgentSpawned {

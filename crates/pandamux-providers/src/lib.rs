@@ -36,7 +36,7 @@ pub use cursor::{
     CursorDriver, build_cursor_preamble, evaluate_cursor_permission, resolve_cursor_binary,
     validate_cursor_initialize,
 };
-pub use error::ProviderError;
+pub use error::{ProviderDispatchStage, ProviderError};
 pub use grok::{
     GrokDriver, GrokRateLimits, GrokTokenBudget, GrokUsageLimits, build_grok_preamble,
     parse_grok_usage_limits, resolve_grok_binary, validate_grok_initialize,

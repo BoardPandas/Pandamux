@@ -153,7 +153,7 @@ fn plan_admission(
         .tasks
         .get(&request.attempt.task_id)
         .ok_or_else(|| StoreError::Data("execution budget task was not found".to_string()))?;
-    if task.route.as_ref() != Some(&request.attempt.route)
+    if (request.attempt.ordinal == 1 && task.route.as_ref() != Some(&request.attempt.route))
         || request.attempt.route.selected_agent_id.as_ref() != Some(&request.agent_id)
         || task.selected_agent_id.as_ref() != Some(&request.agent_id)
         || task.status != pandamux_core::RunTaskStatus::Ready

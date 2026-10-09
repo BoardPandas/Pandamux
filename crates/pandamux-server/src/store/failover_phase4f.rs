@@ -78,6 +78,53 @@ struct RawDelivery {
 }
 
 impl Store {
+    /// Binds the final provider execution identity exactly once before a
+    /// prepared session can create a provider process. All other turn-attempt
+    /// identity fields remain immutable under `save_turn_attempt`.
+    pub(crate) fn bind_turn_attempt_execution(
+        &self,
+        attempt_id: &TurnAttemptId,
+        execution: &AttemptExecutionEvidence,
+    ) -> Result<TurnAttempt, StoreError> {
+        let execution_json = serde_json::to_string(execution)?;
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let raw = query_turn_attempt(&tx, attempt_id.as_str())?
+            .ok_or_else(|| StoreError::Data("turn attempt was not found".to_string()))?;
+        let mut attempt = decode_turn_attempt(raw)?;
+        if attempt.status != pandamux_core::TurnAttemptStatus::Running
+            || attempt.ended_at_ms.is_some()
+        {
+            return Err(StoreError::Data(
+                "only a running turn attempt can bind provider execution".to_string(),
+            ));
+        }
+        match attempt.execution.as_ref() {
+            Some(existing) if existing == execution => {}
+            Some(_) => {
+                return Err(StoreError::Data(
+                    "turn attempt execution identity cannot change".to_string(),
+                ));
+            }
+            None => {
+                attempt.execution = Some(execution.clone());
+                validate_attempt(&attempt)?;
+                let changed = tx.execute(
+                    "UPDATE turn_attempts SET execution_json = ?1
+                      WHERE id = ?2 AND execution_json IS NULL",
+                    params![execution_json, attempt_id.as_str()],
+                )?;
+                if changed != 1 {
+                    return Err(StoreError::Data(
+                        "turn attempt execution binding lost its compare-and-swap".to_string(),
+                    ));
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(attempt)
+    }
+
     pub fn save_turn_attempt(&self, attempt: &TurnAttempt) -> Result<(), StoreError> {
         validate_attempt(attempt)?;
         let ordinal = i64::from(attempt.ordinal);

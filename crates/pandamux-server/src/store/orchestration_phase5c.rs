@@ -465,6 +465,39 @@ pub struct EffectOutcomeRecord {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalAttemptPreparationOutcome {
+    pub effect: StoredOrchestrationEffect,
+    pub attempt: AttemptDispatchRecord,
+    pub prepared: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalAttemptAcceptanceOutcome {
+    pub effect: StoredOrchestrationEffect,
+    pub attempt: AttemptDispatchRecord,
+    pub accepted: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalAttemptOutcomeRequest {
+    pub ownership: EffectOwnership,
+    pub attempt_id: RunAttemptId,
+    pub state: AttemptDispatchState,
+    pub boundary: AttemptBoundary,
+    pub result_digest: String,
+    pub safe_error_code: Option<String>,
+    pub ambiguity_reason: Option<String>,
+    pub recorded_at_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalAttemptOutcome {
+    pub effect: StoredOrchestrationEffect,
+    pub attempt: AttemptDispatchRecord,
+    pub recorded: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OrchestrationReplayAudit {
     pub run_id: RunId,
     pub last_seq: u64,
@@ -872,6 +905,14 @@ impl Store {
 }
 
 impl Store {
+    pub fn get_orchestration_effect(
+        &self,
+        effect_id: &OrchestrationEffectId,
+    ) -> Result<Option<StoredOrchestrationEffect>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        load_stored_effect_by_id(&conn, effect_id)
+    }
+
     pub fn list_pending_orchestration_effects(
         &self,
         limit: u32,
@@ -1027,6 +1068,93 @@ impl Store {
         Ok(EffectPreparationOutcome { effect, prepared })
     }
 
+    /// Atomically binds the prepared provider identities to the claimed effect.
+    /// Thread, turn, turn-attempt, worktree, admission, and budget rows must
+    /// already exist; this transaction is the final durable gate before a
+    /// dispatch marker can be written.
+    pub fn prepare_local_attempt_dispatch(
+        &self,
+        record: &AttemptDispatchRecord,
+        ownership: &EffectOwnership,
+        prepared_receipt_digest: &str,
+        prepared_at_ms: u64,
+    ) -> Result<LocalAttemptPreparationOutcome, StoreError> {
+        validate_effect_ownership(ownership)?;
+        validate_attempt_dispatch_record(record)?;
+        if record.effect_id != ownership.effect_id
+            || record.state != AttemptDispatchState::Prepared
+            || record.created_at_ms != prepared_at_ms
+            || record.updated_at_ms != prepared_at_ms
+            || !is_sha256(prepared_receipt_digest)
+        {
+            return Err(data_error(
+                "local attempt preparation identity is malformed",
+            ));
+        }
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (current, lease) = load_owned_effect(&tx, ownership)?;
+        validate_effect_action_time(&current, &lease, prepared_at_ms)?;
+        if current.run_id != record.run_id
+            || !effect_matches_attempt(
+                &current.effect,
+                &record.run_id,
+                &record.task_id,
+                &record.attempt_id,
+                Some(&record.route),
+            )
+        {
+            return Err(data_error(
+                "local attempt preparation differs from the claimed effect",
+            ));
+        }
+        validate_local_attempt_preparation_rows(&tx, record)?;
+        let existing = load_attempt_dispatches(&tx, &record.run_id)?
+            .into_iter()
+            .find(|candidate| candidate.attempt_id == record.attempt_id);
+        let prepared = match (current.delivery.state, existing) {
+            (EffectDeliveryState::Claimed, None) => {
+                insert_attempt_dispatch(&tx, record)?;
+                update_effect_state(
+                    &tx,
+                    ownership,
+                    EffectDeliveryState::Claimed,
+                    EffectDeliveryState::Prepared,
+                    Some(prepared_receipt_digest),
+                    None,
+                    None,
+                    None,
+                    prepared_at_ms,
+                )?;
+                true
+            }
+            (EffectDeliveryState::Prepared, Some(existing))
+                if existing == *record
+                    && current.delivery.prepared_receipt_digest.as_deref()
+                        == Some(prepared_receipt_digest) =>
+            {
+                false
+            }
+            _ => {
+                return Err(data_error(
+                    "local attempt preparation conflicts with durable state",
+                ));
+            }
+        };
+        let effect = load_stored_effect_by_id(&tx, &ownership.effect_id)?
+            .ok_or_else(|| data_error("prepared local effect disappeared"))?;
+        let attempt = load_attempt_dispatches(&tx, &record.run_id)?
+            .into_iter()
+            .find(|candidate| candidate.attempt_id == record.attempt_id)
+            .ok_or_else(|| data_error("prepared local attempt disappeared"))?;
+        tx.commit()?;
+        Ok(LocalAttemptPreparationOutcome {
+            effect,
+            attempt,
+            prepared,
+        })
+    }
+
     pub fn mark_orchestration_effect_dispatch_started(
         &self,
         request: &EffectDispatchRequest,
@@ -1060,6 +1188,23 @@ impl Store {
                     None,
                     request.dispatch_started_at_ms,
                 )?;
+                let has_attempt: i64 = tx.query_row(
+                    "SELECT COUNT(*) FROM orchestration_attempt_dispatch WHERE effect_id = ?1",
+                    [request.ownership.effect_id.as_str()],
+                    |row| row.get(0),
+                )?;
+                if has_attempt == 1 {
+                    update_attempt_state_for_effect(
+                        &tx,
+                        &request.ownership.effect_id,
+                        AttemptDispatchState::Prepared,
+                        AttemptDispatchState::DispatchStarted,
+                        AttemptBoundary::SafeToRetry,
+                        None,
+                        None,
+                        request.dispatch_started_at_ms,
+                    )?;
+                }
                 true
             }
             EffectDeliveryState::DispatchStarted
@@ -1086,6 +1231,286 @@ impl Store {
             effect,
             dispatch_allowed,
         })
+    }
+
+    pub fn mark_local_attempt_accepted(
+        &self,
+        ownership: &EffectOwnership,
+        attempt_id: &RunAttemptId,
+        accepted_at_ms: u64,
+    ) -> Result<LocalAttemptAcceptanceOutcome, StoreError> {
+        validate_effect_ownership(ownership)?;
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (current, lease) = load_owned_effect(&tx, ownership)?;
+        validate_effect_action_time(&current, &lease, accepted_at_ms)?;
+        let attempts = load_attempt_dispatches(&tx, &current.run_id)?;
+        let existing = attempts
+            .into_iter()
+            .find(|record| record.attempt_id == *attempt_id)
+            .ok_or_else(|| data_error("local attempt dispatch was not found"))?;
+        if existing.effect_id != ownership.effect_id {
+            return Err(data_error(
+                "local attempt acceptance differs from its effect",
+            ));
+        }
+        let accepted = match (current.delivery.state, existing.state) {
+            (EffectDeliveryState::DispatchStarted, AttemptDispatchState::DispatchStarted) => {
+                update_effect_state(
+                    &tx,
+                    ownership,
+                    EffectDeliveryState::DispatchStarted,
+                    EffectDeliveryState::InFlight,
+                    current.delivery.prepared_receipt_digest.as_deref(),
+                    current.delivery.dispatch_started_at_ms,
+                    None,
+                    None,
+                    accepted_at_ms,
+                )?;
+                update_attempt_state_for_effect(
+                    &tx,
+                    &ownership.effect_id,
+                    AttemptDispatchState::DispatchStarted,
+                    AttemptDispatchState::Accepted,
+                    existing.last_boundary,
+                    None,
+                    None,
+                    accepted_at_ms,
+                )?;
+                true
+            }
+            (EffectDeliveryState::InFlight, AttemptDispatchState::Accepted) => false,
+            _ => {
+                return Err(data_error(
+                    "local attempt cannot record provider acceptance",
+                ));
+            }
+        };
+        let effect = load_stored_effect_by_id(&tx, &ownership.effect_id)?
+            .ok_or_else(|| data_error("accepted local effect disappeared"))?;
+        let attempt = load_attempt_dispatches(&tx, &current.run_id)?
+            .into_iter()
+            .find(|record| record.attempt_id == *attempt_id)
+            .ok_or_else(|| data_error("accepted local attempt disappeared"))?;
+        tx.commit()?;
+        Ok(LocalAttemptAcceptanceOutcome {
+            effect,
+            attempt,
+            accepted,
+        })
+    }
+
+    pub fn record_local_attempt_boundary(
+        &self,
+        ownership: &EffectOwnership,
+        attempt_id: &RunAttemptId,
+        boundary: AttemptBoundary,
+        recorded_at_ms: u64,
+    ) -> Result<AttemptDispatchRecord, StoreError> {
+        validate_effect_ownership(ownership)?;
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (current, lease) = load_owned_effect(&tx, ownership)?;
+        validate_effect_action_time(&current, &lease, recorded_at_ms)?;
+        if !matches!(current.delivery.state, EffectDeliveryState::InFlight) {
+            return Err(data_error(
+                "local attempt boundary requires an in-flight effect",
+            ));
+        }
+        let existing = load_attempt_dispatches(&tx, &current.run_id)?
+            .into_iter()
+            .find(|record| record.attempt_id == *attempt_id)
+            .ok_or_else(|| data_error("local attempt dispatch was not found"))?;
+        if existing.effect_id != ownership.effect_id
+            || existing.state != AttemptDispatchState::Accepted
+            || boundary < existing.last_boundary
+            || recorded_at_ms < existing.updated_at_ms
+        {
+            return Err(data_error("local attempt boundary is stale or malformed"));
+        }
+        if boundary > existing.last_boundary {
+            update_attempt_state_for_effect(
+                &tx,
+                &ownership.effect_id,
+                AttemptDispatchState::Accepted,
+                AttemptDispatchState::Accepted,
+                boundary,
+                None,
+                None,
+                recorded_at_ms,
+            )?;
+        }
+        let attempt = load_attempt_dispatches(&tx, &current.run_id)?
+            .into_iter()
+            .find(|record| record.attempt_id == *attempt_id)
+            .ok_or_else(|| data_error("updated local attempt disappeared"))?;
+        tx.commit()?;
+        Ok(attempt)
+    }
+
+    pub fn record_local_attempt_outcome(
+        &self,
+        request: &LocalAttemptOutcomeRequest,
+        failpoint: Option<OrchestrationExecutionFailpoint>,
+    ) -> Result<LocalAttemptOutcome, StoreError> {
+        validate_effect_ownership(&request.ownership)?;
+        validate_failpoint(
+            failpoint,
+            &[
+                OrchestrationExecutionFailpoint::BeforeOutcomeCommit,
+                OrchestrationExecutionFailpoint::AfterOutcomeCommit,
+            ],
+        )?;
+        if !matches!(
+            request.state,
+            AttemptDispatchState::NotStarted
+                | AttemptDispatchState::Ambiguous
+                | AttemptDispatchState::Terminal
+        ) || !is_sha256(&request.result_digest)
+            || request
+                .safe_error_code
+                .as_deref()
+                .is_some_and(|code| !valid_reason_code(code))
+            || (request.state == AttemptDispatchState::NotStarted
+                && (request.boundary != AttemptBoundary::SafeToRetry
+                    || request.safe_error_code.is_none()))
+            || (request.state != AttemptDispatchState::NotStarted
+                && request.safe_error_code.is_some())
+            || (request.state == AttemptDispatchState::Ambiguous
+                && request
+                    .ambiguity_reason
+                    .as_deref()
+                    .is_none_or(str::is_empty))
+            || (request.state != AttemptDispatchState::Ambiguous
+                && request.ambiguity_reason.is_some())
+        {
+            return Err(data_error("local attempt outcome is malformed"));
+        }
+        if failpoint == Some(OrchestrationExecutionFailpoint::BeforeOutcomeCommit) {
+            return Err(injected_failure("before_outcome_commit"));
+        }
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (current, _) = load_owned_effect(&tx, &request.ownership)?;
+        if request.recorded_at_ms < current.updated_at_ms {
+            return Err(data_error(
+                "local attempt outcome timestamp moved backwards",
+            ));
+        }
+        let existing = load_attempt_dispatches(&tx, &current.run_id)?
+            .into_iter()
+            .find(|record| record.attempt_id == request.attempt_id)
+            .ok_or_else(|| data_error("local attempt dispatch was not found"))?;
+        if existing.effect_id != request.ownership.effect_id
+            || request.boundary < existing.last_boundary
+        {
+            return Err(data_error(
+                "local attempt outcome differs from its durable dispatch",
+            ));
+        }
+        let (expected_attempt_state, expected_effect_state) = match request.state {
+            AttemptDispatchState::NotStarted => (
+                AttemptDispatchState::DispatchStarted,
+                EffectDeliveryState::DispatchStarted,
+            ),
+            AttemptDispatchState::Ambiguous
+                if existing.state == AttemptDispatchState::Accepted
+                    && current.delivery.state == EffectDeliveryState::InFlight =>
+            {
+                (
+                    AttemptDispatchState::Accepted,
+                    EffectDeliveryState::InFlight,
+                )
+            }
+            AttemptDispatchState::Ambiguous => (
+                AttemptDispatchState::DispatchStarted,
+                EffectDeliveryState::DispatchStarted,
+            ),
+            AttemptDispatchState::Terminal => (
+                AttemptDispatchState::Accepted,
+                EffectDeliveryState::InFlight,
+            ),
+            _ => unreachable!("validated local outcome state"),
+        };
+        let next_effect_state = if request.state == AttemptDispatchState::Ambiguous {
+            EffectDeliveryState::ReviewRequired
+        } else {
+            EffectDeliveryState::OutcomeRecorded
+        };
+        let recorded = if current.delivery.state == expected_effect_state
+            && existing.state == expected_attempt_state
+        {
+            update_effect_state(
+                &tx,
+                &request.ownership,
+                expected_effect_state,
+                next_effect_state,
+                current.delivery.prepared_receipt_digest.as_deref(),
+                current.delivery.dispatch_started_at_ms,
+                Some(&request.result_digest),
+                request.safe_error_code.as_deref(),
+                request.recorded_at_ms,
+            )?;
+            update_attempt_state_for_effect(
+                &tx,
+                &request.ownership.effect_id,
+                expected_attempt_state,
+                request.state,
+                request.boundary,
+                request.ambiguity_reason.as_deref(),
+                Some(&request.result_digest),
+                request.recorded_at_ms,
+            )?;
+            true
+        } else if current.delivery.state == next_effect_state
+            && existing.state == request.state
+            && current.delivery.result_digest.as_deref() == Some(&request.result_digest)
+            && current.delivery.safe_error_code == request.safe_error_code
+            && existing.last_boundary == request.boundary
+            && existing.ambiguity_reason == request.ambiguity_reason
+            && existing.outcome_digest.as_deref() == Some(&request.result_digest)
+        {
+            false
+        } else {
+            return Err(data_error(
+                "local attempt outcome conflicts with durable state",
+            ));
+        };
+        let effect = load_stored_effect_by_id(&tx, &request.ownership.effect_id)?
+            .ok_or_else(|| data_error("outcome local effect disappeared"))?;
+        let attempt = load_attempt_dispatches(&tx, &current.run_id)?
+            .into_iter()
+            .find(|record| record.attempt_id == request.attempt_id)
+            .ok_or_else(|| data_error("outcome local attempt disappeared"))?;
+        tx.commit()?;
+        if failpoint == Some(OrchestrationExecutionFailpoint::AfterOutcomeCommit) {
+            return Err(injected_failure("after_outcome_commit"));
+        }
+        Ok(LocalAttemptOutcome {
+            effect,
+            attempt,
+            recorded,
+        })
+    }
+
+    pub fn get_attempt_dispatch(
+        &self,
+        attempt_id: &RunAttemptId,
+    ) -> Result<Option<AttemptDispatchRecord>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let run_id = conn
+            .query_row(
+                "SELECT run_id FROM orchestration_attempt_dispatch WHERE attempt_id = ?1",
+                [attempt_id.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let Some(run_id) = run_id else {
+            return Ok(None);
+        };
+        Ok(load_attempt_dispatches(&conn, &RunId::from(run_id))?
+            .into_iter()
+            .find(|record| record.attempt_id == *attempt_id))
     }
 
     pub fn record_orchestration_effect_outcome(
@@ -2206,7 +2631,10 @@ fn insert_attempt_dispatch(
     }
     let snapshot = load_snapshot(tx, &record.run_id)?;
     if snapshot.bundle_sha != record.bundle_sha
-        || snapshot.routes.get(&record.task_id) != Some(&record.route)
+        || snapshot
+            .attempts
+            .get(&record.attempt_id)
+            .is_none_or(|canonical| canonical.route != record.route)
     {
         return Err(data_error(
             "attempt dispatch differs from the canonical run snapshot",
@@ -2237,7 +2665,7 @@ fn insert_attempt_dispatch(
             sha256_hex(&route_bytes),
             record.bundle_sha,
             enum_text(record.state)?,
-            enum_text(record.last_boundary)?,
+            attempt_boundary_text(record.last_boundary),
             checked_i64(record.last_progress_at_ms, "attempt progress timestamp")?,
             record
                 .cancel_requested_at_ms
@@ -2249,6 +2677,181 @@ fn insert_attempt_dispatch(
             checked_i64(record.updated_at_ms, "attempt dispatch updated at")?,
         ],
     )?;
+    Ok(())
+}
+
+fn validate_local_attempt_preparation_rows(
+    tx: &Transaction<'_>,
+    record: &AttemptDispatchRecord,
+) -> Result<(), StoreError> {
+    let snapshot = load_snapshot(tx, &record.run_id)?;
+    let attempt = snapshot
+        .attempts
+        .get(&record.attempt_id)
+        .ok_or_else(|| data_error("prepared local attempt is absent from the run"))?;
+    if attempt.task_id != record.task_id
+        || attempt.route != record.route
+        || attempt.status != AttemptStatus::DispatchRequested
+        || attempt.worktree_id.is_none()
+        || attempt.thread_id.is_some()
+        || attempt.turn_attempt_id.is_some()
+    {
+        return Err(data_error(
+            "prepared local attempt differs from the canonical run",
+        ));
+    }
+
+    let (worktree_id, worktree_path, worktree_environment): (String, String, String) = tx
+        .query_row(
+            "SELECT worktree_id, path, environment_id
+               FROM orchestration_worktrees
+              WHERE run_id = ?1 AND task_id = ?2 AND attempt_id = ?3",
+            params![
+                record.run_id.as_str(),
+                record.task_id.as_str(),
+                record.attempt_id.as_str(),
+            ],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?
+        .ok_or_else(|| data_error("prepared local attempt has no owned worktree"))?;
+    if attempt.worktree_id.as_ref().map(AttemptWorktreeId::as_str) != Some(worktree_id.as_str()) {
+        return Err(data_error(
+            "prepared local attempt worktree identity changed",
+        ));
+    }
+
+    let queue_matches: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM orchestration_queue
+          WHERE run_id = ?1 AND task_id = ?2 AND attempt_id = ?3
+            AND provider_instance_id = ?4 AND environment_id = ?5
+            AND state = 'claimed' AND owner_incarnation_id IS NOT NULL
+            AND lease_id IS NOT NULL",
+        params![
+            record.run_id.as_str(),
+            record.task_id.as_str(),
+            record.attempt_id.as_str(),
+            record.provider_instance_id.as_str(),
+            worktree_environment,
+        ],
+        |row| row.get(0),
+    )?;
+    let budget_matches: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM orchestration_budget_reservations
+          WHERE run_id = ?1 AND task_id = ?2 AND attempt_id = ?3
+            AND state = 'reserved'",
+        params![
+            record.run_id.as_str(),
+            record.task_id.as_str(),
+            record.attempt_id.as_str(),
+        ],
+        |row| row.get(0),
+    )?;
+    if queue_matches != 1 || budget_matches != 1 {
+        return Err(data_error(
+            "prepared local attempt lacks its active admission or budget",
+        ));
+    }
+
+    let (workspace_json, origin_json, thread_environment, thread_provider): (
+        String,
+        String,
+        String,
+        String,
+    ) = tx
+        .query_row(
+            "SELECT workspace_json, origin_json, environment_id, provider_instance_id
+               FROM threads WHERE id = ?1",
+            [record.thread_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()?
+        .ok_or_else(|| data_error("prepared local thread was not persisted"))?;
+    let workspace: pandamux_core::ThreadWorkspace = serde_json::from_str(&workspace_json)?;
+    let origin: pandamux_core::ThreadOrigin = serde_json::from_str(&origin_json)?;
+    if workspace.effective_path() != worktree_path
+        || thread_environment != worktree_environment
+        || thread_provider != record.provider_instance_id.as_str()
+        || !matches!(
+            origin,
+            pandamux_core::ThreadOrigin::Orchestrator {
+                ref run_id,
+                ref task_id,
+            } if run_id == &record.run_id && task_id == record.task_id.as_str()
+        )
+    {
+        return Err(data_error(
+            "prepared local thread differs from its owned run worktree",
+        ));
+    }
+
+    let turn_matches: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM turns
+          WHERE id = ?1 AND thread_id = ?2 AND environment_id = ?3
+            AND provider_instance_id = ?4",
+        params![
+            record.turn_id.as_str(),
+            record.thread_id.as_str(),
+            worktree_environment,
+            record.provider_instance_id.as_str(),
+        ],
+        |row| row.get(0),
+    )?;
+    let turn_attempt_matches: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM turn_attempts
+          WHERE id = ?1 AND turn_id = ?2 AND thread_id = ?3
+            AND environment_id = ?4 AND provider_instance_id = ?5
+            AND boundary = ?6 AND status = ?7",
+        params![
+            record.turn_attempt_id.as_str(),
+            record.turn_id.as_str(),
+            record.thread_id.as_str(),
+            worktree_environment,
+            record.provider_instance_id.as_str(),
+            serde_json::to_string(&AttemptBoundary::SafeToRetry)?,
+            serde_json::to_string(&TurnAttemptStatus::Running)?,
+        ],
+        |row| row.get(0),
+    )?;
+    if turn_matches != 1 || turn_attempt_matches != 1 {
+        return Err(data_error(
+            "prepared local turn identities were not persisted exactly",
+        ));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn update_attempt_state_for_effect(
+    tx: &Transaction<'_>,
+    effect_id: &OrchestrationEffectId,
+    expected_state: AttemptDispatchState,
+    next_state: AttemptDispatchState,
+    boundary: AttemptBoundary,
+    ambiguity_reason: Option<&str>,
+    outcome_digest: Option<&str>,
+    updated_at_ms: u64,
+) -> Result<(), StoreError> {
+    let changed = tx.execute(
+        "UPDATE orchestration_attempt_dispatch
+            SET state = ?1, last_boundary = ?2, last_progress_at_ms = ?3,
+                ambiguity_reason = ?4, outcome_digest = ?5, updated_at_ms = ?3
+          WHERE effect_id = ?6 AND state = ?7 AND updated_at_ms <= ?3",
+        params![
+            enum_text(next_state)?,
+            attempt_boundary_text(boundary),
+            checked_i64(updated_at_ms, "attempt dispatch update timestamp")?,
+            ambiguity_reason,
+            outcome_digest,
+            effect_id.as_str(),
+            enum_text(expected_state)?,
+        ],
+    )?;
+    if changed != 1 {
+        return Err(data_error(
+            "attempt dispatch update lost its compare-and-swap",
+        ));
+    }
     Ok(())
 }
 
@@ -2305,11 +2908,32 @@ fn insert_queue_record(
                     .attempts
                     .get(&record.attempt_id)
                     .is_some_and(|attempt| attempt.task_id == record.task_id));
+        let existing_attempt = snapshot.attempts.get(&record.attempt_id);
+        let prior_attempt_count = snapshot
+            .attempts
+            .values()
+            .filter(|attempt| attempt.task_id == record.task_id)
+            .count();
+        let route_identity_matches = existing_attempt.map_or_else(
+            || {
+                route.selected_agent_id.as_ref() == Some(&record.agent_id)
+                    && (prior_attempt_count > 0
+                        || route.provider.selected_provider_instance_id.as_ref()
+                            == Some(&record.provider_instance_id))
+            },
+            |attempt| {
+                attempt.route.selected_agent_id.as_ref() == Some(&record.agent_id)
+                    && attempt
+                        .route
+                        .provider
+                        .selected_provider_instance_id
+                        .as_ref()
+                        == Some(&record.provider_instance_id)
+            },
+        );
         if !task_state_matches
             || Some(&snapshot.organization_id) != record.organization_id.as_ref()
-            || route.selected_agent_id.as_ref() != Some(&record.agent_id)
-            || route.provider.selected_provider_instance_id.as_ref()
-                != Some(&record.provider_instance_id)
+            || !route_identity_matches
         {
             return Err(data_error(
                 "orchestration queue record differs from the canonical run",
@@ -3741,6 +4365,197 @@ impl Store {
             return Err(injected_failure("after_budget_release_commit"));
         }
         Ok(updated)
+    }
+
+    /// Releases an attempt reservation after a post-marker adapter receipt has
+    /// positively proved that no provider process or prompt was accepted and
+    /// cleanup completed. No other post-marker state is eligible.
+    pub fn release_verified_not_started_budget(
+        &self,
+        run_id: &RunId,
+        attempt_id: &RunAttemptId,
+        released_at_ms: u64,
+    ) -> Result<StoredBudgetReservation, StoreError> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = load_verified_transaction_snapshot(&tx, run_id)?;
+        let dispatch = load_attempt_dispatches(&tx, run_id)?
+            .into_iter()
+            .find(|record| record.attempt_id == *attempt_id)
+            .ok_or_else(|| data_error("verified not-started attempt was not found"))?;
+        let effect = load_stored_effect_by_id(&tx, &dispatch.effect_id)?
+            .ok_or_else(|| data_error("verified not-started effect was not found"))?;
+        if dispatch.state != AttemptDispatchState::NotStarted
+            || dispatch.last_boundary != AttemptBoundary::SafeToRetry
+            || dispatch.outcome_digest.is_none()
+            || effect.delivery.state != EffectDeliveryState::OutcomeRecorded
+            || effect
+                .delivery
+                .safe_error_code
+                .as_deref()
+                .is_none_or(str::is_empty)
+            || effect.delivery.result_digest != dispatch.outcome_digest
+            || released_at_ms < dispatch.updated_at_ms
+        {
+            return Err(data_error(
+                "budget release lacks an exact cleanup-verified not-started receipt",
+            ));
+        }
+        let mut stored = load_budget_reservations(&tx, run_id)?
+            .into_iter()
+            .find(|record| record.reservation.attempt_id == *attempt_id)
+            .ok_or_else(|| data_error("verified not-started budget reservation was not found"))?;
+        if stored.reservation.state == BudgetReservationState::Released {
+            tx.commit()?;
+            return Ok(stored);
+        }
+        if stored.reservation.state != BudgetReservationState::Reserved
+            || released_at_ms < stored.updated_at_ms
+            || current
+                .reservations
+                .get(&stored.reservation.id)
+                .is_none_or(|reservation| reservation != &stored.reservation)
+        {
+            return Err(data_error(
+                "verified not-started budget reservation is not releasable",
+            ));
+        }
+        let turn_attempt = tx
+            .query_row(
+                "SELECT boundary, partial_output FROM turn_attempts WHERE id = ?1",
+                [dispatch.turn_attempt_id.as_str()],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?
+            .ok_or_else(|| data_error("verified not-started turn attempt was not found"))?;
+        let boundary: AttemptBoundary = serde_json::from_str(&turn_attempt.0)?;
+        let tool_count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM turn_tool_ledger WHERE turn_id = ?1",
+            [dispatch.turn_id.as_str()],
+            |row| row.get(0),
+        )?;
+        if boundary != AttemptBoundary::SafeToRetry || !turn_attempt.1.is_empty() || tool_count != 0
+        {
+            return Err(data_error(
+                "verified not-started attempt contains provider-visible evidence",
+            ));
+        }
+
+        let kinds = pandamux_orchestrator::decide(
+            &current,
+            RunCommand::ReleaseBudget {
+                reservation_id: stored.reservation.id.clone(),
+            },
+        )
+        .map_err(orchestration_error)?;
+        if kinds.len() != 1 {
+            return Err(data_error(
+                "verified not-started budget release did not produce one event",
+            ));
+        }
+        let event = RunEvent {
+            event_id: RunEventId::new(format!(
+                "run-event-budget-not-started-release-{}",
+                stored.reservation.id.as_str()
+            )),
+            run_id: run_id.clone(),
+            seq: current
+                .last_seq
+                .checked_add(1)
+                .ok_or_else(|| data_error("orchestration event sequence overflow"))?,
+            at_ms: released_at_ms,
+            idempotency_key: format!(
+                "budget-not-started-release:{}",
+                stored.reservation.id.as_str()
+            ),
+            kind: kinds.into_iter().next().expect("one budget release event"),
+        };
+        if transition_events_collide(&tx, std::slice::from_ref(&event))? {
+            return Err(data_error(
+                "verified not-started budget release identity collided",
+            ));
+        }
+        let applied =
+            pandamux_orchestrator::apply(&current, &event).map_err(orchestration_error)?;
+        insert_event(&tx, &event)?;
+        for derived in applied.new_effects {
+            insert_effect(
+                &tx,
+                &stored_effect_from_run(&applied.run, std::slice::from_ref(&event), derived)?,
+            )?;
+        }
+        update_run_snapshot(
+            &tx,
+            run_id,
+            &applied.run,
+            current.last_seq,
+            &orchestration_snapshot_sha256(&current),
+        )?;
+        release_daily_budget(&tx, &stored, released_at_ms)?;
+        let previous = stored.clone();
+        stored.reservation = applied
+            .run
+            .reservations
+            .get(&stored.reservation.id)
+            .cloned()
+            .ok_or_else(|| data_error("released budget reservation disappeared"))?;
+        stored.updated_at_ms = released_at_ms;
+        update_budget_reservation_row(&tx, &previous, &stored)?;
+
+        let queue = load_queue_records(&tx, run_id)?
+            .into_iter()
+            .find(|record| record.attempt_id == *attempt_id)
+            .ok_or_else(|| data_error("verified not-started admission was not found"))?;
+        match (&queue.owner_incarnation_id, &queue.lease_id) {
+            (None, None) if queue.state == QueueState::Dispatched => {}
+            (Some(owner), Some(lease_id))
+                if matches!(queue.state, QueueState::Claimed | QueueState::Dispatched) =>
+            {
+                let deleted = tx.execute(
+                    "DELETE FROM orchestration_leases
+                      WHERE lease_id = ?1 AND resource_kind = 'capacity'
+                        AND resource_id = ?2 AND owner_incarnation_id = ?3
+                        AND revision = ?4",
+                    params![
+                        lease_id.as_str(),
+                        queue.queue_id,
+                        owner.as_str(),
+                        checked_i64(queue.claim_revision, "queue claim revision")?,
+                    ],
+                )?;
+                let changed = tx.execute(
+                    "UPDATE orchestration_queue
+                        SET state = 'dispatched', owner_incarnation_id = NULL,
+                            lease_id = NULL, claim_revision = ?1
+                      WHERE queue_id = ?2 AND owner_incarnation_id = ?3
+                        AND lease_id = ?4 AND claim_revision = ?5",
+                    params![
+                        checked_i64(
+                            queue.claim_revision.checked_add(1).ok_or_else(|| {
+                                data_error("execution admission revision overflow")
+                            })?,
+                            "released claim revision"
+                        )?,
+                        queue.queue_id,
+                        owner.as_str(),
+                        lease_id.as_str(),
+                        checked_i64(queue.claim_revision, "queue claim revision")?,
+                    ],
+                )?;
+                if deleted != 1 || changed != 1 {
+                    return Err(data_error(
+                        "verified not-started capacity release lost ownership",
+                    ));
+                }
+            }
+            _ => {
+                return Err(data_error(
+                    "verified not-started admission cleanup is ambiguous",
+                ));
+            }
+        }
+        tx.commit()?;
+        Ok(stored)
     }
 
     pub fn reconcile_execution_capacity(
@@ -6007,7 +6822,10 @@ fn validate_runtime_bindings(
             &attempt.attempt_id,
             Some(&attempt.route),
         ) || snapshot.bundle_sha != attempt.bundle_sha
-            || snapshot.routes.get(&attempt.task_id) != Some(&attempt.route)
+            || snapshot
+                .attempts
+                .get(&attempt.attempt_id)
+                .is_none_or(|canonical| canonical.route != attempt.route)
         {
             return Err(data_error(
                 "attempt dispatch differs from its canonical run or provider effect",
@@ -6015,10 +6833,15 @@ fn validate_runtime_bindings(
         }
     }
     for record in queue_records {
-        let route = snapshot
+        let original_route = snapshot
             .routes
             .get(&record.task_id)
             .ok_or_else(|| data_error("queue row has no canonical task route"))?;
+        let route = snapshot
+            .attempts
+            .get(&record.attempt_id)
+            .map(|attempt| &attempt.route)
+            .unwrap_or(original_route);
         if !snapshot.tasks.contains_key(&record.task_id)
             || route.selected_agent_id.as_ref() != Some(&record.agent_id)
             || route.provider.selected_provider_instance_id.as_ref()
@@ -6233,7 +7056,7 @@ fn load_attempt_dispatches(
             route: serde_json::from_slice(&route_bytes)?,
             bundle_sha,
             state: parse_enum(&state, "attempt dispatch state")?,
-            last_boundary: parse_enum(&last_boundary, "attempt boundary")?,
+            last_boundary: parse_attempt_boundary(&last_boundary)?,
             last_progress_at_ms: checked_u64(last_progress_at_ms, "attempt progress timestamp")?,
             cancel_requested_at_ms: cancel_requested_at_ms
                 .map(|value| checked_u64(value, "attempt cancellation timestamp"))
@@ -7156,6 +7979,28 @@ fn enum_text<T: Serialize>(value: T) -> Result<String, StoreError> {
         .as_str()
         .map(str::to_string)
         .ok_or_else(|| data_error("enum did not serialize to a string"))
+}
+
+fn attempt_boundary_text(boundary: AttemptBoundary) -> &'static str {
+    match boundary {
+        AttemptBoundary::SafeToRetry => "safe_to_retry",
+        AttemptBoundary::VisibleOutputBegun => "visible_output_begun",
+        AttemptBoundary::ToolSideEffectBegun => "tool_started",
+        AttemptBoundary::ExternallyCommitted => "external_commit",
+    }
+}
+
+fn parse_attempt_boundary(value: &str) -> Result<AttemptBoundary, StoreError> {
+    match value {
+        "safe_to_retry" => Ok(AttemptBoundary::SafeToRetry),
+        // Schema 14 retained the earlier request-submitted spelling. Treat it
+        // as visible output so an old row can never become automatically
+        // retryable under the narrower Phase 4 boundary model.
+        "request_submitted" | "visible_output_begun" => Ok(AttemptBoundary::VisibleOutputBegun),
+        "tool_started" => Ok(AttemptBoundary::ToolSideEffectBegun),
+        "external_commit" => Ok(AttemptBoundary::ExternallyCommitted),
+        _ => Err(data_error("attempt boundary is invalid")),
+    }
 }
 
 fn parse_enum<T: DeserializeOwned>(value: &str, label: &str) -> Result<T, StoreError> {

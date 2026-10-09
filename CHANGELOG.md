@@ -40,6 +40,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Added crash-safe local provider effect execution in version 0.60.97.**
+  Orchestrated attempts now persist their exact effect, route, bundle,
+  worktree, checkpoint, thread, turn, turn-attempt, capacity, and budget
+  identities before `ThreadManager` obtains the final provider permit or
+  starts a session. Server-derived instructions and tool policy come from the
+  run-pinned immutable bundle even after active configuration changes, while
+  typed not-started receipts are the only post-marker path that releases
+  capacity and budget for one bounded fallback. Lost responses, ambiguous
+  starts, unresolved tools, visible output, and approval interaction remain
+  suppressed or review-required without blind resend. The existing Phase 4
+  event loop, side-effect ledger, attempt boundary, and durable continuation
+  remain authoritative. Local mock-provider tests cover persist-before-start,
+  exact policy injection, start and prompt failure, marker replay, duplicate
+  events, false success, safe fallback, unsafe fallback refusal, route
+  immutability, and permit release. This checkpoint contacts no external
+  provider or repository, adds no native or live-provider acceptance, and does
+  not push, run CI, deploy, activate, package, sign, publish, or release.
+
 - **Added durable Phase 5C budget enforcement and reconciliation in version
   0.60.96.** `ExecutionBudgetService` now plans checked attempt-bound task and
   run reservations, while the shared admission transaction authoritatively
