@@ -15,7 +15,7 @@ The following files were used as evidence for this page:
 - [ring_buffer.rs:1-134](../../crates/pandamux-term/src/ring_buffer.rs#L1-L134)
 - [search.rs:1-192](../../crates/pandamux-term/src/search.rs#L1-L192)
 - [session.rs:14-485](../../crates/pandamux-term/src/session.rs#L14-L485)
-- [shell.rs:1-273](../../crates/pandamux-term/src/shell.rs#L1-L273)
+- [shell.rs:1-383](../../crates/pandamux-term/src/shell.rs#L1-L383)
 - [size.rs:1-11](../../crates/pandamux-term/src/size.rs#L1-L11)
 
 </details>
@@ -40,7 +40,9 @@ The following files were used as evidence for this page:
 
 This split is the ownership boundary used by the wider workspace: the server can own PTYs without linking the renderer, while the desktop can render terminal bytes without spawning processes. Public exports use PandaMUX-owned types such as `GridSize`, `ScreenCells`, and `TerminalRingBuffer` instead of leaking implementation types ([lib.rs:17-36](../../crates/pandamux-term/src/lib.rs#L17-L36)).
 
-Sources: [Cargo.toml:9-19](../../crates/pandamux-term/Cargo.toml#L9-L19), [lib.rs:1-36](../../crates/pandamux-term/src/lib.rs#L1-L36)
+Shell resolution validates candidates before a PTY is opened. On Windows the general resolver tries PowerShell 7, Windows PowerShell, and Command Prompt in order, while the Project launcher accepts only a usable PowerShell implementation ([shell.rs:32-76](../../crates/pandamux-term/src/shell.rs#L32-L76)). A bare PowerShell name must both resolve on `PATH` and return a plausible version from a bounded, noninteractive probe; this rejects Microsoft Store App Execution Aliases that `where.exe` can find but cannot actually run, and caches the result for the two standard candidates ([shell.rs:88-153](../../crates/pandamux-term/src/shell.rs#L88-L153), [shell.rs:155-203](../../crates/pandamux-term/src/shell.rs#L155-L203)).
+
+Sources: [Cargo.toml:9-19](../../crates/pandamux-term/Cargo.toml#L9-L19), [lib.rs:1-36](../../crates/pandamux-term/src/lib.rs#L1-L36), [shell.rs:32-203](../../crates/pandamux-term/src/shell.rs#L32-L203)
 <!-- END:AUTOGEN pandamux_05_terminal-engine_features -->
 
 ---

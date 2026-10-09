@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Changed
+
+- **Recorded exact physical-laptop P4-C6 acceptance.** Exact 0.60.64 commit
+  `a41c5bd40861fb37de7a53252d96dcb055828362` passed the required 30-minute
+  provider disconnect and full-screen terminal Modern Standby rows on the
+  physical MSI laptop, including bounded abandoned-proxy cleanup, unique event
+  and usage replay, stable terminal ownership, exact offset replay, and verified
+  host and Galahad restoration. Version 0.60.65 is documentation-only and makes
+  no new executable, native, live, push, deployment, activation, or release
+  claim.
+
 ### Fixed
 
 - Fixed the Linux SSH proxy bridge so a node-side heartbeat lease closure

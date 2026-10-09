@@ -5,7 +5,7 @@
 The following files were used as evidence for this page:
 
 - [lib.rs:1-60](../../crates/pandamux-desktop/src/lib.rs#L1-L60)
-- [app_view.rs:89-2670](../../crates/pandamux-desktop/src/app_view.rs#L89-L2670)
+- [app_view.rs:89-2686](../../crates/pandamux-desktop/src/app_view.rs#L89-L2686)
 - [command_palette.rs:1-605](../../crates/pandamux-desktop/src/command_palette.rs#L1-L605)
 - [composer.rs:12-279](../../crates/pandamux-desktop/src/composer.rs#L12-L279)
 - [diff_view.rs:1-1712](../../crates/pandamux-desktop/src/diff_view.rs#L1-L1712)
@@ -14,11 +14,11 @@ The following files were used as evidence for this page:
 - [scratchpad.rs:1-332](../../crates/pandamux-desktop/src/scratchpad.rs#L1-L332)
 - [sidebar.rs:1-1324](../../crates/pandamux-desktop/src/sidebar.rs#L1-L1324)
 - [timeline.rs:22-2175](../../crates/pandamux-desktop/src/timeline.rs#L22-L2175)
-- [surfaces_panel.rs:18-1568](../../crates/pandamux-desktop/src/surfaces_panel.rs#L18-L1568)
+- [surfaces_panel.rs:18-1731](../../crates/pandamux-desktop/src/surfaces_panel.rs#L18-L1731)
 - [terminal_view.rs:22-650](../../crates/pandamux-desktop/src/terminal_view.rs#L22-L650)
-- [settings_view.rs:19-815](../../crates/pandamux-desktop/src/settings_view.rs#L19-L815)
+- [settings_view.rs:19-3739](../../crates/pandamux-desktop/src/settings_view.rs#L19-L3739)
 - [theme.rs:1-237](../../crates/pandamux-desktop/src/theme.rs#L1-L237)
-- [titlebar.rs:1-207](../../crates/pandamux-desktop/src/titlebar.rs#L1-L207)
+- [titlebar.rs:1-208](../../crates/pandamux-desktop/src/titlebar.rs#L1-L208)
 - [tray.rs:1-126](../../crates/pandamux-desktop/src/tray.rs#L1-L126)
 - [usage_view.rs:23-260](../../crates/pandamux-desktop/src/usage_view.rs#L23-L260)
 
@@ -47,7 +47,7 @@ graph TD
     Window --> Overlays["Palette and Toasts"]
 ```
 
-`AppView` owns client projections and view-local state: active thread and rail selection, composer and picker state, settings, usage, surfaces, timeline virtualization, notifications, terminal focus, and the server bridge ([app_view.rs:89-125](../../crates/pandamux-desktop/src/app_view.rs#L89-L125)). Its renderer composes a custom titlebar over the rail/sidebar/workspace/surfaces layout and defers terminal focus until the terminal panel is actually rendered ([app_view.rs:2188-2275](../../crates/pandamux-desktop/src/app_view.rs#L2188-L2275)). The titlebar receives the current panel state, marks the control selected while open, and changes its label and accessible action between opening and closing Surfaces ([titlebar.rs:12-18](../../crates/pandamux-desktop/src/titlebar.rs#L12-L18), [titlebar.rs:175-184](../../crates/pandamux-desktop/src/titlebar.rs#L175-L184)).
+`AppView` owns client projections and view-local state: active thread and rail selection, composer and picker state, settings, usage, surfaces, timeline virtualization, notifications, terminal focus, and the server bridge ([app_view.rs:89-125](../../crates/pandamux-desktop/src/app_view.rs#L89-L125)). Its renderer composes a custom titlebar over the rail/sidebar/workspace/surfaces layout and defers terminal focus until the terminal panel is actually rendered ([app_view.rs:2188-2262](../../crates/pandamux-desktop/src/app_view.rs#L2188-L2262)). The titlebar receives the current panel state, publishes selected and toggled state while open, and changes its label and accessible action between opening and closing Surfaces ([titlebar.rs:12-18](../../crates/pandamux-desktop/src/titlebar.rs#L12-L18), [titlebar.rs:175-185](../../crates/pandamux-desktop/src/titlebar.rs#L175-L185)).
 
 | Region | Primary responsibility |
 |---|---|
@@ -56,7 +56,7 @@ graph TD
 | Main workspace | Thread metadata, virtualized timeline, composer, attachments, and git actions ([app_view.rs:2411-2578](../../crates/pandamux-desktop/src/app_view.rs#L2411-L2578)) |
 | Status bar | Connected server version/PID/path or reconnect/error state ([app_view.rs:2614-2628](../../crates/pandamux-desktop/src/app_view.rs#L2614-L2628)) |
 
-Sources: [lib.rs:3-60](../../crates/pandamux-desktop/src/lib.rs#L3-L60), [app_view.rs:89-125](../../crates/pandamux-desktop/src/app_view.rs#L89-L125), [app_view.rs:2188-2302](../../crates/pandamux-desktop/src/app_view.rs#L2188-L2302), [app_view.rs:2411-2628](../../crates/pandamux-desktop/src/app_view.rs#L2411-L2628), [titlebar.rs:12-184](../../crates/pandamux-desktop/src/titlebar.rs#L12-L184)
+Sources: [lib.rs:3-60](../../crates/pandamux-desktop/src/lib.rs#L3-L60), [app_view.rs:89-125](../../crates/pandamux-desktop/src/app_view.rs#L89-L125), [app_view.rs:2188-2302](../../crates/pandamux-desktop/src/app_view.rs#L2188-L2302), [app_view.rs:2411-2628](../../crates/pandamux-desktop/src/app_view.rs#L2411-L2628), [titlebar.rs:12-18](../../crates/pandamux-desktop/src/titlebar.rs#L12-L18), [titlebar.rs:175-185](../../crates/pandamux-desktop/src/titlebar.rs#L175-L185)
 <!-- END:AUTOGEN pandamux_06_ui-shell_composition -->
 
 ---
@@ -85,7 +85,7 @@ Sources: [app_view.rs:253-311](../../crates/pandamux-desktop/src/app_view.rs#L25
 
 The right-side panel groups thread-adjacent surfaces rather than owning their durable data. Tabs cover agents, diffs, files, pull requests, terminal, floor-plan data, and artifacts, each with a stable label, shortcut, and icon ([surfaces_panel.rs:18-80](../../crates/pandamux-desktop/src/surfaces_panel.rs#L18-L80)).
 
-`SurfacesPanelState` retains per-thread active tabs and terminal views, restores those choices when a thread is selected, and toggles terminal polling/focus only while the terminal tab is visible ([surfaces_panel.rs:117-246](../../crates/pandamux-desktop/src/surfaces_panel.rs#L117-L246), [app_view.rs:833-884](../../crates/pandamux-desktop/src/app_view.rs#L833-L884)). `show_terminal` installs the terminal, opens the panel, and selects its Terminal tab as one state transition; provider login uses that path and tells the user the terminal is visible on the right ([surfaces_panel.rs:184-192](../../crates/pandamux-desktop/src/surfaces_panel.rs#L184-L192), [app_view.rs:1826-1853](../../crates/pandamux-desktop/src/app_view.rs#L1826-L1853)). The panel keeps its configured width instead of shrinking out of the central flex layout ([surfaces_panel.rs:248-285](../../crates/pandamux-desktop/src/surfaces_panel.rs#L248-L285)). The desktop terminal consumes server-owned byte replay into its own grid: `feed_bytes` clears stale grid state when replay is truncated, advances current bytes, and stores the next offset ([terminal_view.rs:198-301](../../crates/pandamux-desktop/src/terminal_view.rs#L198-L301)).
+`SurfacesPanelState` retains per-thread active tabs and terminal views, restores those choices when a thread is selected, and toggles terminal polling/focus only while the terminal tab is visible ([surfaces_panel.rs:117-246](../../crates/pandamux-desktop/src/surfaces_panel.rs#L117-L246), [app_view.rs:833-884](../../crates/pandamux-desktop/src/app_view.rs#L833-L884)). `show_terminal` installs the terminal, opens the panel, and selects its Terminal tab as one state transition; provider login uses that path and tells the user the terminal is visible on the right ([surfaces_panel.rs:184-192](../../crates/pandamux-desktop/src/surfaces_panel.rs#L184-L192), [app_view.rs:1826-1854](../../crates/pandamux-desktop/src/app_view.rs#L1826-L1854)). The panel keeps its configured width instead of shrinking out of the central flex layout ([surfaces_panel.rs:248-285](../../crates/pandamux-desktop/src/surfaces_panel.rs#L248-L285)). The desktop terminal consumes server-owned byte replay into its own grid: `feed_bytes` clears stale grid state when replay is truncated, advances current bytes, and stores the next offset ([terminal_view.rs:198-301](../../crates/pandamux-desktop/src/terminal_view.rs#L198-L301)).
 
 | Terminal concern | Desktop responsibility |
 |---|---|
@@ -111,9 +111,9 @@ Settings is a top-level surface with six categories: providers, organizations, e
 | Check health | Request all or one provider instance, then replace the health report collection ([app_view.rs:1693-1753](../../crates/pandamux-desktop/src/app_view.rs#L1693-L1753)) |
 | Login | Preview the exact provider/environment command before launching it in the visible right-side Terminal surface; cancel clears preview state ([app_view.rs:1754-1869](../../crates/pandamux-desktop/src/app_view.rs#L1754-L1869)) |
 
-The settings renderer receives callbacks for save, health, preview, launch, cancel, and mutation, and presents status banners as polite status or assertive alert live regions depending on success/error state. The provider login confirmation is pinned between that banner and the scrolling category body, so asynchronous preview completion cannot leave the confirmation below the current scroll position ([settings_view.rs:382-534](../../crates/pandamux-desktop/src/settings_view.rs#L382-L534), [settings_view.rs:675-734](../../crates/pandamux-desktop/src/settings_view.rs#L675-L734)). Provider health cards expose status, version, authentication, freshness, last-success time, reason, and optional account badge as one accessible description ([settings_view.rs:641-669](../../crates/pandamux-desktop/src/settings_view.rs#L641-L669)).
+The settings renderer receives callbacks for save, health, preview, launch, cancel, and mutation, and presents status banners as polite status or assertive alert live regions depending on success/error state. The provider login confirmation is pinned between that banner and the scrolling category body, so asynchronous preview completion cannot leave the confirmation below the current scroll position ([settings_view.rs:407-556](../../crates/pandamux-desktop/src/settings_view.rs#L407-L556), [settings_view.rs:675-734](../../crates/pandamux-desktop/src/settings_view.rs#L675-L734)). Provider health cards expose status, version, authentication, freshness, last-success time, reason, and optional account badge as one accessible description ([settings_view.rs:641-669](../../crates/pandamux-desktop/src/settings_view.rs#L641-L669)).
 
-Sources: [app_view.rs:1360-1383](../../crates/pandamux-desktop/src/app_view.rs#L1360-L1383), [app_view.rs:1660-1869](../../crates/pandamux-desktop/src/app_view.rs#L1660-L1869), [settings_view.rs:19-114](../../crates/pandamux-desktop/src/settings_view.rs#L19-L114), [settings_view.rs:382-534](../../crates/pandamux-desktop/src/settings_view.rs#L382-L534), [settings_view.rs:641-734](../../crates/pandamux-desktop/src/settings_view.rs#L641-L734)
+Sources: [app_view.rs:1360-1383](../../crates/pandamux-desktop/src/app_view.rs#L1360-L1383), [app_view.rs:1660-1869](../../crates/pandamux-desktop/src/app_view.rs#L1660-L1869), [settings_view.rs:19-114](../../crates/pandamux-desktop/src/settings_view.rs#L19-L114), [settings_view.rs:407-556](../../crates/pandamux-desktop/src/settings_view.rs#L407-L556), [settings_view.rs:641-734](../../crates/pandamux-desktop/src/settings_view.rs#L641-L734)
 <!-- END:AUTOGEN pandamux_06_ui-shell_settings -->
 
 ---

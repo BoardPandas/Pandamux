@@ -134,16 +134,16 @@ Release vocabulary is deliberately strict so source completion, automated checks
 |---|---|
 | **Implementation** | Source changes that encode the requested behavior. Implementation alone does not establish a passing build, deployment, or live behavior ([CLAUDE.md:362-377](../CLAUDE.md#L362-L377)) |
 | **Verification** | Directly observed checks against the exact source or artifact, such as formatting, tests, build, smoke, or a native acceptance row ([CLAUDE.md:364-377](../CLAUDE.md#L364-L377)) |
-| **Artifact evidence** | Commit, version, size, and hash evidence for a built binary set. The R0 harness records and re-verifies these values but leaves publication disabled ([README.md:258-262](../README.md#L258-L262)) |
+| **Artifact evidence** | Commit, version, size, and hash evidence for a built binary set. The R0 harness records and re-verifies these values but leaves publication disabled ([README.md:262-266](../README.md#L262-L266)) |
 | **Commit and push** | Separate Git states: a local commit records work, while a push places that commit on a remote ref. Neither implies deployment or acceptance ([CLAUDE.md:364-377](../CLAUDE.md#L364-L377)) |
 | **Deployment** | Placement or activation of an exact artifact in a target environment. It remains distinct from source implementation and from live acceptance ([CLAUDE.md:362-377](../CLAUDE.md#L362-L377)) |
 | **Live acceptance** | Execution of the defined matrix against the exact environment and artifact. Claims require the recorded row evidence, not inference from local tests ([CLAUDE.md:364-377](../CLAUDE.md#L364-L377)) |
-| **Phase 4 exit matrix** | The current acceptance contract for provider observability and routing. Real capacity exhaustion, final documentation archive, and deferred physical laptop checks remain open ([README.md:171-180](../README.md#L171-L180)) |
-| **Released or shipped** | A status that requires the release and acceptance gates, not merely a versioned source tree. The open Phase 4 rows prevent that claim for the current recovery baseline ([README.md:171-180](../README.md#L171-L180)) |
+| **Phase 4 exit matrix** | The current acceptance contract for provider observability and routing. Both physical P4-C6 rows passed; real pre-output capacity exhaustion and the final post-P4-C5 archive remain open ([README.md:169-181](../README.md#L169-L181)) |
+| **Released or shipped** | A status that requires the release and acceptance gates, not merely a versioned source tree. The remaining Phase 4 rows prevent that claim for the current recovery baseline ([README.md:175-181](../README.md#L175-L181)) |
 
-At commit `4b8db04c2d6ce9e2fe9b5406937c1d9479b98507`, this glossary documents implemented contracts and recorded evidence boundaries. It does not claim Phase 4 production acceptance, release, deployment, or shipment.
+At commit `a41c5bd40861fb37de7a53252d96dcb055828362`, this glossary documents implemented contracts and recorded evidence boundaries. It does not claim Phase 4 production acceptance, release, deployment, or shipment.
 
-Sources: [README.md:171-180](../README.md#L171-L180), [README.md:258-262](../README.md#L258-L262), [CLAUDE.md:362-377](../CLAUDE.md#L362-L377)
+Sources: [README.md:169-181](../README.md#L169-L181), [README.md:262-266](../README.md#L262-L266), [CLAUDE.md:361-382](../CLAUDE.md#L361-L382)
 <!-- END:AUTOGEN pandamux_15_glossary_release -->
 
 ---

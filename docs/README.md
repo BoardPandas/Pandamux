@@ -95,18 +95,22 @@ Phase 4 closeout:
 The current recovery branch includes exact evidence for accounting,
 reconciliation, provider and model discovery, native Windows accessibility and
 local IPC, restart and side-effect boundaries, external-service interruption,
-and Codex credit serviceability. Those accepted rows do not establish complete
+and Codex credit serviceability. Exact 0.60.62 also closes the affected
+provider-login and Surfaces native matrix on the physical MSI laptop. Exact
+0.60.64 commit `a41c5bd` closes both physical P4-C6 rows with one real provider
+turn across a 30-minute Wi-Fi outage and one remote terminal across 39 minutes
+of Connected Modern Standby. Those accepted rows do not establish complete
 Phase 4 production acceptance.
 
 The following gates remain open:
 
 - a real pre-output provider capacity failure followed by the specified safe
   failover behavior;
-- the deferred physical-laptop disconnect and sleep rows;
-- final P4-C7 synchronization after the preceding acceptance rows stabilize.
+- final P4-C7 synchronization after the remaining P4-C5 row stabilizes.
 
-This generated-wiki refresh is an interim P4-C7 preparation. It does not claim
-that Phase 4 is complete, released, deployed, signed, published, or served.
+This generated-wiki refresh is an interim P4-C7 synchronization. It does not
+claim that Phase 4 is complete, released, deployed, signed, published, or
+served.
 
 ## Security boundary
 

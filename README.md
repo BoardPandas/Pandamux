@@ -16,7 +16,11 @@ R0 development gate:
 - R0.2 implements Hub-to-node routing through a versioned SSH exec proxy, reconnect semantics, event replay, and joined cleanup.
 - R0.3 resolves every provider turn from the exact stored provider instance and holds per-instance capacity for the provider process lifetime.
 - R0.4 secures local IPC with server-assigned request contexts, distinct capabilities, OS-user boundaries, and redacted MCP reads.
-- R0.5 has exact live evidence for Galahad and native Windows IPC. On 2026-09-29, the user approved deferring the required 30-minute physical laptop disconnect and sleep checks so Phase 4 development could continue. Those checks still block production-accepted, released, or shipped claims.
+- R0.5 has exact live evidence for Galahad and native Windows IPC. The two rows
+  deferred for development sequencing on 2026-09-29 later passed on exact
+  0.60.64: one physical MSI laptop remained disconnected from Wi-Fi for more
+  than 30 minutes during a real provider turn, and one remote full-screen
+  terminal survived 39 minutes of Connected Modern Standby. P4-C6 is Pass.
 - Phase 4A provides normalized usage observations, durable transactional cursors and outbox state, canonical organization and failover policy, migration-4 reconciliation through additive migration 6, and bounded authenticated usage, capacity, and health protocol pages.
 - Phase 4B adds node-owned Claude and Codex transcript scanners with durable platform file identity, bounded lifecycle and retention, explicit coverage diagnostics, transactional cursor advancement, and managed-turn reconciliation. Claude token usage is keyed to exact assistant message identity, while terminal result cost remains a separate turn-level fact. Raw transcript text and paths remain node-local.
 - Phase 4C adds bounded Hub pulls, transactional per-node high-water marks, acknowledged outbox compaction, explicit retention-gap backfill, indexed SQL aggregates, effective-dated integer pricing, and cross-node coverage metadata. Provider-reported spend remains separate from API-equivalent estimates.
@@ -118,8 +122,8 @@ R0 development gate:
   local gate, schema migration, six-model Codex discovery, and real
   `codex-default` plus `gpt-6-luna` turn passed. Exact limited-user Windows
   artifacts then passed native build, headless smoke, visible no-route fallback,
-  and an authenticated picker-created thread whose `codex-default` and
-  `gpt-6.1-sol` values matched the exact-build CLI. P4-C3 is Pass again.
+  and an authenticated picker-created thread. Exact 0.60.62 commit `757caf0`
+  passed the affected provider-login and Surfaces matrix at 100/200 percent on the physical MSI, so P4-C3 is Pass.
   A separate supporting live run later killed the exact remote proxy after
   visible text and one successful file-writing shell tool. Reconnect retained
   one protected attempt and the one-line marker without replay. Exact 0.60.47
@@ -168,13 +172,13 @@ R0 development gate:
   and no capacity retry or Claude fallback appeared. This verifies the
   correction but does not close the real capacity-failover row because credits
   were still available.
-  A supporting Hyper-V rehearsal on the same exact runtime later passed a real
-  30-minute provider-network interruption and full-screen terminal saved-state
-  recovery with exact event, usage, offset, replay, and cleanup evidence. It
-  does not replace the required physical laptop disconnect and sleep rows.
-  Real pre-output provider capacity exhaustion, the final documentation
-  archive, and the deferred physical laptop checks keep P4-C5 Partial and the
-  Phase 4 exit matrix open.
+  A supporting Hyper-V rehearsal first exercised the same recovery paths, but
+  did not substitute for physical hardware. Exact 0.60.64 commit `a41c5bd`
+  subsequently passed both physical P4-C6 rows with exact event, usage,
+  terminal offset, replay, abandoned-proxy cleanup, SleepStudy, and restoration
+  evidence. Real pre-output provider capacity exhaustion and the final P4-C7
+  archive after that row stabilizes keep P4-C5 Partial and the Phase 4 exit
+  matrix open.
 
 See the [Phase 4 live acceptance record](docs/operations/PHASE4_ACCEPTANCE.md)
 and the completion criteria in [`tasks/plan-rewrite.md`](tasks/plan-rewrite.md).

@@ -2,13 +2,13 @@
 
 Date opened: 2026-09-28
 
-Last updated: 2026-09-29
+Last updated: 2026-10-08
 
-Status: **Open for production acceptance, closed as a Phase 4 development gate by
-explicit user-approved rescope on 2026-09-29. The exact Galahad artifact, lifecycle,
-managed install, transfer, Codex, Claude, and Antigravity provider rows, and native
-Windows IPC behavior have live evidence. The required 30-minute physical laptop
-disconnect and sleep checks remain open and still block release claims.**
+Status: **The R0.5 evidence matrix is complete. It was closed as a Phase 4
+development gate by explicit user-approved rescope on 2026-09-29, and its two
+deferred physical laptop rows later passed on exact 0.60.64 on 2026-10-08. This
+does not declare the whole product production-accepted or released: the Phase 4
+P4-C5 capacity row and final P4-C7 archive remain open.**
 
 This record separates source and fixture verification from production acceptance.
 Passing unit, cross-compile, or proxy fixture tests does not satisfy a live Windows or
@@ -35,6 +35,8 @@ Galahad row.
 - Native Windows acceptance commit: `b314ae79f1f16d1eac3a5360eba340dda70884e8`
 - Native Windows acceptance version: `0.54.12`
 - Native Windows build target: `x86_64-pc-windows-gnu`
+- Physical laptop acceptance commit:
+  `a41c5bd40861fb37de7a53252d96dcb055828362`, version `0.60.64`
 - Publication: disabled
 
 ## Source and fixture evidence
@@ -120,8 +122,8 @@ the required Windows-specific R0.5 evidence is the native IPC row above.
 | Antigravity node-side managed download | Not applicable | Pass | A fresh isolated `0.54.1` node returned `source=node_download`; the official Google ACP 1.1.1 archive and extracted files matched pinned sizes and hashes, private modes, and cleanup rules |
 | Antigravity blocked-node fallback download plus SFTP | Not applicable | Pass | Independent egress failed through closed proxy `127.0.0.1:9`; the Hub returned `source=hub_push`, transferred the verified private archive through SFTP, and the node reverified and extracted it without staging residue |
 | Antigravity remote OAuth relay | Not applicable | Pass | The production relay completed the strictly validated Google callback for `antigravity-default`; the resulting isolated token file is private mode `0600`, and subsequent proxy health plus live ACP turns passed without exposing callback or token material |
-| Thirty-minute laptop disconnect during remote turn | Not applicable | Not run | Twenty-second Hub disconnects passed for Codex on exact `0.54.7` and for Claude and Antigravity on exact `0.54.11`, preserving node work and replaying final events. These are supporting evidence, not substitutes for the required 30-minute physical laptop check |
-| Thirty-minute laptop sleep during remote full-screen terminal | Not applicable | Not run | Requires coordinated physical laptop sleep with a live full-screen terminal and offset capture |
+| Thirty-minute laptop disconnect during remote turn | Pass on physical MSI | Pass | Exact `0.60.64` retained one real Codex attempt, unique event sequences 4 through 23, one usage observation, and exact output across 1,805.006 seconds of physical Wi-Fi disconnection; the abandoned proxy exited within the accepted lease ceiling |
+| Thirty-minute laptop sleep during remote full-screen terminal | Pass on physical MSI | Pass | Exact `0.60.64` retained terminal `term-425d34ff` and its exact Galahad owner across 2,340.538 seconds of Connected Modern Standby, then replayed 6,561 bytes without truncation and retained exactly one input marker |
 | Idle node upgrade using R0 artifacts | Not applicable | Pass through `0.54.11` | Exact artifacts, compatible discovery, idle checks, graceful stops, launcher ownership, authenticated ping and identify, served version, and executable hashes were captured. The last acceptance transition was `0.54.10` to `0.54.11` |
 | Busy node upgrade refusal or defer | Not applicable | Pass | With PTY `term-a02635e5` active, the `0.54.2` request returned `ssh_daemon_upgrade_deferred` with `retryable=true`; the prior PID, served version, and PTY remained intact |
 | Pasted image to remote provider | Not applicable | Pass | Exact `0.54.7` transferred the 970,142-byte PNG with matching SHA-256, and Codex identified its bear subject plus cyan and golden-yellow outlines |
@@ -253,14 +255,17 @@ No upstream push occurred.
 On 2026-09-28, the user granted full authorization to run the live matrix, including
 provider quota, OAuth or CLI login, binary and file transfer, Galahad daemon changes,
 temporary node egress blocking, and coordinated disconnect or sleep checks. Public push
-and release publication remain outside this recovery run. Both browser login flows and
-the native Windows run are complete. The physical laptop disconnect and sleep checks
-still require interactive participation when those rows are scheduled.
+and release publication remain outside this recovery run. Both browser login flows, the
+native Windows run, and the later physical MSI disconnect and Modern Standby rows are
+complete. Exact hashes, durations, identifiers, diagnostics, and cleanup are archived
+in the Phase 4 acceptance record.
 
 ## Gate decision
 
-The user approved the documented rescope on 2026-09-29, so R0 is closed as a Phase 4
-development gate and implementation may continue. The 30-minute physical laptop
-disconnect and full-screen-terminal sleep rows were deferred, not waived. This record
-remains open, and PandaMUX must not be described as production-accepted, released, or
-shipped until those rows pass and their evidence is archived.
+The user approved the documented rescope on 2026-09-29, so R0 closed as a Phase 4
+development gate and implementation continued. The 30-minute physical laptop disconnect
+and full-screen-terminal sleep rows were deferred, not waived. Both later passed on exact
+0.60.64, and their evidence is archived in
+[`PHASE4_ACCEPTANCE.md`](PHASE4_ACCEPTANCE.md). This closes the R0.5 matrix, but
+PandaMUX must not be described as production-accepted, released, or shipped while the
+independent Phase 4 P4-C5 and final P4-C7 gates remain open.

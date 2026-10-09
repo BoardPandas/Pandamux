@@ -16,11 +16,12 @@ The following files were used as evidence for this page:
 - [crates/pandamux-protocol/src/environment_rpc.rs:1-41](../../crates/pandamux-protocol/src/environment_rpc.rs#L1-L41)
 - [crates/pandamux-protocol/src/fs_rpc.rs:1-96](../../crates/pandamux-protocol/src/fs_rpc.rs#L1-L96)
 - [crates/pandamux-protocol/src/git_rpc.rs:1-117](../../crates/pandamux-protocol/src/git_rpc.rs#L1-L117)
-- [crates/pandamux-protocol/src/proxy.rs:1-106](../../crates/pandamux-protocol/src/proxy.rs#L1-L106)
+- [crates/pandamux-protocol/src/proxy.rs:1-121](../../crates/pandamux-protocol/src/proxy.rs#L1-L121)
 - [crates/pandamux-protocol/src/worktree_rpc.rs:1-30](../../crates/pandamux-protocol/src/worktree_rpc.rs#L1-L30)
 - [crates/pandamux-server/src/environment_router.rs:1-442](../../crates/pandamux-server/src/environment_router.rs#L1-L442)
-- [crates/pandamux-server/src/proxy_connection.rs:1-408](../../crates/pandamux-server/src/proxy_connection.rs#L1-L408)
-- [crates/pandamux-server/src/proxy_transport.rs:1-555](../../crates/pandamux-server/src/proxy_transport.rs#L1-L555)
+- [crates/pandamux-server/src/main.rs:309-357](../../crates/pandamux-server/src/main.rs#L309-L357)
+- [crates/pandamux-server/src/proxy_connection.rs:1-529](../../crates/pandamux-server/src/proxy_connection.rs#L1-L529)
+- [crates/pandamux-server/src/proxy_transport.rs:1-704](../../crates/pandamux-server/src/proxy_transport.rs#L1-L704)
 
 </details>
 
@@ -128,11 +129,11 @@ sequenceDiagram
     deactivate P
 ```
 
-`ProxyMessage` is a tagged protocol containing hello/ack, request/response, cancellation, ordered event, goodbye, and structured error frames. The hello carries both proxy and RPC versions, client version, environment id, and `resume_after_event_seq`; the ack returns the current durable event sequence ([proxy.rs:6-48](../../crates/pandamux-protocol/src/proxy.rs#L6-L48)).
+`ProxyMessage` is a tagged protocol containing hello/ack, request/response, cancellation, keepalive/ack, ordered event, goodbye, and structured error frames. Protocol version 2 adds the keepalive pair. The hello carries both proxy and RPC versions, client version, environment id, and `resume_after_event_seq`; the ack returns the current durable event sequence ([proxy.rs:6-53](../../crates/pandamux-protocol/src/proxy.rs#L6-L53)).
 
-The Hub transport sends hello and waits with a bounded handshake timeout, correlates pending request ids, publishes events, and exposes connected/disconnected/error state through `EnvironmentTransport` ([proxy_transport.rs:61-112](../../crates/pandamux-server/src/proxy_transport.rs#L61-L112), [proxy_transport.rs:241-325](../../crates/pandamux-server/src/proxy_transport.rs#L241-L325), [proxy_transport.rs:366-446](../../crates/pandamux-server/src/proxy_transport.rs#L366-L446)). The node requires hello as the first frame and rejects version or environment mismatches before routing ([proxy_connection.rs:23-122](../../crates/pandamux-server/src/proxy_connection.rs#L23-L122)).
+The Hub transport sends hello and waits with a bounded handshake timeout, correlates pending request ids, publishes events, and exposes connected/disconnected/error state through `EnvironmentTransport` ([proxy_transport.rs:63-115](../../crates/pandamux-server/src/proxy_transport.rs#L63-L115), [proxy_transport.rs:189-373](../../crates/pandamux-server/src/proxy_transport.rs#L189-L373)). Independently of SSH/TCP keepalive behavior, its writer emits an application keepalive every 15 seconds and marks the transport stale if that write fails ([proxy_transport.rs:20-28](../../crates/pandamux-server/src/proxy_transport.rs#L20-L28), [proxy_transport.rs:117-187](../../crates/pandamux-server/src/proxy_transport.rs#L117-L187)). The node requires hello as the first frame, rejects version or environment mismatches before routing, acknowledges keepalives, and expires a silent Hub after a 90-second client lease ([proxy_connection.rs:17-30](../../crates/pandamux-server/src/proxy_connection.rs#L17-L30), [proxy_connection.rs:41-133](../../crates/pandamux-server/src/proxy_connection.rs#L41-L133), [proxy_connection.rs:241-364](../../crates/pandamux-server/src/proxy_connection.rs#L241-L364)).
 
-Sources: [proxy.rs:9-109](../../crates/pandamux-remote/src/proxy.rs#L9-L109), [proxy.rs:6-48](../../crates/pandamux-protocol/src/proxy.rs#L6-L48), [proxy_transport.rs:61-446](../../crates/pandamux-server/src/proxy_transport.rs#L61-L446), [proxy_connection.rs:23-122](../../crates/pandamux-server/src/proxy_connection.rs#L23-L122)
+Sources: [proxy.rs:9-109](../../crates/pandamux-remote/src/proxy.rs#L9-L109), [proxy.rs:6-53](../../crates/pandamux-protocol/src/proxy.rs#L6-L53), [proxy_transport.rs:20-373](../../crates/pandamux-server/src/proxy_transport.rs#L20-L373), [proxy_connection.rs:17-364](../../crates/pandamux-server/src/proxy_connection.rs#L17-L364)
 <!-- END:AUTOGEN pandamux_11_ssh-remote_proxy -->
 
 ---
@@ -164,15 +165,17 @@ Sources: [fs_rpc.rs:4-68](../../crates/pandamux-protocol/src/fs_rpc.rs#L4-L68), 
 Proxy recovery is cursor-based rather than request replay. The Hub retains the last observed durable event sequence, includes it in the next hello, and the node streams committed events after that cursor through the sequence captured at handshake ([proxy_transport.rs:264-277](../../crates/pandamux-server/src/proxy_transport.rs#L264-L277), [proxy_connection.rs:135-173](../../crates/pandamux-server/src/proxy_connection.rs#L135-L173)).
 
 - Replacing a registered environment transport stops the old event-forwarding task and awaits transport shutdown before the new registration becomes authoritative ([environment_router.rs:101-164](../../crates/pandamux-server/src/environment_router.rs#L101-L164), [environment_router.rs:269-276](../../crates/pandamux-server/src/environment_router.rs#L269-L276)).
-- A dropped in-flight request sends a best-effort proxy cancellation, and transport shutdown sends `Goodbye` before closing owned I/O tasks ([proxy_transport.rs:325-331](../../crates/pandamux-server/src/proxy_transport.rs#L325-L331), [proxy_transport.rs:500-524](../../crates/pandamux-server/src/proxy_transport.rs#L500-L524)).
-- Pending requests are failed when the proxy reader terminates, preventing callers from hanging across disconnect ([proxy_transport.rs:178-237](../../crates/pandamux-server/src/proxy_transport.rs#L178-L237), [proxy_transport.rs:541-555](../../crates/pandamux-server/src/proxy_transport.rs#L541-L555)).
+- A dropped in-flight request sends a best-effort proxy cancellation, and transport shutdown sends `Goodbye` before closing owned I/O tasks ([proxy_transport.rs:375-415](../../crates/pandamux-server/src/proxy_transport.rs#L375-L415), [proxy_transport.rs:552-581](../../crates/pandamux-server/src/proxy_transport.rs#L552-L581)).
+- Pending requests are failed when either proxy I/O task terminates, preventing callers from hanging across disconnect ([proxy_transport.rs:117-187](../../crates/pandamux-server/src/proxy_transport.rs#L117-L187), [proxy_transport.rs:189-295](../../crates/pandamux-server/src/proxy_transport.rs#L189-L295)).
+- The Hub's 15-second application heartbeat renews a 90-second node lease. Lease expiry stops in-flight work, drains a final `Goodbye` when possible, and closes the node proxy even if the underlying SSH connection remains half-open ([proxy_transport.rs:117-187](../../crates/pandamux-server/src/proxy_transport.rs#L117-L187), [proxy_connection.rs:241-364](../../crates/pandamux-server/src/proxy_connection.rs#L241-L364)).
+- The Linux exec bridge copies each direction independently. Node-to-Hub completion ends the bridge immediately; Hub-to-node completion allows a bounded two-second drain. This prevents an open SSH stdin pipe from retaining a node proxy after the leased socket closes ([main.rs:309-357](../../crates/pandamux-server/src/main.rs#L309-L357)).
 - A launcher-owned daemon is stopped for upgrade only after the remote activity probe finds no child processes and no active Unix-socket clients; otherwise upgrade is deferred ([bootstrap.rs:375-453](../../crates/pandamux-remote/src/bootstrap.rs#L375-L453)).
 - Explicit teardown sends `SIGTERM`, polls for exit, and removes the runtime record only after the process is gone ([bootstrap.rs:456-490](../../crates/pandamux-remote/src/bootstrap.rs#L456-L490)).
 - A discovered daemon is not treated as launcher-owned, so normal disconnect cleanup does not claim ownership of a pre-existing service ([bootstrap.rs:292-317](../../crates/pandamux-remote/src/bootstrap.rs#L292-L317)).
 
-This code defines recovery mechanics but is not, by itself, evidence that the repository's still-open Phase 4 physical disconnect, sleep, capacity exhaustion, release, or production-acceptance gates have passed.
+The exact 0.60.64 implementation passed the physical 30-minute provider disconnect and 39-minute Connected Modern Standby terminal rows recorded in [the Phase 4 acceptance record](../operations/PHASE4_ACCEPTANCE.md). That evidence closes P4-C6 only. Real pre-output provider-capacity failure, final post-P4-C5 documentation closure, release, and deployment remain separate gates.
 
-Sources: [proxy_transport.rs:178-331](../../crates/pandamux-server/src/proxy_transport.rs#L178-L331), [proxy_transport.rs:500-555](../../crates/pandamux-server/src/proxy_transport.rs#L500-L555), [proxy_connection.rs:135-173](../../crates/pandamux-server/src/proxy_connection.rs#L135-L173), [environment_router.rs:101-276](../../crates/pandamux-server/src/environment_router.rs#L101-L276), [bootstrap.rs:292-490](../../crates/pandamux-remote/src/bootstrap.rs#L292-L490)
+Sources: [proxy_transport.rs:117-415](../../crates/pandamux-server/src/proxy_transport.rs#L117-L415), [proxy_transport.rs:552-581](../../crates/pandamux-server/src/proxy_transport.rs#L552-L581), [proxy_connection.rs:135-364](../../crates/pandamux-server/src/proxy_connection.rs#L135-L364), [main.rs:309-357](../../crates/pandamux-server/src/main.rs#L309-L357), [environment_router.rs:101-276](../../crates/pandamux-server/src/environment_router.rs#L101-L276), [bootstrap.rs:292-490](../../crates/pandamux-remote/src/bootstrap.rs#L292-L490)
 <!-- END:AUTOGEN pandamux_11_ssh-remote_recovery -->
 
 ---

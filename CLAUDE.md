@@ -19,11 +19,12 @@ Phase 4A through 4F implementation is recorded after the R0 development gate,
 but the Phase 4 exit matrix remains open. R0.1 preserves the unfinished usage
 prototype; R0.2 completes production proxy routing; R0.3 enforces exact
 provider-instance execution; R0.4 secures the local control boundary. R0.5 has
-exact live evidence for Galahad and native Windows IPC. On 2026-09-29, the user
-approved deferring the required 30-minute physical laptop disconnect and sleep
-checks so development could continue. Those rows still block any
-production-accepted, released, or shipped claim until the matrix passes and its
-record is archived. Exact 0.60.15 commit `3a77382` passes P4-C1, P4-C2, and
+exact live evidence for Galahad and native Windows IPC. The two physical rows
+deferred for development sequencing on 2026-09-29 later passed on exact 0.60.64
+commit `a41c5bd40861fb37de7a53252d96dcb055828362`: a real provider turn survived
+more than 30 minutes of physical Wi-Fi disconnection, and a remote full-screen
+terminal survived 39 minutes of Connected Modern Standby. Exact 0.60.15 commit
+`3a77382` passes P4-C1, P4-C2, and
 P4-C4. Exact 0.60.41 commit
 `c6a20ff4f768747d0dadd59b88b40d3e20f7674d` passes the unchanged P4-C3
 terminal, accessibility, visual, scaling, and IPC rows on one clean native
@@ -72,19 +73,17 @@ errors it will retry. Its exact Galahad artifact passed a live
 credit-serviceability route proof with capacity-aware routing enabled, one
 completed Codex attempt, and no retry or Claude fallback. Real total provider
 capacity exhaustion is still open.
-A supporting Hyper-V
-rehearsal on exact 0.60.43 later passed a real
-30-minute provider-network interruption and full-screen terminal
-saved-state recovery with exact event, usage, offset, replay, and cleanup
-evidence. It does not replace the required physical laptop disconnect and
-sleep rows. Exact 0.60.17 commit
+A supporting Hyper-V rehearsal on exact 0.60.43 first exercised the
+provider-network and terminal recovery paths. Exact 0.60.64 then passed the two
+required physical P4-C6 rows with event, usage, offset, replay,
+abandoned-proxy, SleepStudy, and cleanup evidence. Exact 0.60.17 commit
 `2f56a27` partially passes P4-C5 with live scanner and Hub durability,
 conservative capacity projections and route explanations, and independent
 rollback controls. Real pre-output provider capacity exhaustion remains open.
 The exact results are recorded in
 [`docs/operations/PHASE4_ACCEPTANCE.md`](docs/operations/PHASE4_ACCEPTANCE.md).
-The remaining capacity-failover row, final documentation archive, and physical
-rows keep Phase 4 open.
+The remaining capacity-failover row and final post-P4-C5 documentation archive
+keep Phase 4 open.
 
 Exact 0.60.38 commit `d328ad8` supersedes the preceding source-candidate note:
 its complete local gate, native build, host smoke, remote lifecycle, and
@@ -108,9 +107,9 @@ Windows UI Automation tree despite passing the local, native-build, and host
 gates. Exact 0.60.41 commit `c6a20ff` provides that child through an AccessKit
 value backed by a synthetic text run, enabling UIA TextPattern content. Its
 complete local, native, interaction, scaling, display-mode, Narrator, visual,
-and named-pipe matrices passed. Those rows remain accepted. The later 0.60.43
-routing and UI correction also passed its exact native Windows picker and
-no-route rows, so P4-C3 is Pass again.
+and named-pipe matrices passed. The 0.60.43 routing correction also passed.
+Exact 0.60.62 commit `757caf0` passed the affected provider-login and Surfaces
+matrix on the physical MSI at 100 and 200 percent, so P4-C3 remains Pass.
 
 ## Build and development
 
@@ -363,7 +362,13 @@ The non-release R0 artifact harness is `scripts/r0-node-artifacts.sh`. Its build
 
 Release authorization is not implied by implementation work. Keep implementation, verification, commit, push, deployment, and live acceptance as separate evidence boundaries.
 
-The current GPUI rewrite has not passed R0.5. `.github/workflows/release.yml` still contains historical packaging references and must not be used as evidence that the current workspace is releasable. Phase 7 owns the final Windows packaging, signing, publication, and update pipeline.
+The current GPUI rewrite has passed R0.5, including both physical P4-C6 rows,
+but it has not passed the complete Phase 4 exit matrix. The real pre-output
+provider-capacity row and final post-P4-C5 documentation archive remain open.
+`.github/workflows/release.yml` still contains historical packaging references
+and must not be used as evidence that the current workspace is releasable.
+Phase 7 owns the final Windows packaging, signing, publication, and update
+pipeline.
 
 ## Repository conventions
 

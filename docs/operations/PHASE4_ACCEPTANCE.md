@@ -3,77 +3,44 @@
 Date: 2026-09-29
 Updated: 2026-10-08
 
-Status: **Accounting passed; the P4-C3 terminal, Narrator, visual, scaling, and
-IPC rows passed on exact 0.60.41; the provider/model routing row passed local,
-live, and native Windows acceptance on exact 0.60.43; exact 0.60.59 fixes
-provider-login discoverability and passes the complete local gate, but reopens
-its affected P4-C3 native interaction, visual, scaling, High Contrast, and
-accessibility rows; P4-C5 remains Partial
-with supporting live post-side-effect proxy-loss evidence on exact 0.60.43 and
-approval plus loopback-network recovery evidence on exact 0.60.47, atomic
-tool-result source evidence, a live pending-approval restart Pass, and an exact
-tool-result process-crash restart Pass on exact 0.60.49, plus a live
-pending-continuation restart Pass and a real external-service interruption Pass
-on repaired exact 0.60.52; later capacity diagnostics on exact 0.60.52 and
-0.60.55 were correctly rejected when Codex completed instead of failing over,
-and exact 0.60.56 passed the refined included-use plus credit-serviceability
-correction with one completed Codex attempt and no retry or fallback; P4-C6 has
-supporting Hyper-V rehearsal evidence but its physical rows remain open; and
-Phase 4 acceptance is incomplete.** Exact 0.60.15 commit
-`3a77382` passed the P4-C1 implementation, P4-C2 local candidate, and P4-C4
-cloned-store reconciliation gates. Exact 0.60.41 commit
-`c6a20ff4f768747d0dadd59b88b40d3e20f7674d` passed P4-C3 after the expanded
-successful-login path was added to the matrix. One exact desktop, server, and
-CLI artifact set passed clean limited-user build, host smoke, remote lifecycle,
-100 and 200 percent interaction, High Contrast, disabled animations, genuine
-Windows Narrator traversal, visual inspection, and the complete local plus
-independent-peer named-pipe security matrix. Narrator directly copied the exact
-READY, ECHO, and reopened-output phrases while synchronized Speech Recap
-screenshots remain as audit evidence. This supersedes the reopened 0.60.22 and
-rejected 0.60.24 through 0.60.40 candidates without erasing their diagnostic
-record. Exact 0.60.43 commit
-`372f2ae83e67a62cd3b382e5db52af96d00a85ce` then corrected the
-provider/model selection route and passed the complete local gate, schema
-migration, live model discovery, and a real Codex turn. Its exact limited-user
-Windows artifacts then passed native build, headless smoke, visible no-route
-fallback, and authenticated configured-route picker interaction. Exact 0.60.59
-later changed the provider-login confirmation, panel layout, terminal handoff,
-and titlebar toggle. Its local gate passed, but the corresponding native rows
-are Unrun, so P4-C3 is reopened only for that scope. The unchanged 0.60.41
-terminal TextPattern and IPC rows remain Pass. Exact 0.60.17 commit
-`2f56a27` passed the scanner, Hub
-synchronization, conservative capacity projection, route-explanation, and
-rollback-control portions of P4-C5. Real provider quota exhaustion and real
-interruptions after output or external side effects were not initially
-available, so their diagnostic fixtures did not close the live rows.
-The first supporting abrupt-proxy rehearsal passed visible-text, file, and
-command-side-effect recovery. Exact 0.60.47 then repaired an unresolved-tool
-false-success defect exposed by a rejected diagnostic and passed one approval
-plus one loopback HTTP POST across abrupt proxy loss. Exact 0.60.49 then made
-terminal tool-result projection atomic and passed restart with a real approval
-result durably Pending. Its exact server then passed a controlled process crash
-inside a real terminal tool-result transaction and reopened without a partial
-projection or replay. Exact 0.60.52 repaired continuation-route persistence and
-then passed a controlled-source, real-Codex continuation restart without
-redispatch or replay. The unchanged exact server then passed a real
-external-service network action against one disposable Webhook.site HTTPS
-endpoint. Organization policy selected real Claude, one marked POST committed,
-and restart after the full provider process tree was killed produced no replay
-or invented terminal result. P4-C5 remains Partial because real pre-output
-provider capacity exhaustion and failover under that condition are still open.
-The rejected capacity diagnostics exposed both a false hard-limit projection
-from a 100 percent Codex utilization window and an overbroad reading of
-exhausted included use while paid credits remained available. Version 0.60.56
-models both serviceability paths and handles terminal structured Codex capacity
-errors without preempting app-server retries. Its exact Galahad artifact passed
-a live credit-serviceability route proof with capacity-aware routing enabled.
-The projected 100 percent included-use window remained serviceable, one Codex
-attempt completed, and no capacity retry or Claude fallback appeared.
-The later supporting Hyper-V rehearsal passed real 30-minute provider-network
-and full-screen-terminal recovery paths, but neither a Windows guest nor
-`Save-VM` substitutes for the required physical laptop disconnect and sleep
-rows. The final documentation archive after the remaining rows stabilize and
-the physical matrix therefore remain open. No push, deployment, production
+Status: **P4-C1, P4-C2, P4-C3, P4-C4, and P4-C6 are Pass. P4-C5 remains
+Partial because real pre-output provider-capacity exhaustion and its one
+allowed failover are still open. This update is an interim P4-C7
+synchronization; final P4-C7 closure follows the remaining P4-C5 row. Phase 4
+acceptance is therefore incomplete.**
+
+Exact 0.60.15 commit `3a77382` passed P4-C1, the P4-C2 local candidate, and
+P4-C4 cloned-store reconciliation. Exact 0.60.41 commit
+`c6a20ff4f768747d0dadd59b88b40d3e20f7674d` passed the terminal, Narrator,
+visual, scaling, successful-login, and named-pipe security portions of P4-C3.
+Exact 0.60.43 commit `372f2ae83e67a62cd3b382e5db52af96d00a85ce`
+then passed local, live, and native Windows provider/model routing. Exact
+0.60.62 commit `757caf0ef515561218509fa2f8838569837057b9`
+subsequently passed the provider-login and Surfaces rows reopened by the
+0.60.59 UI change on the physical MSI laptop at 100 and 200 percent, in dark
+and light modes, High Contrast, disabled animations, genuine Narrator, restored
+display settings, and remote login routing. P4-C3 remains Pass.
+
+P4-C5 has accepted scanner, synchronization, capacity projection, route
+explanation, rollback, post-side-effect interruption, pending-approval restart,
+atomic tool-result crash, pending-continuation restart, and real
+external-service interruption evidence through exact 0.60.56. The later
+capacity diagnostics correctly retained Codex when paid credits kept it
+serviceable. Those runs verify the corrected serviceability interpretation but
+cannot replace a real total provider-capacity failure before output, so P4-C5
+remains Partial.
+
+Exact 0.60.64 commit `a41c5bd40861fb37de7a53252d96dcb055828362`
+passed both mandatory physical P4-C6 rows. A real Codex turn retained one
+attempt, unique event replay, one usage observation, and exact output after the
+MSI stayed disconnected from Wi-Fi for 1,805.006 seconds. A remote full-screen
+terminal retained its exact node process and replayed 6,561 bytes without
+truncation after a 2,340.538-second Connected Modern Standby interval measured
+by Windows SleepStudy. The node-side heartbeat lease and bidirectional bridge
+cleanup removed abandoned proxy children in both cases. Verified cleanup
+restored laptop networking and power policy, removed acceptance-only keys and
+tasks, stopped the isolated Galahad daemon, and preserved the original checkout
+and retained databases. No push, CI, signing, packaging, deployment, production
 activation, or release occurred.
 
 ## Source and preservation boundary
@@ -293,6 +260,21 @@ activation, or release occurred.
   source gate passed. No native Windows artifact or interaction result is
   claimed. Workspace version `0.60.60` records this scoped acceptance reopening
   only; it adds no new runtime behavior or native evidence.
+- Accepted scoped P4-C3 rerun source: clean commit
+  `757caf0ef515561218509fa2f8838569837057b9`, version `0.60.62`. It retains
+  the 0.60.59 UI repair, exposes the Surfaces selected/toggled accessibility
+  state, rejects unusable `pwsh.exe` App Execution Aliases, and passes the
+  exact physical-laptop native matrix recorded below. No VM result substitutes
+  for these accepted rows.
+- Accepted P4-C6 physical-laptop source: clean commit
+  `a41c5bd40861fb37de7a53252d96dcb055828362`, version `0.60.64`. Its
+  protocol-v2 heartbeat sends every 15 seconds, the node expires a silent Hub
+  after 90 seconds, and the Linux exec bridge exits when the node-to-Hub side
+  closes even if SSH stdin stays half-open. Its exact physical MSI and Galahad
+  evidence passes both mandatory P4-C6 rows below. Workspace version `0.60.65`
+  records the resulting evidence and documentation synchronization only. No
+  0.60.65 executable, native, live, production, push, deployment, activation,
+  or release result is claimed.
 - The intermediate 0.60.2 commit `8a52d2a21da1d5d0f69540864a6162d2b30375bc`
   repaired direct UI Automation activation for Save and Cancel. The 0.60.3
   follow-up exposed the editor text fields on semantic nodes tied to their real
@@ -2018,64 +2000,68 @@ but the later 0.60.59 UI change reopens the affected provider-login rows as
 recorded below. No push, CI, signing, packaging, deployment, production
 activation, or release occurred.
 
-## Exact 0.60.59 provider-login discoverability repair, native rerun pending
+## Exact 0.60.62 provider-login and shell-resolution native acceptance
 
-Result: **Local source Pass; scoped P4-C3 native rows Unrun.** Clean commit
-`06ed48cb8fe55c750905788c0bc9ec0a8e51f805`, version `0.60.59`, repairs two
-problems observed during normal use after the earlier native matrix. The
-prepared login confirmation could be inserted below the current provider-list
-scroll position, and successful launch could leave the user unsure whether the
-right-side Surfaces panel had opened because its titlebar control exposed no
-open state.
+Result: **P4-C3 Pass.** Clean commit
+`757caf0ef515561218509fa2f8838569837057b9`, version `0.60.62`, supersedes the
+scoped native reopening created by exact 0.60.59. The original repair keeps the
+provider-login confirmation outside the scrolling provider list, opens and
+selects the Terminal surface as one state transition, preserves the panel width,
+and makes the titlebar control expose its current open or close action. The final
+candidate also publishes selected and toggled accessibility state and rejects a
+Microsoft Store `pwsh.exe` App Execution Alias unless a bounded noninteractive
+version probe proves that it is a usable shell. This allows the physical laptop
+to fall through to its installed Windows PowerShell instead of opening a dead
+terminal.
 
-The repair keeps confirmation outside the scrolling provider list. Successful
-launch now installs the login terminal, opens Surfaces, and selects Terminal
-through one state transition, while the status banner says that the terminal is
-on the right. The main Settings surface may shrink beside the panel, but the
-panel retains its configured width. While open, the titlebar control is selected
-and reads `Hide Surfaces`; its tooltip and accessible name announce the close
-action. Focused regressions cover the panel state transition and both toggle
-presentations.
+The exact source bundle has SHA-256
+`9897eefb964938b3d07bc8cc189d345b2acad053be08dd0f7d901ab762efa7e8`.
+It produced a clean source clone at
+`C:\Users\B_StL\AppData\Local\PandaMUX-Acceptance\phase4-757caf0-0.60.62-msi-r2`;
+the source-preparation record has SHA-256
+`8231ac6f8074358255ad5f49f24841df99d4d94836633ea2e1271f0d75860615`.
+The limited normal-user build used Rust 1.99.0 and Cargo 1.99.0, exited zero,
+left the source clean, and produced one artifact set:
 
-The exact source passed:
+| Artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `pandamux.exe` | 28,012,032 | `0c4f464e99d14d4d7d9cda98eabd8510e09cae08d14f26802f0675be2ef6b3a4` |
+| `pandamux-server.exe` | 14,319,616 | `c8f520ca14050f0aea2387a1d7d970d7586d2daab63b2ddb5db45c96dec98fe5` |
+| `pandamux-cli.exe` | 1,448,448 | `ec19550a310b2a812243582e3011a6564fb19f5cb18effd6f14e68c84a237a2c` |
 
-- `cargo fmt --all --check`
-- `node scripts/check-claude-wiring.mjs`
-- `pwsh -File scripts/check-rust-boundaries.ps1`
-- `cargo clippy --locked --workspace --all-targets -- -D warnings`
-- `cargo test --locked --workspace`, with 437 passed, zero failed, and two
-  intentional real-shell ConPTY tests ignored
-- `cargo deny check advisories licenses`, with policy success and the retained
-  unmatched `Unicode-DFS-2016` allowance plus yanked transitive
-  `chacha20 0.10.1` and `yoke-derive 0.8.3` warnings
-- `cargo run --locked -p pandamux-desktop -- --headless`, with
-  `ALL CHECKS PASSED`
-- maintained-doc source, link, citation, and Mermaid validation, with all 142
-  Rust source modules mapped and no warning or error
-- diff hygiene and exact version checks
+The build result at SHA-256
+`261ad1d95a8f49567b28c8d7bf28de94715c0e6f479f08809b38852b0d26bd91`
+also records a zero-exit headless run with `ALL CHECKS PASSED`. A separate
+limited-user authenticated IPC smoke used SID
+`S-1-5-21-601361308-2282107928-3304411722-1001`, completed server and CLI
+`hello`, `ping`, and `identify`, and stopped the server; its result has SHA-256
+`dcc8bff7db34271f764ff46fc490484d2495025ffe624da57b738ea4fda18d44`.
 
-Because this commit changes the successful-login UI after the accepted native
-runs, the following exact 0.60.59 rows must run on Windows before P4-C3 can
-return to Pass:
+The affected physical-laptop rows passed as follows:
 
-1. Clean limited-user MSVC desktop, server, and CLI build plus exact hashes and
-   headless smoke.
-2. At 100 and 200 percent scale, prepare login while the provider list is
-   scrolled, prove the confirmation remains visible, launch it, and prove the
-   right-side Terminal surface is visible, focused, interactive, closable, and
-   recoverable through the titlebar control. Repeat the ownership assertion for
-   a remote login fixture.
-3. Inspect dark and light screenshots, High Contrast selected and focus states,
-   and disabled-animation state clarity without relying on tint alone.
-4. Verify UI Automation names, selected state, and open or close action, then
-   perform genuine Narrator traversal through the toggle and the opened terminal
-   output.
+| Row | Result record SHA-256 | Accepted evidence |
+|---|---|---|
+| 100 percent interaction and visual | `589b065af9a61399ec94539e9152197104007cfba364d8a28a874144fcc33e41` | Confirmation remained visible while the provider list was scrolled; launch opened and focused the right-side Terminal; controlled input echoed; close and titlebar reopen worked; dark and light captures were inspected |
+| 200 percent interaction and visual | `a91bc743b07d247e03341c9c444c1b25c243966ce9cdb435d66ea29298074a28` | The same complete interaction passed at actual 200 percent scale on the 3840 by 2160 panel without clipping; dark and light captures were inspected |
+| High Contrast | wrapper `8b754dbfa9b05236ebe8ac98f0a99633ffcab0abd51bd3626203bf5f5017ef15`, child `c54d497f295615fee7e3d12742ba65c4ecc79d802822d206d950f9b0ba576398` | Selected, focused, active, warning, error, status, terminal, and titlebar-toggle meaning remained visible without tint alone; the active High Contrast flag was restored |
+| Animations disabled | wrapper `e7a4510e7be6015ad4b98fb241dd449b90e9ef8e1de685867f4eaa3b5e3aa6af`, child `7b299fc104946703fff203aa7903a932433886e104ca6f60c0cad7d419082eec` | Login, panel state, focus, output, close, reopen, and status remained understandable; all three original UI-effects values were restored |
+| Genuine Windows Narrator | `defd302c10b6028d1812c24e139a17fe1b53ccdadd96b461a6654645e7851cc1` | Narrator synchronized to system focus, traversed the open or close toggle and terminal controls, and copied the exact READY, ECHO, and reopened-output phrases through the supported Narrator command; three Speech Recap captures remain as visual audit evidence |
+| Remote login routing | `2f3fc1e3ff03e7aa10ada24125d668f2bc5207b584d8c1a73d5be18a2e11f81b` | The same exact artifact hashes passed server-owned remote login-terminal registration and routing |
+| Display restoration | `032883941db1704745be28ac7f1f22239a50a479d83a6eb6e5190e8d0a8fa60f` | The physical panel returned to its original 200 percent display scale after the 100 percent run |
 
-The terminal output TextPattern implementation and named-pipe security boundary
-did not change, so their accepted 0.60.41 evidence remains Pass. Local tests do
-not substitute for the scoped native rows above. No VM was used for this repair,
-and no native, live-provider, production, push, CI, signing, packaging,
-deployment, activation, or release result is claimed.
+The laptop's original and restored state records have SHA-256 values
+`498808989086bfb6bb3be1c275fcbed065d3f304acdab7942145c1acb0e46078`
+and `8a08910a9d2c1c4c7931c13674e41941c687250d26239a8af8fd1d57d53f2b59`.
+The restored active display, animation, and High Contrast flags match the
+baseline. The disabled High Contrast scheme name is inert but now names `High
+Contrast Black`; it does not enable High Contrast and is recorded rather than
+misreported as byte-identical restoration.
+
+The unchanged 0.60.41 terminal output TextPattern and full named-pipe security
+matrix remain accepted; this scoped rerun did not pretend that a limited-user
+smoke repeated every unchanged security row. No VM supplied any accepted row.
+No push, CI, signing, packaging, deployment, production activation, or release
+occurred.
 
 ## Exact 0.60.43 P4-C5 supporting post-side-effect proxy-loss rehearsal
 
@@ -2936,7 +2922,8 @@ Windows guest `SF-C4ad-c4f68c3c` and the isolated Galahad node. The two
 rehearsals used the production SSH proxy, remote event replay, managed usage
 sync, and server-owned terminal replay paths. A Windows guest is not a physical
 laptop, and Hyper-V saved state is not physical laptop sleep. Both mandatory
-P4-C6 rows therefore remain open and release-blocking.
+P4-C6 rows therefore remained open and release-blocking at that rehearsal
+checkpoint; the later exact 0.60.64 physical result below closes them.
 
 The isolated roots are:
 
@@ -3066,6 +3053,142 @@ video, the exact original eight checkpoint IDs, and zero rehearsal tasks.
 SupportForge sessions were disconnected. The original checkout and historical
 untracked recovery bundles were not modified. No push, CI, signing, packaging,
 deployment, production activation, or release occurred.
+
+## Exact 0.60.64 P4-C6 physical laptop acceptance
+
+Result recorded 2026-10-08: **Pass for both mandatory physical P4-C6 rows on
+exact 0.60.64.** Clean commit
+`a41c5bd40861fb37de7a53252d96dcb055828362` supplied the Windows desktop,
+server, and CLI plus the Linux server and CLI used by the physical MSI Stealth
+GS77 12UHS and the isolated Galahad node. This result supersedes the open
+physical-row conclusion of the 0.60.43 Hyper-V rehearsal without converting the
+VM rehearsal itself into physical evidence.
+
+### Candidate and isolated artifacts
+
+The exact source bundle has SHA-256
+`9fa806a0fad0364ec4dada15658f7526cccde43faeaec2fab7556f176d0406cc`.
+The Linux server and CLI hashes are
+`6c94fb162c2341b663eac2570423d1cd15171560cd97b0aef16f3e40cdb19040`
+and `2a4ccdc2572ced0fca2523b0f9566ae7a7addbbcf3bc2d1123aaf8ef1048d97c`.
+The limited-user Windows desktop, server, and CLI hashes are
+`2de2b271074b0f514c0fa35fb8b80c06d880d51c236d89874f2c7ee9b12282cb`,
+`e3d21302fd8302269e8385e950b0381c35e8fd6ed93544aca7ff3a7d50217269`,
+and `ebe755c407f0ede8d138807d7f6ddadcde41bf4fc9043aba0e2dd482eb5d2bfe`.
+The physical acceptance harness has SHA-256
+`789153fca3607d37e3e60469b68a42f738b21598ed83b86eb1faeaae37138b73`.
+
+The candidate first passed a short physical orphan smoke: after the Hub-side
+connection disappeared while SSH stdin remained open, the node-side proxy
+exited after 84.010 seconds, no matching proxy process remained, and the remote
+terminal continued. That smoke exercised the exact protocol-v2 application
+heartbeat, 90-second node lease, and split bridge termination later used by the
+full-duration rows.
+
+### Real provider turn across a physical 30-minute Wi-Fi outage
+
+The accepted row used configured instance `codex-default`, model `gpt-6-luna`,
+thread `thread-f4f04c09-6f7d-4847-be7e-5d11cff0e7da`, turn
+`turn-708f966f-e625-4d2a-b8bd-5b08824671ce`, and attempt
+`attempt-27861612-60f6-4f2a-8d29-51748a695fde`. The MSI's Wi-Fi interface was
+physically unavailable to PandaMUX for 1,805,006 milliseconds. The independent
+coordinator observed 1,815,778 milliseconds between disconnect and recovery.
+The node-side proxy PID 3862964 exited after 75,360 milliseconds, below the
+105,000-millisecond acceptance ceiling. Its lease record has SHA-256
+`57ea48f3e72507152d9f2b6f10c2a10b859b184db8fef6ae41b3b122e6159cba`.
+
+After reconnect, durable thread event sequences 4 through 23 appeared exactly
+once, the single attempt completed, and the exact final output was
+`P4C6_PHYSICAL_PROVIDER_REPLAY_OK`. Hub-owned usage synchronization returned
+exactly one matching observation with 14,271 input, 13,056 cached-input, 14
+output, and zero cache-write tokens. No retry or fallback attempt appeared.
+The ready, result, network-gap, and wrapper records have SHA-256 values
+`d808db4ce94e708d949a0b1590cca18d39f6d5b6947c2f4ae070c992c9d70c08`,
+`32ee1a80afd82579be5c2f6ab8c548010489de22f4f43d9774e277151167c863`,
+`401f247186306c29cecaf1906bcfae9d1ab5e2a494ce13198312693cdbde8749`,
+and `69a5c3601dc0d9098eccd7940f79e06ef16ec1de910610241e0122d1a448116d`.
+
+### Remote full-screen terminal across physical Modern Standby
+
+The accepted Run 8 used remote terminal `term-425d34ff`, whose exact owner was
+Galahad PID 723863 running `/usr/bin/watch`. Windows SleepStudy records one
+Connected Modern Standby session beginning at `2026-10-09T02:30:20Z`, or
+`2026-10-08T22:30:20` on the MSI, with duration 2,340,538 milliseconds. Entry
+was `Transition To Sleep`, exit was `Power Button`,
+`DisconnectedStandby=0`, `hibernateTimeoutInSec=0`, and the report contained
+zero hibernate sessions. The SleepStudy XML has SHA-256
+`3fec66306b105594c68fb772161bf191acf06676006bd09867cba755d2776956`;
+the normalized physical-sleep result has SHA-256
+`64241bd42178e8fde2367ce70984992283ce4e6e0cbe201b2bcd9cf0ed407955`.
+
+The exact harness wrapper passed after 2,437,490 milliseconds with empty stderr
+and SHA-256
+`c9362d325c0a7a8a8b72efa0efec723b43d58893191a8a0f6d7ee0f1a304cd88`.
+The guest-side observed gap was 2,422,630 milliseconds. The same terminal and
+owner remained active, its durable offset advanced from 1,444 to 8,005, and
+reconnect returned exactly 6,561 bytes without truncation. Exactly one input
+marker remained, the old transport cleaned up gracefully, and explicit close
+removed the terminal owner. The terminal result has SHA-256
+`255cd2dfa059760f6397a219f46155626a5ada83d41da6a3379ec155f8c53933`.
+
+Pre-sleep proxy PID 723806 exited 81.021 seconds after the authoritative
+SleepStudy entry. Its exit record has SHA-256
+`e48748edb9b99853bc7ae4daac9750b711ad8b4bf709a87ada1cc00b23339b08`.
+The observer reported 116,001 milliseconds because it began before the sleep
+dispatch; the same-clock SleepStudy-to-exit interval decides the lease result.
+
+### Rejected supplemental diagnostics
+
+The coordinator's supplemental network monitor reported
+`physical_sleep_interval_too_short` after seeing only 553,703 milliseconds of
+continuous network unavailability. Connected Modern Standby briefly exposed
+networking, so that measurement cannot decide physical sleep duration and is
+rejected for the sleep row. Windows SleepStudy is the authoritative same-host
+power-state record.
+
+The first finalizer captured the accepted SleepStudy session and restored the
+machine settings, but then wrote a false Fail because PowerShell 5.1 StrictMode
+does not expose `.Count` on `$null`. That rejected record is preserved at
+SHA-256
+`35e072b9af9c2667af4c52c377e1234ae69452cb7aefbfe5bb482ae53517adeb`.
+The ignored helper changed the check to `@($hibernateSessions).Count`, parsed
+with zero PowerShell AST errors, and has SHA-256
+`1bd41aba4fb3fd1631bc4b5408320d6cb0bd484d3311fc4e7a98a42b90655068`.
+Its rerun only re-evaluated the same immutable SleepStudy entry; it did not
+repeat or extend the physical sleep.
+
+### Preservation and cleanup
+
+The accepted evidence is retained under ignored local root
+`target/native-acceptance/phase4-msi-a41c5bd-0.60.64`, including Run 8 and the
+final cleanup receipts. On Galahad, cleanup stopped isolated daemon PID 3819869
+with `SIGTERM` and no forced kill, removed its sockets, left zero matching root
+processes, checkpointed the clone to `0|0|0`, and passed SQLite integrity. The
+final clone database has SHA-256
+`d6234ef8c6f928ee812626031349d975654bf6a0912bac874c76de7ee8e8d99a`.
+
+The active auth was restored to baseline SHA-256
+`c113c08e486e8c8825ccb288395593131699f5d1511e52d81309334d01f1c4e4`
+at mode 600. `authorized_keys` returned to SHA-256
+`e447b47c714f942203afed79b60d0fd9187ad94ca4447289687bf6d8d582969c`
+at mode 600 with zero temporary acceptance keys. The protected source and
+rehearsal databases remained unchanged at SHA-256
+`5f45008d32b07e3c8491f2ad45361482e16cfa66a7f42bae7c5408c96350b323`
+and `0a64a5d92f53725525f409e98434c25799157591e5369cb495591ac641100c0a`.
+The Galahad cleanup log has SHA-256
+`220db9ca83a7ba3fba5e79ffe5740f03f1890735ad498d67076e68b593ef75c8`.
+
+MSI cleanup removed every P4-C6 scheduled task, the private acceptance key,
+and the staging root; restored `known_hosts` to SHA-256
+`1bfee67fb2681b5e202a65cc88ad139e0e75fb068e4c59713ba6cea252e900c6`;
+returned Wi-Fi to Up; restored AC sleep to Never, hibernate timeout to 900
+seconds, wake timers to enabled, and the original five wake devices. Its cleanup
+and power restoration records have SHA-256 values
+`8a5ee6578ba69be98b47b346e2b11dbe85712827081d1b851a0baf18e2a6ce5d`
+and `8ec56c83bdac0f7a2d54c0bb7aa0df010354865645d04210eb4e73221d4c8086`.
+The laptop remained on. The original checkout, retained Galahad evidence, and
+eleven untracked recovery bundles were not modified. P4-C6 is Pass; no release,
+push, CI, signing, packaging, deployment, or production activation occurred.
 
 ## Static verification and remaining gates
 
@@ -3259,6 +3382,26 @@ and all eleven historical recovery bundles remained untracked and untouched.
 This local verification creates no native Windows or production acceptance
 claim.
 
+Exact 0.60.64 commit
+`a41c5bd40861fb37de7a53252d96dcb055828362` passed locked metadata,
+formatting, the Rust boundary and Claude wiring guards, strict locked all-target
+and all-feature workspace Clippy, the full workspace test suite, dependency
+policy, desktop headless verification, and diff hygiene before its exact
+physical acceptance runs. The source verification and physical artifact
+evidence are separate results.
+
+The documentation-only 0.60.65 workspace passed locked metadata, formatting,
+the Rust boundary and Claude wiring guards, strict locked all-target and
+all-feature workspace Clippy, 458 workspace tests with zero failures and two
+intentional real-shell ignores, desktop headless verification with `ALL CHECKS
+PASSED`, dependency policy, maintained-doc structure, link, citation, source-map,
+and static Mermaid validation, and diff hygiene. Dependency policy returned
+`advisories ok, bans ok, licenses ok, sources ok`; its existing duplicate,
+unmatched license allowance, and yanked transitive-version warnings remained
+non-failing. This documentation snapshot creates no 0.60.65 executable, native,
+live, provider-capacity, physical-laptop, production, push, CI, deployment,
+activation, or release claim.
+
 `cargo-deny` 0.20.2 could not parse the old `deny.toml` syntax. The follow-up
 configuration change removed deprecated keys and scoped seven existing
 non-allowlisted transitive licenses to their exact crates and versions. With
@@ -3276,12 +3419,7 @@ especially for the scoped MPL-2.0 exceptions.
 
 Phase 4 cannot yet be marked exited under `tasks/plan-rewrite.md`:
 
-1. Run the scoped exact 0.60.59 P4-C3 Windows matrix for provider-login
-   confirmation visibility, Surfaces handoff and recovery, scaling, visual
-   review, High Contrast, disabled-animation clarity, UI Automation, and
-   genuine Narrator traversal. The unchanged terminal TextPattern and IPC rows
-   do not need to be repeated.
-2. Close the remaining live P4-C5 failover row with a real pre-output provider
+1. Close the remaining live P4-C5 failover row with a real pre-output provider
    capacity failure and one retry on the explicitly allowed pool.
    Exact 0.60.17 already
    passes scanner durability, reconnect and bounded backfill, capacity
@@ -3299,12 +3437,14 @@ Phase 4 cannot yet be marked exited under `tasks/plan-rewrite.md`:
    Exact 0.60.56 passes the live credit-serviceability correction check with
    capacity-aware routing enabled, but paid credits kept Codex serviceable.
    None of these results substitutes for the remaining real capacity row.
-3. Complete the P4-C7 archive and maintained-document synchronization after the
-   remaining P4-C5 and P4-C6 live rows stabilize. This record already reflects
-   the historical P4-C3 evidence, scoped 0.60.59 reopening, and P4-C5 Partial
-   result.
-4. Complete the explicitly deferred R0.5 30-minute physical laptop disconnect
-   and sleep checks before production acceptance or release.
+2. Complete final P4-C7 archive synchronization after the remaining P4-C5 live
+   row stabilizes. This interim synchronization already reflects the historical
+   P4-C3 evidence, accepted exact 0.60.62 scoped rerun, P4-C5 Partial result,
+   and exact 0.60.64 physical P4-C6 Pass.
+
+The previously deferred R0.5 physical disconnect and sleep rows are no longer
+open: both passed on exact 0.60.64. They do not remove the independent P4-C5 or
+final P4-C7 requirements.
 
 The acceptance VM is still a shared lab. Its existing network attachment and
 unrelated Hyper-V checkpoints were left untouched during the 0.60.0 matrix. No

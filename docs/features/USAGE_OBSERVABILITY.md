@@ -390,6 +390,12 @@ visibly rejected a no-route create into Provider Settings and, with authenticate
 Codex 0.159.2, rendered `Codex CLI` plus live `GPT-6.1-Sol`; the shipped CLI
 read the same `codex-default` and `gpt-6.1-sol` values on the created thread.
 P4-C3 is Pass again.
+Exact 0.60.62 commit `757caf0` later passed the affected provider-login and
+Surfaces matrix on the physical MSI laptop at 100 and 200 percent. The exact
+candidate retained dark/light visual clarity, High Contrast, disabled-animation
+state meaning, genuine Narrator traversal, display restoration, remote login
+routing, and usable-shell fallback when the machine exposed a dead `pwsh.exe`
+App Execution Alias. P4-C3 therefore remains Pass.
 A separate supporting live run later killed the exact remote proxy after
 visible text and one successful file-writing shell tool. Reconnect kept one
 protected attempt and the one-line marker without replay. Exact 0.60.47 then
@@ -429,12 +435,13 @@ the primary Codex projection stayed reported and serviceable at 100 percent
 included-use utilization, one Codex attempt completed, and no capacity retry or
 Claude fallback appeared. P4-C5 remains Partial because the real pre-output
 capacity-failure row is still open.
-A supporting Hyper-V rehearsal on the same exact runtime later passed a real
-30-minute provider-network interruption and full-screen terminal saved-state
-recovery with exact event, usage, offset, replay, and cleanup evidence. It does
-not replace the required physical laptop disconnect and sleep rows.
-The open real provider-capacity row, the deferred physical R0.5 laptop
-disconnect and sleep rows, the final archive after those results stabilize,
-and later release gates still
-block Phase 4 exit, production acceptance, and release. Exact results and
-limitations are recorded in `docs/operations/PHASE4_ACCEPTANCE.md`.
+A supporting Hyper-V rehearsal first exercised the provider-network and
+terminal recovery paths without substituting for physical hardware. Exact
+0.60.64 commit `a41c5bd` subsequently passed both physical P4-C6 rows: the
+provider turn retained one attempt and one usage observation across more than
+30 minutes of Wi-Fi disconnection, and the remote terminal retained its exact
+owner and replayed 6,561 bytes without truncation after 39 minutes of Connected
+Modern Standby. The open real provider-capacity row, the final P4-C7 archive
+after that result stabilizes, and later release gates still block Phase 4 exit,
+production acceptance, and release. Exact results and limitations are recorded
+in `docs/operations/PHASE4_ACCEPTANCE.md`.

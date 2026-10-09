@@ -1,8 +1,29 @@
 # PandaMUX Rewrite: Chat-First Agent Client with Remote Environments, Multi-Repo Fleet Orchestration, Agents, Schedules, Full MCP Settings Control, and Broadside Sharing
 
-Date: 2026-09-25 (Approved 2026-09-26; recovery rewrite 2026-09-28; Phase 4 closure rewrite 2026-10-06; accounting and native acceptance 2026-10-07; continuation restart, external-service acceptance, and capacity interpretation correction 2026-10-08)
-Status: **Phases 0 to 3 and Phase 4A through 4F implementation are recorded; P4-C1, P4-C2, and P4-C4 passed on exact 0.60.15; the terminal, Narrator, visual, scaling, and IPC rows passed on exact 0.60.41; the provider/model routing row passed local, live, and native Windows acceptance on exact 0.60.43; exact 0.60.43 passed supporting post-side-effect proxy-loss and Hyper-V recovery rehearsals; exact 0.60.47 repaired unresolved-tool false success and passed supporting approval plus loopback-network recovery; exact 0.60.49 made tool-result projection atomic and passed the live pending-approval plus exact tool-result process-crash restart rows; exact 0.60.52 repaired continuation route persistence, passed the pending-continuation restart row, and then passed the real external-service interruption row; later exact 0.60.52 and 0.60.55 capacity diagnostics were rejected when Codex remained serviceable and exposed false hard-limit interpretations corrected and live-proven on exact 0.60.56; exact 0.60.59 fixes provider-login discoverability and passes the complete local gate but reopens its affected P4-C3 native interaction, visual, scaling, High Contrast, and accessibility rows; and P4-C5 remains Partial, so the scoped P4-C3 rerun, real pre-output capacity, final documentation, and physical acceptance gates keep Phase 4 open**
-Baseline: The preserved original checkout remains PandaMUX v0.53.44 at `9511d0e22d44`; active recovery work is isolated on `codex/recovery-r0`, with exact 0.60.15 accounting evidence at `3a77382`, exact 0.60.41 native Windows evidence at `c6a20ff4f768747d0dadd59b88b40d3e20f7674d`, exact 0.60.43 local, live, and native provider-routing plus supporting recovery evidence at `372f2ae83e67a62cd3b382e5db52af96d00a85ce`, exact 0.60.47 fail-closed plus supporting approval/network evidence at `1822486b4f7d98ba6026bbfd7224e97f09e447c9`, exact 0.60.49 atomic tool-result, pending-approval restart, and exact process-crash evidence at `d09641e86cd06d72d7312ceb1fa3b20e5931ff5f`, exact 0.60.52 continuation-route, pending-continuation restart, real external-service interruption, and rejected capacity-diagnostic evidence at `5d8b77d7086a7a266251cd3106e5f124d6cd2aec`, exact 0.60.55 source plus rejected credit-serviceability diagnostics at `025e443a8f0113962e75b9e9b0beaa4b3549f8c5`, exact 0.60.56 credit-serviceability source and live evidence at `2ca7d70210f64bc8896e30903fe073d7c5dad65e`, and exact 0.60.59 local provider-login discoverability source at `06ed48cb8fe55c750905788c0bc9ec0a8e51f805`. Workspace version 0.60.60 records the scoped acceptance reopening only.
+Date: 2026-09-25 (Approved 2026-09-26; recovery rewrite 2026-09-28; Phase 4 closure rewrite 2026-10-06; accounting and native acceptance 2026-10-07; continuation restart, external-service acceptance, capacity interpretation correction, and physical P4-C6 closure 2026-10-08)
+Status: **Phases 0 to 3 and Phase 4A through 4F implementation are recorded;
+P4-C1, P4-C2, and P4-C4 passed on exact 0.60.15; the historical P4-C3 terminal,
+Narrator, visual, scaling, and IPC rows passed on exact 0.60.41; provider/model
+routing passed local, live, and native Windows acceptance on exact 0.60.43; the
+supporting recovery rows through exact 0.60.56 retain their recorded results;
+and exact 0.60.62 closes the scoped provider-login, interaction, visual,
+scaling, High Contrast, animation, accessibility, and remote-routing reopening
+on a physical Windows laptop. Exact 0.60.64 closes both mandatory physical
+P4-C6 rows. P4-C5 remains Partial, so real pre-output capacity and the final
+post-P4-C5 documentation archive keep Phase 4 open.**
+Baseline: The preserved original checkout remains PandaMUX v0.53.44 at
+`9511d0e22d44`; active recovery work is isolated on `codex/recovery-r0`, with
+exact 0.60.15 accounting evidence at `3a77382`, exact 0.60.41 native Windows
+evidence at `c6a20ff4f768747d0dadd59b88b40d3e20f7674d`, exact 0.60.43 local,
+live, native provider-routing, and supporting recovery evidence at
+`372f2ae83e67a62cd3b382e5db52af96d00a85ce`, exact 0.60.47 through 0.60.56
+durability and capacity-interpretation evidence at their recorded commits,
+exact 0.60.59 local provider-login source at
+`06ed48cb8fe55c750905788c0bc9ec0a8e51f805`, and accepted exact 0.60.62
+physical-laptop P4-C3 evidence at
+`757caf0ef515561218509fa2f8838569837057b9`, and accepted exact 0.60.64
+physical P4-C6 evidence at
+`a41c5bd40861fb37de7a53252d96dcb055828362`.
 
 Relationship to `tasks/plan-repo.md`: that file is the **historical** record of the Electron to native Rust rewrite (Phases 1 to 7, complete). This plan supersedes its product direction (terminal multiplexer) but keeps its engineering posture: backend-owned state, single writer, intent-in/delta-out, deliberate dependency pins, crate isolation, and tag-driven signed releases. Its Section 12 design tokens carry over where they still apply (Section 8). UI history: Iced is removed. An earlier draft of this plan chose Tauri 2 + React; the user replaced that with **GPUI + gpui-kit** (all Rust) on 2026-09-25, and Tauri 2 remains only as the documented fallback if the Phase 0 GPUI spike fails. `plan-repo.md` rejected GPUI for three reasons, each now handled explicitly: GPL contamination (zed#55470, still open; tracked as a license gate in S6 and Risks), "not built for external consumption" (gpui-kit publishes exact-pinned `gpui-pre` snapshots and ships in production in Longbridge Pro on Windows, macOS, and Linux), and weak accessibility. Phase 0 treated accessibility as exploratory; the rewritten Phase 4 and Phase 7 criteria make the defined v1 accessibility matrix release-gating.
 
@@ -275,17 +296,17 @@ Terminology used throughout:
   Those historical P4-C3 rows remain evidence. Exact 0.60.43 later passed local
   live provider/model routing and its exact native Windows configured-route and
   no-route picker rows. Exact 0.60.59 then changed the successful-login
-  confirmation, Surfaces panel layout, terminal handoff, and titlebar toggle.
-  Its complete local gate passed, but the corresponding native interaction,
-  visual, scaling, High Contrast, and accessibility rows are reopened. The
-  unchanged terminal TextPattern and named-pipe rows remain Pass. Version
-  0.60.60 records this scoped reopening only and has no executable or native
-  claim.
-- Phase 4 remains open on the scoped 0.60.59 native Windows rerun, real
-  pre-output capacity exhaustion, and the final
-  documentation archive after the remaining P4-C5 row stabilizes. The
-  re-scoped physical laptop
-  disconnect and sleep rows remain production-acceptance and release blockers.
+  confirmation, Surfaces panel layout, terminal handoff, and titlebar toggle,
+  reopening only those affected rows. Exact 0.60.62 commit `757caf0` passed the
+  clean limited-user build, headless and IPC smoke, 100 and 200 percent
+  interaction, dark and light visual review, High Contrast, disabled
+  animations, genuine Narrator, display restoration, and remote login routing
+  on the physical MSI laptop. The unchanged terminal TextPattern and full
+  named-pipe security rows remain Pass from exact 0.60.41.
+- Phase 4 remains open on real pre-output capacity exhaustion and the final
+  documentation archive after the remaining P4-C5 row stabilizes. Exact
+  0.60.64 passed the re-scoped physical laptop disconnect and sleep rows, so
+  P4-C6 is no longer a production-acceptance or release blocker.
 - Phase 5 implementation has not started. The next development work is the
   ordered Phase 4 closure sequence in its verification record. Phase 5 begins
   only with its dependency, legacy-domain, and boundary gate. Phase 6 depends
@@ -1179,7 +1200,7 @@ Exit criteria: Antigravity's managed bundle is installed on Galahad by node-side
 
 ### Recovery Gate R0: prove the Phase 3 foundation before extending it
 
-**Why this gate exists:** When R0 opened, Phase 3 had implementation commits, but the production hub did not compose a remote transport, the server did not complete the proxy command, thread execution did not resolve the selected provider instance, and the documented live matrix had not been archived. Phase 4 usage, capacity, and failover would otherwise have observed and routed a placeholder system. R0.2 through R0.4 now correct those foundations. On 2026-09-29, the user explicitly approved moving past the two remaining physical R0.5 rows. That rescope closes R0 as a Phase 4 development gate only. The disconnect and sleep rows remain required production-acceptance and release evidence.
+**Why this gate exists:** When R0 opened, Phase 3 had implementation commits, but the production hub did not compose a remote transport, the server did not complete the proxy command, thread execution did not resolve the selected provider instance, and the documented live matrix had not been archived. Phase 4 usage, capacity, and failover would otherwise have observed and routed a placeholder system. R0.2 through R0.4 now correct those foundations. On 2026-09-29, the user explicitly approved moving past the two remaining physical R0.5 rows. That rescope closed R0 as a Phase 4 development gate only. The disconnect and sleep rows remained required production-acceptance and release evidence until both passed on exact 0.60.64 on 2026-10-08.
 
 #### R0.1 Preserve and classify the unfinished Phase 4 attempt
 
@@ -1249,9 +1270,9 @@ Acceptance:
 
 #### R0.5 Archive the Phase 3 production acceptance matrix
 
-Live results and required evidence are tracked in [`docs/operations/PHASE3_ACCEPTANCE.md`](../docs/operations/PHASE3_ACCEPTANCE.md). The record is open for the physical laptop rows; every accepted native Windows and Galahad result is backed by direct live evidence rather than inferred from fixture coverage.
+Live results and required evidence are tracked in [`docs/operations/PHASE3_ACCEPTANCE.md`](../docs/operations/PHASE3_ACCEPTANCE.md). Every accepted native Windows, physical laptop, and Galahad result is backed by direct live evidence rather than inferred from fixture coverage. The two rows originally deferred for development sequencing later passed on exact 0.60.64.
 
-R0.5 preflight found that the recovered Antigravity path used placeholder release metadata, shell-script stand-ins for the Google bundle, a fabricated OAuth flow, and success responses without a live ACP process. The recovery implementation now uses the pinned Google ACP 1.1.1 bundles, streaming size and SHA-256 verification, two-entry hardened extraction, real initialize and session traffic, strict OAuth relay validation, workspace-confined file capabilities, opaque permission option IDs, cancellation and process cleanup, node download plus verified hub-to-node SFTP fallback, and private profile and scratch directories. Exact-commit Galahad runs prove both managed-install paths, idle and busy lifecycle behavior, the remote transfer layer, stored best-effort-provider disabled states, the full Codex row on `0.54.7`, and the authenticated Claude and Antigravity rows on `0.54.11`. Exact `0.54.12` Windows binaries prove the native IPC boundary. Only the required physical laptop disconnect and sleep checks remain gating.
+R0.5 preflight found that the recovered Antigravity path used placeholder release metadata, shell-script stand-ins for the Google bundle, a fabricated OAuth flow, and success responses without a live ACP process. The recovery implementation now uses the pinned Google ACP 1.1.1 bundles, streaming size and SHA-256 verification, two-entry hardened extraction, real initialize and session traffic, strict OAuth relay validation, workspace-confined file capabilities, opaque permission option IDs, cancellation and process cleanup, node download plus verified hub-to-node SFTP fallback, and private profile and scratch directories. Exact-commit Galahad runs prove both managed-install paths, idle and busy lifecycle behavior, the remote transfer layer, stored best-effort-provider disabled states, the full Codex row on `0.54.7`, and the authenticated Claude and Antigravity rows on `0.54.11`. Exact `0.54.12` Windows binaries prove the native IPC boundary. Exact `0.60.64` later proves the physical laptop disconnect and Modern Standby boundaries.
 
 Run the matrix against local Windows and Galahad with exact binary SHAs and captured artifacts:
 
@@ -1324,8 +1345,15 @@ Gate exit:
 - **Development-gate rescope, 2026-09-29:** the user explicitly approved continuing
   Phase 4 without waiting for the 30-minute physical laptop disconnect and
   full-screen-terminal sleep checks. Browser authentication, native Windows IPC, and all
-  three Galahad provider rows are complete. The two deferred rows still require
+  three Galahad provider rows were complete. The two deferred rows still required
   interactive evidence before any production-accepted, released, or shipped claim.
+- **Physical-row closure, 2026-10-08:** exact 0.60.64 commit `a41c5bd` passed
+  one real provider turn across 1,805.006 seconds of physical MSI Wi-Fi
+  disconnection and one remote full-screen terminal across 2,340.538 seconds
+  of Connected Modern Standby. Event and usage replay remained unique, terminal
+  ownership and offsets remained stable, abandoned proxies were reaped within
+  the lease ceiling, and cleanup restored the laptop and isolated Galahad state.
+  The R0.5 evidence matrix is complete.
 
 ### Phase 4: Provider observability, usage, capacity, policy, and safe failover
 
@@ -1753,10 +1781,13 @@ Checkpoint acceptance:
   turns on an isolated Galahad node, and a real Hub-to-node SSH turn with policy
   denial and bounded usage sync. The full native interaction and accessibility
   matrix, live restart and side-effect-aware failover matrix, and weekly
-  reconciliation remain open. The deferred R0.5 physical laptop-disconnect and
-  sleep rows also remain open. See `docs/operations/PHASE4_ACCEPTANCE.md` for
-  exact hashes, commands, result IDs, limitations, and cleanup. No push,
-  deployment, production activation, or release is claimed.
+  reconciliation remained open at that boundary. Later exact-candidate evidence
+  closes the native matrix, reconciliation, restart and side-effect rows, and
+  both physical R0.5 rows. Real pre-output provider-capacity failure and final
+  post-P4-C5 documentation closure remain open. See
+  `docs/operations/PHASE4_ACCEPTANCE.md` for exact hashes, commands, result IDs,
+  limitations, and cleanup. No push, deployment, production activation, or
+  release is claimed.
 - **Recovery preservation:** the original dirty checkout remains at recovered base
   `9511d0e22d44`. Its 11 unfinished Phase 4 prototype source files were restored from the
   R0.1 archive in a detached temporary worktree and compared byte-for-byte with the
@@ -2204,11 +2235,14 @@ visibly redirects to Provider Settings without creating a thread and that
 authenticated Codex 0.159.2 renders `Codex CLI` plus live `GPT-6.1-Sol` before
 creating a thread whose persisted `codex-default` and `gpt-6.1-sol` values
 match the shipped CLI. The exact 0.60.43 picker row passed. Exact 0.60.59 later
-changed the provider-login confirmation and terminal handoff UI, so P4-C3 is
-reopened only for the successful-login interaction, panel layout, scaling,
-visual, High Contrast, and accessible toggle rows. The unchanged 0.60.41 terminal output
-TextPattern and named-pipe security rows remain Pass. The scoped native rerun is
-listed below and cannot be replaced by local tests.
+changed the provider-login confirmation and terminal handoff UI, reopening only
+the successful-login interaction, panel layout, scaling, visual, High Contrast,
+animation, and accessible-toggle rows. Exact 0.60.62 commit
+`757caf0ef515561218509fa2f8838569837057b9` passed that complete scoped matrix
+on the physical MSI laptop, including genuine Narrator and remote login routing.
+The unchanged 0.60.41 terminal output TextPattern and full named-pipe security
+rows remain Pass. P4-C3 is Pass again; exact hashes and restoration evidence are
+archived in `docs/operations/PHASE4_ACCEPTANCE.md`.
 
 ##### P4-C4: rerun defensible seven-day reconciliation
 
@@ -2711,8 +2745,8 @@ These two rows may remain deferred for development sequencing only. They are
 mandatory before Phase 7 release authorization and cannot be converted to Pass
 by a waiver, short run, or fixture.
 
-Result recorded 2026-10-08: **Supporting Hyper-V rehearsal Pass; P4-C6 remains
-open.** Exact runtime code from commit
+Supporting result recorded 2026-10-08: **Hyper-V rehearsal Pass; P4-C6 remained
+open at this checkpoint.** Exact runtime code from commit
 `372f2ae83e67a62cd3b382e5db52af96d00a85ce`, version `0.60.43`, ran between
 the Windows guest `SF-C4ad-c4f68c3c` and the isolated Galahad node. During a
 real `codex-default` plus `gpt-6-luna` turn, COLT-SHINE detached the guest
@@ -2741,9 +2775,48 @@ database, removed only the temporary checkpoint and rehearsal tasks, and
 returned the shared VM to its Off, disconnected, GSI-disabled, original
 eight-checkpoint baseline.
 
+Physical result recorded 2026-10-08: **Pass for both mandatory P4-C6 rows on
+exact 0.60.64.** Clean commit
+`a41c5bd40861fb37de7a53252d96dcb055828362` sends a protocol-v2 application
+heartbeat every 15 seconds, expires silent Hub clients on the node after 90
+seconds, and terminates the Linux exec bridge when node-to-Hub output closes
+even if SSH stdin remains half-open.
+
+The accepted provider row used one real `codex-default` plus `gpt-6-luna`
+attempt. The physical MSI Wi-Fi gap was 1,805.006 seconds and the independent
+coordinator observed 1,815.778 seconds. The old node proxy exited after 75.360
+seconds, sequences 4 through 23 replayed exactly once, the turn completed with
+exact output `P4C6_PHYSICAL_PROVIDER_REPLAY_OK`, and Hub synchronization exposed
+exactly one matching usage observation with 14,271 input, 13,056 cached-input,
+14 output, and zero cache-write tokens. No retry or fallback occurred.
+
+The accepted terminal Run 8 retained terminal `term-425d34ff` and exact owner
+PID 723863 running `/usr/bin/watch`. Windows SleepStudy records 2,340.538
+seconds of Connected Modern Standby, entered through `Transition To Sleep` and
+exited by `Power Button`, with no hibernate session. After wake the durable
+offset advanced from 1,444 to 8,005, exactly 6,561 bytes replayed without
+truncation, exactly one input marker remained, and explicit terminal close
+removed the owner. The old proxy exited 81.021 seconds after SleepStudy entry.
+
+The supplemental coordinator network monitor is rejected for the sleep
+duration because Connected Modern Standby briefly exposed networking and it
+measured only 553.703 seconds continuously down. SleepStudy is the authoritative
+same-host power record. A PowerShell 5.1 `$null.Count` StrictMode defect also
+caused the first finalizer to label already captured evidence Fail; the retained
+diagnostic was corrected to `@($hibernateSessions).Count`, parsed cleanly, and
+re-evaluated the same immutable SleepStudy session without repeating sleep.
+
+Cleanup removed acceptance-only tasks, keys, staging, processes, and sockets;
+restored Wi-Fi, known hosts, AC sleep, hibernate, wake timers, wake devices,
+Codex auth, and `authorized_keys`; passed SQLite integrity; and preserved the
+original checkout plus protected Galahad databases. Hash-pinned artifact,
+result, diagnostic, SleepStudy, and cleanup records are detailed in
+`docs/operations/PHASE4_ACCEPTANCE.md`. P4-C6 is Pass. No push, CI, signing,
+packaging, deployment, production activation, or release occurred.
+
 ##### P4-C7: archive and synchronize documentation
 
-After C1 through C5 stabilize, and after C6 when hardware is available:
+After C1 through C5 stabilize and the completed C6 evidence is available:
 
 1. Update `docs/operations/PHASE4_ACCEPTANCE.md` with every implementation SHA,
    version, artifact hash, command, result, screenshot, live identifier,
@@ -2765,15 +2838,14 @@ C7 pass. Phase 4 production acceptance additionally requires C6. Any later code
 change affecting accounting, transport, routing, UI, accessibility, or IPC
 invalidates the corresponding exact-candidate row.
 
-Current application of that rule: exact 0.60.59 commit
-`06ed48cb8fe55c750905788c0bc9ec0a8e51f805` changed provider-login UI and
-Surfaces presentation after the 0.60.41 and 0.60.43 native runs. Its local gate
-passes, but its successful-login interaction at 100 and 200 percent, dark and
-light visual inspection, High Contrast, disabled-animation state clarity, and
-UI Automation plus Narrator toggle and terminal traversal are Unrun. The
-terminal TextPattern implementation and IPC security boundary did not change,
-so their earlier exact rows remain Pass. Phase 5 stays blocked until this scoped
-rerun and the other development-exit gates are archived.
+Current application of that rule: exact 0.60.62 commit
+`757caf0ef515561218509fa2f8838569837057b9` passed the affected provider-login
+and Surfaces rows at 100 and 200 percent, dark and light visual inspection,
+High Contrast, animations disabled, UI Automation, genuine Narrator, and remote
+login routing on the physical MSI laptop. The unchanged exact 0.60.41 terminal
+TextPattern and IPC security rows remain Pass. Exact 0.60.64 commit `a41c5bd`
+passes both physical P4-C6 rows. Phase 5 stays blocked on the remaining P4-C5
+development gate and the final post-P4-C5 documentation archive.
 
 Phase 4 exit contract:
 
@@ -2808,8 +2880,9 @@ Phase 4 closure assumptions:
 - Missing independent provider reporting is a legitimate Unknown result. It is
   not replaced by the same managed event, a pricing estimate, or a synthetic
   zero.
-- The physical R0.5 rows may be scheduled later only because they require the
-  user's laptop and a 30-minute interval. They remain mandatory release gates.
+- The physical R0.5 rows required the user's laptop and a 30-minute interval.
+  Both passed on exact 0.60.64 and remain immutable exact-candidate evidence;
+  later transport changes invalidate the affected row and require a rerun.
 - The user authorized this plan rewrite and in-scope recovery work. Push,
   signing, publication, deployment, site updates, Winget, and external
   repository creation remain distinct authority boundaries in their phases.
