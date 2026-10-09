@@ -1,10 +1,10 @@
 use pandamux_core::{
-    ApprovalDecision, ApprovalKind, FileChangeKind, PlanStep, Run, RunEvent, RunStatus,
-    RunTaskStatus, Thread, ThreadEvent, ThreadEventKind, ThreadStatus, ToolCallStatus, Turn,
-    TurnOutcome, TurnStatus,
+    AgentId, ApprovalDecision, ApprovalKind, FileChangeKind, PlanStep, Run, RunId, RunStatus,
+    RunTaskId, RunTaskStatus, Thread, ThreadEvent, ThreadEventKind, ThreadStatus, ToolCallStatus,
+    Turn, TurnOutcome, TurnStatus,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// Client-side projection of a thread accumulated from an event stream.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -871,55 +871,49 @@ pub struct SubAgentTreeNode {
     pub children: Vec<SubAgentTreeNode>,
 }
 
-/// Client-side projection of an orchestrator or schedule run.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// Presentation-only projection derived from canonical orchestrator state.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunProjection {
-    pub run: Run,
+    pub run_id: RunId,
+    pub status: RunStatus,
+    pub last_seq: u64,
+    #[serde(default)]
+    pub task_counts: BTreeMap<RunTaskStatus, u32>,
+    #[serde(default)]
+    pub selected_agents: BTreeMap<RunTaskId, AgentId>,
+    pub pending_approval_count: u32,
+    pub pending_effect_count: u32,
 }
 
 impl RunProjection {
-    pub fn new(run: Run) -> Self {
-        Self { run }
-    }
-
-    /// Reducer applying a RunEvent into the projection.
-    pub fn apply_event(&mut self, event: &RunEvent) {
-        match event {
-            RunEvent::Planned { tasks, .. } => {
-                self.run.tasks = tasks.clone();
-                self.run.status = RunStatus::Planned;
-            }
-            RunEvent::ApprovalRequested { .. } => {
-                self.run.status = RunStatus::Paused;
-            }
-            RunEvent::TaskDispatched {
-                task_id, thread_id, ..
-            } => {
-                self.run.status = RunStatus::Running;
-                if let Some(task) = self.run.tasks.iter_mut().find(|t| &t.task_id == task_id) {
-                    task.thread_id = Some(thread_id.clone());
-                    task.status = RunTaskStatus::Dispatched;
-                }
-            }
-            RunEvent::TaskRerouted { .. } => {}
-            RunEvent::TaskFinished {
-                task_id, outcome, ..
-            } => {
-                if let Some(task) = self.run.tasks.iter_mut().find(|t| &t.task_id == task_id) {
-                    task.status = RunTaskStatus::Finished;
-                    task.summary = Some(outcome.clone());
-                }
-            }
-            RunEvent::Paused { .. } => {
-                self.run.status = RunStatus::Paused;
-            }
-            RunEvent::Resumed { .. } => {
-                self.run.status = RunStatus::Running;
-            }
-            RunEvent::Finished { status, .. } => {
-                self.run.status = *status;
+    pub fn from_run(run: &Run) -> Self {
+        let mut task_counts = BTreeMap::new();
+        let mut selected_agents = BTreeMap::new();
+        for (task_id, task) in &run.tasks {
+            *task_counts.entry(task.status).or_insert(0) += 1;
+            if let Some(agent_id) = &task.selected_agent_id {
+                selected_agents.insert(task_id.clone(), agent_id.clone());
             }
         }
+        Self {
+            run_id: run.id.clone(),
+            status: run.status,
+            last_seq: run.last_seq,
+            task_counts,
+            selected_agents,
+            pending_approval_count: run
+                .approvals
+                .values()
+                .filter(|approval| approval.status == pandamux_core::RunApprovalStatus::Pending)
+                .count() as u32,
+            pending_effect_count: run.pending_effects.len() as u32,
+        }
+    }
+}
+
+impl From<&Run> for RunProjection {
+    fn from(run: &Run) -> Self {
+        Self::from_run(run)
     }
 }

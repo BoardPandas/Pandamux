@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Added
 
+- **Added canonical Phase 5 orchestration records in version 0.60.69.** Core now
+  owns typed run, task, attempt, event, effect, edge, approval, budget, and
+  blackboard identities; ordered replay state; provider-neutral compiled
+  agents; and immutable instruction-bundle manifests. The client derives a
+  presentation projection from canonical state and no longer owns run
+  transitions. Existing thread, turn, schedule, and Phase 4 provider-routing
+  records remain unchanged.
+
 - **Froze Phase 1 orchestration compatibility at version 0.60.68.** Legacy
   runs, run events, agents, vector-bearing memory, and schedules now validate
   against private exact V0 wire records instead of the evolving live core

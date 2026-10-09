@@ -6,6 +6,7 @@ pub mod event;
 pub mod home;
 pub mod i18n;
 pub mod ids;
+pub mod instruction_bundle;
 pub mod notification;
 pub mod organization;
 pub mod project;
@@ -23,8 +24,8 @@ pub mod thread;
 pub mod usage;
 
 pub use agent_def::{
-    AgentAuthor, AgentChange, AgentChangeStatus, AgentDefinition, AgentScope, MemoryEntry,
-    MemoryScope,
+    AgentAuthor, AgentBudget, AgentChange, AgentChangeStatus, AgentDefinition, AgentProviderPolicy,
+    AgentScope, AgentToolPolicy, MemoryEntry, MemoryScope, OutputContract,
 };
 pub use ast_diff::{
     AstChangeType, AstDiffSummary, AstFileDiff, AstNodeChange, AstNodeKind, compress_unified_diff,
@@ -44,10 +45,16 @@ pub use event::{
 pub use home::{HomeLayout, HomePane};
 pub use i18n::{Locale, Localizer};
 pub use ids::{
-    AgentId, ContinuationId, EnvironmentId, FailoverPoolId, NodeStoreId, OrganizationId, PaneId,
-    PricingVersionId, ProjectId, ProviderInstanceId, RunId, ScheduleId, SshProfileId,
-    SubscriptionKey, SurfaceId, ThreadId, TurnAttemptId, TurnId, UsageObservationId, WindowId,
-    WorkspaceId,
+    AgentId, ApprovalId, BlackboardEntryId, BudgetReservationId, ContinuationId, DependencyEdgeId,
+    EnvironmentId, FailoverPoolId, NodeStoreId, OrchestrationEffectId, OrganizationId, PaneId,
+    PricingVersionId, ProjectId, ProviderInstanceId, RunAttemptId, RunEventId, RunId, RunTaskId,
+    ScheduleId, SshProfileId, SubscriptionKey, SurfaceId, ThreadId, TurnAttemptId, TurnId,
+    UsageObservationId, WindowId, WorkspaceId,
+};
+pub use instruction_bundle::{
+    BundleReference, BundleSourceManifest, COMPILED_BUNDLE_SCHEMA_VERSION, CompiledClassRule,
+    CompiledInstructionBundleV1, CompiledKnowledge, CompiledOrchestrationPolicy, CompiledPrompt,
+    FailureFallback, NoProviderFallback, PromptPurpose, RateLimitFallback, ValueLayer, ValueOrigin,
 };
 pub use notification::{NewNotification, NotificationInfo, NotificationSource, Notifications};
 pub use organization::{
@@ -81,7 +88,15 @@ pub use routing::{
     RoutingEvaluation, RoutingHealth, RoutingScore, ToolLedgerEntry, ToolLedgerStatus, TurnAttempt,
     TurnAttemptStatus, select_route,
 };
-pub use run::{Run, RunEvent, RunKind, RunStatus, RunTask, RunTaskStatus};
+pub use run::{
+    AgentEvaluation, AgentSelectionScore, AgentTask, ApprovalDecisionProvenance,
+    ApprovalRequirement, Attempt, AttemptFailure, AttemptStatus, BlackboardEntry, BudgetAmount,
+    BudgetReservation, BudgetReservationState, CheckpointKind, CheckpointRef, DependencyEdge,
+    DependencyRequirement, EffectReceipt, FailureClass, OrchestrationEffect,
+    OrchestrationEffectKind, OrchestrationMode, RoutingEnvironment, Run, RunApprovalKind,
+    RunApprovalStatus, RunBudget, RunCommand, RunEvent, RunEventKind, RunSeed, RunStatus,
+    RunTaskStatus, RunTrigger, TaskInput, TaskRouteDecision, ValidatedPlan,
+};
 pub use schedule::{
     PerDayBudget, PerRunBudget, ScheduleApprovalPolicy, ScheduleBudget, ScheduleCatchUpPolicy,
     ScheduleEnvironmentRef, ScheduleOverlapPolicy, ScheduleRecord, ScheduleTarget,

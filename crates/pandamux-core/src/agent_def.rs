@@ -1,24 +1,55 @@
-use crate::ids::{AgentId, ProjectId, RunId};
+use crate::ids::{AgentId, OrganizationId, ProjectId, RunId};
+use crate::provider_config::ProviderKind;
+use crate::thread::AccessMode;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
-/// Canonical agent definition resolved from layered configuration.
+/// Canonical provider-neutral agent produced by the instruction compiler.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentDefinition {
     pub id: AgentId,
     pub name: String,
+    pub description: String,
+    pub instructions: String,
     pub scope: AgentScope,
     pub author: AgentAuthor,
-    #[serde(default)]
     pub version: String,
-    pub description: String,
-    pub system_prompt: String,
+    pub bundle_sha: String,
+    pub source_path: String,
     #[serde(default)]
-    pub allowed_tools: Vec<String>,
+    pub organization_id: Option<OrganizationId>,
     #[serde(default)]
-    pub disallowed_tools: Vec<String>,
+    pub project_id: Option<ProjectId>,
     #[serde(default)]
-    pub max_turns: Option<u32>,
+    pub specialties: BTreeSet<String>,
+    pub tier: String,
+    #[serde(default)]
+    pub effort: Option<String>,
+    pub access_mode: AccessMode,
+    #[serde(default)]
+    pub full_access_opt_in: bool,
+    #[serde(default)]
+    pub required_capabilities: BTreeSet<String>,
+    #[serde(default)]
+    pub providers: AgentProviderPolicy,
+    #[serde(default)]
+    pub environments: BTreeSet<String>,
+    #[serde(default)]
+    pub knowledge: BTreeSet<String>,
+    #[serde(default)]
+    pub tools: AgentToolPolicy,
+    pub output: OutputContract,
+    #[serde(default)]
+    pub verification: Vec<String>,
+    pub concurrency: u32,
+    pub budget: AgentBudget,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -35,6 +66,43 @@ pub enum AgentScope {
 pub enum AgentAuthor {
     User,
     Orchestrator { run_id: RunId },
+    InstructionsRepository,
+    ProjectRepository,
+}
+
+/// Provider order is semantic for `prefer`; `avoid` is canonicalized by the compiler.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentProviderPolicy {
+    #[serde(default)]
+    pub prefer: Vec<ProviderKind>,
+    #[serde(default)]
+    pub avoid: Vec<ProviderKind>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentToolPolicy {
+    #[serde(default)]
+    pub allow: BTreeSet<String>,
+    #[serde(default)]
+    pub deny: BTreeSet<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentBudget {
+    pub max_tokens: u64,
+    pub max_cost_micro_usd: u64,
+    pub max_runtime_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutputContract {
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<serde_json::Value>,
 }
 
 /// A proposed or applied modification to an agent definition.
@@ -60,7 +128,7 @@ pub enum AgentChangeStatus {
     Reverted,
 }
 
-/// Agent memory entry (vector-indexed and markdown mirrored).
+/// Legacy Phase 1 memory input retained only for the explicit Phase 5E importer.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryEntry {
