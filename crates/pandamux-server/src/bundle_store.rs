@@ -140,6 +140,10 @@ impl BundleStore {
         self.git.shutdown();
     }
 
+    pub(crate) fn data_paths(&self) -> &DataPaths {
+        &self.paths
+    }
+
     pub fn materialize(
         &self,
         input: &BundleMaterializationInput,

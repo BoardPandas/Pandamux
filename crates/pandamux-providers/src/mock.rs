@@ -308,6 +308,12 @@ impl ProviderDriver for MockProviderDriver {
                     .get("sendFailure")
                     .and_then(|value| value.as_str())
                     .map(str::to_string),
+                interrupt_usage: cfg
+                    .settings
+                    .get("interruptUsage")
+                    .cloned()
+                    .map(serde_json::from_value)
+                    .transpose()?,
             };
             Ok(Box::new(session) as Box<dyn ProviderSession>)
         })
@@ -323,6 +329,7 @@ pub struct MockProviderSession {
     capacity_failure_mode: Option<String>,
     event_script: Option<String>,
     send_failure_mode: Option<String>,
+    interrupt_usage: Option<TurnUsage>,
 }
 
 impl ProviderSession for MockProviderSession {
@@ -632,11 +639,12 @@ impl ProviderSession for MockProviderSession {
             .as_ref()
             .expect("mock event sender is available")
             .clone();
+        let usage = self.interrupt_usage.clone();
         Box::pin(async move {
             let _ = tx
                 .send(ProviderEvent::TurnCompleted {
                     outcome: TurnOutcome::Cancelled,
-                    usage: None,
+                    usage,
                 })
                 .await;
             Ok(())

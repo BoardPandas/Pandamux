@@ -11,12 +11,18 @@ use pandamux_server::{
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream};
 
+static NEXT_TEST_SERVER_ROOT: AtomicU64 = AtomicU64::new(1);
+
 fn test_server(environment_id: &str) -> Arc<Server> {
+    let root_ordinal = NEXT_TEST_SERVER_ROOT.fetch_add(1, Ordering::Relaxed);
     Arc::new(
         Server::new(ServerConfig {
             role: ServerRole::Node,
             environment_id: environment_id.to_string(),
-            runtime_dir: std::env::temp_dir().join("pandamux-proxy-test-runtime"),
+            runtime_dir: std::env::temp_dir().join(format!(
+                "pandamux-proxy-test-runtime-{}-{root_ordinal}",
+                std::process::id()
+            )),
             db_path: None,
         })
         .expect("create test server"),

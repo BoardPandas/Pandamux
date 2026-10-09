@@ -1,15 +1,15 @@
 use super::*;
 use crate::bundle_store::tests::materialization_fixture;
 use crate::{
-    CapabilityAuthority, DriverRegistry, EnqueueOrchestratedAdmissionRequest, EnvironmentRouter,
-    ExecutionAdmissionService, ExecutionBudgetService, ProviderResolver, Router,
-    RunExecutionService,
-    environment_router::{BoxFuture, EnvironmentTransport, EnvironmentTransportState},
-    request_context::{CapabilityScope, ClientIdentity},
+    AttemptDispatchState, EffectClaimRequest, EffectDispatchRequest, EffectOwnership,
+    OrchestrationRunRecord, PlanExecutionBudgetRequest,
 };
 use crate::{
-    EffectClaimRequest, EffectDispatchRequest, EffectOwnership, OrchestrationRunRecord,
-    PlanExecutionBudgetRequest,
+    CapabilityAuthority, DriverRegistry, EnqueueOrchestratedAdmissionRequest, EnvironmentRouter,
+    ExecutionAdmissionService, ExecutionBudgetService, ProviderResolver, RecoveryDisposition,
+    Router, RunExecutionService, RunRecoveryService,
+    environment_router::{BoxFuture, EnvironmentTransport, EnvironmentTransportState},
+    request_context::{CapabilityScope, ClientIdentity},
 };
 use pandamux_core::{
     AccessMode, AdvancedSettings, AgentId, AgentTask, ArchiveSha256, Attempt, AttemptBoundary,
@@ -688,6 +688,224 @@ async fn hub_response_loss_uses_status_and_never_forwards_a_replacement_dispatch
 }
 
 #[tokio::test]
+async fn rec_10_and_11_startup_recovery_reattaches_exact_response_loss() {
+    let node = Harness::new(json!({}));
+    let node_environment = EnvironmentId::new(ENVIRONMENT_ID);
+    let transport = Arc::new(LoopbackNodeTransport::new(
+        Arc::new(node.router()),
+        node.context.clone(),
+    ));
+    let environment_router = Arc::new(EnvironmentRouter::new(EnvironmentId::new("hub-local")));
+    environment_router
+        .register_transport(node_environment.clone(), transport.clone(), None)
+        .await;
+    let (hub_store, hub_service, ownership, base_identity, dispatch_at_ms) =
+        hub_execution(&node, environment_router.clone(), "recovery-response-loss").await;
+
+    let repository_identity = OrchestrationExecutionIdentity {
+        idempotency_key: "recovery-response-loss-repository".to_string(),
+        ..base_identity.clone()
+    };
+    hub_service
+        .prepare_remote_repository(
+            &ownership,
+            &node_environment,
+            node.repository_params(repository_identity, true),
+            dispatch_at_ms,
+        )
+        .await
+        .expect("prepare recovery repository");
+    let prepare_identity = OrchestrationExecutionIdentity {
+        idempotency_key: "recovery-response-loss-prepare".to_string(),
+        ..base_identity.clone()
+    };
+    let prepared = hub_service
+        .prepare_remote_provider_attempt(
+            &ownership,
+            &node_environment,
+            node.attempt_params(
+                prepare_identity,
+                "request_approval: hold remote recovery attempt open",
+            ),
+        )
+        .await
+        .expect("prepare recovery attempt");
+    let mut dispatch_identity = base_identity.clone();
+    let dispatch_key =
+        remote_dispatch_identity(&dispatch_identity, &prepared.receipt.receipt_sha256)
+            .expect("stable recovery dispatch identity");
+    dispatch_identity.idempotency_key = dispatch_key.clone();
+    let dispatch_params = OrchestrationAttemptDispatchParams {
+        identity: dispatch_identity,
+        prepare_receipt_sha256: prepared.receipt.receipt_sha256,
+        dispatch_identity: dispatch_key,
+    };
+
+    transport.drop_next_response();
+    let error = hub_service
+        .dispatch_remote_provider_attempt(
+            &ownership,
+            &node_environment,
+            dispatch_params,
+            dispatch_at_ms,
+            None,
+        )
+        .await
+        .expect_err("processed dispatch response is lost before Hub acceptance");
+    assert_reason(&error, "loopback_response_lost");
+    assert_eq!(node.driver.session_start_count(), 1);
+
+    let recovery_owner = ServerIncarnationId::new("hub-recovery-owner");
+    let report = RunRecoveryService::new(hub_store.clone())
+        .with_environment_router(environment_router.clone())
+        .recover_nonterminal_runs(recovery_owner.clone(), dispatch_at_ms + 1)
+        .await
+        .expect("recover exact remote attempt");
+    assert!(report.intake_open);
+    assert_eq!(report.attempts_reattached, 1);
+    assert_eq!(report.reviews_created, 0);
+    assert!(report.actions.iter().any(|action| {
+        action.attempt_id.as_ref() == Some(&base_identity.attempt_id)
+            && action.disposition == RecoveryDisposition::ExactAttemptReattached
+    }));
+    assert_eq!(node.driver.session_start_count(), 1);
+
+    let effect = hub_store
+        .get_orchestration_effect(&base_identity.effect_id)
+        .expect("load recovered effect")
+        .expect("recovered effect exists");
+    assert_eq!(
+        effect.delivery.state,
+        pandamux_core::EffectDeliveryState::InFlight
+    );
+    assert_eq!(
+        effect.delivery.owner_incarnation_id.as_ref(),
+        Some(&recovery_owner)
+    );
+    let dispatch = hub_store
+        .get_attempt_dispatch(&base_identity.attempt_id)
+        .expect("load recovered dispatch")
+        .expect("recovered dispatch exists");
+    assert_eq!(dispatch.state, AttemptDispatchState::Accepted);
+    let run = hub_store
+        .load_verified_orchestration_run(&base_identity.run_id)
+        .expect("load recovered run")
+        .expect("recovered run exists");
+    assert_eq!(
+        run.run
+            .attempts
+            .get(&base_identity.attempt_id)
+            .expect("recovered canonical attempt")
+            .status,
+        AttemptStatus::Running
+    );
+    let queue = hub_store
+        .load_orchestration_runtime_records(&base_identity.run_id)
+        .expect("load recovered runtime")
+        .queue_records
+        .into_iter()
+        .find(|record| record.attempt_id == base_identity.attempt_id)
+        .expect("recovered capacity owner");
+    assert_eq!(queue.state, QueueState::Dispatched);
+    assert_eq!(queue.owner_incarnation_id.as_ref(), Some(&recovery_owner));
+    assert!(queue.lease_id.is_some());
+
+    let mut cancel_identity = base_identity;
+    cancel_identity.idempotency_key = "recovery-response-loss-cancel".to_string();
+    hub_service
+        .cancel_remote_provider_attempt(
+            &node_environment,
+            OrchestrationAttemptCancelParams {
+                identity: cancel_identity,
+                reason_code: "test_cleanup".to_string(),
+            },
+            now_ms(),
+        )
+        .await
+        .expect("clean up recovered loopback session");
+    environment_router.shutdown_all().await;
+}
+
+#[tokio::test]
+async fn crash_pre_marker_recovery_pauses_once_without_starting_provider() {
+    let node = Harness::new(json!({}));
+    let node_environment = EnvironmentId::new(ENVIRONMENT_ID);
+    let transport = Arc::new(LoopbackNodeTransport::new(
+        Arc::new(node.router()),
+        node.context.clone(),
+    ));
+    let environment_router = Arc::new(EnvironmentRouter::new(EnvironmentId::new("hub-local")));
+    environment_router
+        .register_transport(node_environment.clone(), transport, None)
+        .await;
+    let (hub_store, hub_service, ownership, base_identity, dispatch_at_ms) =
+        hub_execution(&node, environment_router.clone(), "recovery-pre-marker").await;
+
+    let repository_identity = OrchestrationExecutionIdentity {
+        idempotency_key: "recovery-pre-marker-repository".to_string(),
+        ..base_identity.clone()
+    };
+    hub_service
+        .prepare_remote_repository(
+            &ownership,
+            &node_environment,
+            node.repository_params(repository_identity, true),
+            dispatch_at_ms,
+        )
+        .await
+        .expect("prepare pre-marker recovery repository");
+    let prepare_identity = OrchestrationExecutionIdentity {
+        idempotency_key: "recovery-pre-marker-prepare".to_string(),
+        ..base_identity.clone()
+    };
+    hub_service
+        .prepare_remote_provider_attempt(
+            &ownership,
+            &node_environment,
+            node.attempt_params(prepare_identity, "prepared but never dispatched"),
+        )
+        .await
+        .expect("persist remote preparation");
+    assert_eq!(node.driver.session_start_count(), 0);
+
+    let recovery = RunRecoveryService::new(hub_store.clone())
+        .with_environment_router(environment_router.clone());
+    let first = recovery
+        .recover_nonterminal_runs(
+            ServerIncarnationId::new("hub-pre-marker-recovery"),
+            dispatch_at_ms - 1,
+        )
+        .await
+        .expect("classify durable prepared attempt");
+    assert!(first.intake_open);
+    assert_eq!(first.reviews_created, 1);
+    assert!(first.actions.iter().any(|action| {
+        action.attempt_id.as_ref() == Some(&base_identity.attempt_id)
+            && action.disposition == RecoveryDisposition::ReviewRequired
+            && action.reason_code.as_deref() == Some("recovery_prepared_attempt_requires_resume")
+    }));
+    assert_eq!(node.driver.session_start_count(), 0);
+    let run = hub_store
+        .load_verified_orchestration_run(&base_identity.run_id)
+        .expect("load paused pre-marker run")
+        .expect("paused pre-marker run exists");
+    assert_eq!(run.run.status, pandamux_core::RunStatus::Paused);
+
+    let replay = recovery
+        .recover_nonterminal_runs(
+            ServerIncarnationId::new("hub-pre-marker-recovery-replay"),
+            dispatch_at_ms - 1,
+        )
+        .await
+        .expect("replay prepared recovery classification");
+    assert_eq!(replay.reviews_created, 0);
+    assert_eq!(replay.reviews_deduplicated, 1);
+    assert_eq!(hub_store.list_pending_recovery_reviews().unwrap().len(), 1);
+    assert_eq!(node.driver.session_start_count(), 0);
+    environment_router.shutdown_all().await;
+}
+
+#[tokio::test]
 async fn repository_prepare_supports_staged_content_and_rejects_missing_baseline() {
     let harness = Harness::new(json!({}));
     let missing = harness
@@ -1040,6 +1258,71 @@ async fn dispatch_marker_replay_status_cancel_events_and_ack_are_exact() {
         .expect("ack replay");
     assert_eq!(ack, replay);
     assert_eq!(ack.acknowledged_through_sequence, through_sequence);
+}
+
+#[tokio::test]
+async fn verified_not_started_remote_dispatch_releases_node_capacity_once() {
+    let harness = Harness::new(json!({
+        "startFailure": "verified_not_started"
+    }));
+    let (prepare_identity, prepared) = harness
+        .prepare_attempt("not-started", "Provider must not accept this prompt")
+        .await;
+    let mut dispatch_identity = prepare_identity.clone();
+    let dispatch_key =
+        remote_dispatch_identity(&dispatch_identity, &prepared.receipt.receipt_sha256)
+            .expect("dispatch identity");
+    dispatch_identity.idempotency_key = dispatch_key.clone();
+    let dispatch = OrchestrationAttemptDispatchParams {
+        identity: dispatch_identity,
+        prepare_receipt_sha256: prepared.receipt.receipt_sha256,
+        dispatch_identity: dispatch_key,
+    };
+
+    let marker = harness
+        .service
+        .attempt_dispatch(&harness.context, dispatch.clone(), None)
+        .await
+        .expect("persist typed not-started result");
+    assert_eq!(marker.state, OrchestrationNodeAttemptState::DispatchStarted);
+    let replay = harness
+        .service
+        .attempt_dispatch(&harness.context, dispatch, None)
+        .await
+        .expect("replay dispatch marker");
+    assert_eq!(replay, marker);
+
+    let mut status_identity = prepare_identity.clone();
+    status_identity.idempotency_key = "not-started-status".to_string();
+    let status = harness
+        .service
+        .attempt_status(
+            &harness.context,
+            OrchestrationAttemptStatusParams {
+                identity: status_identity,
+            },
+        )
+        .await
+        .expect("load typed not-started status");
+    assert_eq!(
+        status.receipt.state,
+        OrchestrationNodeAttemptState::NotStarted
+    );
+    assert_eq!(
+        status.receipt.safe_error_code.as_deref(),
+        Some("mock_start_not_started")
+    );
+
+    let queue = harness
+        .store
+        .list_execution_queue_records()
+        .expect("node queue rows")
+        .into_iter()
+        .find(|record| record.attempt_id == prepare_identity.attempt_id)
+        .expect("node capacity row");
+    assert_eq!(queue.state, QueueState::Dispatched);
+    assert!(queue.owner_incarnation_id.is_none());
+    assert!(queue.lease_id.is_none());
 }
 
 #[tokio::test]

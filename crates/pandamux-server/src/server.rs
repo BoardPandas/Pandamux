@@ -1,5 +1,8 @@
 use crate::DataPaths;
+use crate::attempt_watchdog::DEFAULT_SHUTDOWN_TIMEOUT_MS;
 use crate::router::Router;
+use crate::run_execution_service::ShutdownReport;
+use crate::run_recovery::{RecoveryReport, RunRecoveryError, ServerIncarnationLock};
 use crate::runtime::RuntimeInfo;
 use crate::store::Store;
 use pandamux_core::EnvironmentId;
@@ -47,6 +50,7 @@ pub struct Server {
     usage_sync: Mutex<Option<UsageHubSyncService>>,
     instructions_polling: Mutex<Option<InstructionsPollingService>>,
     mutation_sweep: Mutex<Option<MutationSweepService>>,
+    incarnation_lock: ServerIncarnationLock,
 }
 
 impl Server {
@@ -70,6 +74,7 @@ impl Server {
             data_paths = data_paths.with_database_path(path)?;
         }
         data_paths.ensure_private_roots()?;
+        let incarnation_lock = ServerIncarnationLock::acquire(&data_paths)?;
         let store = match &config.db_path {
             Some(_) => Store::open_with_backups(data_paths.database(), data_paths.backups())?,
             None => Store::in_memory()?,
@@ -79,6 +84,7 @@ impl Server {
             Router::new(store.clone(), config.role, config.environment_id.clone())
                 .with_data_paths(data_paths.clone()),
         );
+        router.run_execution().close_intake();
 
         let (shutdown_tx, _) = broadcast::channel(1);
 
@@ -94,6 +100,7 @@ impl Server {
             usage_sync: Mutex::new(None),
             instructions_polling: Mutex::new(None),
             mutation_sweep: Mutex::new(None),
+            incarnation_lock,
         })
     }
 
@@ -111,6 +118,26 @@ impl Server {
 
     pub fn environment_id(&self) -> &str {
         &self.config.environment_id
+    }
+
+    pub fn incarnation_id(&self) -> &pandamux_core::ServerIncarnationId {
+        self.incarnation_lock.owner()
+    }
+
+    pub async fn recover_orchestration(&self) -> Result<RecoveryReport, RunRecoveryError> {
+        self.router
+            .run_execution()
+            .recover_nonterminal_runs(self.incarnation_id().clone(), current_time_ms())
+            .await
+    }
+
+    pub async fn shutdown_orchestration(&self) -> ShutdownReport {
+        self.router
+            .run_execution()
+            .shutdown(std::time::Duration::from_millis(
+                DEFAULT_SHUTDOWN_TIMEOUT_MS,
+            ))
+            .await
     }
 
     pub async fn initialize_personal_repository(

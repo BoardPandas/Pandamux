@@ -110,6 +110,20 @@ pub enum AttemptWorktreeCleanupOutcome {
     Retained(OwnedAttemptWorktreeRecord),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AttemptWorktreeAuditStatus {
+    Exact { head: String },
+    MissingWorktree,
+    ChangedBaseline,
+    MissingCheckpoint { checkpoint_id: CheckpointId },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttemptWorktreeAudit {
+    pub worktree_id: AttemptWorktreeId,
+    pub status: AttemptWorktreeAuditStatus,
+}
+
 #[derive(Clone)]
 pub struct AttemptWorktreeService {
     store: Store,
@@ -218,9 +232,106 @@ impl AttemptWorktreeService {
         .await
         .map_err(|_| worker_error())?
     }
+
+    /// Read-only recovery audit for a durable worktree owner. It verifies path
+    /// confinement, repository identity, baseline ancestry, branch ownership,
+    /// and every durable checkpoint ref without mutating Git state.
+    pub async fn audit(
+        &self,
+        record: OwnedAttemptWorktreeRecord,
+    ) -> Result<AttemptWorktreeAudit, AttemptWorktreeError> {
+        let permit = self
+            .blocking
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| cancelled_error())?;
+        let service = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            service.audit_sync(record)
+        })
+        .await
+        .map_err(|_| worker_error())?
+    }
 }
 
 impl AttemptWorktreeService {
+    fn audit_sync(
+        &self,
+        record: OwnedAttemptWorktreeRecord,
+    ) -> Result<AttemptWorktreeAudit, AttemptWorktreeError> {
+        self.data_paths
+            .ensure_private_roots()
+            .map_err(|_| managed_path_error())?;
+        let identity = identity_from_record(&self.data_paths, &record)?;
+        if fs::symlink_metadata(&identity.path).is_err() {
+            return Ok(AttemptWorktreeAudit {
+                worktree_id: record.worktree.id,
+                status: AttemptWorktreeAuditStatus::MissingWorktree,
+            });
+        }
+        let run = self.load_run(&record.worktree.run_id)?;
+        let repository = self
+            .store
+            .get_project_repository(&run.project_id, &run.run.organization_id)?
+            .ok_or_else(owner_mismatch_error)?;
+        let context = match self.inspect_repository(
+            Path::new(&repository.display_path),
+            &record.worktree.git_common_dir_identity,
+            &record.worktree.baseline_commit,
+        ) {
+            Ok(context) => context,
+            Err(_) => {
+                return Ok(AttemptWorktreeAudit {
+                    worktree_id: record.worktree.id,
+                    status: AttemptWorktreeAuditStatus::ChangedBaseline,
+                });
+            }
+        };
+        let head = match self.verify_owned_worktree(
+            &context,
+            &identity,
+            &record.worktree.baseline_commit,
+            false,
+        ) {
+            Ok(head) => head,
+            Err(_) => {
+                return Ok(AttemptWorktreeAudit {
+                    worktree_id: record.worktree.id,
+                    status: AttemptWorktreeAuditStatus::ChangedBaseline,
+                });
+            }
+        };
+        for checkpoint_id in &record.worktree.checkpoint_ids {
+            let Some(checkpoint) = run.run.checkpoints.get(checkpoint_id) else {
+                return Ok(AttemptWorktreeAudit {
+                    worktree_id: record.worktree.id,
+                    status: AttemptWorktreeAuditStatus::MissingCheckpoint {
+                        checkpoint_id: checkpoint_id.clone(),
+                    },
+                });
+            };
+            if checkpoint.run_id != record.worktree.run_id
+                || checkpoint.task_id != record.worktree.task_id
+                || checkpoint.attempt_id != record.worktree.attempt_id
+                || !record.checkpoint_intent_sha256.contains_key(checkpoint_id)
+                || self.read_ref(&context, &checkpoint.value)?.is_none()
+            {
+                return Ok(AttemptWorktreeAudit {
+                    worktree_id: record.worktree.id,
+                    status: AttemptWorktreeAuditStatus::MissingCheckpoint {
+                        checkpoint_id: checkpoint_id.clone(),
+                    },
+                });
+            }
+        }
+        Ok(AttemptWorktreeAudit {
+            worktree_id: record.worktree.id,
+            status: AttemptWorktreeAuditStatus::Exact { head },
+        })
+    }
+
     fn materialize_checkpoint(
         &self,
         context: &RepositoryContext,

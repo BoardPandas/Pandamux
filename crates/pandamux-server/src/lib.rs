@@ -1,4 +1,5 @@
 pub mod attachment;
+pub mod attempt_watchdog;
 pub mod attempt_worktree;
 pub mod blackboard_store;
 pub mod bundle_store;
@@ -25,6 +26,7 @@ pub mod remote_execution;
 pub mod request_context;
 pub mod router;
 pub mod run_execution_service;
+pub mod run_recovery;
 pub mod runtime;
 pub mod server;
 pub mod store;
@@ -37,10 +39,15 @@ pub mod windows_security;
 pub mod worktree;
 
 pub use attachment::AttachmentManager;
+pub use attempt_watchdog::{
+    AttemptLifecycleControl, AttemptWatchdog, CancellationReport, LifecycleFuture,
+    NonProgressSignal, ProgressObservation, ProgressObservationOutcome, WatchdogConfig,
+    WatchdogDecision, cancel_owned_attempt,
+};
 pub use attempt_worktree::{
-    AttemptWorktreeCleanupOutcome, AttemptWorktreeError, AttemptWorktreeFailpoint,
-    AttemptWorktreeOutcome, AttemptWorktreeService, CleanupAttemptWorktreeRequest,
-    CreateAttemptCheckpointRequest, CreateAttemptWorktreeRequest,
+    AttemptWorktreeAudit, AttemptWorktreeAuditStatus, AttemptWorktreeCleanupOutcome,
+    AttemptWorktreeError, AttemptWorktreeFailpoint, AttemptWorktreeOutcome, AttemptWorktreeService,
+    CleanupAttemptWorktreeRequest, CreateAttemptCheckpointRequest, CreateAttemptWorktreeRequest,
 };
 pub use blackboard_store::{
     ArtifactCacheRecord, ArtifactProvenanceSource, ArtifactSubmission, BlackboardError,
@@ -65,11 +72,11 @@ pub use environment_router::{
     EnvironmentRouter, EnvironmentTransport, EnvironmentTransportState, MockEnvironmentTransport,
 };
 pub use execution_admission::{
-    BASE_EXECUTION_RETRY_DELAY_MS, DEFAULT_EXECUTION_ADMISSION_TTL_MS,
-    EnqueueManualAdmissionRequest, EnqueueOrchestratedAdmissionRequest, ExecutionAdmissionClaim,
-    ExecutionAdmissionClaimRequest, ExecutionAdmissionError, ExecutionAdmissionService,
-    MAX_EXECUTION_ADMISSION_TTL_MS, MAX_EXECUTION_RETRY_DELAY_MS, MIN_EXECUTION_ADMISSION_TTL_MS,
-    bounded_execution_retry_delay_ms,
+    BASE_EXECUTION_RETRY_DELAY_MS, DEFAULT_EXECUTION_ADMISSION_RENEWAL_MS,
+    DEFAULT_EXECUTION_ADMISSION_TTL_MS, EnqueueManualAdmissionRequest,
+    EnqueueOrchestratedAdmissionRequest, ExecutionAdmissionClaim, ExecutionAdmissionClaimRequest,
+    ExecutionAdmissionError, ExecutionAdmissionService, MAX_EXECUTION_ADMISSION_TTL_MS,
+    MAX_EXECUTION_RETRY_DELAY_MS, MIN_EXECUTION_ADMISSION_TTL_MS, bounded_execution_retry_delay_ms,
 };
 pub use execution_budget::{
     ExecutionBudgetError, ExecutionBudgetService, GrantExecutionBudgetRequest,
@@ -107,7 +114,11 @@ pub use router::Router;
 pub use run_execution_service::{
     LocalProviderDispatch, LocalProviderDispatchStatus, LocalProviderExecutionError,
     LocalProviderTerminalOutcome, PrepareLocalProviderAttemptRequest, PreparedLocalProviderAttempt,
-    RunExecutionService, RunTransitionNotice,
+    RunExecutionService, RunTransitionNotice, ShutdownReport,
+};
+pub use run_recovery::{
+    RecoveryAction, RecoveryDisposition, RecoveryReport, RunRecoveryError, RunRecoveryService,
+    ServerIncarnationLock,
 };
 pub use runtime::{RUNTIME_FILENAME, RuntimeInfo};
 pub use server::{Server, ServerConfig};
@@ -115,26 +126,28 @@ pub use store::{
     AdmissionCapacityOverage, AdmissionCapacityReconciliation, AdmissionClaimStoreOutcome,
     AdmissionClaimStoreRequest, AdmissionOwnership, AdmissionPolicySnapshot,
     AdmissionRenewStoreRequest, AdmissionRequeueStoreRequest, AssignedRunEvent,
-    AttemptDispatchRecord, AttemptDispatchState, BudgetConservationMismatch,
-    BudgetConservationReport, BudgetConservationVerdict, BudgetCostSource,
-    BudgetExecutionFailpoint, BudgetGrantOutcome, BudgetReconciliationEvidence,
-    BudgetReconciliationOutcome, BudgetScopeOverage, BundleActivationFailpoint,
-    BundleDistributionRecord, BundleObjectRecord, DailyBudgetRecord, EffectClaimOutcome,
-    EffectClaimRequest, EffectDispatchOutcome, EffectDispatchRequest, EffectOutcomeRecord,
-    EffectOutcomeRequest, EffectOwnership, EffectPreparationOutcome, LocalAttemptAcceptanceOutcome,
-    LocalAttemptOutcome, LocalAttemptOutcomeRequest, LocalAttemptPreparationOutcome,
-    NodeReceiptKind, NodeReceiptRecord, OrchestratedAdmissionTransition,
-    OrchestrationExecutionFailpoint, OrchestrationQueueRecord, OrchestrationReplayAudit,
-    OrchestrationRunRecord, OrchestrationRuntimeRecords, OwnedAttemptWorktreeRecord,
-    PersonalRepoStateRecord, ProviderExecutionAudit, QueueState, RevisionedSettings, RunTransition,
-    RunTransitionRequest, RunTransitionRows, Store, StoreError, StoredBudgetReservation,
-    StoredInstructionCandidate, StoredOrchestrationEffect, execution_ledger_utc_date,
-    orchestration_snapshot_sha256, supplemental_budget_action_digest,
+    AttemptDispatchRecord, AttemptDispatchState, AttemptProgressDisposition,
+    AttemptProgressOutcome, BudgetConservationMismatch, BudgetConservationReport,
+    BudgetConservationVerdict, BudgetCostSource, BudgetExecutionFailpoint, BudgetGrantOutcome,
+    BudgetReconciliationEvidence, BudgetReconciliationOutcome, BudgetScopeOverage,
+    BundleActivationFailpoint, BundleDistributionRecord, BundleObjectRecord, DailyBudgetRecord,
+    EffectClaimOutcome, EffectClaimRequest, EffectDispatchOutcome, EffectDispatchRequest,
+    EffectOutcomeRecord, EffectOutcomeRequest, EffectOwnership, EffectPreparationOutcome,
+    EffectRenewStoreOutcome, EffectRenewStoreRequest, ExecutionLeaseRenewStoreRequest,
+    LocalAttemptAcceptanceOutcome, LocalAttemptOutcome, LocalAttemptOutcomeRequest,
+    LocalAttemptPreparationOutcome, NodeReceiptKind, NodeReceiptRecord,
+    OrchestratedAdmissionTransition, OrchestrationExecutionFailpoint, OrchestrationQueueRecord,
+    OrchestrationReplayAudit, OrchestrationRunRecord, OrchestrationRuntimeRecords,
+    OwnedAttemptWorktreeRecord, PersonalRepoStateRecord, ProviderExecutionAudit, QueueState,
+    RecoveryLeaseDisposition, RevisionedSettings, RunTransition, RunTransitionRequest,
+    RunTransitionRows, Store, StoreError, StoredBudgetReservation, StoredInstructionCandidate,
+    StoredOrchestrationEffect, execution_ledger_utc_date, orchestration_snapshot_sha256,
+    supplemental_budget_action_digest,
 };
 pub use terminal::TerminalServerManager;
 pub use thread_manager::{
     PreparedOrchestratedTurn, PreparedTurnDispatch, PreparedTurnDispatchDisposition,
-    PreparedTurnDispatchReceipt, PreparedTurnEvent, ThreadManager,
+    PreparedTurnDispatchReceipt, PreparedTurnEvent, PreparedTurnOwner, ThreadManager,
 };
 pub use usage_scanner::{
     PlatformFileIdentity, UsageScanRunReport, UsageScanSource, UsageScanTrigger,

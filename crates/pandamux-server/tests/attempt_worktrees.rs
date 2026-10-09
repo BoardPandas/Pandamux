@@ -10,10 +10,11 @@ use pandamux_core::{
     ValidatedPlan, WorktreeCleanupEligibility, WorktreeDirtyState,
 };
 use pandamux_server::{
-    AssignedRunEvent, AttemptWorktreeCleanupOutcome, AttemptWorktreeFailpoint,
-    AttemptWorktreeService, CleanupAttemptWorktreeRequest, CreateAttemptCheckpointRequest,
-    CreateAttemptWorktreeRequest, DataPaths, OrchestrationRunRecord, RunTransitionRequest,
-    RunTransitionRows, Store, orchestration_snapshot_sha256,
+    AssignedRunEvent, AttemptWorktreeAuditStatus, AttemptWorktreeCleanupOutcome,
+    AttemptWorktreeFailpoint, AttemptWorktreeService, CleanupAttemptWorktreeRequest,
+    CreateAttemptCheckpointRequest, CreateAttemptWorktreeRequest, DataPaths,
+    OrchestrationRunRecord, RunTransitionRequest, RunTransitionRows, Store,
+    orchestration_snapshot_sha256,
 };
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -911,6 +912,104 @@ async fn checkpoint_intent_and_git_crashes_replay_once_and_changed_bytes_conflic
             ))
             .count(),
         1
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rec_05_through_07_worktree_and_checkpoint_audits_fail_closed() {
+    let harness = Harness::new();
+
+    let missing = harness.add_run("recovery-missing-worktree", 80_000);
+    let missing_created = harness
+        .service
+        .create(missing.clone(), None)
+        .await
+        .expect("missing-worktree fixture");
+    let exact = harness
+        .service
+        .audit(missing_created.record.clone())
+        .await
+        .expect("exact worktree audit");
+    assert!(matches!(
+        exact.status,
+        AttemptWorktreeAuditStatus::Exact { .. }
+    ));
+    git(
+        &harness.repository,
+        &[
+            "worktree",
+            "remove",
+            missing_created.record.worktree.path.as_str(),
+        ],
+    );
+    let audit = harness
+        .service
+        .audit(missing_created.record)
+        .await
+        .expect("missing worktree audit");
+    assert_eq!(audit.status, AttemptWorktreeAuditStatus::MissingWorktree);
+
+    let changed = harness.add_run("recovery-changed-baseline", 90_000);
+    let changed_created = harness
+        .service
+        .create(changed, None)
+        .await
+        .expect("changed-baseline fixture");
+    let changed_path = Path::new(&changed_created.record.worktree.path);
+    let baseline_tree = git_text(changed_path, &["rev-parse", "HEAD^{tree}"]);
+    let foreign_head = git_text(
+        changed_path,
+        &["commit-tree", baseline_tree.as_str(), "-m", "foreign root"],
+    );
+    git(
+        changed_path,
+        &[
+            "update-ref",
+            changed_created.record.worktree.branch_ref.as_str(),
+            foreign_head.as_str(),
+        ],
+    );
+    let audit = harness
+        .service
+        .audit(changed_created.record)
+        .await
+        .expect("changed baseline audit");
+    assert_eq!(audit.status, AttemptWorktreeAuditStatus::ChangedBaseline);
+
+    let missing_checkpoint = harness.add_run("recovery-missing-checkpoint", 100_000);
+    harness
+        .service
+        .create(missing_checkpoint.clone(), None)
+        .await
+        .expect("missing-checkpoint worktree");
+    let checkpoint_id = CheckpointId::new("checkpoint-recovery-missing");
+    harness
+        .service
+        .checkpoint(
+            CreateAttemptCheckpointRequest {
+                worktree_id: missing_checkpoint.worktree_id.clone(),
+                lease_id: missing_checkpoint.lease.id.clone(),
+                checkpoint_id: checkpoint_id.clone(),
+                kind: CheckpointKind::BeforeAttempt,
+                created_at_ms: 100_020,
+            },
+            Some(AttemptWorktreeFailpoint::AfterCheckpointIntent),
+        )
+        .await
+        .expect_err("checkpoint receipt crash");
+    let durable = harness
+        .store
+        .load_owned_attempt_worktree(&missing_checkpoint.worktree_id)
+        .expect("load checkpoint intent")
+        .expect("checkpoint intent exists");
+    let audit = harness
+        .service
+        .audit(durable)
+        .await
+        .expect("missing checkpoint audit");
+    assert_eq!(
+        audit.status,
+        AttemptWorktreeAuditStatus::MissingCheckpoint { checkpoint_id }
     );
 }
 

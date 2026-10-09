@@ -3,14 +3,14 @@ use pandamux_core::{
     ApprovalId, ApprovalRequirement, Attempt, AttemptBoundary, AttemptFailure, AttemptStatus,
     AttemptWorktreeId, BlackboardArtifact, BlackboardEntryId, BudgetAmount, BudgetDimension,
     BudgetGrantId, BudgetReservation, BudgetReservationId, BudgetReservationState, BudgetUsage,
-    CheckpointId, CheckpointKind, CheckpointRef, CleanupState, DependencyEdge, DependencyEdgeId,
-    DependencyRequirement, EffectReceipt, FailureClass, OrchestrationMode, OrganizationId,
-    OutputContract, ProjectId, ProviderInstanceId, RoutingDecision, Run, RunApprovalKind,
-    RunApprovalStatus, RunAttemptId, RunCommand, RunEvent, RunEventId, RunEventKind, RunId,
-    RunSeed, RunStatus, RunTaskId, RunTaskStatus, RunTrigger, SubscriptionKey,
-    SupplementalBudgetGrant, TaskInput, TaskRouteDecision, ThreadId, TurnAttemptId, ValidatedPlan,
-    VerificationEvidence, VerificationEvidenceId, VerificationEvidenceKind,
-    VerificationEvidenceOutcome,
+    CheckpointId, CheckpointKind, CheckpointRef, CleanupRecord, CleanupRecordId, CleanupState,
+    DependencyEdge, DependencyEdgeId, DependencyRequirement, EffectReceipt, FailureClass,
+    OrchestrationMode, OrganizationId, OutputContract, ProjectId, ProviderInstanceId,
+    RoutingDecision, Run, RunApprovalKind, RunApprovalStatus, RunAttemptId, RunCommand, RunEvent,
+    RunEventId, RunEventKind, RunId, RunSeed, RunStatus, RunTaskId, RunTaskStatus, RunTrigger,
+    SubscriptionKey, SupplementalBudgetGrant, TaskInput, TaskRouteDecision, ThreadId,
+    TurnAttemptId, ValidatedPlan, VerificationEvidence, VerificationEvidenceId,
+    VerificationEvidenceKind, VerificationEvidenceOutcome,
 };
 use pandamux_orchestrator::{
     OrchestrationErrorCode, apply, artifact_key, canonical_artifact_json,
@@ -774,6 +774,295 @@ fn cancellation_emits_one_effect_per_active_attempt_and_cancels_undispatched_tas
             RunTaskStatus::Cancelled
         );
     }
+}
+
+fn run_to_running_cancellation_attempt() -> (Run, Vec<RunEvent>) {
+    let seed = seed(OrchestrationMode::Auto);
+    let mut run = Run::draft(RunId::new("run-cancellation-order"), seed.clone(), 1_001);
+    let mut events = Vec::new();
+    execute_command(
+        &mut run,
+        &mut events,
+        RunCommand::AcceptPlan {
+            seed,
+            plan: one_task_plan(),
+        },
+    );
+    acknowledge_all(&mut run, &mut events);
+    execute_command(
+        &mut run,
+        &mut events,
+        RunCommand::SelectRoute {
+            decision: route("task-one", "provider-one"),
+        },
+    );
+    execute_command(
+        &mut run,
+        &mut events,
+        RunCommand::ReserveBudget {
+            reservation: reservation("task-one", 1),
+        },
+    );
+    execute_command(
+        &mut run,
+        &mut events,
+        RunCommand::RequestDispatch {
+            attempt: attempt("task-one", 1, "provider-one"),
+        },
+    );
+    execute_command(
+        &mut run,
+        &mut events,
+        RunCommand::AssignAttemptWorktree {
+            attempt_id: RunAttemptId::new("attempt-task-one-1"),
+            worktree_id: AttemptWorktreeId::new("worktree-cancellation-order"),
+        },
+    );
+    execute_command(
+        &mut run,
+        &mut events,
+        RunCommand::StartAttempt {
+            attempt_id: RunAttemptId::new("attempt-task-one-1"),
+            thread_id: ThreadId::new("thread-cancellation-order"),
+            turn_attempt_id: TurnAttemptId::new("turn-cancellation-order"),
+        },
+    );
+    (run, events)
+}
+
+fn cancellation_checkpoint(run: &Run, id: &str, thread_id: &str) -> CheckpointRef {
+    CheckpointRef {
+        id: CheckpointId::new(id),
+        run_id: run.id.clone(),
+        value: "retained-cancellation-output".to_string(),
+        task_id: RunTaskId::new("task-one"),
+        attempt_id: RunAttemptId::new("attempt-task-one-1"),
+        thread_id: Some(ThreadId::new(thread_id)),
+        kind: CheckpointKind::AfterAttempt,
+        created_at_ms: 1_000 + run.last_seq + 1,
+    }
+}
+
+#[test]
+fn cancellation_checkpoints_and_reconciles_before_terminal_attempt_state() {
+    let (mut run, mut events) = run_to_running_cancellation_attempt();
+    let pre_cancel = decide(
+        &run,
+        RunCommand::RecordCheckpoint {
+            checkpoint: cancellation_checkpoint(
+                &run,
+                "checkpoint-cancellation-too-early",
+                "thread-cancellation-order",
+            ),
+        },
+    );
+    assert_eq!(
+        pre_cancel
+            .expect_err("active non-cancelling attempt rejects after checkpoint")
+            .code,
+        OrchestrationErrorCode::IllegalTransition
+    );
+
+    execute_command(&mut run, &mut events, RunCommand::Cancel);
+    let premature_reconciliation = decide(
+        &run,
+        RunCommand::ReconcileBudget {
+            reservation_id: BudgetReservationId::new("budget-task-one-1"),
+            actual: BudgetUsage {
+                tokens: Some(10),
+                cost_micro_usd: Some(20),
+                runtime_ms: Some(30),
+            },
+        },
+    );
+    assert_eq!(
+        premature_reconciliation
+            .expect_err("cancellation usage requires its retained checkpoint")
+            .code,
+        OrchestrationErrorCode::IllegalTransition
+    );
+    let wrong_thread = decide(
+        &run,
+        RunCommand::RecordCheckpoint {
+            checkpoint: cancellation_checkpoint(
+                &run,
+                "checkpoint-cancellation-wrong-thread",
+                "thread-other",
+            ),
+        },
+    );
+    assert_eq!(
+        wrong_thread
+            .expect_err("cancellation checkpoint requires the exact thread")
+            .code,
+        OrchestrationErrorCode::InvalidEvent
+    );
+
+    let checkpoint = cancellation_checkpoint(
+        &run,
+        "checkpoint-cancellation-after",
+        "thread-cancellation-order",
+    );
+    execute_command(
+        &mut run,
+        &mut events,
+        RunCommand::RecordCheckpoint { checkpoint },
+    );
+    execute_command(
+        &mut run,
+        &mut events,
+        RunCommand::ReconcileBudget {
+            reservation_id: BudgetReservationId::new("budget-task-one-1"),
+            actual: BudgetUsage {
+                tokens: Some(10),
+                cost_micro_usd: Some(20),
+                runtime_ms: Some(30),
+            },
+        },
+    );
+    assert_eq!(
+        run.attempts[&RunAttemptId::new("attempt-task-one-1")].status,
+        AttemptStatus::Running
+    );
+    assert!(run.attempts[&RunAttemptId::new("attempt-task-one-1")].usage_reconciled);
+    execute_command(
+        &mut run,
+        &mut events,
+        RunCommand::SettleAttempt {
+            attempt_id: RunAttemptId::new("attempt-task-one-1"),
+            status: AttemptStatus::Cancelled,
+            failure: Some(AttemptFailure {
+                class: FailureClass::Cancelled,
+                code: "attempt_cancelled".to_string(),
+                safe_message: "The attempt was cancelled".to_string(),
+            }),
+            usage_reconciled: true,
+        },
+    );
+    assert_eq!(
+        run.tasks[&RunTaskId::new("task-one")].status,
+        RunTaskStatus::Cancelled
+    );
+    assert_eq!(
+        canonical_run_bytes(&replay(events.iter()).expect("replay cancellation ordering")),
+        canonical_run_bytes(&run)
+    );
+}
+
+fn cleanup_record(run: &Run, id: &str, state: CleanupState) -> CleanupRecord {
+    CleanupRecord {
+        id: CleanupRecordId::new(id),
+        run_id: run.id.clone(),
+        task_id: RunTaskId::new("task-one"),
+        attempt_id: RunAttemptId::new("attempt-task-one-1"),
+        state,
+        reason_code: format!("cleanup_{state:?}").to_ascii_lowercase(),
+        evidence_digest: "a".repeat(64),
+        updated_at_ms: 1_000 + run.last_seq + 1,
+    }
+}
+
+#[test]
+fn cleanup_transitions_are_terminal_bound_and_replay_safe() {
+    let (mut run, mut events) = run_to_running_cancellation_attempt();
+    let direct_verified = decide(
+        &run,
+        RunCommand::RecordAttemptCleanup {
+            cleanup: cleanup_record(&run, "cleanup-direct-verified", CleanupState::Verified),
+        },
+    );
+    assert_eq!(
+        direct_verified
+            .expect_err("cleanup cannot skip pending")
+            .code,
+        OrchestrationErrorCode::IllegalTransition
+    );
+    let pending_cleanup = cleanup_record(&run, "cleanup-pending", CleanupState::Pending);
+    execute_command(
+        &mut run,
+        &mut events,
+        RunCommand::RecordAttemptCleanup {
+            cleanup: pending_cleanup,
+        },
+    );
+    execute_command(&mut run, &mut events, RunCommand::Cancel);
+    let active_verified = decide(
+        &run,
+        RunCommand::RecordAttemptCleanup {
+            cleanup: cleanup_record(&run, "cleanup-active-verified", CleanupState::Verified),
+        },
+    );
+    assert_eq!(
+        active_verified
+            .expect_err("verified cleanup requires terminal attempt")
+            .code,
+        OrchestrationErrorCode::IllegalTransition
+    );
+    let checkpoint = cancellation_checkpoint(
+        &run,
+        "checkpoint-cleanup-after",
+        "thread-cancellation-order",
+    );
+    execute_command(
+        &mut run,
+        &mut events,
+        RunCommand::RecordCheckpoint { checkpoint },
+    );
+    execute_command(
+        &mut run,
+        &mut events,
+        RunCommand::ReconcileBudget {
+            reservation_id: BudgetReservationId::new("budget-task-one-1"),
+            actual: BudgetUsage {
+                tokens: Some(10),
+                cost_micro_usd: Some(20),
+                runtime_ms: Some(30),
+            },
+        },
+    );
+    execute_command(
+        &mut run,
+        &mut events,
+        RunCommand::SettleAttempt {
+            attempt_id: RunAttemptId::new("attempt-task-one-1"),
+            status: AttemptStatus::Cancelled,
+            failure: Some(AttemptFailure {
+                class: FailureClass::Cancelled,
+                code: "attempt_cancelled".to_string(),
+                safe_message: "The attempt was cancelled".to_string(),
+            }),
+            usage_reconciled: true,
+        },
+    );
+    let verified_cleanup = cleanup_record(&run, "cleanup-verified", CleanupState::Verified);
+    execute_command(
+        &mut run,
+        &mut events,
+        RunCommand::RecordAttemptCleanup {
+            cleanup: verified_cleanup,
+        },
+    );
+    assert_eq!(
+        run.attempts[&RunAttemptId::new("attempt-task-one-1")].cleanup_state,
+        CleanupState::Verified
+    );
+    let verified_event = events.last().expect("verified cleanup event").clone();
+    assert!(
+        apply(&run, &verified_event)
+            .expect("exact cleanup replay")
+            .duplicate
+    );
+    let mut changed = verified_event;
+    let RunEventKind::AttemptCleanupRecorded { cleanup } = &mut changed.kind else {
+        panic!("cleanup event")
+    };
+    cleanup.reason_code = "cleanup_changed".to_string();
+    assert_eq!(
+        apply(&run, &changed)
+            .expect_err("changed cleanup replay conflicts")
+            .code,
+        OrchestrationErrorCode::ReplayConflict
+    );
 }
 
 #[test]

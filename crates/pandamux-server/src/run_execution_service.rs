@@ -1,3 +1,12 @@
+use crate::attempt_watchdog::{
+    AttemptLifecycleControl, AttemptWatchdog, CancellationReport, DEFAULT_LEASE_RENEWAL_MS,
+    DEFAULT_LEASE_TTL_MS, DEFAULT_SHUTDOWN_TIMEOUT_MS, LifecycleFuture, ProgressObservation,
+    WatchdogConfig, WatchdogDecision, cancel_owned_attempt,
+};
+use crate::attempt_worktree::{
+    AttemptWorktreeCleanupOutcome, AttemptWorktreeService, CleanupAttemptWorktreeRequest,
+    CreateAttemptCheckpointRequest,
+};
 use crate::blackboard_store::{
     ArtifactCacheRecord, BlackboardError, BlackboardStore, CompleteTaskArtifactsRequest,
     PreparedBlackboardTransition, RecordVerificationEvidenceRequest,
@@ -5,30 +14,35 @@ use crate::blackboard_store::{
 use crate::bundle_store::{BundleStore, BundleStoreError};
 use crate::data_paths::DataPaths;
 use crate::environment_router::EnvironmentRouter;
-use crate::execution_admission::ExecutionAdmissionClaim;
+use crate::execution_admission::{ExecutionAdmissionClaim, ExecutionAdmissionService};
 use crate::execution_budget::ExecutionBudgetService;
 use crate::remote_execution::{
     remote_dispatch_identity, remote_execution_ids, remote_identity_sha256,
     remote_repository_key_sha256, remote_request_sha256,
 };
+use crate::run_recovery::{RecoveryReport, RunRecoveryError, RunRecoveryService};
 use crate::store::{
     AttemptDispatchRecord, AttemptDispatchState, EffectClaimOutcome, EffectClaimRequest,
     EffectDispatchOutcome, EffectDispatchRequest, EffectOutcomeRecord, EffectOutcomeRequest,
-    EffectOwnership, EffectPreparationOutcome, LocalAttemptOutcomeRequest, NodeReceiptRecord,
+    EffectOwnership, EffectPreparationOutcome, EffectRenewStoreRequest,
+    ExecutionLeaseRenewStoreRequest, LocalAttemptOutcomeRequest, NodeReceiptRecord,
     OrchestrationExecutionFailpoint, OrchestrationReplayAudit, RunTransition, RunTransitionRequest,
     Store, StoreError, StoredOrchestrationEffect,
 };
 use crate::thread_manager::{
     PreparedOrchestratedTurn, PreparedTurnDispatchDisposition, PreparedTurnDispatchReceipt,
-    PreparedTurnEvent, ThreadManager,
+    PreparedTurnEvent, PreparedTurnOwner, ThreadManager,
 };
 use pandamux_core::{
-    AgentInstanceRef, AttemptBoundary, AttemptFailure, AttemptStatus, BundleSha, CheckpointKind,
-    ContinuationId, ContinuationState, EffectDeliveryState, EffectReceipt, EnvironmentId,
-    FailureClass, NodeStoreId, OrchestrationEffectId, OrchestrationEffectKind, RunAttemptId,
-    RunCommand, RunEventId, RunId, RunStatus, Thread, ThreadId, ThreadOrigin, ThreadStatus,
-    ThreadWorkspace, Turn, TurnAttempt, TurnAttemptId, TurnAttemptStatus, TurnId, TurnInput,
-    TurnOutcome, TurnStatus, WorktreeRef,
+    AgentInstanceRef, AttemptBoundary, AttemptFailure, AttemptProgressId, AttemptProgressKind,
+    AttemptProgressRecord, AttemptStatus, BudgetReservationState, BundleSha, CheckpointId,
+    CheckpointKind, CleanupRecord, CleanupRecordId, CleanupState, ContinuationId,
+    ContinuationState, EffectDeliveryState, EffectReceipt, EnvironmentId, ExecutionLease,
+    ExecutionLeaseId, FailureClass, LeaseResourceKind, NodeStoreId, OrchestrationEffectId,
+    OrchestrationEffectKind, RecoveryReview, RecoveryReviewId, RecoveryReviewStatus, RunAttemptId,
+    RunCommand, RunEventId, RunId, RunStatus, ServerIncarnationId, Thread, ThreadId, ThreadOrigin,
+    ThreadStatus, ThreadWorkspace, Turn, TurnAttempt, TurnAttemptId, TurnAttemptStatus, TurnId,
+    TurnInput, TurnOutcome, TurnStatus, WorktreeDirtyState, WorktreeRef,
 };
 use pandamux_protocol::{
     OrchestrationAttemptAckParams, OrchestrationAttemptAckResult, OrchestrationAttemptCancelParams,
@@ -43,10 +57,13 @@ use pandamux_protocol::{
 use pandamux_providers::{InjectedInstructions, SessionSpec, ToolPolicy};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{Mutex, broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
 
 const RUN_PROJECTION_BROADCAST_CAPACITY: usize = 256;
@@ -56,6 +73,27 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+fn owned_attempt_worktree_lease(
+    store: &Store,
+    run_id: &RunId,
+    attempt_id: &RunAttemptId,
+) -> Result<Option<ExecutionLease>, LocalProviderExecutionError> {
+    let runtime = store.load_orchestration_runtime_records(run_id)?;
+    let Some(worktree) = runtime
+        .worktrees
+        .iter()
+        .find(|record| record.worktree.attempt_id == *attempt_id)
+    else {
+        return Ok(None);
+    };
+    runtime
+        .leases
+        .into_iter()
+        .find(|lease| lease.id == worktree.worktree.lease_id)
+        .map(Some)
+        .ok_or_else(|| invalid("The accepted attempt lost its exact worktree lease"))
 }
 
 /// A bounded, payload-free projection hint emitted only after a durable run
@@ -80,6 +118,55 @@ struct LocalProviderRuntime {
 #[derive(Clone)]
 struct RemoteProviderRuntime {
     environment_router: Arc<EnvironmentRouter>,
+}
+
+#[derive(Default)]
+struct RunExecutionLifecycle {
+    accepting_work: AtomicBool,
+    claims_stopped: AtomicBool,
+    active: Mutex<BTreeMap<RunAttemptId, Arc<LocalAttemptControl>>>,
+}
+
+#[derive(Clone)]
+enum TerminalSignal {
+    Completed(Result<LocalProviderTerminalOutcome, String>),
+}
+
+struct LocalAttemptControl {
+    store: Store,
+    projections: broadcast::Sender<RunTransitionNotice>,
+    prepared: PreparedLocalProviderAttempt,
+    effect_ownership: Mutex<EffectOwnership>,
+    cancel_effect_ownership: Mutex<Option<EffectOwnership>>,
+    provider: PreparedTurnOwner,
+    worktree_service: Option<AttemptWorktreeService>,
+    worktree_lease: Option<Mutex<ExecutionLease>>,
+    terminal: watch::Receiver<Option<TerminalSignal>>,
+    stop_tx: watch::Sender<bool>,
+    completion_join: Arc<Mutex<Option<JoinHandle<()>>>>,
+    watchdog_join: Arc<Mutex<Option<JoinHandle<()>>>>,
+    lease_renewal_join: Arc<Mutex<Option<JoinHandle<()>>>>,
+    cancellation_tx: mpsc::UnboundedSender<BackgroundCancellationRequest>,
+    cancellation_join: Arc<Mutex<Option<JoinHandle<()>>>>,
+    cancellation_started: AtomicBool,
+}
+
+#[derive(Clone, Copy)]
+struct BackgroundCancellationRequest {
+    config: WatchdogConfig,
+    at_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShutdownReport {
+    pub intake_closed: bool,
+    pub claims_stopped: bool,
+    pub attempts_total: usize,
+    pub attempts_verified: usize,
+    pub attempts_quarantined: usize,
+    pub timed_out: bool,
+    pub live_owned_tasks: usize,
+    pub sqlite_checkpointed: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -173,17 +260,27 @@ pub struct RunExecutionService {
     local_provider: Option<LocalProviderRuntime>,
     remote_provider: Option<RemoteProviderRuntime>,
     blackboard: Option<BlackboardStore>,
+    data_paths: Option<DataPaths>,
+    watchdog: AttemptWatchdog,
+    recovery: Option<RunRecoveryService>,
+    lifecycle: Arc<RunExecutionLifecycle>,
 }
 
 impl RunExecutionService {
     pub fn new(store: Store) -> Self {
         let (projections, _) = broadcast::channel(RUN_PROJECTION_BROADCAST_CAPACITY);
+        let lifecycle = Arc::new(RunExecutionLifecycle::default());
+        lifecycle.accepting_work.store(true, Ordering::Release);
         Self {
+            watchdog: AttemptWatchdog::new(store.clone()),
             store,
             projections,
             local_provider: None,
             remote_provider: None,
             blackboard: None,
+            data_paths: None,
+            recovery: None,
+            lifecycle,
         }
     }
 
@@ -193,15 +290,18 @@ impl RunExecutionService {
         bundle_store: BundleStore,
     ) -> Self {
         let mut service = Self::new(store);
+        service.data_paths = Some(bundle_store.data_paths().clone());
         service.local_provider = Some(LocalProviderRuntime {
             thread_manager,
             bundle_store,
         });
+        service.rebuild_recovery_runtime();
         service
     }
 
     pub fn with_environment_router(mut self, environment_router: Arc<EnvironmentRouter>) -> Self {
         self.remote_provider = Some(RemoteProviderRuntime { environment_router });
+        self.rebuild_recovery_runtime();
         self
     }
 
@@ -209,12 +309,43 @@ impl RunExecutionService {
         mut self,
         data_paths: DataPaths,
     ) -> Result<Self, BlackboardError> {
-        self.blackboard = Some(BlackboardStore::new(self.store.clone(), data_paths)?);
+        self.blackboard = Some(BlackboardStore::new(
+            self.store.clone(),
+            data_paths.clone(),
+        )?);
+        self.data_paths = Some(data_paths);
+        self.rebuild_recovery_runtime();
         Ok(self)
+    }
+
+    fn rebuild_recovery_runtime(&mut self) {
+        let mut recovery = RunRecoveryService::new(self.store.clone());
+        if let (Some(local), Some(paths)) = (self.local_provider.clone(), self.data_paths.clone()) {
+            recovery = recovery.with_local_resources(
+                local.bundle_store,
+                AttemptWorktreeService::new(self.store.clone(), paths),
+                local.thread_manager.clone(),
+                EnvironmentId::new(local.thread_manager.environment_id().to_string()),
+            );
+        }
+        if let Some(remote) = self.remote_provider.as_ref() {
+            recovery = recovery.with_environment_router(remote.environment_router.clone());
+        }
+        self.recovery = Some(recovery);
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<RunTransitionNotice> {
         self.projections.subscribe()
+    }
+
+    pub fn close_intake(&self) {
+        self.lifecycle
+            .accepting_work
+            .store(false, Ordering::Release);
+        self.lifecycle.claims_stopped.store(true, Ordering::Release);
+        if let Some(recovery) = self.recovery.as_ref() {
+            recovery.close_intake();
+        }
     }
 
     pub fn commit_transition(
@@ -271,7 +402,41 @@ impl RunExecutionService {
         let prepared = self
             .blackboard_store()?
             .prepare_task_completion(&record.run, request)?;
-        self.commit_blackboard_transition(&record.run, prepared, failpoint)
+        let transition = self.commit_blackboard_transition(&record.run, prepared, failpoint)?;
+        for event in &transition.events {
+            if let pandamux_core::RunEventKind::TaskSucceeded {
+                attempt_id,
+                artifacts,
+                ..
+            } = &event.kind
+                && attempt_id == &request.attempt_id
+                && let Some(dispatch) = self.store.get_attempt_dispatch(attempt_id)?
+            {
+                for artifact in artifacts {
+                    let payload = serde_json::to_vec(artifact).map_err(StoreError::from)?;
+                    let payload_digest = format!("{:x}", Sha256::digest(&payload));
+                    self.store.record_attempt_progress(&AttemptProgressRecord {
+                        id: AttemptProgressId::new(format!(
+                            "attempt-progress-artifact-{}",
+                            stable_execution_digest(&[
+                                request.attempt_id.as_str(),
+                                artifact.id.as_str(),
+                                &payload_digest,
+                            ])
+                        )),
+                        run_id: request.run_id.clone(),
+                        task_id: request.task_id.clone(),
+                        attempt_id: request.attempt_id.clone(),
+                        kind: AttemptProgressKind::ArtifactPublished,
+                        payload_digest,
+                        at_ms: event.at_ms.max(dispatch.last_progress_at_ms),
+                        cumulative_stream_bytes: None,
+                        terminal: false,
+                    })?;
+                }
+            }
+        }
+        Ok(transition)
     }
 
     pub fn materialize_blackboard_artifact(
@@ -478,12 +643,35 @@ impl RunExecutionService {
             &result,
             params.prepared_at_ms,
         )?;
+        let provider_instance_id = params
+            .identity
+            .route
+            .provider
+            .selected_provider_instance_id
+            .clone()
+            .ok_or_else(|| remote_hub_invalid("remote_provider_route_missing"))?;
+        let dispatch = AttemptDispatchRecord {
+            attempt_id: params.identity.attempt_id.clone(),
+            run_id: params.identity.run_id.clone(),
+            task_id: params.identity.task_id.clone(),
+            effect_id: params.identity.effect_id.clone(),
+            thread_id: result.receipt.thread_id.clone(),
+            turn_id: result.receipt.turn_id.clone(),
+            turn_attempt_id: result.receipt.turn_attempt_id.clone(),
+            provider_instance_id,
+            route: params.identity.route.clone(),
+            bundle_sha: params.identity.bundle_sha.as_str().to_string(),
+            state: AttemptDispatchState::Prepared,
+            last_boundary: result.receipt.boundary,
+            last_progress_at_ms: params.prepared_at_ms,
+            cancel_requested_at_ms: None,
+            ambiguity_reason: None,
+            outcome_digest: None,
+            created_at_ms: params.prepared_at_ms,
+            updated_at_ms: params.prepared_at_ms,
+        };
         self.store
-            .mark_orchestration_effect_prepared(
-                ownership,
-                result.receipt.receipt_sha256.as_str(),
-                params.prepared_at_ms,
-            )
+            .prepare_remote_attempt_dispatch(&dispatch, ownership, &result, params.prepared_at_ms)
             .map_err(remote_hub_store_error)?;
         Ok(result)
     }
@@ -518,6 +706,15 @@ impl RunExecutionService {
                 failpoint,
             )
             .map_err(remote_hub_store_error)?;
+        let admission = ExecutionAdmissionService::new(self.store.clone());
+        let capacity_claim = admission
+            .load_owned_attempt_claim(&params.identity.run_id, &params.identity.attempt_id)
+            .await
+            .map_err(|_| remote_hub_invalid("remote_admission_owner_invalid"))?;
+        admission
+            .mark_dispatched(&capacity_claim)
+            .await
+            .map_err(|_| remote_hub_invalid("remote_admission_dispatch_failed"))?;
         if !marker.dispatch_allowed {
             if let Some(existing) = find_hub_dispatch_receipt(
                 &self.store,
@@ -743,6 +940,7 @@ impl RunExecutionService {
         &self,
         request: PrepareLocalProviderAttemptRequest,
     ) -> Result<PreparedLocalProviderAttempt, LocalProviderExecutionError> {
+        self.ensure_intake_open()?;
         let runtime = self.local_provider.clone().ok_or_else(|| {
             LocalProviderExecutionError::Invalid(
                 "The local provider runtime is not configured".to_string(),
@@ -830,12 +1028,113 @@ impl RunExecutionService {
                     dispatch_started_at_ms,
                     "provider-attempt-start",
                 )?;
+                let provider_owner = dispatch.owner.take().ok_or_else(|| {
+                    invalid("The accepted provider turn omitted its exact runtime owner")
+                })?;
+                let (terminal_tx, terminal_rx) = watch::channel(None);
+                let (stop_tx, stop_rx) = watch::channel(false);
+                let (cancellation_tx, cancellation_rx) = mpsc::unbounded_channel();
+                let completion_join = Arc::new(Mutex::new(None));
+                let watchdog_join = Arc::new(Mutex::new(None));
+                let lease_renewal_join = Arc::new(Mutex::new(None));
+                let cancellation_join = Arc::new(Mutex::new(None));
+                let worktree_lease = owned_attempt_worktree_lease(
+                    &self.store,
+                    &prepared.dispatch.run_id,
+                    &prepared.run_attempt_id,
+                )?;
+                let control = Arc::new(LocalAttemptControl {
+                    store: self.store.clone(),
+                    projections: self.projections.clone(),
+                    prepared: prepared.clone(),
+                    effect_ownership: Mutex::new(prepared.ownership.clone()),
+                    cancel_effect_ownership: Mutex::new(None),
+                    provider: provider_owner,
+                    worktree_service: self
+                        .data_paths
+                        .clone()
+                        .map(|paths| AttemptWorktreeService::new(self.store.clone(), paths)),
+                    worktree_lease: worktree_lease.map(Mutex::new),
+                    terminal: terminal_rx.clone(),
+                    stop_tx,
+                    completion_join: completion_join.clone(),
+                    watchdog_join: watchdog_join.clone(),
+                    lease_renewal_join: lease_renewal_join.clone(),
+                    cancellation_tx,
+                    cancellation_join: cancellation_join.clone(),
+                    cancellation_started: AtomicBool::new(false),
+                });
+                self.lifecycle
+                    .active
+                    .lock()
+                    .await
+                    .insert(prepared.run_attempt_id.clone(), control.clone());
                 let service = self.clone();
-                let completion_prepared = prepared.clone();
+                let completion_control = control.clone();
+                let mut events = dispatch.events;
+                let completion_task = tokio::spawn(async move {
+                    let result = service
+                        .complete_local_provider_attempt(completion_control, &mut events)
+                        .await;
+                    let signal = TerminalSignal::Completed(
+                        result
+                            .as_ref()
+                            .map(Clone::clone)
+                            .map_err(ToString::to_string),
+                    );
+                    let _ = terminal_tx.send(Some(signal));
+                });
+                *completion_join.lock().await = Some(completion_task);
+                let cancellation_control = control.clone();
+                let cancellation_lifecycle = Arc::downgrade(&self.lifecycle);
+                let cancellation_stop_rx = stop_rx.clone();
+                let cancellation_task = tokio::spawn(async move {
+                    run_background_cancellation(
+                        cancellation_control,
+                        cancellation_lifecycle,
+                        cancellation_rx,
+                        cancellation_stop_rx,
+                    )
+                    .await;
+                });
+                *cancellation_join.lock().await = Some(cancellation_task);
+                let watchdog_control = control.clone();
+                let watchdog = self.watchdog.clone();
+                let renewal_stop_rx = stop_rx.clone();
+                let watchdog_task = tokio::spawn(async move {
+                    run_attempt_watchdog(watchdog, watchdog_control, stop_rx).await;
+                });
+                *watchdog_join.lock().await = Some(watchdog_task);
+                let renewal_control = control.clone();
+                let renewal_task = tokio::spawn(async move {
+                    run_attempt_lease_renewal(renewal_control, renewal_stop_rx).await;
+                });
+                *lease_renewal_join.lock().await = Some(renewal_task);
+                let weak_lifecycle = Arc::downgrade(&self.lifecycle);
+                let observer_control = control.clone();
+                let attempt_id = prepared.run_attempt_id.clone();
                 let completion = tokio::spawn(async move {
-                    service
-                        .complete_local_provider_attempt(completion_prepared, &mut dispatch.events)
-                        .await
+                    let result = wait_terminal_signal(observer_control.terminal.clone()).await;
+                    let _ = observer_control.stop_tx.send(true);
+                    let lifecycle_result = if observer_control
+                        .cancellation_started
+                        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                        .is_ok()
+                    {
+                        finalize_terminal_owner(&observer_control, now_ms()).await
+                    } else {
+                        wait_for_cleanup_terminal(&observer_control).await
+                    };
+                    let cancellation_result = join_background_cancellation(&observer_control).await;
+                    if cleanup_state_for(&observer_control).ok() == Some(CleanupState::Verified)
+                        && let Some(lifecycle) = weak_lifecycle.upgrade()
+                    {
+                        lifecycle.active.lock().await.remove(&attempt_id);
+                    }
+                    let outcome = result.map_err(LocalProviderExecutionError::Worker)?;
+                    lifecycle_result.map_err(LocalProviderExecutionError::Invalid)?;
+                    cancellation_result.map_err(LocalProviderExecutionError::Worker)?;
+                    Ok(outcome)
                 });
                 Ok(LocalProviderDispatch {
                     status: LocalProviderDispatchStatus::Accepted,
@@ -888,9 +1187,24 @@ impl RunExecutionService {
                     dispatch_started_at_ms,
                     "provider-attempt-not-started",
                 )?;
+                self.finalize_verified_not_started_cleanup(
+                    &prepared,
+                    &receipt,
+                    &outcome_digest,
+                    dispatch_started_at_ms,
+                )
+                .await?;
                 self.acknowledge_local_effect(
                     &prepared.dispatch.run_id,
                     &prepared.ownership.effect_id,
+                    &outcome_digest,
+                    dispatch_started_at_ms,
+                )?;
+                record_terminal_progress(
+                    &self.store,
+                    &prepared.dispatch.run_id,
+                    &prepared.dispatch.task_id,
+                    &prepared.run_attempt_id,
                     &outcome_digest,
                     dispatch_started_at_ms,
                 )?;
@@ -910,7 +1224,7 @@ impl RunExecutionService {
                         attempt_id: prepared.run_attempt_id.clone(),
                         state: AttemptDispatchState::Ambiguous,
                         boundary: AttemptBoundary::SafeToRetry,
-                        result_digest: outcome_digest,
+                        result_digest: outcome_digest.clone(),
                         safe_error_code: None,
                         ambiguity_reason: Some(reason.clone()),
                         recorded_at_ms: dispatch_started_at_ms,
@@ -926,6 +1240,14 @@ impl RunExecutionService {
                     dispatch_started_at_ms,
                     "provider-attempt-ambiguous",
                 )?;
+                record_terminal_progress(
+                    &self.store,
+                    &prepared.dispatch.run_id,
+                    &prepared.dispatch.task_id,
+                    &prepared.run_attempt_id,
+                    &outcome_digest,
+                    dispatch_started_at_ms,
+                )?;
                 Ok(LocalProviderDispatch {
                     status: LocalProviderDispatchStatus::Ambiguous,
                     receipt: Some(receipt),
@@ -933,6 +1255,237 @@ impl RunExecutionService {
                 })
             }
         }
+    }
+
+    fn ensure_intake_open(&self) -> Result<(), LocalProviderExecutionError> {
+        if !self.lifecycle.accepting_work.load(Ordering::Acquire)
+            || self.lifecycle.claims_stopped.load(Ordering::Acquire)
+        {
+            return Err(invalid(
+                "Run execution intake is closed until recovery or shutdown completes",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn observe_attempt_progress(
+        &self,
+        observation: ProgressObservation,
+    ) -> Result<crate::attempt_watchdog::ProgressObservationOutcome, StoreError> {
+        self.watchdog.observe(observation)
+    }
+
+    pub async fn recover_nonterminal_runs(
+        &self,
+        owner: ServerIncarnationId,
+        at_ms: u64,
+    ) -> Result<RecoveryReport, RunRecoveryError> {
+        self.lifecycle
+            .accepting_work
+            .store(false, Ordering::Release);
+        self.lifecycle.claims_stopped.store(true, Ordering::Release);
+        let recovery = self
+            .recovery
+            .clone()
+            .unwrap_or_else(|| RunRecoveryService::new(self.store.clone()));
+        recovery.set_live_owners(BTreeSet::from([owner.clone()]));
+        let result = recovery.recover_nonterminal_runs(owner, at_ms).await;
+        if result.is_ok() {
+            self.lifecycle
+                .claims_stopped
+                .store(false, Ordering::Release);
+            self.lifecycle.accepting_work.store(true, Ordering::Release);
+        }
+        result
+    }
+
+    pub async fn cancel_attempt(
+        &self,
+        attempt_id: &RunAttemptId,
+        at_ms: u64,
+    ) -> Result<CancellationReport, LocalProviderExecutionError> {
+        let control = self
+            .lifecycle
+            .active
+            .lock()
+            .await
+            .get(attempt_id)
+            .cloned()
+            .ok_or_else(|| invalid("The run attempt has no live local owner"))?;
+        ensure_control_run_cancelling(&control, at_ms, "attempt-run-cancel")
+            .map_err(LocalProviderExecutionError::Invalid)?;
+        cancel_control_once(control, self.watchdog.config(), at_ms)
+            .await
+            .map_err(LocalProviderExecutionError::Invalid)
+    }
+
+    pub async fn cancel_run(
+        &self,
+        run_id: &RunId,
+        idempotency_key: &str,
+        at_ms: u64,
+    ) -> Result<Vec<CancellationReport>, LocalProviderExecutionError> {
+        if idempotency_key.trim().is_empty() {
+            return Err(invalid("Run cancellation requires an idempotency key"));
+        }
+        let record = self
+            .store
+            .load_verified_orchestration_run(run_id)?
+            .ok_or_else(|| invalid("The orchestration run was not found"))?;
+        if record.run.status != RunStatus::Cancelling {
+            let kinds = pandamux_orchestrator::decide(&record.run, RunCommand::Cancel)
+                .map_err(|error| invalid(error.to_string()))?;
+            let assigned_events = kinds
+                .iter()
+                .enumerate()
+                .map(|(index, _)| crate::store::AssignedRunEvent {
+                    event_id: RunEventId::new(format!(
+                        "run-event-cancel-{}-{index}",
+                        stable_execution_digest(&[run_id.as_str(), idempotency_key])
+                    )),
+                    idempotency_key: format!("{idempotency_key}:{index}"),
+                    at_ms: at_ms.max(record.run.updated_at_ms),
+                })
+                .collect();
+            self.commit_transition(
+                &RunTransitionRequest {
+                    run_id: run_id.clone(),
+                    expected_last_seq: record.run.last_seq,
+                    expected_snapshot_sha256: crate::store::orchestration_snapshot_sha256(
+                        &record.run,
+                    ),
+                    command: RunCommand::Cancel,
+                    assigned_events,
+                    rows: crate::store::RunTransitionRows::default(),
+                },
+                None,
+            )?;
+        }
+        let controls = self
+            .lifecycle
+            .active
+            .lock()
+            .await
+            .values()
+            .filter(|control| control.prepared.dispatch.run_id == *run_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut tasks = tokio::task::JoinSet::new();
+        for control in controls {
+            let config = self.watchdog.config();
+            tasks.spawn(async move { cancel_control_once(control, config, at_ms).await });
+        }
+        let mut reports = Vec::new();
+        while let Some(result) = tasks.join_next().await {
+            reports.push(
+                result
+                    .map_err(|error| LocalProviderExecutionError::Worker(error.to_string()))?
+                    .map_err(LocalProviderExecutionError::Invalid)?,
+            );
+        }
+        Ok(reports)
+    }
+
+    pub async fn shutdown(&self, deadline: Duration) -> ShutdownReport {
+        self.lifecycle
+            .accepting_work
+            .store(false, Ordering::Release);
+        self.lifecycle.claims_stopped.store(true, Ordering::Release);
+        let controls = self
+            .lifecycle
+            .active
+            .lock()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let attempts_total = controls.len();
+        let config = self.watchdog.config();
+        let mut cancellation_runs = BTreeSet::new();
+        for control in &controls {
+            if cancellation_runs.insert(control.prepared.dispatch.run_id.clone()) {
+                let _ = ensure_control_run_cancelling(control, now_ms(), "shutdown-run-cancel");
+            }
+        }
+        let cancellation = async {
+            let mut tasks = tokio::task::JoinSet::new();
+            for control in &controls {
+                let control = control.clone();
+                tasks.spawn(async move { cancel_control_once(control, config, now_ms()).await });
+            }
+            while tasks.join_next().await.is_some() {
+                // Every attempt owns an independently bounded cancellation state machine.
+            }
+        };
+        let timed_out = match tokio::time::timeout(deadline, cancellation).await {
+            Ok(()) => false,
+            Err(_) => {
+                for control in &controls {
+                    let at_ms = now_ms();
+                    let _ = control
+                        .store
+                        .record_attempt_cancel_intent(&control.prepared.run_attempt_id, at_ms);
+                    let _ = record_cleanup_state(
+                        control,
+                        CleanupState::Pending,
+                        "service_shutdown_deadline_exceeded",
+                        at_ms,
+                    );
+                    let _ = control
+                        .quarantine("service_shutdown_deadline_exceeded", at_ms)
+                        .await;
+                }
+                true
+            }
+        };
+
+        for control in &controls {
+            let _ = join_background_cancellation(control).await;
+        }
+
+        for control in &controls {
+            if !matches!(
+                cleanup_state_for(control),
+                Ok(CleanupState::Verified | CleanupState::Quarantined)
+            ) {
+                let _ = quarantine_attempt(
+                    control,
+                    "service_shutdown_attempt_cleanup_failed",
+                    now_ms(),
+                )
+                .await;
+            }
+        }
+
+        let attempts_verified = controls
+            .iter()
+            .filter(|control| cleanup_state_for(control) == Ok(CleanupState::Verified))
+            .count();
+        let attempts_quarantined = controls
+            .iter()
+            .filter(|control| cleanup_state_for(control) == Ok(CleanupState::Quarantined))
+            .count();
+        self.lifecycle
+            .active
+            .lock()
+            .await
+            .retain(|_, control| cleanup_state_for(control) != Ok(CleanupState::Verified));
+        let live_owned_tasks = self.lifecycle.active.lock().await.len();
+        let sqlite_checkpointed = self.store.checkpoint_truncate().is_ok();
+        ShutdownReport {
+            intake_closed: true,
+            claims_stopped: true,
+            attempts_total,
+            attempts_verified,
+            attempts_quarantined,
+            timed_out,
+            live_owned_tasks,
+            sqlite_checkpointed,
+        }
+    }
+
+    pub async fn live_owned_attempts(&self) -> usize {
+        self.lifecycle.active.lock().await.len()
     }
 
     fn commit_owned_command(
@@ -1011,9 +1564,254 @@ impl RunExecutionService {
         )
     }
 
+    async fn finalize_verified_not_started_cleanup(
+        &self,
+        prepared: &PreparedLocalProviderAttempt,
+        receipt: &PreparedTurnDispatchReceipt,
+        outcome_digest: &str,
+        at_ms: u64,
+    ) -> Result<(), LocalProviderExecutionError> {
+        self.record_detached_cleanup_state(
+            prepared,
+            CleanupState::Pending,
+            "attempt_not_started_cleanup",
+            at_ms,
+        )?;
+        let result = async {
+            let Some(worktree) = self.store.load_attempt_worktree_for_attempt(
+                &prepared.dispatch.run_id,
+                &prepared.run_attempt_id,
+            )?
+            else {
+                return Ok::<(), LocalProviderExecutionError>(());
+            };
+            let paths = self.data_paths.clone().ok_or_else(|| {
+                invalid("The verified not-started worktree has no filesystem owner")
+            })?;
+            let runtime = self
+                .store
+                .load_orchestration_runtime_records(&prepared.dispatch.run_id)?;
+            let lease = runtime
+                .leases
+                .into_iter()
+                .find(|lease| lease.id == worktree.worktree.lease_id)
+                .ok_or_else(|| invalid("The verified not-started worktree lost its lease"))?;
+            let run = self
+                .store
+                .load_verified_orchestration_run(&prepared.dispatch.run_id)?
+                .ok_or_else(|| invalid("The verified not-started run disappeared"))?;
+            let dispatch = self
+                .store
+                .get_attempt_dispatch(&prepared.run_attempt_id)?
+                .ok_or_else(|| invalid("The verified not-started dispatch disappeared"))?;
+            let checkpoint_at_ms = at_ms
+                .max(run.run.updated_at_ms)
+                .max(worktree.updated_at_ms)
+                .max(dispatch.last_progress_at_ms)
+                .max(lease.last_heartbeat_ms);
+            if checkpoint_at_ms >= lease.expires_at_ms {
+                return Err(invalid(
+                    "The verified not-started worktree lease expired before checkpointing",
+                ));
+            }
+            let checkpoint_identity =
+                stable_execution_digest(&[prepared.run_attempt_id.as_str(), "not_started_after"]);
+            let worktrees = AttemptWorktreeService::new(self.store.clone(), paths);
+            let checkpoint = worktrees
+                .checkpoint(
+                    CreateAttemptCheckpointRequest {
+                        worktree_id: worktree.worktree.id.clone(),
+                        lease_id: lease.id.clone(),
+                        checkpoint_id: CheckpointId::new(format!(
+                            "checkpoint-after-{}",
+                            &checkpoint_identity[..24]
+                        )),
+                        kind: CheckpointKind::AfterAttempt,
+                        created_at_ms: checkpoint_at_ms,
+                    },
+                    None,
+                )
+                .await
+                .map_err(|error| invalid(error.to_string()))?;
+            record_detached_checkpoint_progress(&self.store, prepared, &checkpoint)?;
+            let refreshed = self
+                .store
+                .load_attempt_worktree_for_attempt(
+                    &prepared.dispatch.run_id,
+                    &prepared.run_attempt_id,
+                )?
+                .ok_or_else(|| invalid("The verified not-started worktree disappeared"))?;
+            let retained_evidence_sha256 = stable_execution_digest(
+                &refreshed
+                    .worktree
+                    .checkpoint_ids
+                    .iter()
+                    .map(|id| id.as_str())
+                    .collect::<Vec<_>>(),
+            );
+            let verified_process_death_sha256 = stable_execution_digest(&[
+                "not_started_cleanup_verified",
+                prepared.run_attempt_id.as_str(),
+                prepared.turn_attempt.id.as_str(),
+                receipt
+                    .safe_error_code
+                    .as_deref()
+                    .unwrap_or("provider_not_started"),
+            ]);
+            match worktrees
+                .cleanup(
+                    CleanupAttemptWorktreeRequest {
+                        worktree_id: refreshed.worktree.id,
+                        lease_id: lease.id,
+                        verified_process_death_sha256,
+                        retained_evidence_sha256,
+                        cleaned_at_ms: checkpoint_at_ms.max(refreshed.updated_at_ms),
+                    },
+                    None,
+                )
+                .await
+                .map_err(|error| invalid(error.to_string()))?
+            {
+                AttemptWorktreeCleanupOutcome::Removed(_) => Ok(()),
+                AttemptWorktreeCleanupOutcome::Retained(_) => Err(invalid(
+                    "The verified not-started worktree was retained for recovery review",
+                )),
+            }
+        }
+        .await;
+        let result = match result {
+            Ok(()) => {
+                crate::execution_admission::ExecutionAdmissionService::new(self.store.clone())
+                    .release(&prepared.admission_claim)
+                    .await
+                    .map(|_| ())
+                    .map_err(|error| invalid(error.to_string()))
+            }
+            Err(error) => Err(error),
+        };
+        match result {
+            Ok(()) => self.record_detached_cleanup_state(
+                prepared,
+                CleanupState::Verified,
+                "attempt_cleanup_verified",
+                at_ms,
+            ),
+            Err(error) => {
+                self.quarantine_detached_cleanup(
+                    prepared,
+                    "attempt_not_started_cleanup_failed",
+                    at_ms,
+                )?;
+                record_terminal_progress(
+                    &self.store,
+                    &prepared.dispatch.run_id,
+                    &prepared.dispatch.task_id,
+                    &prepared.run_attempt_id,
+                    outcome_digest,
+                    at_ms,
+                )?;
+                Err(error)
+            }
+        }
+    }
+
+    fn record_detached_cleanup_state(
+        &self,
+        prepared: &PreparedLocalProviderAttempt,
+        state: CleanupState,
+        reason_code: &str,
+        at_ms: u64,
+    ) -> Result<(), LocalProviderExecutionError> {
+        let record = self
+            .store
+            .load_verified_orchestration_run(&prepared.dispatch.run_id)?
+            .ok_or_else(|| invalid("The cleanup run disappeared"))?;
+        let attempt = record
+            .run
+            .attempts
+            .get(&prepared.run_attempt_id)
+            .ok_or_else(|| invalid("The cleanup attempt disappeared"))?;
+        if attempt.cleanup_state == state {
+            return Ok(());
+        }
+        let updated_at_ms = at_ms.max(record.run.updated_at_ms);
+        let evidence_digest = stable_execution_digest(&[
+            prepared.dispatch.run_id.as_str(),
+            prepared.dispatch.task_id.as_str(),
+            prepared.run_attempt_id.as_str(),
+            reason_code,
+            cleanup_state_name(state),
+        ]);
+        self.commit_owned_command(
+            &prepared.dispatch.run_id,
+            RunCommand::RecordAttemptCleanup {
+                cleanup: CleanupRecord {
+                    id: CleanupRecordId::new(format!(
+                        "cleanup-{}",
+                        stable_execution_digest(&[
+                            prepared.run_attempt_id.as_str(),
+                            cleanup_state_name(state),
+                            &evidence_digest,
+                        ])
+                    )),
+                    run_id: prepared.dispatch.run_id.clone(),
+                    task_id: prepared.dispatch.task_id.clone(),
+                    attempt_id: prepared.run_attempt_id.clone(),
+                    state,
+                    reason_code: reason_code.to_string(),
+                    evidence_digest,
+                    updated_at_ms,
+                },
+            },
+            updated_at_ms,
+            "detached-cleanup",
+        )?;
+        Ok(())
+    }
+
+    fn quarantine_detached_cleanup(
+        &self,
+        prepared: &PreparedLocalProviderAttempt,
+        reason_code: &str,
+        at_ms: u64,
+    ) -> Result<(), LocalProviderExecutionError> {
+        self.record_detached_cleanup_state(
+            prepared,
+            CleanupState::Quarantined,
+            reason_code,
+            at_ms,
+        )?;
+        let evidence_digest = stable_execution_digest(&[
+            prepared.dispatch.run_id.as_str(),
+            prepared.dispatch.task_id.as_str(),
+            prepared.run_attempt_id.as_str(),
+            prepared.ownership.effect_id.as_str(),
+            reason_code,
+        ]);
+        let identity = stable_execution_digest(&[
+            prepared.run_attempt_id.as_str(),
+            reason_code,
+            &evidence_digest,
+        ]);
+        self.store.upsert_recovery_review(&RecoveryReview {
+            id: RecoveryReviewId::new(format!("recovery-review-{identity}")),
+            run_id: prepared.dispatch.run_id.clone(),
+            task_id: prepared.dispatch.task_id.clone(),
+            attempt_id: prepared.run_attempt_id.clone(),
+            effect_id: Some(prepared.ownership.effect_id.clone()),
+            reason_code: reason_code.to_string(),
+            evidence_digest,
+            status: RecoveryReviewStatus::Pending,
+            created_at_ms: at_ms,
+            resolved_at_ms: None,
+            resolution: None,
+        })?;
+        Ok(())
+    }
+
     async fn complete_local_provider_attempt(
         &self,
-        prepared: PreparedLocalProviderAttempt,
+        control: Arc<LocalAttemptControl>,
         events: &mut mpsc::UnboundedReceiver<PreparedTurnEvent>,
     ) -> Result<LocalProviderTerminalOutcome, LocalProviderExecutionError> {
         let event = events.recv().await.ok_or_else(|| {
@@ -1021,8 +1819,1605 @@ impl RunExecutionService {
                 "The prepared provider owner closed without a durable outcome".to_string(),
             )
         })?;
-        complete_local_provider_event(self, &prepared, event).await
+        complete_local_provider_event(self, &control, event).await
     }
+}
+
+impl AttemptLifecycleControl for LocalAttemptControl {
+    fn record_cancel_intent<'a>(&'a self, at_ms: u64) -> LifecycleFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            let dispatch = self
+                .store
+                .get_attempt_dispatch(&self.prepared.run_attempt_id)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| "The cancelled attempt dispatch disappeared".to_string())?;
+            let requested_at_ms = at_ms.max(dispatch.updated_at_ms);
+            self.store
+                .record_attempt_cancel_intent(&self.prepared.run_attempt_id, requested_at_ms)
+                .map_err(|error| error.to_string())?;
+            record_cleanup_state(
+                self,
+                CleanupState::Pending,
+                "attempt_cancellation_requested",
+                requested_at_ms,
+            )
+            .map_err(|error| error.to_string())?;
+            let ownership = prepare_cancel_effect(self, requested_at_ms)?;
+            *self.cancel_effect_ownership.lock().await = ownership;
+            Ok(())
+        })
+    }
+
+    fn interrupt<'a>(&'a self) -> LifecycleFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            self.provider
+                .interrupt()
+                .await
+                .map_err(|error| error.message)
+        })
+    }
+
+    fn drain<'a>(&'a self) -> LifecycleFuture<'a, Result<bool, String>> {
+        Box::pin(async move {
+            let _ = wait_terminal_signal(self.terminal.clone()).await;
+            self.provider
+                .join_event_writer()
+                .await
+                .map_err(|error| error.message)?;
+            Ok(self.provider.provider_death_verified().await)
+        })
+    }
+
+    fn escalate<'a>(&'a self) -> LifecycleFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            self.provider
+                .escalate()
+                .await
+                .map_err(|error| error.message)
+        })
+    }
+
+    fn verify_death<'a>(&'a self) -> LifecycleFuture<'a, Result<bool, String>> {
+        Box::pin(async move {
+            if self.provider.writer_finished().await {
+                self.provider
+                    .join_event_writer()
+                    .await
+                    .map_err(|error| error.message)?;
+            }
+            Ok(self.provider.provider_death_verified().await)
+        })
+    }
+
+    fn settle_verified<'a>(&'a self, at_ms: u64) -> LifecycleFuture<'a, Result<(), String>> {
+        Box::pin(async move { settle_cancelled_attempt(self, at_ms).await })
+    }
+
+    fn mark_cleanup_verified<'a>(&'a self, at_ms: u64) -> LifecycleFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            cleanup_attempt_worktree(self, at_ms).await?;
+            self.provider
+                .release_admission()
+                .await
+                .map_err(|error| error.message)?;
+            record_cleanup_state(
+                self,
+                CleanupState::Verified,
+                "attempt_cleanup_verified",
+                at_ms,
+            )
+            .map_err(|error| error.to_string())
+        })
+    }
+
+    fn quarantine<'a>(
+        &'a self,
+        reason_code: &'static str,
+        at_ms: u64,
+    ) -> LifecycleFuture<'a, Result<(), String>> {
+        Box::pin(async move { quarantine_attempt(self, reason_code, at_ms).await })
+    }
+
+    fn release_leases<'a>(&'a self) -> LifecycleFuture<'a, Result<(), String>> {
+        // Capacity remains owned until writer and worktree cleanup are both
+        // verified. The lifecycle phase records release intent here; the
+        // durable admission is released by `mark_cleanup_verified`.
+        Box::pin(async move { Ok(()) })
+    }
+
+    fn stop_timers<'a>(&'a self) -> LifecycleFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            let _ = self.stop_tx.send(true);
+            Ok(())
+        })
+    }
+
+    fn close_senders<'a>(&'a self) -> LifecycleFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            let _ = self.stop_tx.send(true);
+            self.provider.revoke_capability();
+            Ok(())
+        })
+    }
+
+    fn join_writers<'a>(&'a self) -> LifecycleFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            self.provider
+                .join_event_writer()
+                .await
+                .map_err(|error| error.message)?;
+            join_owner_tasks(self).await
+        })
+    }
+}
+
+async fn run_attempt_watchdog(
+    watchdog: AttemptWatchdog,
+    control: Arc<LocalAttemptControl>,
+    mut stop_rx: watch::Receiver<bool>,
+) {
+    let absolute_runtime_ms = control
+        .store
+        .load_orchestration_runtime_records(&control.prepared.dispatch.run_id)
+        .ok()
+        .and_then(|runtime| {
+            runtime
+                .budget_reservations
+                .into_iter()
+                .find(|reservation| {
+                    reservation.reservation.attempt_id == control.prepared.run_attempt_id
+                })
+                .map(|reservation| reservation.reservation.amount.runtime_ms)
+        })
+        .unwrap_or(1);
+    let mut interval = tokio::time::interval(Duration::from_millis(watchdog.config().poll_ms));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            changed = stop_rx.changed() => {
+                if changed.is_err() || *stop_rx.borrow() {
+                    break;
+                }
+            }
+            _ = interval.tick() => {
+                let Ok(Some(dispatch)) = control.store.get_attempt_dispatch(
+                    &control.prepared.run_attempt_id,
+                ) else {
+                    break;
+                };
+                match watchdog.evaluate(&dispatch, absolute_runtime_ms, now_ms()) {
+                    WatchdogDecision::Continue => {}
+                    WatchdogDecision::Terminal => break,
+                    WatchdogDecision::StallDeadline
+                    | WatchdogDecision::AbsoluteRuntimeDeadline
+                    | WatchdogDecision::ClockAnomaly => {
+                        let _ = control.cancellation_tx.send(BackgroundCancellationRequest {
+                            config: watchdog.config(),
+                            at_ms: now_ms(),
+                        });
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn ensure_control_run_cancelling(
+    control: &LocalAttemptControl,
+    at_ms: u64,
+    operation: &str,
+) -> Result<(), String> {
+    let current = control
+        .store
+        .load_verified_orchestration_run(&control.prepared.dispatch.run_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "The cancellation run disappeared".to_string())?;
+    if current.run.status == RunStatus::Cancelling {
+        return Ok(());
+    }
+    if current.run.status.is_terminal() {
+        return Err("The cancellation run is already terminal".to_string());
+    }
+    if let Err(error) = commit_control_command(control, RunCommand::Cancel, at_ms, operation) {
+        let reloaded = control
+            .store
+            .load_verified_orchestration_run(&control.prepared.dispatch.run_id)
+            .map_err(|store_error| store_error.to_string())?
+            .ok_or_else(|| "The cancellation run disappeared".to_string())?;
+        if reloaded.run.status != RunStatus::Cancelling {
+            return Err(error.to_string());
+        }
+    }
+    Ok(())
+}
+
+async fn run_attempt_lease_renewal(
+    control: Arc<LocalAttemptControl>,
+    mut stop_rx: watch::Receiver<bool>,
+) {
+    let mut interval = tokio::time::interval(Duration::from_millis(DEFAULT_LEASE_RENEWAL_MS));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Tokio intervals tick immediately. The claim was just created or
+    // validated, so wait one full renewal period before the first CAS.
+    interval.tick().await;
+    loop {
+        tokio::select! {
+            changed = stop_rx.changed() => {
+                if changed.is_err() || *stop_rx.borrow() {
+                    break;
+                }
+            }
+            _ = interval.tick() => {
+                let renewed_at_ms = now_ms();
+                if renew_attempt_leases(&control, renewed_at_ms).await.is_err() {
+                    let _ = control.cancellation_tx.send(BackgroundCancellationRequest {
+                        config: WatchdogConfig::default(),
+                        at_ms: renewed_at_ms,
+                    });
+                    break;
+                }
+            }
+        }
+    }
+}
+
+async fn run_background_cancellation(
+    control: Arc<LocalAttemptControl>,
+    lifecycle: std::sync::Weak<RunExecutionLifecycle>,
+    mut requests: mpsc::UnboundedReceiver<BackgroundCancellationRequest>,
+    mut stop_rx: watch::Receiver<bool>,
+) {
+    let request = tokio::select! {
+        request = requests.recv() => request,
+        changed = stop_rx.changed() => {
+            if changed.is_err() || *stop_rx.borrow() {
+                None
+            } else {
+                requests.recv().await
+            }
+        }
+    };
+    let Some(request) = request else {
+        return;
+    };
+    if ensure_control_run_cancelling(&control, request.at_ms, "background-run-cancel").is_err() {
+        let _ = quarantine_attempt(
+            &control,
+            "background_cancellation_intent_failed",
+            request.at_ms,
+        )
+        .await;
+        return;
+    }
+    let controls = if let Some(lifecycle) = lifecycle.upgrade() {
+        lifecycle
+            .active
+            .lock()
+            .await
+            .values()
+            .filter(|candidate| {
+                candidate.prepared.dispatch.run_id == control.prepared.dispatch.run_id
+            })
+            .cloned()
+            .collect::<Vec<_>>()
+    } else {
+        vec![control]
+    };
+    let mut cancellations = tokio::task::JoinSet::new();
+    for control in controls {
+        cancellations.spawn(async move {
+            cancel_control_once(control, request.config, request.at_ms).await
+        });
+    }
+    while cancellations.join_next().await.is_some() {}
+}
+
+async fn join_background_cancellation(control: &LocalAttemptControl) -> Result<(), String> {
+    if let Some(handle) = control.cancellation_join.lock().await.take() {
+        handle.await.map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+async fn renew_attempt_leases(
+    control: &LocalAttemptControl,
+    renewed_at_ms: u64,
+) -> Result<(), String> {
+    let lease_expires_at_ms = renewed_at_ms
+        .checked_add(DEFAULT_LEASE_TTL_MS)
+        .ok_or_else(|| "attempt lease expiry overflowed".to_string())?;
+    {
+        let mut ownership = control.effect_ownership.lock().await;
+        let renewed = control
+            .store
+            .renew_orchestration_effect(&EffectRenewStoreRequest {
+                ownership: ownership.clone(),
+                renewed_at_ms,
+                lease_expires_at_ms,
+            })
+            .map_err(|error| error.to_string())?;
+        ownership.claim_revision = renewed.effect.delivery.claim_revision;
+    }
+    control
+        .provider
+        .renew_admission(renewed_at_ms, DEFAULT_LEASE_TTL_MS)
+        .await
+        .map_err(|error| error.message)?;
+    if let Some(worktree_lease) = control.worktree_lease.as_ref() {
+        let mut lease = worktree_lease.lock().await;
+        *lease = control
+            .store
+            .renew_owned_execution_lease(&ExecutionLeaseRenewStoreRequest {
+                lease: lease.clone(),
+                renewed_at_ms,
+                lease_expires_at_ms,
+            })
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+async fn cancel_control_once(
+    control: Arc<LocalAttemptControl>,
+    config: WatchdogConfig,
+    at_ms: u64,
+) -> Result<CancellationReport, String> {
+    let ownership_wait = async {
+        loop {
+            if control
+                .cancellation_started
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return Ok(None);
+            }
+            if let Some(report) = completed_cancellation_report(control.as_ref())? {
+                return Ok(Some(report));
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+    match tokio::time::timeout(
+        Duration::from_millis(config.shutdown_timeout_ms),
+        ownership_wait,
+    )
+    .await
+    {
+        Ok(Ok(Some(report))) => return Ok(report),
+        Ok(Ok(None)) => {}
+        Ok(Err(error)) => return Err(error),
+        Err(_) => {
+            quarantine_attempt(
+                control.as_ref(),
+                "attempt_cancellation_owner_wait_exceeded",
+                at_ms,
+            )
+            .await?;
+            return completed_cancellation_report(control.as_ref())?.ok_or_else(|| {
+                "The cancellation owner timed out without cleanup debt".to_string()
+            });
+        }
+    }
+    let report = match cancel_owned_attempt(control.as_ref(), config, at_ms).await {
+        Ok(report) => report,
+        Err(error) => {
+            if quarantine_attempt(control.as_ref(), "attempt_cancellation_failed", at_ms)
+                .await
+                .is_ok()
+            {
+                return completed_cancellation_report(control.as_ref())?.ok_or(error);
+            }
+            control.cancellation_started.store(false, Ordering::Release);
+            return Err(error);
+        }
+    };
+    if report.cleanup_state == CleanupState::Verified {
+        settle_cancelled_run_if_ready(control.as_ref(), at_ms).await?;
+    }
+    Ok(report)
+}
+
+fn completed_cancellation_report(
+    control: &LocalAttemptControl,
+) -> Result<Option<CancellationReport>, String> {
+    let run = control
+        .store
+        .load_verified_orchestration_run(&control.prepared.dispatch.run_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "The cancellation run disappeared".to_string())?;
+    let attempt = run
+        .run
+        .attempts
+        .get(&control.prepared.run_attempt_id)
+        .ok_or_else(|| "The cancellation attempt disappeared".to_string())?;
+    Ok(match attempt.cleanup_state {
+        CleanupState::Verified => Some(CancellationReport {
+            cleanup_state: CleanupState::Verified,
+            interrupt_completed: true,
+            drained: true,
+            escalated: false,
+            death_verified: true,
+            leases_released: true,
+            writers_joined: true,
+            reason_code: None,
+        }),
+        CleanupState::Quarantined => Some(CancellationReport {
+            cleanup_state: CleanupState::Quarantined,
+            interrupt_completed: false,
+            drained: false,
+            escalated: false,
+            death_verified: false,
+            leases_released: false,
+            writers_joined: false,
+            reason_code: Some("attempt_cleanup_pending"),
+        }),
+        CleanupState::NotStarted | CleanupState::Pending => None,
+    })
+}
+
+async fn wait_terminal_signal(
+    mut terminal: watch::Receiver<Option<TerminalSignal>>,
+) -> Result<LocalProviderTerminalOutcome, String> {
+    loop {
+        if let Some(TerminalSignal::Completed(result)) = terminal.borrow().clone() {
+            return result;
+        }
+        terminal
+            .changed()
+            .await
+            .map_err(|_| "The terminal result channel closed without an outcome".to_string())?;
+    }
+}
+
+async fn join_owner_tasks(control: &LocalAttemptControl) -> Result<(), String> {
+    if let Some(handle) = control.completion_join.lock().await.take() {
+        handle.await.map_err(|error| error.to_string())?;
+    }
+    if let Some(handle) = control.watchdog_join.lock().await.take() {
+        handle.await.map_err(|error| error.to_string())?;
+    }
+    if let Some(handle) = control.lease_renewal_join.lock().await.take() {
+        handle.await.map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+async fn finalize_terminal_owner(control: &LocalAttemptControl, at_ms: u64) -> Result<(), String> {
+    record_cleanup_state(
+        control,
+        CleanupState::Pending,
+        "attempt_terminal_cleanup_started",
+        at_ms,
+    )
+    .map_err(|error| error.to_string())?;
+
+    let phase = async {
+        control
+            .provider
+            .join_event_writer()
+            .await
+            .map_err(|error| ("attempt_writer_join_failed", error.message))?;
+        if !control.provider.provider_death_verified().await {
+            return Err((
+                "attempt_death_unverified",
+                "The terminal provider owner could not prove process death".to_string(),
+            ));
+        }
+        control.provider.revoke_capability();
+        join_owner_tasks(control)
+            .await
+            .map_err(|error| ("attempt_writer_join_failed", error))?;
+        cleanup_attempt_worktree(control, at_ms)
+            .await
+            .map_err(|error| ("attempt_worktree_cleanup_failed", error))?;
+        control
+            .provider
+            .release_admission()
+            .await
+            .map_err(|error| ("attempt_lease_release_failed", error.message))?;
+        record_cleanup_state(
+            control,
+            CleanupState::Verified,
+            "attempt_cleanup_verified",
+            at_ms,
+        )
+        .map_err(|error| ("attempt_cleanup_receipt_failed", error.to_string()))?;
+        Ok::<(), (&'static str, String)>(())
+    }
+    .await;
+
+    if let Err((reason, message)) = phase {
+        quarantine_attempt(control, reason, at_ms).await?;
+        return Err(message);
+    }
+    Ok(())
+}
+
+async fn wait_for_cleanup_terminal(control: &LocalAttemptControl) -> Result<(), String> {
+    let wait = async {
+        loop {
+            let run = control
+                .store
+                .load_verified_orchestration_run(&control.prepared.dispatch.run_id)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| "The lifecycle run disappeared".to_string())?;
+            let state = run
+                .run
+                .attempts
+                .get(&control.prepared.run_attempt_id)
+                .ok_or_else(|| "The lifecycle attempt disappeared".to_string())?
+                .cleanup_state;
+            if matches!(state, CleanupState::Verified | CleanupState::Quarantined) {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+    match tokio::time::timeout(Duration::from_millis(DEFAULT_SHUTDOWN_TIMEOUT_MS), wait).await {
+        Ok(result) => result,
+        Err(_) => {
+            quarantine_attempt(control, "attempt_cleanup_owner_wait_exceeded", now_ms()).await?;
+            Err("The attempt cleanup owner exceeded its aggregate deadline".to_string())
+        }
+    }
+}
+
+fn cleanup_state_for(control: &LocalAttemptControl) -> Result<CleanupState, String> {
+    let run = control
+        .store
+        .load_verified_orchestration_run(&control.prepared.dispatch.run_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "The lifecycle run disappeared".to_string())?;
+    run.run
+        .attempts
+        .get(&control.prepared.run_attempt_id)
+        .map(|attempt| attempt.cleanup_state)
+        .ok_or_else(|| "The lifecycle attempt disappeared".to_string())
+}
+
+async fn checkpoint_attempt_worktree(
+    control: &LocalAttemptControl,
+    kind: CheckpointKind,
+    at_ms: u64,
+) -> Result<(), String> {
+    let durable_worktree = control
+        .store
+        .load_attempt_worktree_for_attempt(
+            &control.prepared.dispatch.run_id,
+            &control.prepared.run_attempt_id,
+        )
+        .map_err(|error| error.to_string())?;
+    let Some(worktree) = durable_worktree else {
+        if control.worktree_lease.is_some() {
+            return Err("The attempt worktree lease lost its durable owner".to_string());
+        }
+        return Ok(());
+    };
+    let service = control
+        .worktree_service
+        .as_ref()
+        .ok_or_else(|| "The attempt worktree owner has no filesystem service".to_string())?;
+    let lease = control
+        .worktree_lease
+        .as_ref()
+        .ok_or_else(|| "The attempt worktree owner lost its renewable lease".to_string())?
+        .lock()
+        .await
+        .clone();
+    if lease.id != worktree.worktree.lease_id {
+        return Err("The attempt worktree lease identity changed".to_string());
+    }
+
+    let run = control
+        .store
+        .load_verified_orchestration_run(&control.prepared.dispatch.run_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "The checkpoint run disappeared".to_string())?;
+    let existing = run.run.checkpoints.values().find(|checkpoint| {
+        checkpoint.attempt_id == control.prepared.run_attempt_id && checkpoint.kind == kind
+    });
+    let checkpoint = if let Some(existing) = existing {
+        existing.clone()
+    } else {
+        let dispatch = control
+            .store
+            .get_attempt_dispatch(&control.prepared.run_attempt_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "The checkpoint dispatch disappeared".to_string())?;
+        let created_at_ms = at_ms
+            .max(run.run.updated_at_ms)
+            .max(worktree.updated_at_ms)
+            .max(dispatch.last_progress_at_ms)
+            .max(lease.last_heartbeat_ms);
+        if created_at_ms >= lease.expires_at_ms {
+            return Err("The attempt worktree lease expired before checkpointing".to_string());
+        }
+        let kind_name = match kind {
+            CheckpointKind::BeforeAttempt => "before",
+            CheckpointKind::AfterAttempt => "after",
+            CheckpointKind::Recovery => "recovery",
+        };
+        let identity =
+            stable_execution_digest(&[control.prepared.run_attempt_id.as_str(), kind_name]);
+        service
+            .checkpoint(
+                CreateAttemptCheckpointRequest {
+                    worktree_id: worktree.worktree.id.clone(),
+                    lease_id: lease.id.clone(),
+                    checkpoint_id: CheckpointId::new(format!(
+                        "checkpoint-{kind_name}-{}",
+                        &identity[..24]
+                    )),
+                    kind,
+                    created_at_ms,
+                },
+                None,
+            )
+            .await
+            .map_err(|error| error.to_string())?
+    };
+    record_checkpoint_progress(control, &checkpoint)
+}
+
+fn record_checkpoint_progress(
+    control: &LocalAttemptControl,
+    checkpoint: &pandamux_core::CheckpointRef,
+) -> Result<(), String> {
+    let payload_digest = stable_execution_digest(&[
+        checkpoint.id.as_str(),
+        checkpoint.value.as_str(),
+        control.prepared.run_attempt_id.as_str(),
+    ]);
+    let progress_id = AttemptProgressId::new(format!(
+        "attempt-progress-checkpoint-{}",
+        &payload_digest[..32]
+    ));
+    if control
+        .store
+        .load_attempt_progress(&control.prepared.run_attempt_id)
+        .map_err(|error| error.to_string())?
+        .iter()
+        .any(|progress| progress.id == progress_id)
+    {
+        return Ok(());
+    }
+    let dispatch = control
+        .store
+        .get_attempt_dispatch(&control.prepared.run_attempt_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "The checkpoint progress owner disappeared".to_string())?;
+    control
+        .store
+        .record_attempt_progress(&AttemptProgressRecord {
+            id: progress_id,
+            run_id: control.prepared.dispatch.run_id.clone(),
+            task_id: control.prepared.dispatch.task_id.clone(),
+            attempt_id: control.prepared.run_attempt_id.clone(),
+            kind: AttemptProgressKind::CheckpointCreated,
+            payload_digest,
+            at_ms: checkpoint.created_at_ms.max(dispatch.last_progress_at_ms),
+            cumulative_stream_bytes: None,
+            terminal: false,
+        })
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+fn record_detached_checkpoint_progress(
+    store: &Store,
+    prepared: &PreparedLocalProviderAttempt,
+    checkpoint: &pandamux_core::CheckpointRef,
+) -> Result<(), LocalProviderExecutionError> {
+    let payload_digest = stable_execution_digest(&[
+        checkpoint.id.as_str(),
+        checkpoint.value.as_str(),
+        prepared.run_attempt_id.as_str(),
+    ]);
+    let progress_id = AttemptProgressId::new(format!(
+        "attempt-progress-checkpoint-{}",
+        &payload_digest[..32]
+    ));
+    if store
+        .load_attempt_progress(&prepared.run_attempt_id)?
+        .iter()
+        .any(|progress| progress.id == progress_id)
+    {
+        return Ok(());
+    }
+    let dispatch = store
+        .get_attempt_dispatch(&prepared.run_attempt_id)?
+        .ok_or_else(|| invalid("The checkpoint progress owner disappeared"))?;
+    store.record_attempt_progress(&AttemptProgressRecord {
+        id: progress_id,
+        run_id: prepared.dispatch.run_id.clone(),
+        task_id: prepared.dispatch.task_id.clone(),
+        attempt_id: prepared.run_attempt_id.clone(),
+        kind: AttemptProgressKind::CheckpointCreated,
+        payload_digest,
+        at_ms: checkpoint.created_at_ms.max(dispatch.last_progress_at_ms),
+        cumulative_stream_bytes: None,
+        terminal: false,
+    })?;
+    Ok(())
+}
+
+async fn cleanup_attempt_worktree(control: &LocalAttemptControl, at_ms: u64) -> Result<(), String> {
+    let durable_worktree = control
+        .store
+        .load_attempt_worktree_for_attempt(
+            &control.prepared.dispatch.run_id,
+            &control.prepared.run_attempt_id,
+        )
+        .map_err(|error| error.to_string())?;
+    let Some(worktree) = durable_worktree else {
+        if control.worktree_lease.is_some() {
+            return Err("The attempt worktree disappeared before cleanup".to_string());
+        }
+        return Ok(());
+    };
+    let service = control
+        .worktree_service
+        .as_ref()
+        .ok_or_else(|| "The attempt worktree owner has no filesystem service".to_string())?;
+    if worktree.worktree.checkpoint_ids.is_empty() {
+        return Err("The attempt worktree has no terminal checkpoint".to_string());
+    }
+    let lease_id = control
+        .worktree_lease
+        .as_ref()
+        .ok_or_else(|| "The attempt worktree owner lost its renewable lease".to_string())?
+        .lock()
+        .await
+        .id
+        .clone();
+    let mut checkpoint_ids = worktree
+        .worktree
+        .checkpoint_ids
+        .iter()
+        .map(|id| id.as_str())
+        .collect::<Vec<_>>();
+    checkpoint_ids.sort_unstable();
+    let retained_evidence_sha256 = stable_execution_digest(&checkpoint_ids);
+    let verified_process_death_sha256 = stable_execution_digest(&[
+        "provider_death_verified",
+        control.prepared.dispatch.run_id.as_str(),
+        control.prepared.run_attempt_id.as_str(),
+        control.provider.thread_id().as_str(),
+        control.provider.turn_attempt_id().as_str(),
+    ]);
+    let cleaned_at_ms = at_ms.max(worktree.updated_at_ms);
+    match service
+        .cleanup(
+            CleanupAttemptWorktreeRequest {
+                worktree_id: worktree.worktree.id,
+                lease_id,
+                verified_process_death_sha256,
+                retained_evidence_sha256,
+                cleaned_at_ms,
+            },
+            None,
+        )
+        .await
+        .map_err(|error| error.to_string())?
+    {
+        AttemptWorktreeCleanupOutcome::Removed(_) => Ok(()),
+        AttemptWorktreeCleanupOutcome::Retained(_) => {
+            Err("The attempt worktree was retained for recovery review".to_string())
+        }
+    }
+}
+
+fn prepare_cancel_effect(
+    control: &LocalAttemptControl,
+    at_ms: u64,
+) -> Result<Option<EffectOwnership>, String> {
+    let mut matches = control
+        .store
+        .load_orchestration_effects(&control.prepared.dispatch.run_id)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .filter(|effect| {
+            matches!(
+                &effect.effect.kind,
+                OrchestrationEffectKind::CancelAttempt {
+                    run_id,
+                    task_id,
+                    attempt_id,
+                } if run_id == &control.prepared.dispatch.run_id
+                    && task_id == &control.prepared.dispatch.task_id
+                    && attempt_id == &control.prepared.run_attempt_id
+            )
+        })
+        .collect::<Vec<_>>();
+    if matches.len() > 1 {
+        return Err("The attempt has more than one durable cancel effect".to_string());
+    }
+    let Some(mut effect) = matches.pop() else {
+        // Direct internal attempt cancellation still has the durable dispatch
+        // cancel-intent row. Run cancellation additionally owns this effect.
+        return Ok(None);
+    };
+    if effect.delivery.state == EffectDeliveryState::Settled {
+        return Ok(None);
+    }
+
+    let owner_incarnation_id = control.prepared.ownership.owner_incarnation_id.clone();
+    let mut action_at_ms = at_ms.max(effect.updated_at_ms);
+    let ownership = if effect.delivery.state == EffectDeliveryState::Pending {
+        let lease_identity = stable_execution_digest(&[
+            "cancel_effect_lease",
+            effect.effect.id.as_str(),
+            owner_incarnation_id.as_str(),
+        ]);
+        let lease_expires_at_ms = action_at_ms
+            .checked_add(DEFAULT_LEASE_TTL_MS)
+            .ok_or_else(|| "The cancel-effect lease expiry overflowed".to_string())?;
+        let claim_revision = effect
+            .delivery
+            .claim_revision
+            .checked_add(1)
+            .ok_or_else(|| "The cancel-effect claim revision overflowed".to_string())?;
+        let claim = control
+            .store
+            .claim_orchestration_effect(
+                &EffectClaimRequest {
+                    effect_id: effect.effect.id.clone(),
+                    expected_payload_sha256: effect.effect.payload_sha256.clone(),
+                    owner_incarnation_id: owner_incarnation_id.clone(),
+                    lease: ExecutionLease {
+                        id: ExecutionLeaseId::new(format!(
+                            "cancel-effect-lease-{}",
+                            &lease_identity[..24]
+                        )),
+                        resource_kind: LeaseResourceKind::Effect,
+                        resource_id: effect.effect.id.as_str().to_string(),
+                        owner_incarnation_id: owner_incarnation_id.clone(),
+                        expires_at_ms: lease_expires_at_ms,
+                        last_heartbeat_ms: action_at_ms,
+                        revision: claim_revision,
+                    },
+                    claimed_at_ms: action_at_ms,
+                },
+                None,
+            )
+            .map_err(|error| error.to_string())?;
+        effect = claim.effect;
+        EffectOwnership {
+            effect_id: effect.effect.id.clone(),
+            expected_payload_sha256: effect.effect.payload_sha256.clone(),
+            owner_incarnation_id,
+            lease_id: effect
+                .delivery
+                .lease_id
+                .clone()
+                .ok_or_else(|| "The claimed cancel effect has no lease".to_string())?,
+            claim_revision: effect.delivery.claim_revision,
+        }
+    } else if matches!(
+        effect.delivery.state,
+        EffectDeliveryState::Claimed
+            | EffectDeliveryState::Prepared
+            | EffectDeliveryState::DispatchStarted
+            | EffectDeliveryState::InFlight
+            | EffectDeliveryState::OutcomeRecorded
+    ) {
+        if effect.delivery.owner_incarnation_id.as_ref() != Some(&owner_incarnation_id) {
+            return Err("The durable cancel effect belongs to another server owner".to_string());
+        }
+        let lease_id = effect
+            .delivery
+            .lease_id
+            .clone()
+            .ok_or_else(|| "The owned cancel effect has no lease".to_string())?;
+        let runtime = control
+            .store
+            .load_orchestration_runtime_records(&control.prepared.dispatch.run_id)
+            .map_err(|error| error.to_string())?;
+        let lease = runtime
+            .leases
+            .iter()
+            .find(|lease| lease.id == lease_id)
+            .ok_or_else(|| "The owned cancel-effect lease disappeared".to_string())?;
+        action_at_ms = action_at_ms.max(lease.last_heartbeat_ms);
+        EffectOwnership {
+            effect_id: effect.effect.id.clone(),
+            expected_payload_sha256: effect.effect.payload_sha256.clone(),
+            owner_incarnation_id,
+            lease_id,
+            claim_revision: effect.delivery.claim_revision,
+        }
+    } else {
+        return Err("The durable cancel effect is not safely dispatchable".to_string());
+    };
+
+    let prepared_digest = stable_execution_digest(&[
+        "cancel_effect_prepared",
+        ownership.effect_id.as_str(),
+        control.prepared.run_attempt_id.as_str(),
+    ]);
+    if effect.delivery.state == EffectDeliveryState::Claimed {
+        effect = control
+            .store
+            .mark_orchestration_effect_prepared(
+                &ownership,
+                &prepared_digest,
+                action_at_ms.max(effect.updated_at_ms),
+            )
+            .map_err(|error| error.to_string())?
+            .effect;
+    }
+    if effect.delivery.state == EffectDeliveryState::Prepared {
+        effect = control
+            .store
+            .mark_orchestration_effect_dispatch_started(
+                &EffectDispatchRequest {
+                    ownership: ownership.clone(),
+                    dispatch_started_at_ms: action_at_ms.max(effect.updated_at_ms),
+                },
+                None,
+            )
+            .map_err(|error| error.to_string())?
+            .effect;
+    }
+    if !matches!(
+        effect.delivery.state,
+        EffectDeliveryState::DispatchStarted
+            | EffectDeliveryState::InFlight
+            | EffectDeliveryState::OutcomeRecorded
+    ) {
+        return Err("The durable cancel effect did not reach its dispatch marker".to_string());
+    }
+    Ok(Some(ownership))
+}
+
+async fn settle_cancelled_attempt(control: &LocalAttemptControl, at_ms: u64) -> Result<(), String> {
+    let mut dispatch = control
+        .store
+        .get_attempt_dispatch(&control.prepared.run_attempt_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "The cancelled dispatch disappeared".to_string())?;
+    let outcome_digest = stable_execution_digest(&[
+        "provider_attempt_cancelled",
+        control.prepared.run_attempt_id.as_str(),
+        dispatch.thread_id.as_str(),
+        dispatch.turn_attempt_id.as_str(),
+    ]);
+    match dispatch.state {
+        AttemptDispatchState::CancelRequested => {
+            let ownership = control.effect_ownership.lock().await;
+            dispatch = control
+                .store
+                .record_local_attempt_outcome(
+                    &LocalAttemptOutcomeRequest {
+                        ownership: ownership.clone(),
+                        attempt_id: control.prepared.run_attempt_id.clone(),
+                        state: AttemptDispatchState::Cancelled,
+                        boundary: dispatch.last_boundary,
+                        result_digest: outcome_digest.clone(),
+                        safe_error_code: None,
+                        ambiguity_reason: None,
+                        recorded_at_ms: at_ms.max(dispatch.updated_at_ms),
+                    },
+                    None,
+                )
+                .map_err(|error| error.to_string())?
+                .attempt;
+        }
+        AttemptDispatchState::Cancelled
+            if dispatch.outcome_digest.as_deref() == Some(outcome_digest.as_str()) => {}
+        _ => {
+            return Err(
+                "The cancelled dispatch does not match its durable cancellation outcome"
+                    .to_string(),
+            );
+        }
+    }
+
+    checkpoint_attempt_worktree(control, CheckpointKind::AfterAttempt, at_ms).await?;
+
+    let record = control
+        .store
+        .load_verified_orchestration_run(&control.prepared.dispatch.run_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "The cancelled run disappeared".to_string())?;
+    let attempt = record
+        .run
+        .attempts
+        .get(&control.prepared.run_attempt_id)
+        .cloned()
+        .ok_or_else(|| "The cancelled attempt disappeared".to_string())?;
+    if !matches!(
+        attempt.status,
+        AttemptStatus::Running | AttemptStatus::Cancelled
+    ) {
+        return Err("The attempt has a conflicting terminal cancellation state".to_string());
+    }
+
+    backfill_cancelled_usage(control).await?;
+    let runtime = control
+        .store
+        .load_orchestration_runtime_records(&control.prepared.dispatch.run_id)
+        .map_err(|error| error.to_string())?;
+    if let Some(reservation) = runtime
+        .budget_reservations
+        .iter()
+        .find(|reservation| reservation.reservation.attempt_id == control.prepared.run_attempt_id)
+        && matches!(
+            reservation.reservation.state,
+            BudgetReservationState::Reserved | BudgetReservationState::PartiallyReconciled
+        )
+    {
+        let latest = control
+            .store
+            .load_verified_orchestration_run(&control.prepared.dispatch.run_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "The cancelled run disappeared".to_string())?;
+        ExecutionBudgetService::new(control.store.clone())
+            .reconcile(
+                control.prepared.dispatch.run_id.clone(),
+                reservation.reservation.id.clone(),
+                at_ms.max(latest.run.updated_at_ms),
+                None,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+
+    let reconciled = control
+        .store
+        .load_verified_orchestration_run(&control.prepared.dispatch.run_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "The reconciled cancellation run disappeared".to_string())?;
+    let attempt = reconciled
+        .run
+        .attempts
+        .get(&control.prepared.run_attempt_id)
+        .ok_or_else(|| "The reconciled cancellation attempt disappeared".to_string())?;
+    if attempt.status == AttemptStatus::Running {
+        commit_control_command(
+            control,
+            RunCommand::SettleAttempt {
+                attempt_id: control.prepared.run_attempt_id.clone(),
+                status: AttemptStatus::Cancelled,
+                failure: Some(AttemptFailure {
+                    class: FailureClass::Cancelled,
+                    code: "attempt_cancelled".to_string(),
+                    safe_message: "The provider attempt was cancelled".to_string(),
+                }),
+                usage_reconciled: attempt.usage_reconciled,
+            },
+            at_ms.max(reconciled.run.updated_at_ms),
+            "attempt-cancelled",
+        )
+        .map_err(|error| error.to_string())?;
+    } else if attempt.status != AttemptStatus::Cancelled {
+        return Err("The reconciled attempt has a conflicting terminal state".to_string());
+    }
+
+    let settled = control
+        .store
+        .load_verified_orchestration_run(&control.prepared.dispatch.run_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "The settled cancellation run disappeared".to_string())?;
+    let attempt = settled
+        .run
+        .attempts
+        .get(&control.prepared.run_attempt_id)
+        .ok_or_else(|| "The settled cancellation attempt disappeared".to_string())?;
+    if !attempt.usage_reconciled {
+        record_unknown_usage_review(control, at_ms.max(settled.run.updated_at_ms))?;
+    }
+
+    acknowledge_control_effect(
+        control,
+        &control.prepared.ownership.effect_id,
+        &outcome_digest,
+        at_ms.max(dispatch.updated_at_ms),
+        "cancel-effect-ack",
+    )?;
+    record_terminal_progress(
+        &control.store,
+        &control.prepared.dispatch.run_id,
+        &control.prepared.dispatch.task_id,
+        &control.prepared.run_attempt_id,
+        &outcome_digest,
+        at_ms
+            .max(dispatch.last_progress_at_ms)
+            .max(dispatch.updated_at_ms),
+    )
+    .map_err(|error| error.to_string())?;
+
+    settle_cancel_effect(control, at_ms).await
+}
+
+async fn backfill_cancelled_usage(control: &LocalAttemptControl) -> Result<(), String> {
+    let store = control.store.clone();
+    let environment_id = control.prepared.thread.environment_id.clone();
+    tokio::task::spawn_blocking(move || store.backfill_managed_turn_usage(&environment_id, 100))
+        .await
+        .map_err(|error| format!("The managed usage backfill worker failed: {error}"))?
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+fn acknowledge_control_effect(
+    control: &LocalAttemptControl,
+    effect_id: &OrchestrationEffectId,
+    result_digest: &str,
+    at_ms: u64,
+    operation: &str,
+) -> Result<(), String> {
+    let effect = control
+        .store
+        .load_orchestration_effects(&control.prepared.dispatch.run_id)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|effect| effect.effect.id == *effect_id)
+        .ok_or_else(|| "The acknowledged cancellation effect disappeared".to_string())?;
+    match effect.delivery.state {
+        EffectDeliveryState::OutcomeRecorded => {
+            if effect.delivery.result_digest.as_deref() != Some(result_digest) {
+                return Err("The cancellation effect outcome digest changed".to_string());
+            }
+            let run = control
+                .store
+                .load_verified_orchestration_run(&control.prepared.dispatch.run_id)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| "The acknowledged cancellation run disappeared".to_string())?;
+            let acknowledged_at_ms = at_ms.max(effect.updated_at_ms).max(run.run.updated_at_ms);
+            commit_control_command(
+                control,
+                RunCommand::AcknowledgeEffect {
+                    effect_id: effect_id.clone(),
+                    receipt: EffectReceipt {
+                        effect_id: effect_id.clone(),
+                        acknowledged_at_ms,
+                        result_digest: result_digest.to_string(),
+                    },
+                },
+                acknowledged_at_ms,
+                operation,
+            )
+            .map_err(|error| error.to_string())?;
+        }
+        EffectDeliveryState::Settled => {
+            let run = control
+                .store
+                .load_verified_orchestration_run(&control.prepared.dispatch.run_id)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| "The acknowledged cancellation run disappeared".to_string())?;
+            if run
+                .run
+                .settled_effects
+                .get(effect_id)
+                .is_none_or(|receipt| receipt.result_digest != result_digest)
+            {
+                return Err("The settled cancellation receipt changed".to_string());
+            }
+        }
+        _ => {
+            return Err(
+                "The cancellation effect has no durable outcome to acknowledge".to_string(),
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn settle_cancel_effect(control: &LocalAttemptControl, at_ms: u64) -> Result<(), String> {
+    let Some(ownership) = control.cancel_effect_ownership.lock().await.clone() else {
+        return Ok(());
+    };
+    let result_digest = stable_execution_digest(&[
+        "cancel_attempt_completed",
+        ownership.effect_id.as_str(),
+        control.prepared.run_attempt_id.as_str(),
+    ]);
+    let effect = control
+        .store
+        .load_orchestration_effects(&control.prepared.dispatch.run_id)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|effect| effect.effect.id == ownership.effect_id)
+        .ok_or_else(|| "The durable cancel effect disappeared".to_string())?;
+    match effect.delivery.state {
+        EffectDeliveryState::DispatchStarted | EffectDeliveryState::InFlight => {
+            control
+                .store
+                .record_orchestration_effect_outcome(
+                    &EffectOutcomeRequest {
+                        ownership: ownership.clone(),
+                        result_digest: result_digest.clone(),
+                        safe_error_code: None,
+                        recorded_at_ms: at_ms.max(effect.updated_at_ms),
+                    },
+                    None,
+                )
+                .map_err(|error| error.to_string())?;
+        }
+        EffectDeliveryState::OutcomeRecorded
+            if effect.delivery.result_digest.as_deref() == Some(result_digest.as_str()) => {}
+        EffectDeliveryState::Settled => return Ok(()),
+        _ => return Err("The durable cancel effect has a conflicting outcome".to_string()),
+    }
+    acknowledge_control_effect(
+        control,
+        &ownership.effect_id,
+        &result_digest,
+        at_ms,
+        "cancel-worker-effect-ack",
+    )
+}
+
+fn record_unknown_usage_review(control: &LocalAttemptControl, at_ms: u64) -> Result<(), String> {
+    let reason_code = "recovery_usage_reconciliation_unknown";
+    let evidence_digest = stable_execution_digest(&[
+        control.prepared.dispatch.run_id.as_str(),
+        control.prepared.dispatch.task_id.as_str(),
+        control.prepared.run_attempt_id.as_str(),
+        control.prepared.ownership.effect_id.as_str(),
+        reason_code,
+    ]);
+    let identity = stable_execution_digest(&[
+        control.prepared.run_attempt_id.as_str(),
+        control.prepared.ownership.effect_id.as_str(),
+        reason_code,
+        &evidence_digest,
+    ]);
+    control
+        .store
+        .upsert_recovery_review(&RecoveryReview {
+            id: RecoveryReviewId::new(format!("recovery-review-{identity}")),
+            run_id: control.prepared.dispatch.run_id.clone(),
+            task_id: control.prepared.dispatch.task_id.clone(),
+            attempt_id: control.prepared.run_attempt_id.clone(),
+            effect_id: Some(control.prepared.ownership.effect_id.clone()),
+            reason_code: reason_code.to_string(),
+            evidence_digest,
+            status: RecoveryReviewStatus::Pending,
+            created_at_ms: at_ms,
+            resolved_at_ms: None,
+            resolution: None,
+        })
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+async fn settle_cancelled_run_if_ready(
+    control: &LocalAttemptControl,
+    at_ms: u64,
+) -> Result<(), String> {
+    let latest = control
+        .store
+        .load_verified_orchestration_run(&control.prepared.dispatch.run_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "The cancelled run disappeared".to_string())?;
+    if latest.run.status == RunStatus::Cancelling
+        && latest
+            .run
+            .tasks
+            .values()
+            .all(|task| task.status.is_terminal())
+        && latest.run.pending_effects.is_empty()
+        && latest.run.reservations.values().all(|reservation| {
+            !matches!(
+                reservation.state,
+                BudgetReservationState::Reserved | BudgetReservationState::PartiallyReconciled
+            )
+        })
+        && !latest.run.budget.incomplete.tokens
+        && !latest.run.budget.incomplete.cost_micro_usd
+        && !latest.run.budget.incomplete.runtime_ms
+        && latest.run.budget.overage.tokens == 0
+        && latest.run.budget.overage.cost_micro_usd == 0
+        && latest.run.budget.overage.runtime_ms == 0
+        && latest.run.attempts.values().all(|attempt| {
+            !matches!(
+                attempt.status,
+                AttemptStatus::Succeeded
+                    | AttemptStatus::Failed
+                    | AttemptStatus::Cancelled
+                    | AttemptStatus::Interrupted
+            ) || attempt.usage_reconciled
+        })
+        && latest
+            .run
+            .attempts
+            .values()
+            .all(|attempt| attempt.cleanup_state == CleanupState::Verified)
+        && let Err(error) = commit_control_command(
+            control,
+            RunCommand::SettleRun {
+                status: RunStatus::Cancelled,
+                outcome: "cancelled".to_string(),
+            },
+            at_ms,
+            "cancel-run-settle",
+        )
+    {
+        let current = control
+            .store
+            .load_verified_orchestration_run(&control.prepared.dispatch.run_id)
+            .map_err(|store_error| store_error.to_string())?
+            .ok_or_else(|| "The cancelled run disappeared".to_string())?;
+        if current.run.status != RunStatus::Cancelled {
+            return Err(error.to_string());
+        }
+    }
+    Ok(())
+}
+
+async fn quarantine_attempt(
+    control: &LocalAttemptControl,
+    reason_code: &'static str,
+    at_ms: u64,
+) -> Result<(), String> {
+    let current = control
+        .store
+        .load_verified_orchestration_run(&control.prepared.dispatch.run_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "The quarantined run disappeared".to_string())?;
+    let cleanup_state = current
+        .run
+        .attempts
+        .get(&control.prepared.run_attempt_id)
+        .ok_or_else(|| "The quarantined attempt disappeared".to_string())?
+        .cleanup_state;
+    if cleanup_state == CleanupState::NotStarted {
+        record_cleanup_state(
+            control,
+            CleanupState::Pending,
+            "attempt_cleanup_pending",
+            at_ms,
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    let dispatch = control
+        .store
+        .get_attempt_dispatch(&control.prepared.run_attempt_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "The quarantined dispatch disappeared".to_string())?;
+    if matches!(
+        dispatch.state,
+        AttemptDispatchState::DispatchStarted
+            | AttemptDispatchState::Accepted
+            | AttemptDispatchState::CancelRequested
+    ) {
+        let digest = stable_execution_digest(&[
+            "attempt_quarantined",
+            control.prepared.run_attempt_id.as_str(),
+            reason_code,
+        ]);
+        let ownership = control.effect_ownership.lock().await;
+        let _ = control.store.record_local_attempt_outcome(
+            &LocalAttemptOutcomeRequest {
+                ownership: ownership.clone(),
+                attempt_id: control.prepared.run_attempt_id.clone(),
+                state: AttemptDispatchState::Ambiguous,
+                boundary: dispatch.last_boundary,
+                result_digest: digest,
+                safe_error_code: None,
+                ambiguity_reason: Some(reason_code.to_string()),
+                recorded_at_ms: at_ms.max(dispatch.updated_at_ms),
+            },
+            None,
+        );
+    }
+    let run = control
+        .store
+        .load_verified_orchestration_run(&control.prepared.dispatch.run_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "The quarantined run disappeared".to_string())?;
+    if let Some(attempt) = run.run.attempts.get(&control.prepared.run_attempt_id)
+        && !attempt.ambiguous_effect
+        && !matches!(
+            attempt.status,
+            AttemptStatus::Succeeded
+                | AttemptStatus::Failed
+                | AttemptStatus::Cancelled
+                | AttemptStatus::Interrupted
+        )
+    {
+        commit_control_command(
+            control,
+            RunCommand::MarkAttemptAmbiguous {
+                attempt_id: control.prepared.run_attempt_id.clone(),
+                reason_code: reason_code.to_string(),
+            },
+            at_ms,
+            "attempt-quarantined",
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    record_cleanup_state(control, CleanupState::Quarantined, reason_code, at_ms)
+        .map_err(|error| error.to_string())?;
+    let evidence_digest = stable_execution_digest(&[
+        control.prepared.dispatch.run_id.as_str(),
+        control.prepared.dispatch.task_id.as_str(),
+        control.prepared.run_attempt_id.as_str(),
+        control.prepared.ownership.effect_id.as_str(),
+        reason_code,
+    ]);
+    let identity = stable_execution_digest(&[
+        control.prepared.run_attempt_id.as_str(),
+        reason_code,
+        &evidence_digest,
+    ]);
+    control
+        .store
+        .upsert_recovery_review(&RecoveryReview {
+            id: RecoveryReviewId::new(format!("recovery-review-{identity}")),
+            run_id: control.prepared.dispatch.run_id.clone(),
+            task_id: control.prepared.dispatch.task_id.clone(),
+            attempt_id: control.prepared.run_attempt_id.clone(),
+            effect_id: Some(control.prepared.ownership.effect_id.clone()),
+            reason_code: reason_code.to_string(),
+            evidence_digest,
+            status: RecoveryReviewStatus::Pending,
+            created_at_ms: at_ms,
+            resolved_at_ms: None,
+            resolution: None,
+        })
+        .map_err(|error| error.to_string())?;
+    if let Some(worktree) = control
+        .store
+        .load_attempt_worktree_for_attempt(
+            &control.prepared.dispatch.run_id,
+            &control.prepared.run_attempt_id,
+        )
+        .map_err(|error| error.to_string())?
+    {
+        let _ = control.store.retain_attempt_worktree(
+            &worktree.worktree.id,
+            &worktree.worktree.lease_id,
+            WorktreeDirtyState::Ambiguous,
+            at_ms.max(worktree.updated_at_ms),
+        );
+    }
+    Ok(())
+}
+
+fn record_cleanup_state(
+    control: &LocalAttemptControl,
+    state: CleanupState,
+    reason_code: &str,
+    at_ms: u64,
+) -> Result<(), LocalProviderExecutionError> {
+    let record = control
+        .store
+        .load_verified_orchestration_run(&control.prepared.dispatch.run_id)?
+        .ok_or_else(|| invalid("The cleanup run disappeared"))?;
+    let attempt = record
+        .run
+        .attempts
+        .get(&control.prepared.run_attempt_id)
+        .ok_or_else(|| invalid("The cleanup attempt disappeared"))?;
+    if attempt.cleanup_state == state {
+        return Ok(());
+    }
+    let evidence_digest = stable_execution_digest(&[
+        control.prepared.dispatch.run_id.as_str(),
+        control.prepared.dispatch.task_id.as_str(),
+        control.prepared.run_attempt_id.as_str(),
+        reason_code,
+        cleanup_state_name(state),
+    ]);
+    commit_control_command(
+        control,
+        RunCommand::RecordAttemptCleanup {
+            cleanup: CleanupRecord {
+                id: CleanupRecordId::new(format!(
+                    "cleanup-{}",
+                    stable_execution_digest(&[
+                        control.prepared.run_attempt_id.as_str(),
+                        cleanup_state_name(state),
+                        &evidence_digest,
+                    ])
+                )),
+                run_id: control.prepared.dispatch.run_id.clone(),
+                task_id: control.prepared.dispatch.task_id.clone(),
+                attempt_id: control.prepared.run_attempt_id.clone(),
+                state,
+                reason_code: reason_code.to_string(),
+                evidence_digest,
+                updated_at_ms: at_ms.max(record.run.updated_at_ms),
+            },
+        },
+        at_ms,
+        "attempt-cleanup",
+    )?;
+    Ok(())
+}
+
+fn commit_control_command(
+    control: &LocalAttemptControl,
+    command: RunCommand,
+    at_ms: u64,
+    operation: &str,
+) -> Result<RunTransition, LocalProviderExecutionError> {
+    for _ in 0..8 {
+        let record = control
+            .store
+            .load_verified_orchestration_run(&control.prepared.dispatch.run_id)?
+            .ok_or_else(|| invalid("The orchestration run was not found"))?;
+        let kinds = pandamux_orchestrator::decide(&record.run, command.clone())
+            .map_err(|error| invalid(error.to_string()))?;
+        let digest = sha256_json(&command)?;
+        let next_seq = record
+            .run
+            .last_seq
+            .checked_add(1)
+            .ok_or_else(|| invalid("The orchestration event sequence overflowed"))?;
+        let assigned_events = kinds
+            .iter()
+            .enumerate()
+            .map(|(index, _)| crate::store::AssignedRunEvent {
+                event_id: RunEventId::new(format!(
+                    "run-event-{operation}-{next_seq}-{}-{index}",
+                    &digest[..16]
+                )),
+                idempotency_key: format!(
+                    "{operation}:{}:{}:{index}",
+                    record.run.id.as_str(),
+                    &digest[..16]
+                ),
+                at_ms: at_ms.max(record.run.updated_at_ms),
+            })
+            .collect();
+        match control.store.commit_run_transition(
+            &RunTransitionRequest {
+                run_id: record.run.id.clone(),
+                expected_last_seq: record.run.last_seq,
+                expected_snapshot_sha256: crate::store::orchestration_snapshot_sha256(&record.run),
+                command: command.clone(),
+                assigned_events,
+                rows: crate::store::RunTransitionRows::default(),
+            },
+            None,
+        ) {
+            Ok(transition) => {
+                let _ = control.projections.send(RunTransitionNotice {
+                    run_id: transition.run.id.clone(),
+                    last_seq: transition.run.last_seq,
+                    snapshot_sha256: transition.snapshot_sha256.clone(),
+                    status: transition.run.status,
+                    event_ids: transition
+                        .events
+                        .iter()
+                        .map(|event| event.event_id.clone())
+                        .collect(),
+                    effect_ids: transition.effect_ids.clone(),
+                    duplicate: transition.duplicate,
+                });
+                return Ok(transition);
+            }
+            Err(StoreError::Data(message))
+                if message.contains("changed before the transition could commit") => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err(invalid(
+        "The orchestration lifecycle transition remained contended",
+    ))
+}
+
+fn cleanup_state_name(state: CleanupState) -> &'static str {
+    match state {
+        CleanupState::NotStarted => "not_started",
+        CleanupState::Pending => "pending",
+        CleanupState::Verified => "verified",
+        CleanupState::Quarantined => "quarantined",
+    }
+}
+
+fn stable_execution_digest(fields: &[&str]) -> String {
+    let mut digest = Sha256::new();
+    for field in fields {
+        digest.update((field.len() as u64).to_be_bytes());
+        digest.update(field.as_bytes());
+    }
+    format!("{:x}", digest.finalize())
 }
 
 fn validate_remote_ownership(
@@ -1834,9 +4229,10 @@ fn prepare_local_provider_attempt_sync(
 
 async fn complete_local_provider_event(
     service: &RunExecutionService,
-    prepared: &PreparedLocalProviderAttempt,
+    control: &LocalAttemptControl,
     event: PreparedTurnEvent,
 ) -> Result<LocalProviderTerminalOutcome, LocalProviderExecutionError> {
+    let prepared = &control.prepared;
     let (reported_outcome, continuation_id, at_ms, stream_closed) = match event {
         PreparedTurnEvent::Terminal { outcome, at_ms } => (Some(outcome), None, at_ms, false),
         PreparedTurnEvent::CapacityInterrupted {
@@ -1855,12 +4251,15 @@ async fn complete_local_provider_event(
         .ok_or_else(|| invalid("The completed provider turn disappeared"))?;
     let ledger = service.store.list_tool_ledger(&prepared.turn.id)?;
     if turn_attempt.boundary > AttemptBoundary::SafeToRetry {
-        service.store.record_local_attempt_boundary(
-            &prepared.ownership,
-            &prepared.run_attempt_id,
-            turn_attempt.boundary,
-            at_ms,
-        )?;
+        {
+            let ownership = control.effect_ownership.lock().await;
+            service.store.record_local_attempt_boundary(
+                &ownership,
+                &prepared.run_attempt_id,
+                turn_attempt.boundary,
+                at_ms,
+            )?;
+        }
         service.commit_owned_command(
             &prepared.dispatch.run_id,
             RunCommand::AdvanceAttemptBoundary {
@@ -1888,19 +4287,22 @@ async fn complete_local_provider_event(
             &turn_attempt,
             &ledger,
         ))?;
-        service.store.record_local_attempt_outcome(
-            &LocalAttemptOutcomeRequest {
-                ownership: prepared.ownership.clone(),
-                attempt_id: prepared.run_attempt_id.clone(),
-                state: AttemptDispatchState::Ambiguous,
-                boundary: turn_attempt.boundary,
-                result_digest: outcome_digest.clone(),
-                safe_error_code: None,
-                ambiguity_reason: Some(reason.to_string()),
-                recorded_at_ms: at_ms,
-            },
-            None,
-        )?;
+        {
+            let ownership = control.effect_ownership.lock().await;
+            service.store.record_local_attempt_outcome(
+                &LocalAttemptOutcomeRequest {
+                    ownership: ownership.clone(),
+                    attempt_id: prepared.run_attempt_id.clone(),
+                    state: AttemptDispatchState::Ambiguous,
+                    boundary: turn_attempt.boundary,
+                    result_digest: outcome_digest.clone(),
+                    safe_error_code: None,
+                    ambiguity_reason: Some(reason.to_string()),
+                    recorded_at_ms: at_ms,
+                },
+                None,
+            )?;
+        }
         service.commit_owned_command(
             &prepared.dispatch.run_id,
             RunCommand::MarkAttemptAmbiguous {
@@ -1922,8 +4324,34 @@ async fn complete_local_provider_event(
             at_ms,
         )
         .await?;
+        checkpoint_attempt_worktree(control, CheckpointKind::Recovery, at_ms)
+            .await
+            .map_err(invalid)?;
+        record_terminal_progress(
+            &service.store,
+            &prepared.dispatch.run_id,
+            &prepared.dispatch.task_id,
+            &prepared.run_attempt_id,
+            &outcome_digest,
+            at_ms,
+        )?;
         return Ok(LocalProviderTerminalOutcome {
             status: AttemptDispatchState::Ambiguous,
+            boundary: turn_attempt.boundary,
+            outcome_digest,
+            continuation_id,
+        });
+    }
+
+    if control.cancellation_started.load(Ordering::Acquire) {
+        let outcome_digest = stable_execution_digest(&[
+            "provider_attempt_cancelled",
+            prepared.run_attempt_id.as_str(),
+            prepared.dispatch.thread_id.as_str(),
+            prepared.dispatch.turn_attempt_id.as_str(),
+        ]);
+        return Ok(LocalProviderTerminalOutcome {
+            status: AttemptDispatchState::Cancelled,
             boundary: turn_attempt.boundary,
             outcome_digest,
             continuation_id,
@@ -1981,25 +4409,48 @@ async fn complete_local_provider_event(
         &ledger,
         &continuation_id,
     ))?;
-    service.store.record_local_attempt_outcome(
-        &LocalAttemptOutcomeRequest {
-            ownership: prepared.ownership.clone(),
-            attempt_id: prepared.run_attempt_id.clone(),
-            state: AttemptDispatchState::Terminal,
-            boundary: turn_attempt.boundary,
-            result_digest: outcome_digest.clone(),
-            safe_error_code: None,
-            ambiguity_reason: None,
-            recorded_at_ms: at_ms,
-        },
-        None,
-    )?;
+    {
+        let ownership = control.effect_ownership.lock().await;
+        service.store.record_local_attempt_outcome(
+            &LocalAttemptOutcomeRequest {
+                ownership: ownership.clone(),
+                attempt_id: prepared.run_attempt_id.clone(),
+                state: AttemptDispatchState::Terminal,
+                boundary: turn_attempt.boundary,
+                result_digest: outcome_digest.clone(),
+                safe_error_code: None,
+                ambiguity_reason: None,
+                recorded_at_ms: at_ms,
+            },
+            None,
+        )?;
+    }
     settle_and_reconcile(service, prepared, attempt_status, failure, at_ms).await?;
+    checkpoint_attempt_worktree(control, CheckpointKind::AfterAttempt, at_ms)
+        .await
+        .map_err(invalid)?;
+    let completion_at_ms = service
+        .store
+        .get_attempt_dispatch(&prepared.run_attempt_id)?
+        .map(|dispatch| {
+            at_ms
+                .max(dispatch.last_progress_at_ms)
+                .max(dispatch.updated_at_ms)
+        })
+        .unwrap_or(at_ms);
     service.acknowledge_local_effect(
         &prepared.dispatch.run_id,
         &prepared.ownership.effect_id,
         &outcome_digest,
-        at_ms,
+        completion_at_ms,
+    )?;
+    record_terminal_progress(
+        &service.store,
+        &prepared.dispatch.run_id,
+        &prepared.dispatch.task_id,
+        &prepared.run_attempt_id,
+        &outcome_digest,
+        completion_at_ms,
     )?;
     Ok(LocalProviderTerminalOutcome {
         status: AttemptDispatchState::Terminal,
@@ -2007,6 +4458,35 @@ async fn complete_local_provider_event(
         outcome_digest,
         continuation_id,
     })
+}
+
+fn record_terminal_progress(
+    store: &Store,
+    run_id: &RunId,
+    task_id: &pandamux_core::RunTaskId,
+    attempt_id: &RunAttemptId,
+    outcome_digest: &str,
+    at_ms: u64,
+) -> Result<(), StoreError> {
+    let dispatch = store
+        .get_attempt_dispatch(attempt_id)?
+        .ok_or_else(|| StoreError::Data("terminal progress owner disappeared".to_string()))?;
+    store
+        .record_attempt_progress(&AttemptProgressRecord {
+            id: AttemptProgressId::new(format!(
+                "attempt-progress-terminal-{}",
+                stable_execution_digest(&[attempt_id.as_str(), outcome_digest])
+            )),
+            run_id: run_id.clone(),
+            task_id: task_id.clone(),
+            attempt_id: attempt_id.clone(),
+            kind: AttemptProgressKind::TerminalOutcome,
+            payload_digest: outcome_digest.to_string(),
+            at_ms: at_ms.max(dispatch.last_progress_at_ms),
+            cumulative_stream_bytes: None,
+            terminal: true,
+        })
+        .map(|_| ())
 }
 
 async fn settle_and_reconcile(

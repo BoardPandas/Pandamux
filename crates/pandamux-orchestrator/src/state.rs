@@ -5,13 +5,13 @@ use crate::routing::{FallbackEligibility, fallback_eligibility};
 use pandamux_core::{
     ArtifactKey, Attempt, AttemptBoundary, AttemptStatus, BlackboardArtifact, BlackboardEntry,
     BudgetAmount, BudgetDimension, BudgetIncomplete, BudgetReservation, BudgetReservationState,
-    BudgetUsage, CheckpointKind, DependencyRequirement, MAX_ARTIFACT_BYTES,
-    MAX_ARTIFACT_CONTAINER_ITEMS, MAX_ARTIFACT_JSON_DEPTH, MAX_ARTIFACT_STRING_BYTES,
-    MAX_ARTIFACTS_PER_RUN, MAX_ARTIFACTS_PER_TASK, MAX_RUN_ARTIFACT_BYTES, OrchestrationEffect,
-    OrchestrationEffectId, OrchestrationEffectKind, OutputContract, Run, RunApprovalKind,
-    RunApprovalStatus, RunAttemptId, RunCommand, RunEvent, RunEventId, RunEventKind, RunStatus,
-    RunTaskId, RunTaskStatus, SupplementalBudgetGrant, VerificationEvidence,
-    VerificationEvidenceKind, VerificationEvidenceOutcome,
+    BudgetUsage, CheckpointKind, CleanupRecord, CleanupState, DependencyRequirement,
+    MAX_ARTIFACT_BYTES, MAX_ARTIFACT_CONTAINER_ITEMS, MAX_ARTIFACT_JSON_DEPTH,
+    MAX_ARTIFACT_STRING_BYTES, MAX_ARTIFACTS_PER_RUN, MAX_ARTIFACTS_PER_TASK,
+    MAX_RUN_ARTIFACT_BYTES, OrchestrationEffect, OrchestrationEffectId, OrchestrationEffectKind,
+    OutputContract, Run, RunApprovalKind, RunApprovalStatus, RunAttemptId, RunCommand, RunEvent,
+    RunEventId, RunEventKind, RunStatus, RunTaskId, RunTaskStatus, SupplementalBudgetGrant,
+    VerificationEvidence, VerificationEvidenceKind, VerificationEvidenceOutcome,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -219,6 +219,9 @@ pub fn decide(run: &Run, command: RunCommand) -> Result<Vec<RunEventKind>, Orche
             failure,
             usage_reconciled,
         },
+        RunCommand::RecordAttemptCleanup { cleanup } => {
+            RunEventKind::AttemptCleanupRecorded { cleanup }
+        }
         RunCommand::RecordVerificationEvidence { evidence } => {
             if let Some(existing) = run.verification_evidence.get(&evidence.id) {
                 if existing == &evidence {
@@ -564,17 +567,28 @@ fn validate_kind(
                 .reservations
                 .get(reservation_id)
                 .ok_or_else(|| missing("The budget reservation does not exist"))?;
+            let attempt = run.attempts.get(&reservation.attempt_id);
+            let cancellation_checkpointed = attempt.is_some_and(|attempt| {
+                run.status == RunStatus::Cancelling
+                    && attempt.status == AttemptStatus::Running
+                    && attempt.checkpoint_ids.iter().any(|checkpoint_id| {
+                        run.checkpoints
+                            .get(checkpoint_id)
+                            .is_some_and(|checkpoint| {
+                                checkpoint.kind == CheckpointKind::AfterAttempt
+                            })
+                    })
+            });
             if !matches!(
                 reservation.state,
                 BudgetReservationState::Reserved | BudgetReservationState::PartiallyReconciled
             ) || !valid_usage_update(reservation, *actual)
-                || run
-                    .attempts
-                    .get(&reservation.attempt_id)
-                    .is_none_or(|attempt| !attempt_status_is_settled(attempt.status))
+                || attempt.is_none_or(|attempt| {
+                    !attempt_status_is_settled(attempt.status) && !cancellation_checkpointed
+                })
             {
                 return Err(illegal(
-                    "Only new truthful dimensions can reconcile an active budget",
+                    "Only a terminal or cancellation-checkpointed attempt can reconcile usage",
                 ));
             }
             checked_budget_after_reconcile(run, reservation, *actual)?;
@@ -694,6 +708,9 @@ fn validate_kind(
             {
                 return Err(illegal("The attempt settlement is inconsistent"));
             }
+        }
+        RunEventKind::AttemptCleanupRecorded { cleanup } => {
+            validate_attempt_cleanup(run, cleanup, at_ms)?;
         }
         RunEventKind::VerificationEvidenceRecorded { evidence } => {
             validate_verification_evidence(run, evidence, at_ms)?;
@@ -1083,7 +1100,16 @@ fn apply_kind(
                 } else {
                     RunTaskStatus::Blocked
                 };
+            } else if *status == AttemptStatus::Cancelled {
+                run.tasks.get_mut(&task_id).expect("attempt task").status =
+                    RunTaskStatus::Cancelled;
             }
+        }
+        RunEventKind::AttemptCleanupRecorded { cleanup } => {
+            run.attempts
+                .get_mut(&cleanup.attempt_id)
+                .expect("validated cleanup attempt")
+                .cleanup_state = cleanup.state;
         }
         RunEventKind::VerificationEvidenceRecorded { evidence } => {
             run.verification_evidence
@@ -1350,11 +1376,13 @@ fn validate_checkpoint(
             ))
         }
         CheckpointKind::AfterAttempt
-            if !attempt_status_is_settled(attempt.status)
+            if (!attempt_status_is_settled(attempt.status)
+                && !(run.status == RunStatus::Cancelling
+                    && attempt.status == AttemptStatus::Running))
                 || checkpoint.thread_id.as_ref() != attempt.thread_id.as_ref() =>
         {
             Err(illegal(
-                "An after-attempt checkpoint requires the exact terminal thread",
+                "An after-attempt checkpoint requires the exact terminal or cancelling thread",
             ))
         }
         CheckpointKind::Recovery if !attempt.ambiguous_effect => Err(illegal(
@@ -1362,6 +1390,44 @@ fn validate_checkpoint(
         )),
         _ => Ok(()),
     }
+}
+
+fn validate_attempt_cleanup(
+    run: &Run,
+    cleanup: &CleanupRecord,
+    at_ms: Option<u64>,
+) -> Result<(), OrchestrationError> {
+    let attempt = run
+        .attempts
+        .get(&cleanup.attempt_id)
+        .ok_or_else(|| missing("The cleanup attempt does not exist"))?;
+    if cleanup.id.as_str().trim().is_empty()
+        || cleanup.run_id != run.id
+        || cleanup.task_id != attempt.task_id
+        || !valid_reason_code(&cleanup.reason_code)
+        || !is_sha256(&cleanup.evidence_digest)
+        || cleanup.updated_at_ms != at_ms.unwrap_or(cleanup.updated_at_ms)
+    {
+        return Err(invalid("The attempt cleanup identity is invalid"));
+    }
+    let valid_transition = matches!(
+        (attempt.cleanup_state, cleanup.state),
+        (CleanupState::NotStarted, CleanupState::Pending)
+            | (CleanupState::Pending, CleanupState::Verified)
+            | (CleanupState::Pending, CleanupState::Quarantined)
+            | (CleanupState::Quarantined, CleanupState::Verified)
+    );
+    if !valid_transition {
+        return Err(illegal(
+            "The attempt cleanup state cannot make this transition",
+        ));
+    }
+    if cleanup.state == CleanupState::Verified && !attempt_status_is_settled(attempt.status) {
+        return Err(illegal(
+            "Verified cleanup requires a terminal orchestration attempt",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_verification_evidence(

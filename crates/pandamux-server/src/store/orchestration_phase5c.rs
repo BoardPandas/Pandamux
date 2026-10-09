@@ -3,9 +3,9 @@ use pandamux_core::{
     AgentId, ArtifactKey, Attempt, AttemptBoundary, AttemptProgressId, AttemptProgressKind,
     AttemptProgressRecord, AttemptStatus, AttemptWorktreeId, BlackboardEntry, BlackboardEntryId,
     BudgetAmount, BudgetDimension, BudgetGrantId, BudgetIncomplete, BudgetReservation,
-    BudgetReservationId, BudgetReservationState, BudgetUsage, CheckpointId, EffectDeliveryRecord,
-    EffectDeliveryState, EnvironmentId, ExecutionLease, ExecutionLeaseId, LeaseResourceKind,
-    MAX_ARTIFACT_BYTES, MAX_ARTIFACT_CONTAINER_ITEMS, MAX_ARTIFACT_JSON_DEPTH,
+    BudgetReservationId, BudgetReservationState, BudgetUsage, CheckpointId, CheckpointKind,
+    EffectDeliveryRecord, EffectDeliveryState, EnvironmentId, ExecutionLease, ExecutionLeaseId,
+    LeaseResourceKind, MAX_ARTIFACT_BYTES, MAX_ARTIFACT_CONTAINER_ITEMS, MAX_ARTIFACT_JSON_DEPTH,
     MAX_ARTIFACT_STRING_BYTES, MAX_ARTIFACTS_PER_RUN, MAX_ARTIFACTS_PER_TASK,
     MAX_RUN_ARTIFACT_BYTES, NodeStoreId, OrchestrationEffect, OrchestrationEffectId,
     OrganizationId, OwnedAttemptWorktree, PricingVersionId, ProjectId, ProjectRepositoryId,
@@ -362,6 +362,30 @@ pub struct OrchestrationRuntimeRecords {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttemptProgressDisposition {
+    Persisted,
+    Duplicate,
+    Coalesced,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttemptProgressOutcome {
+    pub disposition: AttemptProgressDisposition,
+    pub record: Option<AttemptProgressRecord>,
+    pub last_progress_at_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecoveryLeaseDisposition {
+    Reclaimed,
+    Unexpired,
+    ForeignOwner,
+    LiveOwner,
+    ClockAnomaly,
+    Ineligible,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OrchestrationExecutionFailpoint {
     AfterEventCommit,
     BeforeEffectClaim,
@@ -431,6 +455,26 @@ pub struct EffectOwnership {
     pub owner_incarnation_id: ServerIncarnationId,
     pub lease_id: ExecutionLeaseId,
     pub claim_revision: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EffectRenewStoreRequest {
+    pub ownership: EffectOwnership,
+    pub renewed_at_ms: u64,
+    pub lease_expires_at_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EffectRenewStoreOutcome {
+    pub effect: StoredOrchestrationEffect,
+    pub lease: ExecutionLease,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExecutionLeaseRenewStoreRequest {
+    pub lease: ExecutionLease,
+    pub renewed_at_ms: u64,
+    pub lease_expires_at_ms: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1032,6 +1076,151 @@ impl Store {
         Ok(EffectClaimOutcome { effect, acquired })
     }
 
+    /// Renews an in-flight effect owner and its generic lease in one CAS. The
+    /// returned effect revision is the only ownership accepted by later
+    /// dispatch/outcome operations.
+    pub fn renew_orchestration_effect(
+        &self,
+        request: &EffectRenewStoreRequest,
+    ) -> Result<EffectRenewStoreOutcome, StoreError> {
+        validate_effect_ownership(&request.ownership)?;
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (effect, lease) = load_owned_effect(&tx, &request.ownership)?;
+        if !matches!(
+            effect.delivery.state,
+            EffectDeliveryState::Claimed
+                | EffectDeliveryState::Prepared
+                | EffectDeliveryState::DispatchStarted
+                | EffectDeliveryState::InFlight
+        ) || request.renewed_at_ms < lease.last_heartbeat_ms
+            || request.renewed_at_ms >= lease.expires_at_ms
+            || request.lease_expires_at_ms <= request.renewed_at_ms
+        {
+            return Err(data_error("orchestration effect lease cannot be renewed"));
+        }
+        let next_revision = request
+            .ownership
+            .claim_revision
+            .checked_add(1)
+            .ok_or_else(|| data_error("orchestration effect revision overflow"))?;
+        let effect_changed = tx.execute(
+            "UPDATE orchestration_effects SET claim_revision = ?1, updated_at_ms = ?2
+              WHERE effect_id = ?3 AND payload_sha256 = ?4
+                AND owner_incarnation_id = ?5 AND lease_id = ?6
+                AND claim_revision = ?7
+                AND delivery_state IN ('claimed', 'prepared', 'dispatch_started', 'in_flight')",
+            params![
+                checked_i64(next_revision, "renewed effect claim revision")?,
+                checked_i64(request.renewed_at_ms, "renewed effect timestamp")?,
+                request.ownership.effect_id.as_str(),
+                request.ownership.expected_payload_sha256,
+                request.ownership.owner_incarnation_id.as_str(),
+                request.ownership.lease_id.as_str(),
+                checked_i64(request.ownership.claim_revision, "effect claim revision")?,
+            ],
+        )?;
+        let lease_changed = tx.execute(
+            "UPDATE orchestration_leases
+                SET expires_at_ms = ?1, last_heartbeat_ms = ?2, revision = ?3
+              WHERE lease_id = ?4 AND resource_kind = 'effect' AND resource_id = ?5
+                AND owner_incarnation_id = ?6 AND revision = ?7",
+            params![
+                checked_i64(request.lease_expires_at_ms, "renewed effect lease expiry")?,
+                checked_i64(request.renewed_at_ms, "renewed effect lease heartbeat")?,
+                checked_i64(next_revision, "renewed effect lease revision")?,
+                request.ownership.lease_id.as_str(),
+                request.ownership.effect_id.as_str(),
+                request.ownership.owner_incarnation_id.as_str(),
+                checked_i64(request.ownership.claim_revision, "effect lease revision")?,
+            ],
+        )?;
+        if effect_changed != 1 || lease_changed != 1 {
+            return Err(data_error(
+                "orchestration effect renewal lost its compare-and-swap",
+            ));
+        }
+        let effect = load_stored_effect_by_id(&tx, &request.ownership.effect_id)?
+            .ok_or_else(|| data_error("renewed orchestration effect disappeared"))?;
+        let lease = load_lease(&tx, &request.ownership.lease_id)?
+            .ok_or_else(|| data_error("renewed orchestration effect lease disappeared"))?;
+        tx.commit()?;
+        Ok(EffectRenewStoreOutcome { effect, lease })
+    }
+
+    /// Renews a worktree or remote-attempt lease whose owner record does not
+    /// carry a parallel claim revision. Capacity and effect leases must use
+    /// their atomic owner-specific renewal transactions instead.
+    pub fn renew_owned_execution_lease(
+        &self,
+        request: &ExecutionLeaseRenewStoreRequest,
+    ) -> Result<ExecutionLease, StoreError> {
+        if request.lease.id.as_str().trim().is_empty()
+            || request.lease.resource_id.trim().is_empty()
+            || request
+                .lease
+                .owner_incarnation_id
+                .as_str()
+                .trim()
+                .is_empty()
+            || request.lease.revision == 0
+            || !matches!(
+                request.lease.resource_kind,
+                LeaseResourceKind::Worktree | LeaseResourceKind::RemoteAttempt
+            )
+            || request.renewed_at_ms < request.lease.last_heartbeat_ms
+            || request.renewed_at_ms >= request.lease.expires_at_ms
+            || request.lease_expires_at_ms <= request.renewed_at_ms
+        {
+            return Err(data_error("owned execution lease cannot be renewed"));
+        }
+        let next_revision = request
+            .lease
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| data_error("owned execution lease revision overflow"))?;
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = load_lease(&tx, &request.lease.id)?
+            .ok_or_else(|| data_error("owned execution lease was not found"))?;
+        if current != request.lease {
+            return Err(data_error(
+                "owned execution lease no longer matches durable state",
+            ));
+        }
+        let changed = tx.execute(
+            "UPDATE orchestration_leases
+                SET expires_at_ms = ?1, last_heartbeat_ms = ?2, revision = ?3
+              WHERE lease_id = ?4 AND resource_kind = ?5 AND resource_id = ?6
+                AND owner_incarnation_id = ?7 AND expires_at_ms = ?8
+                AND last_heartbeat_ms = ?9 AND revision = ?10",
+            params![
+                checked_i64(request.lease_expires_at_ms, "renewed owned lease expiry")?,
+                checked_i64(request.renewed_at_ms, "renewed owned lease heartbeat")?,
+                checked_i64(next_revision, "renewed owned lease revision")?,
+                request.lease.id.as_str(),
+                enum_text(request.lease.resource_kind)?,
+                request.lease.resource_id,
+                request.lease.owner_incarnation_id.as_str(),
+                checked_i64(request.lease.expires_at_ms, "prior owned lease expiry")?,
+                checked_i64(
+                    request.lease.last_heartbeat_ms,
+                    "prior owned lease heartbeat"
+                )?,
+                checked_i64(request.lease.revision, "prior owned lease revision")?,
+            ],
+        )?;
+        if changed != 1 {
+            return Err(data_error(
+                "owned execution lease renewal lost its compare-and-swap",
+            ));
+        }
+        let renewed = load_lease(&tx, &request.lease.id)?
+            .ok_or_else(|| data_error("renewed owned execution lease disappeared"))?;
+        tx.commit()?;
+        Ok(renewed)
+    }
+
     pub fn mark_orchestration_effect_prepared(
         &self,
         ownership: &EffectOwnership,
@@ -1161,6 +1350,95 @@ impl Store {
             .into_iter()
             .find(|candidate| candidate.attempt_id == record.attempt_id)
             .ok_or_else(|| data_error("prepared local attempt disappeared"))?;
+        tx.commit()?;
+        Ok(LocalAttemptPreparationOutcome {
+            effect,
+            attempt,
+            prepared,
+        })
+    }
+
+    /// Atomically binds a Hub-owned dispatch record to the exact durable node
+    /// prepare receipt. The node owns its filesystem and provider preparation;
+    /// the Hub still owns effect, admission, budget, and recovery ordering.
+    pub fn prepare_remote_attempt_dispatch(
+        &self,
+        record: &AttemptDispatchRecord,
+        ownership: &EffectOwnership,
+        prepared_result: &OrchestrationAttemptPrepareResult,
+        prepared_at_ms: u64,
+    ) -> Result<LocalAttemptPreparationOutcome, StoreError> {
+        validate_effect_ownership(ownership)?;
+        validate_attempt_dispatch_record(record)?;
+        let prepared_receipt_digest = prepared_result.receipt.receipt_sha256.as_str();
+        if record.effect_id != ownership.effect_id
+            || record.state != AttemptDispatchState::Prepared
+            || record.created_at_ms != prepared_at_ms
+            || record.updated_at_ms != prepared_at_ms
+            || !is_sha256(prepared_receipt_digest)
+        {
+            return Err(data_error(
+                "remote attempt preparation identity is malformed",
+            ));
+        }
+
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (current, lease) = load_owned_effect(&tx, ownership)?;
+        validate_effect_action_time(&current, &lease, prepared_at_ms)?;
+        if current.run_id != record.run_id
+            || !effect_matches_attempt(
+                &current.effect,
+                &record.run_id,
+                &record.task_id,
+                &record.attempt_id,
+                Some(&record.route),
+            )
+        {
+            return Err(data_error(
+                "remote attempt preparation differs from the claimed effect",
+            ));
+        }
+        validate_remote_attempt_preparation_rows(&tx, record, prepared_result)?;
+
+        let existing = load_attempt_dispatches(&tx, &record.run_id)?
+            .into_iter()
+            .find(|candidate| candidate.attempt_id == record.attempt_id);
+        let prepared = match (current.delivery.state, existing) {
+            (EffectDeliveryState::Claimed, None) => {
+                insert_attempt_dispatch(&tx, record)?;
+                update_effect_state(
+                    &tx,
+                    ownership,
+                    EffectDeliveryState::Claimed,
+                    EffectDeliveryState::Prepared,
+                    Some(prepared_receipt_digest),
+                    None,
+                    None,
+                    None,
+                    prepared_at_ms,
+                )?;
+                true
+            }
+            (EffectDeliveryState::Prepared, Some(existing))
+                if existing == *record
+                    && current.delivery.prepared_receipt_digest.as_deref()
+                        == Some(prepared_receipt_digest) =>
+            {
+                false
+            }
+            _ => {
+                return Err(data_error(
+                    "remote attempt preparation conflicts with durable state",
+                ));
+            }
+        };
+        let effect = load_stored_effect_by_id(&tx, &ownership.effect_id)?
+            .ok_or_else(|| data_error("prepared remote effect disappeared"))?;
+        let attempt = load_attempt_dispatches(&tx, &record.run_id)?
+            .into_iter()
+            .find(|candidate| candidate.attempt_id == record.attempt_id)
+            .ok_or_else(|| data_error("prepared remote attempt disappeared"))?;
         tx.commit()?;
         Ok(LocalAttemptPreparationOutcome {
             effect,
@@ -1336,7 +1614,10 @@ impl Store {
             .find(|record| record.attempt_id == *attempt_id)
             .ok_or_else(|| data_error("local attempt dispatch was not found"))?;
         if existing.effect_id != ownership.effect_id
-            || existing.state != AttemptDispatchState::Accepted
+            || !matches!(
+                existing.state,
+                AttemptDispatchState::Accepted | AttemptDispatchState::CancelRequested
+            )
             || boundary < existing.last_boundary
             || recorded_at_ms < existing.updated_at_ms
         {
@@ -1346,8 +1627,8 @@ impl Store {
             update_attempt_state_for_effect(
                 &tx,
                 &ownership.effect_id,
-                AttemptDispatchState::Accepted,
-                AttemptDispatchState::Accepted,
+                existing.state,
+                existing.state,
                 boundary,
                 None,
                 None,
@@ -1380,6 +1661,7 @@ impl Store {
             AttemptDispatchState::NotStarted
                 | AttemptDispatchState::Ambiguous
                 | AttemptDispatchState::Terminal
+                | AttemptDispatchState::Cancelled
         ) || !is_sha256(&request.result_digest)
             || request
                 .safe_error_code
@@ -1428,8 +1710,10 @@ impl Store {
                 EffectDeliveryState::DispatchStarted,
             ),
             AttemptDispatchState::Ambiguous
-                if existing.state == AttemptDispatchState::Accepted
-                    && current.delivery.state == EffectDeliveryState::InFlight =>
+                if matches!(
+                    existing.state,
+                    AttemptDispatchState::Accepted | AttemptDispatchState::CancelRequested
+                ) && current.delivery.state == EffectDeliveryState::InFlight =>
             {
                 (
                     AttemptDispatchState::Accepted,
@@ -1440,11 +1724,28 @@ impl Store {
                 AttemptDispatchState::DispatchStarted,
                 EffectDeliveryState::DispatchStarted,
             ),
-            AttemptDispatchState::Terminal => (
-                AttemptDispatchState::Accepted,
-                EffectDeliveryState::InFlight,
-            ),
-            _ => unreachable!("validated local outcome state"),
+            AttemptDispatchState::Terminal
+                if matches!(
+                    existing.state,
+                    AttemptDispatchState::Accepted | AttemptDispatchState::CancelRequested
+                ) && current.delivery.state == EffectDeliveryState::InFlight =>
+            {
+                (existing.state, EffectDeliveryState::InFlight)
+            }
+            AttemptDispatchState::Cancelled
+                if existing.state == AttemptDispatchState::CancelRequested
+                    && current.delivery.state == EffectDeliveryState::InFlight =>
+            {
+                (
+                    AttemptDispatchState::CancelRequested,
+                    EffectDeliveryState::InFlight,
+                )
+            }
+            _ => {
+                return Err(data_error(
+                    "local attempt outcome conflicts with its current lifecycle state",
+                ));
+            }
         };
         let next_effect_state = if request.state == AttemptDispatchState::Ambiguous {
             EffectDeliveryState::ReviewRequired
@@ -1525,6 +1826,27 @@ impl Store {
         Ok(load_attempt_dispatches(&conn, &RunId::from(run_id))?
             .into_iter()
             .find(|record| record.attempt_id == *attempt_id))
+    }
+
+    pub fn get_attempt_dispatch_for_turn_attempt(
+        &self,
+        turn_attempt_id: &TurnAttemptId,
+    ) -> Result<Option<AttemptDispatchRecord>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let run_id = conn
+            .query_row(
+                "SELECT run_id FROM orchestration_attempt_dispatch
+                  WHERE turn_attempt_id = ?1",
+                [turn_attempt_id.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let Some(run_id) = run_id else {
+            return Ok(None);
+        };
+        Ok(load_attempt_dispatches(&conn, &RunId::from(run_id))?
+            .into_iter()
+            .find(|record| record.turn_attempt_id == *turn_attempt_id))
     }
 
     pub fn record_orchestration_effect_outcome(
@@ -2384,7 +2706,6 @@ fn validate_effect_record(record: &StoredOrchestrationEffect) -> Result<(), Stor
             !owned
                 && record.delivery.owner_incarnation_id.is_none()
                 && record.delivery.lease_id.is_none()
-                && record.delivery.claim_revision == 0
                 && record.delivery.prepared_receipt_digest.is_none()
                 && record.delivery.dispatch_started_at_ms.is_none()
                 && record.delivery.result_digest.is_none()
@@ -2839,6 +3160,92 @@ fn validate_local_attempt_preparation_rows(
     if turn_matches != 1 || turn_attempt_matches != 1 {
         return Err(data_error(
             "prepared local turn identities were not persisted exactly",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_remote_attempt_preparation_rows(
+    tx: &Transaction<'_>,
+    record: &AttemptDispatchRecord,
+    prepared: &OrchestrationAttemptPrepareResult,
+) -> Result<(), StoreError> {
+    let snapshot = load_snapshot(tx, &record.run_id)?;
+    let attempt = snapshot
+        .attempts
+        .get(&record.attempt_id)
+        .ok_or_else(|| data_error("prepared remote attempt is absent from the run"))?;
+    let receipt = &prepared.receipt;
+    if attempt.task_id != record.task_id
+        || attempt.route != record.route
+        || attempt.status != AttemptStatus::DispatchRequested
+        || attempt.thread_id.is_some()
+        || attempt.turn_attempt_id.is_some()
+        || receipt.state != OrchestrationNodeAttemptState::Prepared
+        || receipt.run_id != record.run_id
+        || receipt.task_id != record.task_id
+        || receipt.attempt_id != record.attempt_id
+        || receipt.effect_id != record.effect_id
+        || receipt.thread_id != record.thread_id
+        || receipt.turn_id != record.turn_id
+        || receipt.turn_attempt_id != record.turn_attempt_id
+        || receipt.boundary != AttemptBoundary::SafeToRetry
+        || receipt.terminal_status.is_some()
+        || receipt.result_sha256.is_some()
+        || receipt.safe_error_code.is_some()
+        || prepared.prepared_execution.provider_instance_id != record.provider_instance_id
+        || prepared.prepared_execution.prepared_at_ms != record.created_at_ms
+    {
+        return Err(data_error(
+            "prepared remote attempt differs from the canonical run or node receipt",
+        ));
+    }
+
+    let queue_matches = load_queue_records(tx, &record.run_id)?
+        .into_iter()
+        .filter(|queue| {
+            queue.task_id == record.task_id
+                && queue.attempt_id == record.attempt_id
+                && queue.provider_instance_id == record.provider_instance_id
+                && queue.environment_id == receipt.environment_id
+                && queue.state == QueueState::Claimed
+                && queue.owner_incarnation_id.is_some()
+                && queue.lease_id.is_some()
+        })
+        .count();
+    let budget_matches = load_budget_reservations(tx, &record.run_id)?
+        .into_iter()
+        .filter(|reservation| {
+            reservation.reservation.task_id == record.task_id
+                && reservation.reservation.attempt_id == record.attempt_id
+                && reservation.reservation.state == BudgetReservationState::Reserved
+        })
+        .count();
+    if queue_matches != 1 || budget_matches != 1 {
+        return Err(data_error(
+            "prepared remote attempt lacks its active admission or budget",
+        ));
+    }
+
+    let mut matching_receipts = 0usize;
+    for stored in load_node_receipts(tx, &record.run_id)? {
+        if stored.request_kind != NodeReceiptKind::AttemptPrepare
+            || stored.node_store_id != receipt.node_store_id
+            || stored.task_id != record.task_id
+            || stored.attempt_id != record.attempt_id
+            || stored.effect_id != record.effect_id
+        {
+            continue;
+        }
+        let decoded: OrchestrationAttemptPrepareResult =
+            serde_json::from_slice(&stored.result_bytes)?;
+        if decoded == *prepared {
+            matching_receipts += 1;
+        }
+    }
+    if matching_receipts != 1 {
+        return Err(data_error(
+            "prepared remote attempt lacks one exact durable node receipt",
         ));
     }
     Ok(())
@@ -3478,12 +3885,22 @@ fn insert_recovery_review(tx: &Transaction<'_>, review: &RecoveryReview) -> Resu
     {
         return Err(data_error("recovery review record is malformed"));
     }
-    let snapshot = load_snapshot(tx, &review.run_id)?;
-    if snapshot
-        .attempts
-        .get(&review.attempt_id)
-        .is_none_or(|attempt| attempt.task_id != review.task_id)
-    {
+    let snapshot_owner_matches = load_snapshot(tx, &review.run_id)
+        .ok()
+        .and_then(|snapshot| snapshot.attempts.get(&review.attempt_id).cloned())
+        .is_some_and(|attempt| attempt.task_id == review.task_id);
+    let dispatch_owner_matches = tx
+        .query_row(
+            "SELECT run_id, task_id FROM orchestration_attempt_dispatch
+              WHERE attempt_id = ?1",
+            [review.attempt_id.as_str()],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?
+        .is_some_and(|(run_id, task_id)| {
+            run_id == review.run_id.as_str() && task_id == review.task_id.as_str()
+        });
+    if !snapshot_owner_matches && !dispatch_owner_matches {
         return Err(data_error(
             "recovery review differs from the canonical attempt owner",
         ));
@@ -3729,6 +4146,282 @@ impl Store {
         })
     }
 
+    /// Records only durable, meaningful attempt progress. Streaming bytes are
+    /// coalesced until either one second or another 4 KiB has elapsed, and
+    /// duplicate digests never advance the watchdog clock.
+    pub fn record_attempt_progress(
+        &self,
+        progress: &AttemptProgressRecord,
+    ) -> Result<AttemptProgressOutcome, StoreError> {
+        const STREAM_INTERVAL_MS: u64 = 1_000;
+        const STREAM_BYTES: u64 = 4 * 1024;
+        const RETAINED_NONTERMINAL: i64 = 256;
+
+        if !is_sha256(&progress.payload_digest)
+            || (progress.kind == AttemptProgressKind::StreamBytes)
+                != progress.cumulative_stream_bytes.is_some()
+            || (progress.kind == AttemptProgressKind::TerminalOutcome) != progress.terminal
+        {
+            return Err(data_error("attempt progress record is malformed"));
+        }
+
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let run_id = tx
+            .query_row(
+                "SELECT run_id FROM orchestration_attempt_dispatch WHERE attempt_id = ?1",
+                [progress.attempt_id.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or_else(|| data_error("attempt progress owner was not found"))?;
+        let run_id = RunId::from(run_id);
+        let dispatch = load_attempt_dispatches(&tx, &run_id)?
+            .into_iter()
+            .find(|record| record.attempt_id == progress.attempt_id)
+            .ok_or_else(|| data_error("attempt progress owner disappeared"))?;
+        if progress.run_id != dispatch.run_id || progress.task_id != dispatch.task_id {
+            return Err(data_error("attempt progress ownership changed"));
+        }
+
+        if let Some(existing_run_id) = tx
+            .query_row(
+                "SELECT run_id FROM orchestration_attempt_progress WHERE progress_id = ?1",
+                [progress.id.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+        {
+            let existing = load_progress(&tx, &RunId::from(existing_run_id))?
+                .into_iter()
+                .find(|record| record.id == progress.id)
+                .ok_or_else(|| data_error("attempt progress identity disappeared"))?;
+            let same_meaning = existing.run_id == progress.run_id
+                && existing.task_id == progress.task_id
+                && existing.attempt_id == progress.attempt_id
+                && existing.kind == progress.kind
+                && existing.payload_digest == progress.payload_digest
+                && existing.cumulative_stream_bytes == progress.cumulative_stream_bytes
+                && existing.terminal == progress.terminal;
+            if !same_meaning {
+                return Err(data_error(
+                    "attempt progress identity was reused with different bytes",
+                ));
+            }
+            return Ok(AttemptProgressOutcome {
+                disposition: AttemptProgressDisposition::Duplicate,
+                record: Some(existing),
+                last_progress_at_ms: dispatch.last_progress_at_ms,
+            });
+        }
+
+        if progress.at_ms < dispatch.last_progress_at_ms {
+            return Err(data_error("attempt progress timestamp moved backwards"));
+        }
+        if progress.terminal
+            && !matches!(
+                dispatch.state,
+                AttemptDispatchState::Terminal
+                    | AttemptDispatchState::Cancelled
+                    | AttemptDispatchState::Ambiguous
+                    | AttemptDispatchState::NotStarted
+            )
+        {
+            return Err(data_error(
+                "terminal progress requires a terminal dispatch outcome",
+            ));
+        }
+        let records = load_progress(&tx, &run_id)?
+            .into_iter()
+            .filter(|record| record.attempt_id == progress.attempt_id)
+            .collect::<Vec<_>>();
+        if records.iter().any(|record| {
+            record.kind == progress.kind
+                && record.payload_digest == progress.payload_digest
+                && record.cumulative_stream_bytes == progress.cumulative_stream_bytes
+                && record.terminal == progress.terminal
+        }) {
+            return Ok(AttemptProgressOutcome {
+                disposition: AttemptProgressDisposition::Duplicate,
+                record: None,
+                last_progress_at_ms: dispatch.last_progress_at_ms,
+            });
+        }
+        if records.iter().any(|record| record.terminal)
+            && !matches!(
+                progress.kind,
+                AttemptProgressKind::CheckpointCreated | AttemptProgressKind::ArtifactPublished
+            )
+        {
+            return Err(data_error(
+                "terminal attempt progress accepts only post-terminal evidence",
+            ));
+        }
+        if progress.kind == AttemptProgressKind::StreamBytes {
+            let bytes = progress
+                .cumulative_stream_bytes
+                .expect("validated stream progress has bytes");
+            if let Some(previous) = records
+                .iter()
+                .filter(|record| record.kind == AttemptProgressKind::StreamBytes)
+                .max_by_key(|record| (record.at_ms, record.id.as_str()))
+            {
+                let previous_bytes = previous
+                    .cumulative_stream_bytes
+                    .expect("stored stream progress has bytes");
+                if bytes <= previous_bytes {
+                    return Err(data_error(
+                        "stream progress did not advance persisted bytes",
+                    ));
+                }
+                if progress.at_ms.saturating_sub(previous.at_ms) < STREAM_INTERVAL_MS
+                    && bytes.saturating_sub(previous_bytes) < STREAM_BYTES
+                {
+                    return Ok(AttemptProgressOutcome {
+                        disposition: AttemptProgressDisposition::Coalesced,
+                        record: None,
+                        last_progress_at_ms: dispatch.last_progress_at_ms,
+                    });
+                }
+            }
+        }
+
+        insert_progress(&tx, progress)?;
+        let changed = tx.execute(
+            "UPDATE orchestration_attempt_dispatch
+                SET last_progress_at_ms = ?1, updated_at_ms = max(updated_at_ms, ?1)
+              WHERE attempt_id = ?2 AND run_id = ?3 AND task_id = ?4
+                AND last_progress_at_ms <= ?1",
+            params![
+                checked_i64(progress.at_ms, "attempt progress timestamp")?,
+                progress.attempt_id.as_str(),
+                progress.run_id.as_str(),
+                progress.task_id.as_str(),
+            ],
+        )?;
+        if changed != 1 {
+            return Err(data_error(
+                "attempt progress lost its durable owner compare-and-swap",
+            ));
+        }
+        tx.execute(
+            "DELETE FROM orchestration_attempt_progress
+              WHERE progress_id IN (
+                    SELECT progress_id FROM orchestration_attempt_progress
+                     WHERE attempt_id = ?1 AND terminal = 0
+                     ORDER BY at_ms DESC, progress_id DESC
+                     LIMIT -1 OFFSET ?2
+              )",
+            params![progress.attempt_id.as_str(), RETAINED_NONTERMINAL],
+        )?;
+        tx.commit()?;
+        Ok(AttemptProgressOutcome {
+            disposition: AttemptProgressDisposition::Persisted,
+            record: Some(progress.clone()),
+            last_progress_at_ms: progress.at_ms,
+        })
+    }
+
+    pub fn load_attempt_progress(
+        &self,
+        attempt_id: &RunAttemptId,
+    ) -> Result<Vec<AttemptProgressRecord>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let run_id = conn
+            .query_row(
+                "SELECT run_id FROM orchestration_attempt_dispatch WHERE attempt_id = ?1",
+                [attempt_id.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let Some(run_id) = run_id else {
+            return Ok(Vec::new());
+        };
+        Ok(load_progress(&conn, &RunId::from(run_id))?
+            .into_iter()
+            .filter(|record| record.attempt_id == *attempt_id)
+            .collect())
+    }
+
+    /// Persists cancellation intent before any provider interrupt is allowed.
+    pub fn record_attempt_cancel_intent(
+        &self,
+        attempt_id: &RunAttemptId,
+        requested_at_ms: u64,
+    ) -> Result<AttemptDispatchRecord, StoreError> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let run_id = tx
+            .query_row(
+                "SELECT run_id FROM orchestration_attempt_dispatch WHERE attempt_id = ?1",
+                [attempt_id.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or_else(|| data_error("cancelled attempt dispatch was not found"))?;
+        let run_id = RunId::from(run_id);
+        let current = load_attempt_dispatches(&tx, &run_id)?
+            .into_iter()
+            .find(|record| record.attempt_id == *attempt_id)
+            .ok_or_else(|| data_error("cancelled attempt dispatch disappeared"))?;
+        if current.state == AttemptDispatchState::CancelRequested {
+            return Ok(current);
+        }
+        if !matches!(
+            current.state,
+            AttemptDispatchState::DispatchStarted | AttemptDispatchState::Accepted
+        ) || requested_at_ms < current.updated_at_ms
+        {
+            return Err(data_error("attempt cannot record cancellation intent"));
+        }
+        let changed = tx.execute(
+            "UPDATE orchestration_attempt_dispatch
+                SET state = 'cancel_requested', cancel_requested_at_ms = ?1,
+                    last_progress_at_ms = max(last_progress_at_ms, ?1), updated_at_ms = ?1
+              WHERE attempt_id = ?2 AND state = ?3 AND updated_at_ms = ?4",
+            params![
+                checked_i64(requested_at_ms, "attempt cancellation timestamp")?,
+                attempt_id.as_str(),
+                enum_text(current.state)?,
+                checked_i64(current.updated_at_ms, "prior attempt timestamp")?,
+            ],
+        )?;
+        if changed != 1 {
+            return Err(data_error(
+                "attempt cancellation intent lost its compare-and-swap",
+            ));
+        }
+        let updated = load_attempt_dispatches(&tx, &run_id)?
+            .into_iter()
+            .find(|record| record.attempt_id == *attempt_id)
+            .ok_or_else(|| data_error("cancelled attempt dispatch disappeared"))?;
+        tx.commit()?;
+        Ok(updated)
+    }
+
+    pub fn list_nonterminal_orchestration_run_ids(&self) -> Result<Vec<RunId>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut statement = conn.prepare(
+            "SELECT run_id FROM orchestration_runs
+              WHERE status NOT IN ('succeeded', 'failed', 'cancelled')
+              ORDER BY created_at_ms, run_id",
+        )?;
+        Ok(statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(RunId::from)
+            .collect())
+    }
+
+    pub(crate) fn load_attempt_dispatches_for_recovery(
+        &self,
+        run_id: &RunId,
+    ) -> Result<Vec<AttemptDispatchRecord>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        load_attempt_dispatches(&conn, run_id)
+    }
+
     pub fn load_owned_attempt_worktree(
         &self,
         worktree_id: &AttemptWorktreeId,
@@ -3892,7 +4585,12 @@ impl Store {
             .ok_or_else(|| data_error("owned attempt worktree was not found"))?;
         let lease = load_lease(&tx, lease_id)?
             .ok_or_else(|| data_error("owned attempt worktree lease was not found"))?;
-        validate_active_worktree_lease(&current, &lease, retained_at_ms)?;
+        validate_worktree_lease_identity(&current, &lease)?;
+        if retained_at_ms < lease.last_heartbeat_ms {
+            return Err(data_error(
+                "owned attempt worktree retention timestamp moved backwards",
+            ));
+        }
         if current.worktree.lease_id != *lease_id {
             return Err(data_error("owned attempt worktree lease identity changed"));
         }
@@ -4007,6 +4705,521 @@ impl Store {
             |row| row.get::<_, i64>(0),
         )?;
         Ok(count != 0)
+    }
+
+    /// Inserts a canonical recovery review or returns the existing unresolved
+    /// identity. The unique identity deliberately excludes the review id so
+    /// repeated startup passes cannot create duplicate human work.
+    pub fn upsert_recovery_review(
+        &self,
+        review: &RecoveryReview,
+    ) -> Result<RecoveryReview, StoreError> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(existing) = load_recovery_review_by_identity(&tx, review)? {
+            if existing.status == RecoveryReviewStatus::Pending
+                || existing == *review
+                || (existing.status == RecoveryReviewStatus::Resolved
+                    && review.status == RecoveryReviewStatus::Pending)
+            {
+                return Ok(existing);
+            }
+            return Err(data_error(
+                "recovery review identity conflicts with its durable resolution",
+            ));
+        }
+        if let Some(existing) = load_recovery_review_by_id(&tx, &review.id)? {
+            if existing == *review {
+                return Ok(existing);
+            }
+            return Err(data_error(
+                "recovery review id was reused with different bytes",
+            ));
+        }
+        insert_recovery_review(&tx, review)?;
+        let stored = load_recovery_review_by_id(&tx, &review.id)?
+            .ok_or_else(|| data_error("recovery review disappeared after insertion"))?;
+        tx.commit()?;
+        Ok(stored)
+    }
+
+    /// Resolves one review through an audited compare-and-swap. A replay of
+    /// the exact local-control decision is idempotent; changed decisions fail.
+    pub fn resolve_recovery_review(
+        &self,
+        review_id: &pandamux_core::RecoveryReviewId,
+        resolution: &str,
+        resolved_at_ms: u64,
+    ) -> Result<RecoveryReview, StoreError> {
+        if !valid_reason_code(resolution) {
+            return Err(data_error("recovery review resolution is malformed"));
+        }
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = load_recovery_review_by_id(&tx, review_id)?
+            .ok_or_else(|| data_error("recovery review was not found"))?;
+        if current.status == RecoveryReviewStatus::Resolved {
+            if current.resolution.as_deref() == Some(resolution)
+                && current.resolved_at_ms == Some(resolved_at_ms)
+            {
+                return Ok(current);
+            }
+            return Err(data_error("recovery review resolution cannot be changed"));
+        }
+        if resolved_at_ms < current.created_at_ms {
+            return Err(data_error(
+                "recovery review resolution timestamp moved backwards",
+            ));
+        }
+        let changed = tx.execute(
+            "UPDATE orchestration_recovery_reviews
+                SET status = 'resolved', resolved_at_ms = ?1, resolution = ?2
+              WHERE review_id = ?3 AND status = 'pending'
+                AND resolved_at_ms IS NULL AND resolution IS NULL",
+            params![
+                checked_i64(resolved_at_ms, "recovery review resolution timestamp")?,
+                resolution,
+                review_id.as_str(),
+            ],
+        )?;
+        if changed != 1 {
+            return Err(data_error(
+                "recovery review resolution lost its compare-and-swap",
+            ));
+        }
+        let resolved = load_recovery_review_by_id(&tx, review_id)?
+            .ok_or_else(|| data_error("resolved recovery review disappeared"))?;
+        tx.commit()?;
+        Ok(resolved)
+    }
+
+    pub fn get_recovery_review(
+        &self,
+        review_id: &pandamux_core::RecoveryReviewId,
+    ) -> Result<Option<RecoveryReview>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        load_recovery_review_by_id(&conn, review_id)
+    }
+
+    pub fn list_pending_recovery_reviews(&self) -> Result<Vec<RecoveryReview>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut statement = conn.prepare(
+            "SELECT DISTINCT run_id FROM orchestration_recovery_reviews
+              WHERE status = 'pending' ORDER BY run_id ASC",
+        )?;
+        let run_ids = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+        let mut reviews = Vec::new();
+        for run_id in run_ids {
+            reviews.extend(
+                load_recovery_reviews(&conn, &RunId::from(run_id))?
+                    .into_iter()
+                    .filter(|review| review.status == RecoveryReviewStatus::Pending),
+            );
+        }
+        reviews.sort_by_key(|review| (review.created_at_ms, review.id.clone()));
+        Ok(reviews)
+    }
+
+    /// Reclaims only an expired, exact, provably undispatched effect claim.
+    /// Prepared or post-marker effects are intentionally ineligible.
+    pub fn reclaim_expired_effect_claim(
+        &self,
+        ownership: &EffectOwnership,
+        now_ms: u64,
+        live_owners: &BTreeSet<ServerIncarnationId>,
+    ) -> Result<RecoveryLeaseDisposition, StoreError> {
+        validate_effect_ownership(ownership)?;
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let Some(effect) = load_stored_effect_by_id(&tx, &ownership.effect_id)? else {
+            return Ok(RecoveryLeaseDisposition::Ineligible);
+        };
+        if effect.effect.payload_sha256 != ownership.expected_payload_sha256
+            || effect.delivery.owner_incarnation_id.as_ref()
+                != Some(&ownership.owner_incarnation_id)
+            || effect.delivery.lease_id.as_ref() != Some(&ownership.lease_id)
+            || effect.delivery.claim_revision != ownership.claim_revision
+        {
+            return Ok(RecoveryLeaseDisposition::ForeignOwner);
+        }
+        let Some(lease) = load_lease(&tx, &ownership.lease_id)? else {
+            return Ok(RecoveryLeaseDisposition::ForeignOwner);
+        };
+        if lease.resource_kind != LeaseResourceKind::Effect
+            || lease.resource_id != ownership.effect_id.as_str()
+            || lease.owner_incarnation_id != ownership.owner_incarnation_id
+            || lease.revision != ownership.claim_revision
+        {
+            return Ok(RecoveryLeaseDisposition::ForeignOwner);
+        }
+        if now_ms < lease.last_heartbeat_ms {
+            return Ok(RecoveryLeaseDisposition::ClockAnomaly);
+        }
+        if live_owners.contains(&lease.owner_incarnation_id) {
+            return Ok(RecoveryLeaseDisposition::LiveOwner);
+        }
+        if now_ms < lease.expires_at_ms {
+            return Ok(RecoveryLeaseDisposition::Unexpired);
+        }
+        if effect.delivery.state != EffectDeliveryState::Claimed {
+            return Ok(RecoveryLeaseDisposition::Ineligible);
+        }
+        let next_revision = ownership
+            .claim_revision
+            .checked_add(1)
+            .ok_or_else(|| data_error("effect reclaim revision overflow"))?;
+        let changed = tx.execute(
+            "UPDATE orchestration_effects
+                SET delivery_state = 'pending', owner_incarnation_id = NULL,
+                    lease_id = NULL, claim_revision = ?1, updated_at_ms = ?2
+              WHERE effect_id = ?3 AND payload_sha256 = ?4
+                AND delivery_state = 'claimed' AND owner_incarnation_id = ?5
+                AND lease_id = ?6 AND claim_revision = ?7",
+            params![
+                checked_i64(next_revision, "effect reclaim revision")?,
+                checked_i64(now_ms, "effect reclaim timestamp")?,
+                ownership.effect_id.as_str(),
+                ownership.expected_payload_sha256,
+                ownership.owner_incarnation_id.as_str(),
+                ownership.lease_id.as_str(),
+                checked_i64(ownership.claim_revision, "effect claim revision")?,
+            ],
+        )?;
+        let deleted = tx.execute(
+            "DELETE FROM orchestration_leases
+              WHERE lease_id = ?1 AND resource_kind = 'effect' AND resource_id = ?2
+                AND owner_incarnation_id = ?3 AND revision = ?4
+                AND expires_at_ms <= ?5",
+            params![
+                ownership.lease_id.as_str(),
+                ownership.effect_id.as_str(),
+                ownership.owner_incarnation_id.as_str(),
+                checked_i64(ownership.claim_revision, "effect lease revision")?,
+                checked_i64(now_ms, "effect reclaim timestamp")?,
+            ],
+        )?;
+        if changed != 1 || deleted != 1 {
+            return Err(data_error("effect reclaim lost its compare-and-swap"));
+        }
+        tx.commit()?;
+        Ok(RecoveryLeaseDisposition::Reclaimed)
+    }
+
+    /// Requeues only an expired exact capacity claim that never crossed its
+    /// dispatch marker. A live owner or anomalous clock always wins over TTL.
+    pub fn reclaim_expired_admission(
+        &self,
+        ownership: &AdmissionOwnership,
+        now_ms: u64,
+        live_owners: &BTreeSet<ServerIncarnationId>,
+    ) -> Result<RecoveryLeaseDisposition, StoreError> {
+        validate_admission_ownership(ownership)?;
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let Some(current) = load_queue_record_by_id(&tx, &ownership.queue_id)? else {
+            return Ok(RecoveryLeaseDisposition::Ineligible);
+        };
+        if current.candidate_sha256 != ownership.expected_candidate_sha256
+            || current.owner_incarnation_id.as_ref() != Some(&ownership.owner_incarnation_id)
+            || current.lease_id.as_ref() != Some(&ownership.lease_id)
+            || current.claim_revision != ownership.claim_revision
+        {
+            return Ok(RecoveryLeaseDisposition::ForeignOwner);
+        }
+        let Some(lease) = load_lease(&tx, &ownership.lease_id)? else {
+            return Ok(RecoveryLeaseDisposition::ForeignOwner);
+        };
+        if lease.resource_kind != LeaseResourceKind::Capacity
+            || lease.resource_id != ownership.queue_id
+            || lease.owner_incarnation_id != ownership.owner_incarnation_id
+            || lease.revision != ownership.claim_revision
+        {
+            return Ok(RecoveryLeaseDisposition::ForeignOwner);
+        }
+        if now_ms < lease.last_heartbeat_ms {
+            return Ok(RecoveryLeaseDisposition::ClockAnomaly);
+        }
+        if live_owners.contains(&lease.owner_incarnation_id) {
+            return Ok(RecoveryLeaseDisposition::LiveOwner);
+        }
+        if now_ms < lease.expires_at_ms {
+            return Ok(RecoveryLeaseDisposition::Unexpired);
+        }
+        if current.state != QueueState::Claimed {
+            return Ok(RecoveryLeaseDisposition::Ineligible);
+        }
+        let dispatch_crossed_marker = load_attempt_dispatches(&tx, &current.run_id)?
+            .into_iter()
+            .find(|attempt| attempt.attempt_id == current.attempt_id)
+            .is_some_and(|attempt| attempt.state != AttemptDispatchState::Prepared)
+            || load_effects(&tx, &current.run_id)?
+                .into_iter()
+                .any(|effect| {
+                    matches!(
+                        &effect.effect.kind,
+                        pandamux_core::OrchestrationEffectKind::DispatchTask { attempt_id, .. }
+                            if attempt_id == &current.attempt_id
+                    ) && matches!(
+                        effect.delivery.state,
+                        EffectDeliveryState::DispatchStarted
+                            | EffectDeliveryState::InFlight
+                            | EffectDeliveryState::OutcomeRecorded
+                            | EffectDeliveryState::Settled
+                            | EffectDeliveryState::Cancelled
+                            | EffectDeliveryState::ReviewRequired
+                    )
+                });
+        if dispatch_crossed_marker {
+            return Ok(RecoveryLeaseDisposition::Ineligible);
+        }
+        let next_revision = ownership
+            .claim_revision
+            .checked_add(1)
+            .ok_or_else(|| data_error("admission reclaim revision overflow"))?;
+        let changed = tx.execute(
+            "UPDATE orchestration_queue
+                SET state = 'queued', owner_incarnation_id = NULL, lease_id = NULL,
+                    claim_revision = ?1, not_before_ms = max(not_before_ms, ?2)
+              WHERE queue_id = ?3 AND candidate_sha256 = ?4 AND state = 'claimed'
+                AND owner_incarnation_id = ?5 AND lease_id = ?6
+                AND claim_revision = ?7",
+            params![
+                checked_i64(next_revision, "admission reclaim revision")?,
+                checked_i64(now_ms, "admission reclaim timestamp")?,
+                ownership.queue_id,
+                ownership.expected_candidate_sha256,
+                ownership.owner_incarnation_id.as_str(),
+                ownership.lease_id.as_str(),
+                checked_i64(ownership.claim_revision, "admission claim revision")?,
+            ],
+        )?;
+        let deleted = tx.execute(
+            "DELETE FROM orchestration_leases
+              WHERE lease_id = ?1 AND resource_kind = 'capacity' AND resource_id = ?2
+                AND owner_incarnation_id = ?3 AND revision = ?4
+                AND expires_at_ms <= ?5",
+            params![
+                ownership.lease_id.as_str(),
+                ownership.queue_id,
+                ownership.owner_incarnation_id.as_str(),
+                checked_i64(ownership.claim_revision, "admission lease revision")?,
+                checked_i64(now_ms, "admission reclaim timestamp")?,
+            ],
+        )?;
+        if changed != 1 || deleted != 1 {
+            return Err(data_error("admission reclaim lost its compare-and-swap"));
+        }
+        tx.commit()?;
+        Ok(RecoveryLeaseDisposition::Reclaimed)
+    }
+
+    /// Transfers a post-marker remote attempt to the current Hub incarnation
+    /// only after the caller has persisted and cryptographically verified the
+    /// node's exact status receipt. Effect and capacity fencing revisions move
+    /// together so an old Hub process cannot resume either owner.
+    pub fn reattach_remote_attempt_ownership(
+        &self,
+        attempt_id: &RunAttemptId,
+        effect_id: &OrchestrationEffectId,
+        expected_payload_sha256: &str,
+        new_owner: &ServerIncarnationId,
+        reattached_at_ms: u64,
+        lease_ttl_ms: u64,
+    ) -> Result<EffectOwnership, StoreError> {
+        if attempt_id.as_str().trim().is_empty()
+            || effect_id.as_str().trim().is_empty()
+            || !is_sha256(expected_payload_sha256)
+            || new_owner.as_str().trim().is_empty()
+            || lease_ttl_ms == 0
+        {
+            return Err(data_error("remote reattachment identity is malformed"));
+        }
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = load_stored_effect_by_id(&tx, effect_id)?
+            .ok_or_else(|| data_error("remote reattachment effect was not found"))?;
+        let dispatch = load_attempt_dispatches(&tx, &current.run_id)?
+            .into_iter()
+            .find(|record| record.attempt_id == *attempt_id)
+            .ok_or_else(|| data_error("remote reattachment attempt was not found"))?;
+        if dispatch.effect_id != *effect_id
+            || current.effect.payload_sha256 != expected_payload_sha256
+            || !matches!(
+                current.delivery.state,
+                EffectDeliveryState::DispatchStarted | EffectDeliveryState::InFlight
+            )
+            || !matches!(
+                dispatch.state,
+                AttemptDispatchState::DispatchStarted
+                    | AttemptDispatchState::Accepted
+                    | AttemptDispatchState::CancelRequested
+            )
+        {
+            return Err(data_error(
+                "remote reattachment no longer owns the exact post-marker attempt",
+            ));
+        }
+        let old_owner = current
+            .delivery
+            .owner_incarnation_id
+            .as_ref()
+            .ok_or_else(|| data_error("remote reattachment effect owner is missing"))?;
+        let effect_lease_id = current
+            .delivery
+            .lease_id
+            .as_ref()
+            .ok_or_else(|| data_error("remote reattachment effect lease is missing"))?;
+        let effect_lease = load_lease(&tx, effect_lease_id)?
+            .ok_or_else(|| data_error("remote reattachment effect lease was not found"))?;
+        if effect_lease.resource_kind != LeaseResourceKind::Effect
+            || effect_lease.resource_id != effect_id.as_str()
+            || effect_lease.owner_incarnation_id != *old_owner
+            || effect_lease.revision != current.delivery.claim_revision
+        {
+            return Err(data_error(
+                "remote reattachment effect lease identity changed",
+            ));
+        }
+
+        let queue = load_queue_records(&tx, &current.run_id)?
+            .into_iter()
+            .find(|record| record.attempt_id == *attempt_id)
+            .ok_or_else(|| data_error("remote reattachment capacity owner was not found"))?;
+        if !matches!(queue.state, QueueState::Claimed | QueueState::Dispatched) {
+            return Err(data_error(
+                "remote reattachment capacity is no longer owned",
+            ));
+        }
+        let queue_owner = queue
+            .owner_incarnation_id
+            .as_ref()
+            .ok_or_else(|| data_error("remote reattachment capacity owner is missing"))?;
+        let queue_lease_id = queue
+            .lease_id
+            .as_ref()
+            .ok_or_else(|| data_error("remote reattachment capacity lease is missing"))?;
+        let queue_lease = load_lease(&tx, queue_lease_id)?
+            .ok_or_else(|| data_error("remote reattachment capacity lease was not found"))?;
+        if queue_lease.resource_kind != LeaseResourceKind::Capacity
+            || queue_lease.resource_id != queue.queue_id
+            || queue_lease.owner_incarnation_id != *queue_owner
+            || queue_lease.revision != queue.claim_revision
+        {
+            return Err(data_error(
+                "remote reattachment capacity lease identity changed",
+            ));
+        }
+
+        let effective_at_ms = reattached_at_ms
+            .max(current.updated_at_ms)
+            .max(effect_lease.last_heartbeat_ms)
+            .max(queue_lease.last_heartbeat_ms);
+        let expires_at_ms = effective_at_ms
+            .checked_add(lease_ttl_ms)
+            .ok_or_else(|| data_error("remote reattachment lease expiry overflow"))?;
+        let effect_revision = current
+            .delivery
+            .claim_revision
+            .checked_add(1)
+            .ok_or_else(|| data_error("remote effect reattachment revision overflow"))?;
+        let queue_revision = queue
+            .claim_revision
+            .checked_add(1)
+            .ok_or_else(|| data_error("remote capacity reattachment revision overflow"))?;
+
+        let effect_lease_changed = tx.execute(
+            "UPDATE orchestration_leases
+                SET owner_incarnation_id = ?1, expires_at_ms = ?2,
+                    last_heartbeat_ms = ?3, revision = ?4
+              WHERE lease_id = ?5 AND resource_kind = 'effect' AND resource_id = ?6
+                AND owner_incarnation_id = ?7 AND revision = ?8",
+            params![
+                new_owner.as_str(),
+                checked_i64(expires_at_ms, "remote effect lease expiry")?,
+                checked_i64(effective_at_ms, "remote effect lease heartbeat")?,
+                checked_i64(effect_revision, "remote effect lease revision")?,
+                effect_lease_id.as_str(),
+                effect_id.as_str(),
+                old_owner.as_str(),
+                checked_i64(
+                    current.delivery.claim_revision,
+                    "prior effect claim revision"
+                )?,
+            ],
+        )?;
+        let effect_changed = tx.execute(
+            "UPDATE orchestration_effects
+                SET owner_incarnation_id = ?1, claim_revision = ?2, updated_at_ms = ?3
+              WHERE effect_id = ?4 AND payload_sha256 = ?5
+                AND owner_incarnation_id = ?6 AND lease_id = ?7
+                AND claim_revision = ?8 AND delivery_state IN ('dispatch_started', 'in_flight')",
+            params![
+                new_owner.as_str(),
+                checked_i64(effect_revision, "remote effect claim revision")?,
+                checked_i64(effective_at_ms, "remote effect reattachment timestamp")?,
+                effect_id.as_str(),
+                expected_payload_sha256,
+                old_owner.as_str(),
+                effect_lease_id.as_str(),
+                checked_i64(
+                    current.delivery.claim_revision,
+                    "prior effect claim revision"
+                )?,
+            ],
+        )?;
+        let queue_lease_changed = tx.execute(
+            "UPDATE orchestration_leases
+                SET owner_incarnation_id = ?1, expires_at_ms = ?2,
+                    last_heartbeat_ms = ?3, revision = ?4
+              WHERE lease_id = ?5 AND resource_kind = 'capacity' AND resource_id = ?6
+                AND owner_incarnation_id = ?7 AND revision = ?8",
+            params![
+                new_owner.as_str(),
+                checked_i64(expires_at_ms, "remote capacity lease expiry")?,
+                checked_i64(effective_at_ms, "remote capacity lease heartbeat")?,
+                checked_i64(queue_revision, "remote capacity lease revision")?,
+                queue_lease_id.as_str(),
+                queue.queue_id,
+                queue_owner.as_str(),
+                checked_i64(queue.claim_revision, "prior capacity claim revision")?,
+            ],
+        )?;
+        let queue_changed = tx.execute(
+            "UPDATE orchestration_queue
+                SET owner_incarnation_id = ?1, claim_revision = ?2
+              WHERE queue_id = ?3 AND candidate_sha256 = ?4
+                AND owner_incarnation_id = ?5 AND lease_id = ?6
+                AND claim_revision = ?7 AND state IN ('claimed', 'dispatched')",
+            params![
+                new_owner.as_str(),
+                checked_i64(queue_revision, "remote capacity claim revision")?,
+                queue.queue_id,
+                queue.candidate_sha256,
+                queue_owner.as_str(),
+                queue_lease_id.as_str(),
+                checked_i64(queue.claim_revision, "prior capacity claim revision")?,
+            ],
+        )?;
+        if effect_lease_changed != 1
+            || effect_changed != 1
+            || queue_lease_changed != 1
+            || queue_changed != 1
+        {
+            return Err(data_error(
+                "remote attempt reattachment lost its compare-and-swap",
+            ));
+        }
+        tx.commit()?;
+        Ok(EffectOwnership {
+            effect_id: effect_id.clone(),
+            expected_payload_sha256: expected_payload_sha256.to_string(),
+            owner_incarnation_id: new_owner.clone(),
+            lease_id: effect_lease_id.clone(),
+            claim_revision: effect_revision,
+        })
     }
 
     pub fn insert_execution_queue_record(
@@ -4538,8 +5751,10 @@ impl Store {
     }
 
     /// Releases an attempt reservation after a post-marker adapter receipt has
-    /// positively proved that no provider process or prompt was accepted and
-    /// cleanup completed. No other post-marker state is eligible.
+    /// positively proved that no provider process or prompt was accepted.
+    /// Capacity remains owned until the caller separately verifies worktree
+    /// cleanup through `ExecutionAdmissionService`. No other post-marker state
+    /// is eligible.
     pub fn release_verified_not_started_budget(
         &self,
         run_id: &RunId,
@@ -4672,58 +5887,10 @@ impl Store {
         stored.updated_at_ms = released_at_ms;
         update_budget_reservation_row(&tx, &previous, &stored)?;
 
-        let queue = load_queue_records(&tx, run_id)?
-            .into_iter()
-            .find(|record| record.attempt_id == *attempt_id)
-            .ok_or_else(|| data_error("verified not-started admission was not found"))?;
-        match (&queue.owner_incarnation_id, &queue.lease_id) {
-            (None, None) if queue.state == QueueState::Dispatched => {}
-            (Some(owner), Some(lease_id))
-                if matches!(queue.state, QueueState::Claimed | QueueState::Dispatched) =>
-            {
-                let deleted = tx.execute(
-                    "DELETE FROM orchestration_leases
-                      WHERE lease_id = ?1 AND resource_kind = 'capacity'
-                        AND resource_id = ?2 AND owner_incarnation_id = ?3
-                        AND revision = ?4",
-                    params![
-                        lease_id.as_str(),
-                        queue.queue_id,
-                        owner.as_str(),
-                        checked_i64(queue.claim_revision, "queue claim revision")?,
-                    ],
-                )?;
-                let changed = tx.execute(
-                    "UPDATE orchestration_queue
-                        SET state = 'dispatched', owner_incarnation_id = NULL,
-                            lease_id = NULL, claim_revision = ?1
-                      WHERE queue_id = ?2 AND owner_incarnation_id = ?3
-                        AND lease_id = ?4 AND claim_revision = ?5",
-                    params![
-                        checked_i64(
-                            queue.claim_revision.checked_add(1).ok_or_else(|| {
-                                data_error("execution admission revision overflow")
-                            })?,
-                            "released claim revision"
-                        )?,
-                        queue.queue_id,
-                        owner.as_str(),
-                        lease_id.as_str(),
-                        checked_i64(queue.claim_revision, "queue claim revision")?,
-                    ],
-                )?;
-                if deleted != 1 || changed != 1 {
-                    return Err(data_error(
-                        "verified not-started capacity release lost ownership",
-                    ));
-                }
-            }
-            _ => {
-                return Err(data_error(
-                    "verified not-started admission cleanup is ambiguous",
-                ));
-            }
-        }
+        // Capacity remains owned until the run lifecycle has checkpointed and
+        // removed (or deliberately retained) the exact attempt worktree. The
+        // shared admission service releases it only after that cleanup proof;
+        // this transaction is authoritative solely for the no-usage budget.
         tx.commit()?;
         Ok(stored)
     }
@@ -6309,16 +7476,23 @@ fn normalize_managed_attempt_usage(
         .attempts
         .get(&stored.reservation.attempt_id)
         .ok_or_else(|| data_error("budget reservation attempt was not found"))?;
-    if !matches!(
+    let settled = matches!(
         attempt.status,
         AttemptStatus::Succeeded
             | AttemptStatus::Failed
             | AttemptStatus::Cancelled
             | AttemptStatus::Interrupted
-    ) || attempt.ended_at_ms.is_none()
-    {
+    ) && attempt.ended_at_ms.is_some();
+    let cancellation_checkpointed = run.status == RunStatus::Cancelling
+        && attempt.status == AttemptStatus::Running
+        && attempt.checkpoint_ids.iter().any(|checkpoint_id| {
+            run.checkpoints
+                .get(checkpoint_id)
+                .is_some_and(|checkpoint| checkpoint.kind == CheckpointKind::AfterAttempt)
+        });
+    if !settled && !cancellation_checkpointed {
         return Err(data_error(
-            "budget usage can reconcile only after the exact attempt settles",
+            "budget usage can reconcile only after exact settlement or cancellation checkpoint",
         ));
     }
     let thread_id = attempt
@@ -6944,15 +8118,26 @@ fn validate_active_worktree_lease(
     lease: &ExecutionLease,
     at_ms: u64,
 ) -> Result<(), StoreError> {
+    validate_worktree_lease_identity(record, lease)?;
+    if at_ms < lease.last_heartbeat_ms || at_ms >= lease.expires_at_ms {
+        return Err(data_error(
+            "owned attempt worktree lease is not active for this operation",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_worktree_lease_identity(
+    record: &OwnedAttemptWorktreeRecord,
+    lease: &ExecutionLease,
+) -> Result<(), StoreError> {
     if lease.id != record.worktree.lease_id
         || lease.resource_kind != LeaseResourceKind::Worktree
         || lease.resource_id != record.worktree.id.as_str()
         || lease.revision == 0
-        || at_ms < lease.last_heartbeat_ms
-        || at_ms >= lease.expires_at_ms
     {
         return Err(data_error(
-            "owned attempt worktree lease is not active for this operation",
+            "owned attempt worktree lease identity does not match its resource",
         ));
     }
     Ok(())
@@ -8040,6 +9225,58 @@ fn load_recovery_reviews(
         reviews.push(review);
     }
     Ok(reviews)
+}
+
+fn load_recovery_review_by_id(
+    conn: &rusqlite::Connection,
+    review_id: &pandamux_core::RecoveryReviewId,
+) -> Result<Option<RecoveryReview>, StoreError> {
+    let run_id = conn
+        .query_row(
+            "SELECT run_id FROM orchestration_recovery_reviews WHERE review_id = ?1",
+            [review_id.as_str()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let Some(run_id) = run_id else {
+        return Ok(None);
+    };
+    Ok(load_recovery_reviews(conn, &RunId::from(run_id))?
+        .into_iter()
+        .find(|review| review.id == *review_id))
+}
+
+fn load_recovery_review_by_identity(
+    conn: &rusqlite::Connection,
+    review: &RecoveryReview,
+) -> Result<Option<RecoveryReview>, StoreError> {
+    let review_id = conn
+        .query_row(
+            "SELECT review_id FROM orchestration_recovery_reviews
+              WHERE run_id = ?1 AND task_id = ?2 AND attempt_id = ?3
+                AND ifnull(effect_id, '') = ?4 AND reason_code = ?5
+                AND evidence_digest = ?6",
+            params![
+                review.run_id.as_str(),
+                review.task_id.as_str(),
+                review.attempt_id.as_str(),
+                review
+                    .effect_id
+                    .as_ref()
+                    .map(OrchestrationEffectId::as_str)
+                    .unwrap_or(""),
+                review.reason_code,
+                review.evidence_digest,
+            ],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    review_id
+        .map(|review_id| {
+            load_recovery_review_by_id(conn, &pandamux_core::RecoveryReviewId::from(review_id))?
+                .ok_or_else(|| data_error("recovery review identity disappeared"))
+        })
+        .transpose()
 }
 
 fn load_node_receipts(
@@ -10315,6 +11552,237 @@ mod tests {
                 && item.expected == 200
                 && item.actual == 201
         }));
+    }
+
+    #[test]
+    fn life_01_and_02_progress_is_coalesced_deduplicated_and_bounded() {
+        let store = store_with_repository();
+        let (run, events) = fixture_lifecycle(false);
+        let effects = store
+            .insert_orchestration_run(&run_record(run.clone()), &events)
+            .expect("insert progress run");
+        let dispatch_effect = effects
+            .iter()
+            .find(|record| {
+                matches!(
+                    record.effect.kind,
+                    pandamux_core::OrchestrationEffectKind::DispatchTask { .. }
+                )
+            })
+            .expect("progress dispatch effect")
+            .effect
+            .id
+            .clone();
+        let mut runtime = runtime_records(dispatch_effect);
+        runtime.progress.clear();
+        runtime.recovery_reviews.clear();
+        store
+            .insert_orchestration_runtime_records(&runtime)
+            .expect("insert progress runtime");
+
+        let progress = |id: String,
+                        kind: AttemptProgressKind,
+                        payload_digest: String,
+                        at_ms: u64,
+                        cumulative_stream_bytes: Option<u64>,
+                        terminal: bool| AttemptProgressRecord {
+            id: AttemptProgressId::new(id),
+            run_id: RunId::new("run-phase5c"),
+            task_id: RunTaskId::new("task-phase5c"),
+            attempt_id: RunAttemptId::new("run-attempt-phase5c"),
+            kind,
+            payload_digest,
+            at_ms,
+            cumulative_stream_bytes,
+            terminal,
+        };
+
+        let first_stream = progress(
+            "progress-stream-first".to_string(),
+            AttemptProgressKind::StreamBytes,
+            "1".repeat(64),
+            30_001,
+            Some(0),
+            false,
+        );
+        assert_eq!(
+            store
+                .record_attempt_progress(&first_stream)
+                .expect("first stream progress")
+                .disposition,
+            AttemptProgressDisposition::Persisted
+        );
+        let coalesced = progress(
+            "progress-stream-coalesced".to_string(),
+            AttemptProgressKind::StreamBytes,
+            "2".repeat(64),
+            30_500,
+            Some(1_000),
+            false,
+        );
+        let coalesced = store
+            .record_attempt_progress(&coalesced)
+            .expect("sub-threshold stream progress");
+        assert_eq!(coalesced.disposition, AttemptProgressDisposition::Coalesced);
+        assert_eq!(coalesced.last_progress_at_ms, 30_001);
+
+        let byte_boundary = progress(
+            "progress-stream-byte-boundary".to_string(),
+            AttemptProgressKind::StreamBytes,
+            "3".repeat(64),
+            30_501,
+            Some(4_096),
+            false,
+        );
+        assert_eq!(
+            store
+                .record_attempt_progress(&byte_boundary)
+                .expect("four KiB stream boundary")
+                .disposition,
+            AttemptProgressDisposition::Persisted
+        );
+        let time_boundary = progress(
+            "progress-stream-time-boundary".to_string(),
+            AttemptProgressKind::StreamBytes,
+            "4".repeat(64),
+            31_501,
+            Some(4_097),
+            false,
+        );
+        assert_eq!(
+            store
+                .record_attempt_progress(&time_boundary)
+                .expect("one second stream boundary")
+                .disposition,
+            AttemptProgressDisposition::Persisted
+        );
+        let semantic_duplicate = progress(
+            "progress-stream-semantic-duplicate".to_string(),
+            AttemptProgressKind::StreamBytes,
+            "4".repeat(64),
+            40_000,
+            Some(4_097),
+            false,
+        );
+        let duplicate = store
+            .record_attempt_progress(&semantic_duplicate)
+            .expect("semantic duplicate");
+        assert_eq!(duplicate.disposition, AttemptProgressDisposition::Duplicate);
+        assert_eq!(duplicate.last_progress_at_ms, 31_501);
+        let backwards = progress(
+            "progress-backwards".to_string(),
+            AttemptProgressKind::ToolLifecycle,
+            "5".repeat(64),
+            31_500,
+            None,
+            false,
+        );
+        assert!(
+            store
+                .record_attempt_progress(&backwards)
+                .expect_err("backward progress clock rejected")
+                .to_string()
+                .contains("moved backwards")
+        );
+
+        for index in 0..260_u64 {
+            let payload = sha256_hex(format!("tool-transition-{index}").as_bytes());
+            let record = progress(
+                format!("progress-tool-{index:03}"),
+                AttemptProgressKind::ToolLifecycle,
+                payload,
+                32_000 + index,
+                None,
+                false,
+            );
+            assert_eq!(
+                store
+                    .record_attempt_progress(&record)
+                    .expect("bounded tool progress")
+                    .disposition,
+                AttemptProgressDisposition::Persisted
+            );
+        }
+
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE orchestration_attempt_dispatch
+                    SET state = 'terminal', outcome_digest = ?1
+                  WHERE attempt_id = 'run-attempt-phase5c'",
+                ["6".repeat(64)],
+            )
+            .expect("mark progress fixture terminal");
+        let terminal = progress(
+            "progress-terminal".to_string(),
+            AttemptProgressKind::TerminalOutcome,
+            "6".repeat(64),
+            32_260,
+            None,
+            true,
+        );
+        assert_eq!(
+            store
+                .record_attempt_progress(&terminal)
+                .expect("terminal progress")
+                .disposition,
+            AttemptProgressDisposition::Persisted
+        );
+        for (id, kind, digest, at_ms) in [
+            (
+                "progress-post-terminal-checkpoint",
+                AttemptProgressKind::CheckpointCreated,
+                "7".repeat(64),
+                32_261,
+            ),
+            (
+                "progress-post-terminal-artifact",
+                AttemptProgressKind::ArtifactPublished,
+                "8".repeat(64),
+                32_262,
+            ),
+        ] {
+            assert_eq!(
+                store
+                    .record_attempt_progress(&progress(
+                        id.to_string(),
+                        kind,
+                        digest,
+                        at_ms,
+                        None,
+                        false,
+                    ))
+                    .expect("post-terminal retained evidence")
+                    .disposition,
+                AttemptProgressDisposition::Persisted
+            );
+        }
+        assert!(
+            store
+                .record_attempt_progress(&progress(
+                    "progress-post-terminal-tool".to_string(),
+                    AttemptProgressKind::ToolLifecycle,
+                    "9".repeat(64),
+                    32_263,
+                    None,
+                    false,
+                ))
+                .expect_err("post-terminal tool progress rejected")
+                .to_string()
+                .contains("post-terminal evidence")
+        );
+
+        let retained = store
+            .load_attempt_progress(&RunAttemptId::new("run-attempt-phase5c"))
+            .expect("load retained progress");
+        assert_eq!(retained.iter().filter(|record| record.terminal).count(), 1);
+        assert_eq!(
+            retained.iter().filter(|record| !record.terminal).count(),
+            256
+        );
+        assert_eq!(retained.len(), 257);
     }
 
     #[test]

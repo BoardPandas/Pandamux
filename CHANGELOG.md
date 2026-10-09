@@ -40,6 +40,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Added supervised Phase 5C execution lifecycle and crash recovery in version
+  0.60.100.** Durable meaningful-progress records now drive independent stall
+  and absolute-runtime watchdogs, while cooperative interrupt, bounded drain,
+  process-group escalation, death verification, cancellation replay, and
+  service shutdown retain explicit join ownership. Startup recovery acquires a
+  single incarnation lock before auditing exact attempts, leases, budgets,
+  worktrees, checkpoints, provider effects, and remote receipts; safe pending
+  work is reclaimed or reattached, while ambiguous execution and unverifiable
+  cleanup deduplicate into retained human review. Typed not-started outcomes
+  release capacity and budget only after the responsible cleanup owner proves
+  its boundary. Injected-clock, crash, replay, dirty-worktree, hung-process,
+  remote-response-loss, and concurrent-shutdown fixtures cover the lifecycle
+  contract, including a native Linux descendant-process termination test. No
+  external provider or repository was contacted, and this checkpoint does not
+  add Windows, macOS, physical-remote, or live-provider acceptance or any push,
+  CI, deployment, activation, packaging, signing, publication, or release.
+
 - **Added typed Phase 5C blackboard artifacts and durable verification evidence
   in version 0.60.99.** Successful tasks now atomically publish bounded,
   canonical, content-hashed JSON artifacts before dependent tasks become ready.

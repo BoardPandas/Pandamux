@@ -824,6 +824,9 @@ pub enum RunEventKind {
         failure: Option<AttemptFailure>,
         usage_reconciled: bool,
     },
+    AttemptCleanupRecorded {
+        cleanup: CleanupRecord,
+    },
     VerificationEvidenceRecorded {
         evidence: VerificationEvidence,
     },
@@ -917,6 +920,9 @@ pub enum RunCommand {
         status: AttemptStatus,
         failure: Option<AttemptFailure>,
         usage_reconciled: bool,
+    },
+    RecordAttemptCleanup {
+        cleanup: CleanupRecord,
     },
     RecordVerificationEvidence {
         evidence: VerificationEvidence,

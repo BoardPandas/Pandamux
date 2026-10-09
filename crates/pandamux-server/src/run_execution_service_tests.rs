@@ -14,8 +14,9 @@ use pandamux_core::{
     OrganizationId, OrganizationPolicy, OutputContract, ProjectId, ProjectRepositoryId,
     ProjectRepositoryRecord, ProviderInstanceConfig, ProviderInstanceId, ProviderKind,
     RoutingDecision, Run, RunAttemptId, RunCommand, RunEvent, RunEventId, RunId, RunSeed,
-    RunTaskId, RunTaskStatus, RunTrigger, ServerIncarnationId, SubscriptionKey, TaskRouteDecision,
-    ToolLedgerStatus, UserSettings, ValidatedPlan,
+    RunStatus, RunTaskId, RunTaskStatus, RunTrigger, ServerIncarnationId, SubscriptionKey,
+    TaskRouteDecision, ToolLedgerStatus, UsageProvider, UsageSubscription, UserSettings,
+    ValidatedPlan,
 };
 use pandamux_providers::MockProviderDriver;
 use serde_json::{Value, json};
@@ -542,6 +543,21 @@ async fn efx_02_verified_not_started_releases_budget_and_falls_back_once() {
         first_run.tasks[&harness.task_id].status,
         RunTaskStatus::Ready
     );
+    let first_runtime = harness
+        .store
+        .load_orchestration_runtime_records(&harness.run_id)
+        .expect("load verified not-started runtime");
+    let first_queue = first_runtime
+        .queue_records
+        .iter()
+        .find(|record| record.attempt_id == first.run_attempt_id)
+        .expect("verified not-started capacity record");
+    assert!(first_queue.owner_incarnation_id.is_none());
+    assert!(first_queue.lease_id.is_none());
+    assert_eq!(
+        first_run.attempts[&first.run_attempt_id].cleanup_state,
+        CleanupState::Verified
+    );
 
     let second = harness.prepare_attempt(2, FALLBACK_PROVIDER_ID, None).await;
     let mut second_dispatch = harness
@@ -580,6 +596,57 @@ async fn efx_02_verified_not_started_releases_budget_and_falls_back_once() {
         "the accepted first route remains immutable while the retry owns its own route"
     );
     assert_eq!(harness.driver.session_start_count(), 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn verified_not_started_dirty_cleanup_retains_worktree_and_capacity_debt() {
+    let harness = LocalProviderHarness::new(json!({
+        "startFailure": "verified_not_started"
+    }))
+    .await;
+    let prepared = harness.prepare_attempt(1, PRIMARY_PROVIDER_ID, None).await;
+    let worktree_path = PathBuf::from(prepared.thread.workspace.effective_path());
+    fs::write(worktree_path.join("retained-untracked.txt"), b"retain me\n")
+        .expect("dirty the test-owned attempt worktree");
+
+    let error = harness
+        .dispatch(prepared.clone(), None)
+        .await
+        .expect_err("dirty verified-not-started cleanup remains recovery debt");
+    assert!(error.to_string().contains("retained for recovery review"));
+    let run = harness.run();
+    assert_eq!(
+        run.attempts[&prepared.run_attempt_id].status,
+        AttemptStatus::Failed
+    );
+    assert!(run.attempts[&prepared.run_attempt_id].usage_reconciled);
+    assert_eq!(
+        run.attempts[&prepared.run_attempt_id].cleanup_state,
+        CleanupState::Quarantined
+    );
+    let runtime = harness
+        .store
+        .load_orchestration_runtime_records(&harness.run_id)
+        .expect("load retained not-started runtime");
+    let queue = runtime
+        .queue_records
+        .iter()
+        .find(|record| record.attempt_id == prepared.run_attempt_id)
+        .expect("retained not-started capacity record");
+    assert!(queue.owner_incarnation_id.is_some());
+    assert!(queue.lease_id.is_some());
+    assert!(runtime.leases.iter().any(|lease| {
+        queue
+            .lease_id
+            .as_ref()
+            .is_some_and(|lease_id| lease.id == *lease_id)
+    }));
+    assert!(worktree_path.exists());
+    assert!(runtime.recovery_reviews.iter().any(|review| {
+        review.attempt_id == prepared.run_attempt_id
+            && review.reason_code == "attempt_not_started_cleanup_failed"
+            && review.status == RecoveryReviewStatus::Pending
+    }));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -797,6 +864,270 @@ async fn efx_06_to_08_capacity_continuations_preserve_retry_boundaries() {
             "{mode}"
         );
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn life_local_cancellation_verifies_cleanup_before_terminal_run_settlement() {
+    let harness = LocalProviderHarness::new(json!({
+        "eventScript": "request_approval: hold cancellation fixture open",
+        "interruptUsage": {
+            "inputTokens": 15,
+            "outputTokens": 25,
+            "providerReportedMicroUsd": 1_000
+        }
+    }))
+    .await;
+    map_primary_usage(&harness);
+    let prepared = harness.prepare_attempt(1, PRIMARY_PROVIDER_ID, None).await;
+    let worktree = harness
+        .store
+        .load_attempt_worktree_for_attempt(&harness.run_id, &prepared.run_attempt_id)
+        .expect("load cancellation worktree")
+        .expect("cancellation worktree exists");
+    let worktree_path = PathBuf::from(&worktree.worktree.path);
+    let mut dispatch = harness
+        .dispatch(prepared.clone(), None)
+        .await
+        .expect("dispatch cancellable provider attempt");
+    assert_eq!(dispatch.status, LocalProviderDispatchStatus::Accepted);
+
+    let reports = harness
+        .service
+        .cancel_run(&harness.run_id, "life-local-cancel", now_ms())
+        .await
+        .expect("cancel local orchestration run");
+    assert_eq!(reports.len(), 1);
+    assert_eq!(
+        reports[0].cleanup_state,
+        CleanupState::Verified,
+        "{reports:?}"
+    );
+    assert!(reports[0].death_verified);
+    assert!(reports[0].writers_joined);
+    assert!(reports[0].leases_released);
+    let outcome = finish(&mut dispatch).await;
+    assert_eq!(outcome.status, AttemptDispatchState::Cancelled);
+
+    let run = harness.run();
+    assert_eq!(run.status, RunStatus::Cancelling);
+    assert_eq!(
+        run.attempts[&prepared.run_attempt_id].cleanup_state,
+        CleanupState::Verified
+    );
+    assert!(run.attempts[&prepared.run_attempt_id].usage_reconciled);
+    assert_eq!(harness.service.live_owned_attempts().await, 0);
+    assert!(!worktree_path.exists());
+    let runtime = harness
+        .store
+        .load_orchestration_runtime_records(&harness.run_id)
+        .expect("load cancelled runtime");
+    assert!(!runtime.recovery_reviews.iter().any(|review| {
+        review.attempt_id == prepared.run_attempt_id
+            && review.reason_code == "recovery_usage_reconciliation_unknown"
+    }));
+    let queue = runtime
+        .queue_records
+        .into_iter()
+        .find(|record| record.attempt_id == prepared.run_attempt_id)
+        .expect("cancelled capacity record");
+    assert!(queue.owner_incarnation_id.is_none());
+    assert!(queue.lease_id.is_none());
+    let effects = harness
+        .store
+        .load_orchestration_effects(&harness.run_id)
+        .expect("load cancellation effects");
+    assert_eq!(
+        effects
+            .iter()
+            .find(|effect| effect.effect.id == prepared.ownership.effect_id)
+            .expect("provider dispatch effect")
+            .delivery
+            .state,
+        EffectDeliveryState::Settled
+    );
+    assert_eq!(
+        effects
+            .iter()
+            .find(|effect| {
+                matches!(
+                    &effect.effect.kind,
+                    OrchestrationEffectKind::CancelAttempt { attempt_id, .. }
+                        if attempt_id == &prepared.run_attempt_id
+                )
+            })
+            .expect("cancel worker effect")
+            .delivery
+            .state,
+        EffectDeliveryState::Settled
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn life_service_shutdown_drains_active_owner_and_reports_zero_debt() {
+    let harness = LocalProviderHarness::new(json!({
+        "eventScript": "request_approval: hold shutdown fixture open",
+        "interruptUsage": {
+            "inputTokens": 15,
+            "outputTokens": 25,
+            "providerReportedMicroUsd": 1_000
+        }
+    }))
+    .await;
+    map_primary_usage(&harness);
+    let prepared = harness.prepare_attempt(1, PRIMARY_PROVIDER_ID, None).await;
+    let worktree = harness
+        .store
+        .load_attempt_worktree_for_attempt(&harness.run_id, &prepared.run_attempt_id)
+        .expect("load shutdown worktree")
+        .expect("shutdown worktree exists");
+    let worktree_path = PathBuf::from(&worktree.worktree.path);
+    let mut dispatch = harness
+        .dispatch(prepared.clone(), None)
+        .await
+        .expect("dispatch shutdown provider attempt");
+
+    let report = harness.service.shutdown(Duration::from_secs(5)).await;
+    assert!(report.intake_closed);
+    assert!(report.claims_stopped);
+    assert_eq!(report.attempts_total, 1);
+    assert_eq!(report.attempts_verified, 1);
+    assert_eq!(report.attempts_quarantined, 0);
+    assert!(!report.timed_out);
+    assert_eq!(report.live_owned_tasks, 0);
+    assert!(report.sqlite_checkpointed);
+    assert_eq!(harness.service.live_owned_attempts().await, 0);
+    assert_eq!(
+        finish(&mut dispatch).await.status,
+        AttemptDispatchState::Cancelled
+    );
+    assert_eq!(
+        harness.run().attempts[&prepared.run_attempt_id].cleanup_state,
+        CleanupState::Verified
+    );
+    assert!(!worktree_path.exists());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn life_unknown_cancellation_usage_retains_worktree_and_capacity_debt() {
+    let harness = LocalProviderHarness::new(json!({
+        "eventScript": "request_approval: hold unknown-usage cancellation open"
+    }))
+    .await;
+    map_primary_usage(&harness);
+    let prepared = harness.prepare_attempt(1, PRIMARY_PROVIDER_ID, None).await;
+    let worktree = harness
+        .store
+        .load_attempt_worktree_for_attempt(&harness.run_id, &prepared.run_attempt_id)
+        .expect("load unknown-usage worktree")
+        .expect("unknown-usage worktree exists");
+    let worktree_path = PathBuf::from(&worktree.worktree.path);
+    let mut dispatch = harness
+        .dispatch(prepared.clone(), None)
+        .await
+        .expect("dispatch unknown-usage cancellation attempt");
+
+    let reports = harness
+        .service
+        .cancel_run(&harness.run_id, "life-local-cancel-unknown", now_ms())
+        .await
+        .expect("cancel unknown-usage orchestration run");
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0].cleanup_state, CleanupState::Quarantined);
+    assert_eq!(
+        reports[0].reason_code,
+        Some("attempt_cleanup_receipt_failed")
+    );
+    assert!(reports[0].death_verified);
+    assert!(reports[0].writers_joined);
+    assert!(!reports[0].leases_released);
+    assert_eq!(
+        finish(&mut dispatch).await.status,
+        AttemptDispatchState::Cancelled
+    );
+
+    let run = harness.run();
+    assert_eq!(run.status, RunStatus::Cancelling);
+    assert!(!run.attempts[&prepared.run_attempt_id].usage_reconciled);
+    assert_eq!(
+        run.attempts[&prepared.run_attempt_id].cleanup_state,
+        CleanupState::Quarantined
+    );
+    assert_eq!(harness.service.live_owned_attempts().await, 1);
+    assert!(worktree_path.exists());
+    let runtime = harness
+        .store
+        .load_orchestration_runtime_records(&harness.run_id)
+        .expect("load unknown-usage runtime");
+    assert!(runtime.recovery_reviews.iter().any(|review| {
+        review.attempt_id == prepared.run_attempt_id
+            && review.reason_code == "recovery_usage_reconciliation_unknown"
+            && review.status == RecoveryReviewStatus::Pending
+    }));
+    let queue = runtime
+        .queue_records
+        .iter()
+        .find(|record| record.attempt_id == prepared.run_attempt_id)
+        .expect("unknown-usage capacity record");
+    assert!(queue.owner_incarnation_id.is_some());
+    assert!(queue.lease_id.is_some());
+    assert!(runtime.leases.iter().any(|lease| {
+        queue
+            .lease_id
+            .as_ref()
+            .is_some_and(|lease_id| lease.id == *lease_id)
+    }));
+
+    let owner_before_recovery = queue.owner_incarnation_id.clone();
+    let lease_before_recovery = queue.lease_id.clone();
+    let recovery = crate::RunRecoveryService::new(harness.store.clone());
+    let recovery_report = recovery
+        .recover_nonterminal_runs(
+            ServerIncarnationId::new("server-cancellation-debt-recovery"),
+            now_ms(),
+        )
+        .await
+        .expect("classify retained cancellation debt");
+    assert!(recovery_report.actions.iter().any(|action| {
+        action.attempt_id.as_ref() == Some(&prepared.run_attempt_id)
+            && action.disposition == crate::RecoveryDisposition::ReviewRequired
+    }));
+    assert!(!recovery_report.actions.iter().any(|action| {
+        action.run_id == harness.run_id
+            && action.disposition == crate::RecoveryDisposition::Verified
+    }));
+    let recovered_runtime = harness
+        .store
+        .load_orchestration_runtime_records(&harness.run_id)
+        .expect("load recovered cancellation debt");
+    let recovered_queue = recovered_runtime
+        .queue_records
+        .iter()
+        .find(|record| record.attempt_id == prepared.run_attempt_id)
+        .expect("recovered cancellation capacity record");
+    assert_eq!(recovered_queue.owner_incarnation_id, owner_before_recovery);
+    assert_eq!(recovered_queue.lease_id, lease_before_recovery);
+    assert!(recovered_runtime.worktrees.iter().any(|record| {
+        record.worktree.attempt_id == prepared.run_attempt_id
+            && Path::new(&record.worktree.path) == worktree_path
+    }));
+    assert!(worktree_path.exists());
+}
+
+fn map_primary_usage(harness: &LocalProviderHarness) {
+    harness
+        .store
+        .save_usage_subscription_mapping(
+            &UsageSubscription {
+                key: SubscriptionKey::new(format!("subscription-{PRIMARY_PROVIDER_ID}")),
+                provider: UsageProvider::Custom,
+                display_name: "Cancellation usage fixture".to_string(),
+                masked_account_label: None,
+            },
+            &EnvironmentId::new(ENVIRONMENT_ID),
+            &ProviderInstanceId::new(PRIMARY_PROVIDER_ID),
+            now_ms(),
+        )
+        .expect("save cancellation usage mapping");
 }
 
 async fn finish(dispatch: &mut LocalProviderDispatch) -> LocalProviderTerminalOutcome {

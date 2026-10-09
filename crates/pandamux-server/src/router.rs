@@ -70,6 +70,7 @@ use crate::personal_repo::PersonalRepoService;
 use crate::provider_resolver::ProviderResolver;
 use crate::remote_execution::NodeExecutionService;
 use crate::request_context::{CapabilityAuthority, PeerRole, RequestContext};
+use crate::run_execution_service::RunExecutionService;
 use crate::store::{ProjectTrustMutationState, Store, StoreError};
 use crate::terminal::TerminalServerManager;
 use crate::thread_manager::ThreadManager;
@@ -98,6 +99,7 @@ pub struct Router {
     bundle_sync: BundleSyncService,
     mutation: MutationService,
     node_execution: NodeExecutionService,
+    run_execution: RunExecutionService,
     data_paths: DataPaths,
     role: ServerRole,
     environment_id: String,
@@ -728,6 +730,12 @@ impl Router {
             thread_manager.clone(),
             EnvironmentId::new(environment_id.clone()),
         );
+        let run_execution = RunExecutionService::with_local_provider(
+            store.clone(),
+            thread_manager.clone(),
+            bundle_store.clone(),
+        )
+        .with_environment_router(environment_router.clone());
         Self {
             store,
             mcp,
@@ -752,6 +760,7 @@ impl Router {
             bundle_sync,
             mutation,
             node_execution,
+            run_execution,
             data_paths,
             role,
             environment_id,
@@ -823,6 +832,12 @@ impl Router {
             self.thread_manager.clone(),
             EnvironmentId::new(self.environment_id.clone()),
         );
+        self.run_execution = RunExecutionService::with_local_provider(
+            self.store.clone(),
+            self.thread_manager.clone(),
+            self.bundle_store.clone(),
+        )
+        .with_environment_router(self.environment_router.clone());
         self.data_paths = data_paths;
         self
     }
@@ -867,6 +882,10 @@ impl Router {
         &self.node_execution
     }
 
+    pub fn run_execution(&self) -> &RunExecutionService {
+        &self.run_execution
+    }
+
     pub async fn shutdown_antigravity_auth(&self) {
         self.antigravity_auth.shutdown().await;
     }
@@ -886,6 +905,12 @@ impl Router {
             self.environment_router.clone(),
             EnvironmentId::new(self.environment_id.clone()),
         );
+        self.run_execution = RunExecutionService::with_local_provider(
+            self.store.clone(),
+            self.thread_manager.clone(),
+            self.bundle_store.clone(),
+        )
+        .with_environment_router(self.environment_router.clone());
         self
     }
 

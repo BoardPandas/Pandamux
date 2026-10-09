@@ -84,6 +84,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         db_path,
     };
     let server = Arc::new(Server::new(config)?);
+    let recovery = server.recover_orchestration().await?;
+    if recovery.reviews_created != 0 || recovery.reviews_deduplicated != 0 {
+        eprintln!(
+            "PandaMUX recovery retained {} new and {} existing review item(s)",
+            recovery.reviews_created, recovery.reviews_deduplicated
+        );
+    }
     server.initialize_personal_repository().await?;
     server.start_instructions_polling()?;
     server.start_mutation_sweep()?;
@@ -112,6 +119,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    let orchestration_shutdown = server.shutdown_orchestration().await;
     server.shutdown();
     server.shutdown_provider_sessions().await;
     server.shutdown_usage_scanner().await?;
@@ -122,8 +130,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(proxy_path) = proxy_path.as_ref() {
         cleanup_socket_path(&proxy_path.to_string_lossy());
     }
-    println!("PandaMUX Server stopped gracefully");
     listener_result?;
+    if orchestration_shutdown.timed_out
+        || orchestration_shutdown.live_owned_tasks != 0
+        || !orchestration_shutdown.sqlite_checkpointed
+    {
+        return Err(io::Error::other(format!(
+            "PandaMUX shutdown retained lifecycle debt (timed_out={}, live_owned_tasks={}, sqlite_checkpointed={})",
+            orchestration_shutdown.timed_out,
+            orchestration_shutdown.live_owned_tasks,
+            orchestration_shutdown.sqlite_checkpointed
+        ))
+        .into());
+    }
+    println!("PandaMUX Server stopped gracefully");
     Ok(())
 }
 

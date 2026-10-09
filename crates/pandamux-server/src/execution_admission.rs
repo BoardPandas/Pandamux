@@ -5,13 +5,14 @@ use crate::store::{
     OrchestrationQueueRecord, QueueState, Store, StoreError,
 };
 use pandamux_core::{
-    AgentId, EnvironmentId, ExecutionLease, ExecutionLeaseId, OrganizationId, ProviderInstanceId,
-    RunAttemptId, RunId, RunTaskId, ServerIncarnationId, ThreadId, TurnId,
+    AgentId, EnvironmentId, ExecutionLease, ExecutionLeaseId, LeaseResourceKind, OrganizationId,
+    ProviderInstanceId, RunAttemptId, RunId, RunTaskId, ServerIncarnationId, ThreadId, TurnId,
 };
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const DEFAULT_EXECUTION_ADMISSION_TTL_MS: u64 = 30_000;
+pub const DEFAULT_EXECUTION_ADMISSION_TTL_MS: u64 = 60_000;
+pub const DEFAULT_EXECUTION_ADMISSION_RENEWAL_MS: u64 = 20_000;
 pub const MIN_EXECUTION_ADMISSION_TTL_MS: u64 = 1_000;
 pub const MAX_EXECUTION_ADMISSION_TTL_MS: u64 = 5 * 60_000;
 pub const BASE_EXECUTION_RETRY_DELAY_MS: u64 = 250;
@@ -243,6 +244,66 @@ impl ExecutionAdmissionService {
             lease: claim.lease.clone(),
             acquired: false,
         })
+    }
+
+    /// Reconstructs the exact still-owned capacity claim for one orchestrated
+    /// attempt. Recovery and remote Hub dispatch use this instead of bypassing
+    /// the shared admission owner with ad-hoc queue updates.
+    pub async fn load_owned_attempt_claim(
+        &self,
+        run_id: &RunId,
+        attempt_id: &RunAttemptId,
+    ) -> Result<ExecutionAdmissionClaim, ExecutionAdmissionError> {
+        let store = self.store.clone();
+        let run_id = run_id.clone();
+        let attempt_id = attempt_id.clone();
+        run_blocking(move || {
+            let runtime = store.load_orchestration_runtime_records(&run_id)?;
+            let mut queues = runtime
+                .queue_records
+                .into_iter()
+                .filter(|record| record.attempt_id == attempt_id);
+            let record = queues.next().ok_or_else(|| {
+                StoreError::Data("execution admission attempt owner was not found".to_string())
+            })?;
+            if queues.next().is_some()
+                || record.run_id != run_id
+                || !matches!(record.state, QueueState::Claimed | QueueState::Dispatched)
+            {
+                return Err(StoreError::Data(
+                    "execution admission attempt owner is not unique and active".to_string(),
+                ));
+            }
+            let owner = record.owner_incarnation_id.as_ref().ok_or_else(|| {
+                StoreError::Data("execution admission attempt owner is missing".to_string())
+            })?;
+            let lease_id = record.lease_id.as_ref().ok_or_else(|| {
+                StoreError::Data("execution admission attempt lease is missing".to_string())
+            })?;
+            let mut leases = runtime
+                .leases
+                .into_iter()
+                .filter(|lease| lease.id == *lease_id);
+            let lease = leases.next().ok_or_else(|| {
+                StoreError::Data("execution admission attempt lease was not found".to_string())
+            })?;
+            if leases.next().is_some()
+                || lease.resource_kind != LeaseResourceKind::Capacity
+                || lease.resource_id != record.queue_id
+                || lease.owner_incarnation_id != *owner
+                || lease.revision != record.claim_revision
+            {
+                return Err(StoreError::Data(
+                    "execution admission attempt lease identity changed".to_string(),
+                ));
+            }
+            Ok(ExecutionAdmissionClaim {
+                record,
+                lease,
+                acquired: false,
+            })
+        })
+        .await
     }
 
     pub async fn renew(
