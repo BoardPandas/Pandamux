@@ -127,6 +127,44 @@
   records every checkpoint, exact command result, rejected candidate, repair,
   preservation boundary, and absent CI, native, runtime, and live evidence.
 
+## Phase 5B Trusted-Configuration Update - 2026-10-09
+
+- **Mode:** incremental update from the prior Phase 5A documentation source
+  `423594e3` through clean deciding implementation source `ce30ce7`, version
+  0.60.83, plus the documentation-only 0.60.84 B-G working tree on
+  `codex/recovery-r0`
+- **Generated page added:** Trusted Configuration, with eight sections covering
+  architecture and ownership, storage and migration, source layers and trust,
+  activation and node distribution, mutation review, desktop accessibility,
+  failure modes, and evidence boundaries
+- **Maintained records updated:** root README and CLAUDE guide, docs index, TOC,
+  generation metadata, this summary, and the Phase 5B acceptance record
+- **Source coverage:** all 175 current `crates/*/src/**/*.rs` files are mapped,
+  including every new Phase 5B core, orchestrator, protocol, server, client, and
+  desktop module
+- **Acceptance mapping:** AC-B01 through AC-B18 each name retained evidence;
+  the checkpoint table records B-A through B-F exact hashes and versions, while
+  B-G is labeled as the self-referential documentation commit
+- **Evidence boundary:** local Linux tests and source-level UI checks do not
+  establish native Windows Git-child, private-path, reparse, replacement, or
+  accessibility behavior, or a live external Git and SFTP distribution path.
+  P4-C5 remains Partial and P4-C7 remains open.
+- **Documentation validation:** 17 TOC pages, 106 ordered AUTOGEN sections,
+  1,612 active local links, 1,496 valid line-range citations, all 175 current
+  Rust source files, and 21 Mermaid blocks passed with zero structural errors.
+  Two stale Phase 5A `state.rs` upper bounds were corrected from line 1320 to
+  the current line 1300. `mmdc` is unavailable, so renderer-level Mermaid
+  validation was not performed.
+- **Code-gate status:** exact 0.60.83 passed formatting, every focused crate
+  test command, the five-target boundary checker, 600 workspace tests with 2
+  intentional real-shell ignores, all-target checks, strict Clippy, and diff
+  hygiene. The identical complete matrix also passed on the version 0.60.84
+  B-G tree before commit and is rerun at the exact documentation commit before
+  completion.
+- **Remote status:** no push, deployment, production activation, package,
+  signature, publication, release, served-version check, GitHub write, or pull
+  request occurred.
+
 ## Historical context
 
 The previous generated wiki described the removed Iced multiplexer architecture.

@@ -4,6 +4,12 @@ This index routes contributors to current sources for the GPUI chat-first
 workspace. Read the root [`Cargo.toml`](../Cargo.toml) for the version;
 documentation does not duplicate it.
 
+> **Latest Updates (October 2026):**
+> - **v0.60.84:** Phase 5B maintained documentation and exact local acceptance record.
+> - **v0.60.83:** Durable mutation proposals, local confirmation, history, trust, diff, and revert controls.
+> - **v0.60.82:** Immutable bundle activation and authenticated node distribution.
+> - **v0.60.81:** Exact project-layer trust and local agent access controls.
+
 ## Authority order
 
 When sources disagree, use this order and correct the lower-authority source:
@@ -29,6 +35,7 @@ roadmap.
 | Understand process and state ownership | [Architecture](core/ARCHITECTURE.md) |
 | Change Rust dependencies or toolchains safely | [Toolchain and Dependency Policy](operations/DEPENDENCIES.md) |
 | Find runtime configuration and profile rules | [Configuration](core/CONFIGURATION.md) |
+| Understand trusted sources, activation, and review | [Trusted Configuration](features/TRUSTED_CONFIGURATION.md) |
 | Use the command-line client | [CLI Reference](api/CLI_REFERENCE.md) |
 | Understand release gates without implying publication | [Release and Packaging](operations/RELEASE.md) |
 | Decode project terminology | [Glossary](GLOSSARY.md) |
@@ -54,6 +61,7 @@ sections with stable AUTOGEN identifiers.
 - [Local IPC and Security](features/NAMED_PIPE_IPC.md)
 - [SSH Remote Nodes](features/SSH_REMOTE.md)
 - [Agent Orchestration](features/AGENT_ORCHESTRATION.md)
+- [Trusted Configuration](features/TRUSTED_CONFIGURATION.md)
 - [Provider Routing and Capacity](features/PROVIDER_ROUTING.md)
 
 ### Operations and reference
@@ -68,14 +76,14 @@ sections with stable AUTOGEN identifiers.
 
 | Area | Source of truth | Responsibility |
 |---|---|---|
-| Domain | [`crates/pandamux-core`](../crates/pandamux-core) | Framework-free IDs, threads, events, organizations, provider policy, routing, and usage types |
-| Orchestration | [`crates/pandamux-orchestrator`](../crates/pandamux-orchestrator) | Pure Phase 5A schema, bundle, DAG, routing, approval, model-parse, and replay engine |
-| Wire protocol | [`crates/pandamux-protocol`](../crates/pandamux-protocol) | Versioned JSON-RPC, subscriptions, capabilities, and Hub-to-node proxy contracts |
+| Domain | [`crates/pandamux-core`](../crates/pandamux-core) | Framework-free IDs, threads, events, trusted-configuration identities, mutation records, policy, routing, and usage types |
+| Orchestration | [`crates/pandamux-orchestrator`](../crates/pandamux-orchestrator) | Pure schema, candidate inspection, bundle, DAG, routing, approval, model-parse, and replay engine |
+| Wire protocol | [`crates/pandamux-protocol`](../crates/pandamux-protocol) | Versioned JSON-RPC, trusted-configuration, subscriptions, capabilities, and Hub-to-node contracts |
 | Providers | [`crates/pandamux-providers`](../crates/pandamux-providers) | Provider drivers, profiles, discovery, parsing, and process supervision |
 | SSH and bootstrap | [`crates/pandamux-remote`](../crates/pandamux-remote) | SSH pool, exec, SFTP, bootstrap, worktree synchronization, and proxy tunnels |
-| Server | [`crates/pandamux-server`](../crates/pandamux-server) | Durable store, request contexts, RPC router, provider execution, PTYs, Hub, and node runtime |
-| Client projections | [`crates/pandamux-client`](../crates/pandamux-client) | Event-derived client state, transport, usage projection, and token smoothing |
-| Desktop | [`crates/pandamux-desktop`](../crates/pandamux-desktop) | GPUI chat shell, timeline, composer, settings, surfaces, terminal grid, and usage views |
+| Server | [`crates/pandamux-server`](../crates/pandamux-server) | Durable store, managed configuration sources, activation, distribution, mutation review, request contexts, provider execution, PTYs, Hub, and node runtime |
+| Client projections | [`crates/pandamux-client`](../crates/pandamux-client) | Event-derived state, trusted-configuration review state, transport, usage projection, and token smoothing |
+| Desktop | [`crates/pandamux-desktop`](../crates/pandamux-desktop) | GPUI chat shell, trusted configuration, timeline, composer, settings, surfaces, terminal grid, and usage views |
 | CLI | [`crates/pandamux-cli`](../crates/pandamux-cli) | Authenticated commands and restricted MCP stdio adapter |
 | Terminal primitives | [`crates/pandamux-term`](../crates/pandamux-term) | Separately selectable `grid` and `pty` features |
 | Dependency validation | [`tools/pandamux-boundary-check`](../tools/pandamux-boundary-check) | Target-resolved ownership, feature, snapshot, embedding, and native-stack checks |
@@ -87,8 +95,8 @@ control listener.
 
 ## Acceptance records and current boundary
 
-Three manually maintained pages separate the ongoing Phase 4 closeout from the
-completed pure-domain Phase 5A checkpoint:
+Four manually maintained pages separate the ongoing Phase 4 closeout from the
+Phase 5A pure-domain checkpoint and Phase 5B local implementation evidence:
 
 - [Usage Observability and Transcript Privacy](features/USAGE_OBSERVABILITY.md)
   defines the current data, privacy, UI, capacity, and failover contracts.
@@ -99,6 +107,10 @@ completed pure-domain Phase 5A checkpoint:
   records the exact pure-domain checkpoint chain, local command matrix,
   rejected 0.60.75 candidate, accepted 0.60.76 repair, and absent runtime or
   native evidence.
+- [Phase 5B Trusted Configuration Acceptance](operations/PHASE5B_ACCEPTANCE.md)
+  maps every AC-B01 through AC-B18 row to retained evidence, records the exact
+  checkpoint chain and local matrix, and keeps native and live limitations
+  explicit.
 
 The current recovery branch includes exact evidence for accounting,
 reconciliation, provider and model discovery, native Windows accessibility and
@@ -122,10 +134,15 @@ schemas, canonical bundle, DAG and routing policy, approvals, bounded model
 parsing, and replay state do not
 convert either open Phase 4 row into a pass. They also do not establish a
 database, effect interpreter, provider dispatch, worktree, RPC, CLI, desktop,
-or live-provider path. Phase 5 evidence remains separate from exact 0.60.64
-Phase 4 runtime evidence and the retained Galahad databases. This generated-wiki
-refresh remains an interim P4-C7 synchronization; it does not claim that Phase
-4 is complete, released, deployed, signed, published, or served.
+or live-provider path. Phase 5B now supplies trusted configuration persistence,
+managed Git, source inspection, exact project trust, immutable activation,
+node-distribution contracts, mutation review, and desktop controls. Its local
+Linux matrix does not establish native Windows Git-child, path, replacement,
+or accessibility behavior, or a live remote-node transfer. Phase 5 evidence
+remains separate from exact 0.60.64 Phase 4 runtime evidence and the retained
+Galahad databases. This generated-wiki refresh remains an interim P4-C7
+synchronization; it does not claim that Phase 4 is complete, released,
+deployed, signed, published, or served.
 
 ## Security boundary
 
@@ -151,3 +168,7 @@ The [Phase 3 Acceptance Record](operations/PHASE3_ACCEPTANCE.md) remains a
 historical evidence record. Decision-oriented product research remains under
 [`research/`](research/); verify implementation and external facts again
 before relying on an older comparison.
+
+---
+
+**Last Updated:** October 2026

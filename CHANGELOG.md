@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Added
 
+- **Recorded Phase 5B trusted configuration evidence in version 0.60.84.**
+  Root guidance and the maintained wiki now map the private source graph,
+  layered trust, immutable activation, authenticated distribution, durable
+  proposal review, and desktop controls to their implementation. The acceptance
+  record ties AC-B01 through AC-B18 to retained tests and the complete local
+  matrix while explicitly preserving absent native Windows, live remote, CI,
+  push, deployment, packaging, signing, publication, and release evidence.
+  This documentation checkpoint adds no executable behavior and leaves P4-C5
+  Partial and P4-C7 open.
+
 - **Added durable trusted mutation review and configuration controls in version
   0.60.83.** Server-stamped request context now binds canonical proposals to
   their authenticated caller, tool, environment, exact prior revision, and

@@ -10,8 +10,8 @@ This repository began as an Electron prototype, then had an Iced multiplexer imp
 The workspace version comes only from `[workspace.package] version` in [`Cargo.toml`](Cargo.toml). Do not infer the current version from documentation prose.
 
 The codebase retains an open provider-controlled Phase 4 acceptance row while
-implementing the explicitly authorized pure-domain Phase 5A orchestrator after
-the R0 development gate:
+implementing the explicitly authorized Phase 5A orchestrator and Phase 5B
+trusted configuration control plane after the R0 development gate:
 
 - R0.1 preserves and verifies the unfinished Phase 4 usage prototype without treating it as accepted production code.
 - R0.2 implements Hub-to-node routing through a versioned SSH exec proxy, reconnect semantics, event replay, and joined cleanup.
@@ -187,8 +187,17 @@ the R0 development gate:
   bounded model-output parsing, and replayable run state in the pure
   orchestrator crate. It does not add persistence, effect execution, provider
   dispatch, worktrees, run RPC, CLI commands, or desktop surfaces.
+- Phase 5B adds one private app-data graph, revisioned settings, a managed
+  personal Git repository, bounded instructions mirrors, exact project-layer
+  trust, immutable compiled bundles, authenticated node distribution, durable
+  mutation proposals, and a Trusted Configuration desktop surface. Its local
+  Linux matrix verifies the retained implementation, but native Windows path,
+  Git-child, atomic-replacement, and accessibility evidence plus live remote
+  distribution remain unverified. This does not close P4-C5 or P4-C7.
 
-See the [Phase 4 live acceptance record](docs/operations/PHASE4_ACCEPTANCE.md), the [Phase 5A pure-domain acceptance record](docs/operations/PHASE5A_ACCEPTANCE.md),
+See the [Phase 4 live acceptance record](docs/operations/PHASE4_ACCEPTANCE.md),
+the [Phase 5A pure-domain acceptance record](docs/operations/PHASE5A_ACCEPTANCE.md),
+the [Phase 5B trusted configuration acceptance record](docs/operations/PHASE5B_ACCEPTANCE.md),
 and the completion criteria in [`tasks/plan-rewrite.md`](tasks/plan-rewrite.md).
 
 ## Product shape
@@ -200,9 +209,14 @@ and the completion criteria in [`tasks/plan-rewrite.md`](tasks/plan-rewrite.md).
   Codex, Antigravity, Cursor, Grok, and OpenCode adapters exist, but live acceptance
   varies by provider and environment.
 - The right-side surfaces include agents, diffs, confined files, pull-request views, terminal sessions, floor-plan data, and artifacts.
+- Settings includes a Trusted Configuration surface for active source status,
+  candidate and project-layer review, local mutation confirmation, retained
+  history, and forward-only revert actions.
 - The server owns local PTYs and durable byte replay. The desktop owns only terminal grid rendering.
 - Linux nodes run `pandamux-server daemon`; the Hub reaches them through `pandamux-server proxy` over SSH. No remote TCP listener is opened.
-- The CLI supports connectivity, identification, thread listing and sending, notifications, and a restricted read-only MCP adapter.
+- The CLI supports connectivity, identification, thread listing and sending,
+  notifications, and a restricted MCP adapter with read-only inspection plus
+  one proposal-only trusted access tool.
 
 ## Build and run
 
@@ -250,8 +264,8 @@ crates/
   pandamux-providers/  Provider drivers, profiles, process supervision, and parsing
   pandamux-remote/     SSH pooling, exec, SFTP, bootstrap, and proxy tunnels
   pandamux-server/     Single-writer store, router, provider execution, PTYs, Hub and node runtime
-  pandamux-client/     Client-side event projections and smoothing
-  pandamux-desktop/    GPUI chat-first desktop and terminal grid rendering
+  pandamux-client/     Client-side event and trusted-configuration projections
+  pandamux-desktop/    GPUI chat-first desktop, settings controls, and terminal grid rendering
   pandamux-cli/        Authenticated CLI and restricted MCP stdio adapter
   pandamux-term/       Feature-split terminal grid and local PTY primitives
 tools/
@@ -285,6 +299,8 @@ The narrow R0 artifact harness is [`scripts/r0-node-artifacts.sh`](scripts/r0-no
 - [`AGENTS.md`](AGENTS.md): agent routing and repository authority order
 - [`CLAUDE.md`](CLAUDE.md): authoritative development guide
 - [`docs/README.md`](docs/README.md): maintained documentation index
+- [`docs/features/TRUSTED_CONFIGURATION.md`](docs/features/TRUSTED_CONFIGURATION.md): Phase 5B architecture and operations
+- [`docs/operations/PHASE5B_ACCEPTANCE.md`](docs/operations/PHASE5B_ACCEPTANCE.md): exact Phase 5B evidence and limitations
 - [`tasks/plan-rewrite.md`](tasks/plan-rewrite.md): current implementation and acceptance contract
 - [`tasks/plan-repo.md`](tasks/plan-repo.md): historical rewrite record and retained UI specification
 

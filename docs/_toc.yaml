@@ -2,7 +2,7 @@ project:
   name: "PandaMUX"
   description: "Native chat-first desktop for supervising local and remote AI coding agents through a GPUI client, authenticated JSON-RPC Hub, provider drivers, durable SQLite state, and SSH-connected Linux nodes."
   repo_base_url: "https://github.com/BoardPandas/Pandamux/blob"
-  ref_commit_hash: "423594e3ad77497119aac09ba098a82bd499aa74"
+  ref_commit_hash: "ce30ce7c5e9fa2c9ee6978dafe715093028cf29c"
   branch: "codex/recovery-r0"
   updated_at: "2026-10-09"
 
@@ -924,3 +924,90 @@ pages:
       - pandamux_02_getting-started
       - pandamux_03_architecture
       - pandamux_14_release
+
+  - id: pandamux_17_trusted-configuration
+    title: "Trusted Configuration"
+    folder: "features"
+    filename: "TRUSTED_CONFIGURATION.md"
+    description: "Phase 5B source ownership, layered trust, immutable activation, node distribution, mutation review, desktop controls, and evidence boundaries."
+    category: feature
+    source_files:
+      - "crates/pandamux-core/src/configuration.rs"
+      - "crates/pandamux-core/src/mutation.rs"
+      - "crates/pandamux-core/src/settings.rs"
+      - "crates/pandamux-orchestrator/src/configuration.rs"
+      - "crates/pandamux-orchestrator/src/bundle.rs"
+      - "crates/pandamux-protocol/src/bundle_rpc.rs"
+      - "crates/pandamux-protocol/src/instructions_rpc.rs"
+      - "crates/pandamux-protocol/src/mutation_rpc.rs"
+      - "crates/pandamux-protocol/src/personal_config_rpc.rs"
+      - "crates/pandamux-protocol/src/project_layer_rpc.rs"
+      - "crates/pandamux-protocol/src/settings_rpc.rs"
+      - "crates/pandamux-server/src/data_paths.rs"
+      - "crates/pandamux-server/src/managed_git.rs"
+      - "crates/pandamux-server/src/personal_repo.rs"
+      - "crates/pandamux-server/src/instructions_service.rs"
+      - "crates/pandamux-server/src/configuration_service.rs"
+      - "crates/pandamux-server/src/bundle_store.rs"
+      - "crates/pandamux-server/src/bundle_sync.rs"
+      - "crates/pandamux-server/src/mutation_service.rs"
+      - "crates/pandamux-server/src/store/migrations.rs"
+      - "crates/pandamux-server/src/store/configuration_phase5b.rs"
+      - "crates/pandamux-server/src/store/mutation_phase5b.rs"
+      - "crates/pandamux-server/src/request_context.rs"
+      - "crates/pandamux-server/src/mcp_server.rs"
+      - "crates/pandamux-server/src/router.rs"
+      - "crates/pandamux-server/src/server.rs"
+      - "crates/pandamux-client/src/configuration_projection.rs"
+      - "crates/pandamux-desktop/src/app_view.rs"
+      - "crates/pandamux-desktop/src/mutation_confirmation.rs"
+      - "crates/pandamux-desktop/src/settings_view.rs"
+      - "crates/pandamux-desktop/src/trusted_configuration_view.rs"
+      - "tasks/2026-10-09-phase-5b-trusted-configuration.md"
+    sections:
+      - id: pandamux_17_trusted-configuration_overview
+        title: "Overview"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_17_trusted-configuration_architecture
+        title: "Architecture and Ownership"
+        autogen: true
+        diagrams_needed: true
+        diagram_types: ["flowchart"]
+      - id: pandamux_17_trusted-configuration_storage
+        title: "Storage, Identity, and Migration"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_17_trusted-configuration_layers
+        title: "Source Layers and Trust"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_17_trusted-configuration_activation
+        title: "Activation and Node Distribution"
+        autogen: true
+        diagrams_needed: true
+        diagram_types: ["sequence"]
+      - id: pandamux_17_trusted-configuration_mutations
+        title: "Mutation Proposals and Local Resolution"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_17_trusted-configuration_desktop
+        title: "Desktop Review and Accessibility"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+      - id: pandamux_17_trusted-configuration_failure-modes
+        title: "Failure Modes and Evidence Boundaries"
+        autogen: true
+        diagrams_needed: false
+        diagram_types: []
+    related_pages:
+      - pandamux_03_architecture
+      - pandamux_06_ui-shell
+      - pandamux_07_app-runtime
+      - pandamux_08_configuration
+      - pandamux_12_agent-orchestration

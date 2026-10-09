@@ -91,9 +91,20 @@ unavailable. This sequencing exception does not mark P4-C5 or P4-C7 complete.
 Phase 5A now implements the pure, versioned orchestration domain: authored
 schema validation, canonical bundle compilation, DAG validation, deterministic
 two-step routing, approval reconciliation, bounded model-output parsing, and
-replayable command/event state. SQLite persistence, outbox interpretation,
-provider dispatch, worktrees, RPC, CLI, and desktop orchestration remain later
-checkpoints and require their own evidence.
+replayable command/event state. Phase 5A itself remains pure and does not own
+SQLite, filesystem effects, network transport, provider dispatch, worktrees,
+RPC, CLI, or desktop orchestration.
+
+Phase 5B now implements the trusted configuration control plane around that
+pure compiler. Exact 0.60.83 commit
+`ce30ce7c5e9fa2c9ee6978dafe715093028cf29c` owns private app-data paths,
+migration 13, revisioned settings, managed personal Git, bounded instructions
+mirrors, exact project-layer trust, immutable bundle activation, authenticated
+node distribution, durable mutation proposals, and local confirmation and
+history surfaces. Its complete local Linux command matrix passes. Native
+Windows Git-child, path ownership, reparse-point, atomic-replacement, and
+accessibility rows plus live remote distribution remain unverified, so this is
+not production acceptance and does not close P4-C5 or P4-C7.
 
 Exact 0.60.38 commit `d328ad8` supersedes the preceding source-candidate note:
 its complete local gate, native build, host smoke, remote lifecycle, and
@@ -193,14 +204,14 @@ Before any long or potentially silent command, explain what will run, estimate i
 
 ```text
 crates/
-  pandamux-core/       Framework-free domain types, IDs, settings, threads, turns, events, policy
+  pandamux-core/       Framework-free domain types, IDs, settings, configuration, mutation, and policy
   pandamux-orchestrator/ Pure schema, bundle, DAG, routing, policy, and run-state engine
-  pandamux-protocol/   Versioned RPC, subscription, terminal, settings, and proxy contracts
+  pandamux-protocol/   Versioned RPC, trusted-configuration, terminal, settings, and proxy contracts
   pandamux-providers/  Provider drivers, profiles, parser fixtures, and process supervision
   pandamux-remote/     SSH auth and pooling, exec, SFTP, bootstrap, ProxyJump, proxy tunnels
-  pandamux-server/     SQLite single writer, router, provider resolver, PTYs, Hub and node runtime
-  pandamux-client/     Client event projections and rendering-oriented state
-  pandamux-desktop/    GPUI chat shell, timeline, composer, settings, surfaces, terminal grid
+  pandamux-server/     SQLite owner, configuration services, router, PTYs, Hub and node runtime
+  pandamux-client/     Client event and trusted-configuration projections
+  pandamux-desktop/    GPUI chat shell, trusted settings, surfaces, and terminal grid
   pandamux-cli/        Authenticated CLI and MCP stdio adapter
   pandamux-term/       Optional `grid` and `pty` terminal features
 tools/
@@ -231,7 +242,7 @@ The runtime record is stored under `%LOCALAPPDATA%\pandamux\run\server.json` on 
 `RequestContext` is assigned by the accepting transport and contains the peer role, authenticated environment, client identity, and capability scope. Request JSON cannot select or upgrade those fields.
 
 - Local desktop and CLI: control scope, with MCP methods excluded
-- MCP adapter: `system.hello`, `system.ping`, and the read-only MCP tool surface
+- MCP adapter: `system.hello`, `system.ping`, read-only tools, and proposal-only trusted access changes
 - Provider child: expiring token, exact thread, exact notification or memory methods
 - Node proxy: server-assigned proxy role for the node's authenticated environment
 - Internal calls: explicit in-process context only
@@ -240,7 +251,58 @@ Windows uses a SID-scoped pipe name, a protected user-only DACL, remote-client r
 
 The v1 boundary is per OS user, not hostile same-user process isolation. FullAccess providers intentionally have host-user authority. Never describe a FullAccess session as process-isolated.
 
-The MCP surface is intentionally read-only in Phase 4. `read_settings` and `list_schedules` return purpose-built projections. `validate_thread_proposal` checks one named project, environment, and provider route without creating a thread or granting approval. These tools must never expose profile paths, provider environment overrides, arbitrary provider JSON, secrets, schedule prompts, repository paths, notification targets, FullAccess state, or opaque subscription keys.
+The MCP surface cannot mutate configuration directly. `read_settings` and
+`list_schedules` return purpose-built projections, while
+`validate_thread_proposal` checks one named project, environment, and provider
+route without creating a thread or granting approval. Phase 5B adds only
+`propose_agent_access`: it uses the server-owned request context, persists one
+revision-bound proposal, returns promptly, and requires a separate local-control
+approval. These tools must never expose profile paths, provider environment
+overrides, arbitrary provider JSON, secrets, schedule prompts, repository
+paths, notification targets, FullAccess state, or opaque subscription keys.
+
+## Trusted configuration control plane
+
+`DataPaths` is the injected owner of the private database, backup, runtime,
+personal, instructions, candidate, bundle, staging, recovery, and attachment
+roots. Migration 13 is additive and runs only after a verified private database
+backup. It adds revisioned settings plus candidate, trust, bundle, distribution,
+proposal, and append-only audit records without renumbering earlier migrations.
+
+The personal layer is one private plumbing-only Git repository. It validates
+paths, sizes, case collisions, runtime data, and secret patterns before object
+creation, updates the active ref through compare-and-swap, and uses retained
+commits for forward-only reverts. Instructions use private bare mirrors,
+`ls-remote` discovery before bounded fetch, immutable candidate refs, no-checkout
+inspection, optional signature verification, and explicit last-good retention.
+Project trust binds organization, project, credential-free remote identity,
+canonical repository root, and the exact strict `.pandamux/` content digest.
+
+Compilation combines the active instructions, managed personal layer, trusted
+project layer, and revisioned local settings through the pure orchestrator.
+Local activation verifies and materializes an immutable content-addressed
+archive, then commits the active pointer, audit, candidate transition, and node
+outbox together. Authenticated node proxies receive the private archive over
+SFTP, verify its archive and source identities independently, and atomically
+activate only the expected prior bundle. Existing run records keep their pinned
+bundle.
+
+Mutation proposals key idempotency by server-stamped caller, tool, and request
+identity. Canonical old and new digests, expected revision, expiry, impact, and
+resolution are durable before notification. Only authenticated local control
+can list, approve once, or reject. Database-backed targets apply their exact
+compare-and-swap mutation, immutable audit, and terminal resolution in one
+transaction. The personal Git target uses an idempotent ref update followed by
+reconcilable audit persistence because Git and SQLite cannot share one native
+transaction.
+
+The desktop Trusted Configuration category loads source and candidate status,
+safe diffs, exact project trust, pending and recent proposals, activation
+history, and personal history. It uses redacted projections, non-color-only
+status text, named actions, exact revision and digest values, pessimistic
+loading, and forward-only revert operations. Linux tests and compilation do
+not substitute for the required native Windows keyboard, screen-reader, path,
+Git-child, or atomic-replacement evidence.
 
 ## Provider execution
 
@@ -394,6 +456,8 @@ Release authorization is not implied by implementation work. Keep implementation
 The current GPUI rewrite has passed R0.5, including both physical P4-C6 rows,
 but it has not passed the complete Phase 4 exit matrix. The real pre-output
 provider-capacity row and final post-P4-C5 documentation archive remain open.
+Phase 5B has complete local implementation evidence but not its required
+native Windows or live remote-distribution evidence.
 `.github/workflows/release.yml` still contains historical packaging references
 and must not be used as evidence that the current workspace is releasable.
 Phase 7 owns the final Windows packaging, signing, publication, and update
