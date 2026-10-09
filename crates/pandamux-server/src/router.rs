@@ -32,23 +32,27 @@ use pandamux_protocol::{
     InstructionsRevertParams, InstructionsSetPolicyParams, InstructionsSetTrackingParams,
     InstructionsStatusParams, InstructionsStatusResult, McpCallToolParams, MutationGetParams,
     MutationGetResult, MutationListParams, MutationResolveParams, MutationResolveResult,
-    PROTOCOL_VERSION, PersonalConfigDiffParams, PersonalConfigDiffResult,
-    PersonalConfigHistoryParams, PersonalConfigHistoryResult, PersonalConfigRevertParams,
-    PersonalConfigRevertResult, PingResult, ProjectLayerDiffParams, ProjectLayerDiffResult,
-    ProjectLayerProposalResult, ProjectLayerRevokeParams, ProjectLayerStatusParams,
-    ProjectLayerStatusResult, ProjectLayerTrustParams, ProviderHealthParams, ProviderHealthReport,
-    ProviderHealthResult, ProviderLoginFlow, ProviderLoginGuidance, ProviderLoginLaunchParams,
-    ProviderLoginLaunchResult, ProviderLoginPreview, ProviderLoginPreviewParams, ProviderModelInfo,
-    ProviderModelsParams, ProviderModelsReport, ProviderModelsResult, RoutingProviderCatalogEntry,
-    RpcError, RpcRequest, RpcResponse, ScheduleRunParams, ScheduleRunResult, ScheduleSaveParams,
-    ScheduleValidateParams, ScheduleValidationResult, ServerCapabilities, ServerRole,
-    SettingsGetParams, SettingsGetResult, SettingsSetParams, SubAgentTreeItem, SubAgentTreeParams,
-    SubAgentTreeResult, TerminalAttachParams, TerminalCloseParams, TerminalInputParams,
-    TerminalOpenParams, TerminalResizeParams, ThreadCancelTurnParams, ThreadContinueParams,
-    ThreadCreateParams, ThreadGetParams, ThreadListParams, ThreadRespondApprovalParams,
-    ThreadResumeParams, ThreadSendTurnParams, UsageAckParams, UsageAckResult, UsageBackfillParams,
-    UsageCatalogResult, UsageExportParams, UsageQueryParams, UsageSubscriptionSetParams,
-    WorktreeSyncDeltaParams, WorktreeSyncDeltaResult,
+    OrchestrationAttemptAckParams, OrchestrationAttemptCancelParams,
+    OrchestrationAttemptDispatchParams, OrchestrationAttemptEventsParams,
+    OrchestrationAttemptPrepareParams, OrchestrationAttemptStatusParams,
+    OrchestrationRepositoryPrepareParams, PROTOCOL_VERSION, PersonalConfigDiffParams,
+    PersonalConfigDiffResult, PersonalConfigHistoryParams, PersonalConfigHistoryResult,
+    PersonalConfigRevertParams, PersonalConfigRevertResult, PingResult, ProjectLayerDiffParams,
+    ProjectLayerDiffResult, ProjectLayerProposalResult, ProjectLayerRevokeParams,
+    ProjectLayerStatusParams, ProjectLayerStatusResult, ProjectLayerTrustParams,
+    ProviderHealthParams, ProviderHealthReport, ProviderHealthResult, ProviderLoginFlow,
+    ProviderLoginGuidance, ProviderLoginLaunchParams, ProviderLoginLaunchResult,
+    ProviderLoginPreview, ProviderLoginPreviewParams, ProviderModelInfo, ProviderModelsParams,
+    ProviderModelsReport, ProviderModelsResult, RoutingProviderCatalogEntry, RpcError, RpcRequest,
+    RpcResponse, ScheduleRunParams, ScheduleRunResult, ScheduleSaveParams, ScheduleValidateParams,
+    ScheduleValidationResult, ServerCapabilities, ServerRole, SettingsGetParams, SettingsGetResult,
+    SettingsSetParams, SubAgentTreeItem, SubAgentTreeParams, SubAgentTreeResult,
+    TerminalAttachParams, TerminalCloseParams, TerminalInputParams, TerminalOpenParams,
+    TerminalResizeParams, ThreadCancelTurnParams, ThreadContinueParams, ThreadCreateParams,
+    ThreadGetParams, ThreadListParams, ThreadRespondApprovalParams, ThreadResumeParams,
+    ThreadSendTurnParams, UsageAckParams, UsageAckResult, UsageBackfillParams, UsageCatalogResult,
+    UsageExportParams, UsageQueryParams, UsageSubscriptionSetParams, WorktreeSyncDeltaParams,
+    WorktreeSyncDeltaResult,
 };
 
 use crate::attachment::AttachmentManager;
@@ -64,6 +68,7 @@ use crate::mutation_service::{
 };
 use crate::personal_repo::PersonalRepoService;
 use crate::provider_resolver::ProviderResolver;
+use crate::remote_execution::NodeExecutionService;
 use crate::request_context::{CapabilityAuthority, PeerRole, RequestContext};
 use crate::store::{ProjectTrustMutationState, Store, StoreError};
 use crate::terminal::TerminalServerManager;
@@ -92,6 +97,7 @@ pub struct Router {
     bundle_store: BundleStore,
     bundle_sync: BundleSyncService,
     mutation: MutationService,
+    node_execution: NodeExecutionService,
     data_paths: DataPaths,
     role: ServerRole,
     environment_id: String,
@@ -715,6 +721,13 @@ impl Router {
             EnvironmentId::new(environment_id.clone()),
         );
         let mutation = MutationService::new(store.clone(), personal_repo.clone());
+        let node_execution = NodeExecutionService::new(
+            store.clone(),
+            data_paths.clone(),
+            bundle_store.clone(),
+            thread_manager.clone(),
+            EnvironmentId::new(environment_id.clone()),
+        );
         Self {
             store,
             mcp,
@@ -738,6 +751,7 @@ impl Router {
             bundle_store,
             bundle_sync,
             mutation,
+            node_execution,
             data_paths,
             role,
             environment_id,
@@ -802,6 +816,13 @@ impl Router {
             EnvironmentId::new(self.environment_id.clone()),
         );
         self.mutation = MutationService::new(self.store.clone(), self.personal_repo.clone());
+        self.node_execution = NodeExecutionService::new(
+            self.store.clone(),
+            data_paths.clone(),
+            self.bundle_store.clone(),
+            self.thread_manager.clone(),
+            EnvironmentId::new(self.environment_id.clone()),
+        );
         self.data_paths = data_paths;
         self
     }
@@ -840,6 +861,10 @@ impl Router {
 
     pub fn mutation_service(&self) -> &MutationService {
         &self.mutation
+    }
+
+    pub fn node_execution(&self) -> &NodeExecutionService {
+        &self.node_execution
     }
 
     pub async fn shutdown_antigravity_auth(&self) {
@@ -1486,6 +1511,33 @@ impl Router {
             "system.hello" => self.handle_hello(params),
             "system.identify" => self.handle_identify(),
             "system.capabilities" => self.handle_capabilities(),
+            "orchestration.repository.prepare" => {
+                self.handle_orchestration_repository_prepare(context, params)
+                    .await
+            }
+            "orchestration.attempt.prepare" => {
+                self.handle_orchestration_attempt_prepare(context, params)
+                    .await
+            }
+            "orchestration.attempt.dispatch" => {
+                self.handle_orchestration_attempt_dispatch(context, params)
+                    .await
+            }
+            "orchestration.attempt.status" => {
+                self.handle_orchestration_attempt_status(context, params)
+                    .await
+            }
+            "orchestration.attempt.cancel" => {
+                self.handle_orchestration_attempt_cancel(context, params)
+                    .await
+            }
+            "orchestration.attempt.events" => {
+                self.handle_orchestration_attempt_events(context, params)
+                    .await
+            }
+            "orchestration.attempt.ack" => {
+                self.handle_orchestration_attempt_ack(context, params).await
+            }
             "thread.create" => self.handle_thread_create(context, params),
             "thread.get" => self.handle_thread_get(params),
             "thread.list" => self.handle_thread_list(params),
@@ -1614,6 +1666,110 @@ impl Router {
             Ok(val) => RpcResponse::success(id.unwrap_or(1.into()), val),
             Err(err) => RpcResponse::error(id, err),
         })
+    }
+
+    fn ensure_node_execution_role(&self) -> Result<(), RpcError> {
+        if self.role != ServerRole::Node {
+            return Err(RpcError::with_data(
+                -32001,
+                "Private orchestration execution is available only on a node",
+                json!({ "reason": "orchestration_node_role_required" }),
+            ));
+        }
+        Ok(())
+    }
+
+    async fn handle_orchestration_repository_prepare(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        self.ensure_node_execution_role()?;
+        let params: OrchestrationRepositoryPrepareParams = serde_json::from_value(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let result = self
+            .node_execution
+            .repository_prepare(context, params, None)
+            .await?;
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_orchestration_attempt_prepare(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        self.ensure_node_execution_role()?;
+        let params: OrchestrationAttemptPrepareParams = serde_json::from_value(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let result = self
+            .node_execution
+            .attempt_prepare(context, params, None)
+            .await?;
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_orchestration_attempt_dispatch(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        self.ensure_node_execution_role()?;
+        let params: OrchestrationAttemptDispatchParams = serde_json::from_value(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let result = self
+            .node_execution
+            .attempt_dispatch(context, params, None)
+            .await?;
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_orchestration_attempt_status(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        self.ensure_node_execution_role()?;
+        let params: OrchestrationAttemptStatusParams = serde_json::from_value(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let result = self.node_execution.attempt_status(context, params).await?;
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_orchestration_attempt_cancel(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        self.ensure_node_execution_role()?;
+        let params: OrchestrationAttemptCancelParams = serde_json::from_value(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let result = self.node_execution.attempt_cancel(context, params).await?;
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_orchestration_attempt_events(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        self.ensure_node_execution_role()?;
+        let params: OrchestrationAttemptEventsParams = serde_json::from_value(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let result = self.node_execution.attempt_events(context, params).await?;
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_orchestration_attempt_ack(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        self.ensure_node_execution_role()?;
+        let params: OrchestrationAttemptAckParams = serde_json::from_value(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let result = self.node_execution.attempt_ack(context, params).await?;
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
     }
 
     fn handle_ping(&self) -> Result<Value, RpcError> {

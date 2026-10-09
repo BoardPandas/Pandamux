@@ -73,9 +73,10 @@ pub use orchestration_execution::{
     OrchestrationAttemptAckResult, OrchestrationAttemptCancelParams,
     OrchestrationAttemptCancelResult, OrchestrationAttemptDispatchParams,
     OrchestrationAttemptEventsParams, OrchestrationAttemptEventsResult,
-    OrchestrationAttemptPrepareParams, OrchestrationAttemptReceipt,
-    OrchestrationAttemptStatusParams, OrchestrationAttemptStatusResult,
-    OrchestrationExecutionIdentity, OrchestrationNodeAttemptState, OrchestrationNodeEvent,
+    OrchestrationAttemptPrepareParams, OrchestrationAttemptPrepareResult,
+    OrchestrationAttemptReceipt, OrchestrationAttemptStatusParams,
+    OrchestrationAttemptStatusResult, OrchestrationExecutionIdentity,
+    OrchestrationNodeAttemptState, OrchestrationNodeEvent, OrchestrationPreparedExecution,
     OrchestrationRepositoryPrepareParams, OrchestrationRepositoryPrepareResult,
 };
 pub use personal_config_rpc::{

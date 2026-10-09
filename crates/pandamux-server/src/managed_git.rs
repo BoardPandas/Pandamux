@@ -121,6 +121,21 @@ pub enum ManagedGitCommand {
         git_dir: PathBuf,
         bundle_path: PathBuf,
     },
+    WorktreeAdd {
+        git_dir: PathBuf,
+        worktree_path: PathBuf,
+        branch_ref: String,
+        commit: String,
+    },
+    WorktreeHead {
+        worktree_path: PathBuf,
+    },
+    WorktreeBranch {
+        worktree_path: PathBuf,
+    },
+    WorktreeCommonDir {
+        worktree_path: PathBuf,
+    },
 }
 
 impl ManagedGitCommand {
@@ -145,7 +160,11 @@ impl ManagedGitCommand {
             | Self::Fetch { git_dir, .. }
             | Self::VerifyCommit { git_dir, .. }
             | Self::CreateBundle { git_dir, .. }
-            | Self::VerifyBundle { git_dir, .. } => git_dir,
+            | Self::VerifyBundle { git_dir, .. }
+            | Self::WorktreeAdd { git_dir, .. } => git_dir,
+            Self::WorktreeHead { worktree_path }
+            | Self::WorktreeBranch { worktree_path }
+            | Self::WorktreeCommonDir { worktree_path } => worktree_path,
         }
     }
 
@@ -153,6 +172,7 @@ impl ManagedGitCommand {
         match self {
             Self::CreateBundle { output_path, .. } => Some(output_path),
             Self::VerifyBundle { bundle_path, .. } => Some(bundle_path),
+            Self::WorktreeAdd { worktree_path, .. } => Some(worktree_path),
             _ => None,
         }
     }
@@ -718,6 +738,48 @@ fn configure_process(
         } => {
             git_dir_args(process, git_dir);
             process.arg("bundle").arg("verify").arg(bundle_path);
+        }
+        ManagedGitCommand::WorktreeAdd {
+            git_dir,
+            worktree_path,
+            branch_ref,
+            commit,
+        } => {
+            validate_revision(commit)?;
+            let branch = branch_ref
+                .strip_prefix("refs/heads/")
+                .filter(|branch| !branch.is_empty())
+                .ok_or_else(|| invalid_command("invalid managed Git branch reference"))?;
+            validate_ref(branch_ref)?;
+            git_dir_args(process, git_dir);
+            process
+                .arg("worktree")
+                .arg("add")
+                .arg("-b")
+                .arg(branch)
+                .arg(worktree_path)
+                .arg(commit);
+        }
+        ManagedGitCommand::WorktreeHead { worktree_path } => {
+            process.arg("-C").arg(worktree_path);
+            managed_git_config_args(process);
+            process.arg("rev-parse").arg("--verify").arg("HEAD");
+        }
+        ManagedGitCommand::WorktreeBranch { worktree_path } => {
+            process.arg("-C").arg(worktree_path);
+            managed_git_config_args(process);
+            process
+                .arg("rev-parse")
+                .arg("--symbolic-full-name")
+                .arg("HEAD");
+        }
+        ManagedGitCommand::WorktreeCommonDir { worktree_path } => {
+            process.arg("-C").arg(worktree_path);
+            managed_git_config_args(process);
+            process
+                .arg("rev-parse")
+                .arg("--path-format=absolute")
+                .arg("--git-common-dir");
         }
     }
     Ok(stdin)

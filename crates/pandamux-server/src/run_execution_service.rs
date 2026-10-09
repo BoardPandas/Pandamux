@@ -1,10 +1,15 @@
 use crate::bundle_store::{BundleStore, BundleStoreError};
+use crate::environment_router::EnvironmentRouter;
 use crate::execution_admission::ExecutionAdmissionClaim;
 use crate::execution_budget::ExecutionBudgetService;
+use crate::remote_execution::{
+    remote_dispatch_identity, remote_execution_ids, remote_identity_sha256,
+    remote_repository_key_sha256, remote_request_sha256,
+};
 use crate::store::{
     AttemptDispatchRecord, AttemptDispatchState, EffectClaimOutcome, EffectClaimRequest,
     EffectDispatchOutcome, EffectDispatchRequest, EffectOutcomeRecord, EffectOutcomeRequest,
-    EffectOwnership, EffectPreparationOutcome, LocalAttemptOutcomeRequest,
+    EffectOwnership, EffectPreparationOutcome, LocalAttemptOutcomeRequest, NodeReceiptRecord,
     OrchestrationExecutionFailpoint, OrchestrationReplayAudit, RunTransition, RunTransitionRequest,
     Store, StoreError, StoredOrchestrationEffect,
 };
@@ -14,19 +19,39 @@ use crate::thread_manager::{
 };
 use pandamux_core::{
     AgentInstanceRef, AttemptBoundary, AttemptFailure, AttemptStatus, BundleSha, CheckpointKind,
-    ContinuationId, ContinuationState, EffectDeliveryState, EffectReceipt, FailureClass,
-    OrchestrationEffectId, OrchestrationEffectKind, RunAttemptId, RunCommand, RunEventId, RunId,
-    RunStatus, Thread, ThreadId, ThreadOrigin, ThreadStatus, ThreadWorkspace, Turn, TurnAttempt,
-    TurnAttemptId, TurnAttemptStatus, TurnId, TurnInput, TurnOutcome, TurnStatus, WorktreeRef,
+    ContinuationId, ContinuationState, EffectDeliveryState, EffectReceipt, EnvironmentId,
+    FailureClass, NodeStoreId, OrchestrationEffectId, OrchestrationEffectKind, RunAttemptId,
+    RunCommand, RunEventId, RunId, RunStatus, Thread, ThreadId, ThreadOrigin, ThreadStatus,
+    ThreadWorkspace, Turn, TurnAttempt, TurnAttemptId, TurnAttemptStatus, TurnId, TurnInput,
+    TurnOutcome, TurnStatus, WorktreeRef,
+};
+use pandamux_protocol::{
+    OrchestrationAttemptAckParams, OrchestrationAttemptAckResult, OrchestrationAttemptCancelParams,
+    OrchestrationAttemptCancelResult, OrchestrationAttemptDispatchParams,
+    OrchestrationAttemptEventsParams, OrchestrationAttemptEventsResult,
+    OrchestrationAttemptPrepareParams, OrchestrationAttemptPrepareResult,
+    OrchestrationAttemptReceipt, OrchestrationAttemptStatusParams,
+    OrchestrationAttemptStatusResult, OrchestrationExecutionIdentity,
+    OrchestrationNodeAttemptState, OrchestrationRepositoryPrepareParams,
+    OrchestrationRepositoryPrepareResult, RpcError,
 };
 use pandamux_providers::{InjectedInstructions, SessionSpec, ToolPolicy};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
 
 const RUN_PROJECTION_BROADCAST_CAPACITY: usize = 256;
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
 
 /// A bounded, payload-free projection hint emitted only after a durable run
 /// transition is observable. Consumers must load canonical state from SQLite.
@@ -45,6 +70,11 @@ pub struct RunTransitionNotice {
 struct LocalProviderRuntime {
     thread_manager: ThreadManager,
     bundle_store: BundleStore,
+}
+
+#[derive(Clone)]
+struct RemoteProviderRuntime {
+    environment_router: Arc<EnvironmentRouter>,
 }
 
 #[derive(Clone, Debug)]
@@ -136,6 +166,7 @@ pub struct RunExecutionService {
     store: Store,
     projections: broadcast::Sender<RunTransitionNotice>,
     local_provider: Option<LocalProviderRuntime>,
+    remote_provider: Option<RemoteProviderRuntime>,
 }
 
 impl RunExecutionService {
@@ -145,6 +176,7 @@ impl RunExecutionService {
             store,
             projections,
             local_provider: None,
+            remote_provider: None,
         }
     }
 
@@ -159,6 +191,11 @@ impl RunExecutionService {
             bundle_store,
         });
         service
+    }
+
+    pub fn with_environment_router(mut self, environment_router: Arc<EnvironmentRouter>) -> Self {
+        self.remote_provider = Some(RemoteProviderRuntime { environment_router });
+        self
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<RunTransitionNotice> {
@@ -238,6 +275,317 @@ impl RunExecutionService {
             .record_orchestration_effect_outcome(request, failpoint)
     }
 
+    pub async fn prepare_remote_repository(
+        &self,
+        ownership: &EffectOwnership,
+        environment_id: &EnvironmentId,
+        params: OrchestrationRepositoryPrepareParams,
+        received_at_ms: u64,
+    ) -> Result<OrchestrationRepositoryPrepareResult, RpcError> {
+        validate_remote_ownership(ownership, &params.identity)?;
+        let runtime = self.remote_runtime()?;
+        let result = runtime
+            .environment_router
+            .orchestration_repository_prepare(environment_id, &params)
+            .await?;
+        let request_sha256 = remote_request_sha256(&params)?;
+        validate_remote_repository_result(environment_id, &params, &request_sha256, &result)?;
+        persist_hub_node_result(
+            &self.store,
+            crate::store::NodeReceiptKind::RepositoryPrepare,
+            &params.identity,
+            &result.node_store_id,
+            &request_sha256,
+            &result,
+            received_at_ms,
+        )?;
+        Ok(result)
+    }
+
+    pub async fn prepare_remote_provider_attempt(
+        &self,
+        ownership: &EffectOwnership,
+        environment_id: &EnvironmentId,
+        params: OrchestrationAttemptPrepareParams,
+    ) -> Result<OrchestrationAttemptPrepareResult, RpcError> {
+        validate_remote_ownership(ownership, &params.identity)?;
+        let runtime = self.remote_runtime()?;
+        let result = runtime
+            .environment_router
+            .orchestration_attempt_prepare(environment_id, &params)
+            .await?;
+        let request_sha256 = remote_request_sha256(&params)?;
+        validate_remote_prepare_result(environment_id, &params, &request_sha256, &result)?;
+        persist_hub_node_result(
+            &self.store,
+            crate::store::NodeReceiptKind::AttemptPrepare,
+            &params.identity,
+            &result.receipt.node_store_id,
+            &request_sha256,
+            &result,
+            params.prepared_at_ms,
+        )?;
+        self.store
+            .mark_orchestration_effect_prepared(
+                ownership,
+                result.receipt.receipt_sha256.as_str(),
+                params.prepared_at_ms,
+            )
+            .map_err(remote_hub_store_error)?;
+        Ok(result)
+    }
+
+    pub async fn dispatch_remote_provider_attempt(
+        &self,
+        ownership: &EffectOwnership,
+        environment_id: &EnvironmentId,
+        params: OrchestrationAttemptDispatchParams,
+        dispatch_started_at_ms: u64,
+        failpoint: Option<OrchestrationExecutionFailpoint>,
+    ) -> Result<OrchestrationAttemptReceipt, RpcError> {
+        validate_remote_ownership(ownership, &params.identity)?;
+        if params.identity.idempotency_key != params.dispatch_identity
+            || remote_dispatch_identity(&params.identity, &params.prepare_receipt_sha256)?
+                != params.dispatch_identity
+        {
+            return Err(remote_hub_invalid("remote_dispatch_identity_invalid"));
+        }
+        let prepared = require_hub_prepare_result(
+            &self.store,
+            &params.identity,
+            Some(&params.prepare_receipt_sha256),
+        )?;
+        let marker = self
+            .store
+            .mark_orchestration_effect_dispatch_started(
+                &EffectDispatchRequest {
+                    ownership: ownership.clone(),
+                    dispatch_started_at_ms,
+                },
+                failpoint,
+            )
+            .map_err(remote_hub_store_error)?;
+        if !marker.dispatch_allowed {
+            if let Some(existing) = find_hub_dispatch_receipt(
+                &self.store,
+                &params.identity,
+                &params.identity.idempotency_key,
+            )? {
+                return Ok(existing);
+            }
+            let mut status_identity = params.identity.clone();
+            status_identity.idempotency_key = format!(
+                "{}:hub-reconcile:{dispatch_started_at_ms}:{}",
+                params.dispatch_identity,
+                now_ms()
+            );
+            let status = self
+                .remote_attempt_status(
+                    environment_id,
+                    OrchestrationAttemptStatusParams {
+                        identity: status_identity,
+                    },
+                    now_ms(),
+                )
+                .await?;
+            if status.receipt.state != OrchestrationNodeAttemptState::Prepared {
+                return Ok(status.receipt);
+            }
+        }
+
+        let runtime = self.remote_runtime()?;
+        let result = runtime
+            .environment_router
+            .orchestration_attempt_dispatch(environment_id, &params)
+            .await?;
+        let request_sha256 = remote_request_sha256(&params)?;
+        validate_remote_attempt_receipt(
+            environment_id,
+            &params.identity,
+            &request_sha256,
+            &result,
+        )?;
+        if result.node_store_id != prepared.receipt.node_store_id
+            || result.prepared_execution_sha256 != prepared.receipt.prepared_execution_sha256
+            || !matches!(
+                result.state,
+                OrchestrationNodeAttemptState::DispatchStarted
+                    | OrchestrationNodeAttemptState::NotStarted
+            )
+        {
+            return Err(remote_hub_invalid("remote_dispatch_result_invalid"));
+        }
+        persist_hub_node_result(
+            &self.store,
+            crate::store::NodeReceiptKind::AttemptDispatch,
+            &params.identity,
+            &result.node_store_id,
+            &request_sha256,
+            &result,
+            result.updated_at_ms,
+        )?;
+        Ok(result)
+    }
+
+    pub async fn remote_attempt_status(
+        &self,
+        environment_id: &EnvironmentId,
+        params: OrchestrationAttemptStatusParams,
+        received_at_ms: u64,
+    ) -> Result<OrchestrationAttemptStatusResult, RpcError> {
+        let prepared = require_hub_prepare_result(&self.store, &params.identity, None)?;
+        let runtime = self.remote_runtime()?;
+        let result = runtime
+            .environment_router
+            .orchestration_attempt_status(environment_id, &params)
+            .await?;
+        let request_sha256 = remote_request_sha256(&params)?;
+        validate_remote_attempt_receipt(
+            environment_id,
+            &params.identity,
+            &request_sha256,
+            &result.receipt,
+        )?;
+        validate_remote_prepared_authority(&prepared, &result.receipt)?;
+        persist_hub_node_result(
+            &self.store,
+            crate::store::NodeReceiptKind::AttemptStatus,
+            &params.identity,
+            &result.receipt.node_store_id,
+            &request_sha256,
+            &result,
+            received_at_ms,
+        )?;
+        Ok(result)
+    }
+
+    pub async fn cancel_remote_provider_attempt(
+        &self,
+        environment_id: &EnvironmentId,
+        params: OrchestrationAttemptCancelParams,
+        received_at_ms: u64,
+    ) -> Result<OrchestrationAttemptCancelResult, RpcError> {
+        let prepared = require_hub_prepare_result(&self.store, &params.identity, None)?;
+        let runtime = self.remote_runtime()?;
+        let result = runtime
+            .environment_router
+            .orchestration_attempt_cancel(environment_id, &params)
+            .await?;
+        let request_sha256 = remote_request_sha256(&params)?;
+        validate_remote_attempt_receipt(
+            environment_id,
+            &params.identity,
+            &request_sha256,
+            &result.receipt,
+        )?;
+        validate_remote_prepared_authority(&prepared, &result.receipt)?;
+        persist_hub_node_result(
+            &self.store,
+            crate::store::NodeReceiptKind::AttemptCancel,
+            &params.identity,
+            &result.receipt.node_store_id,
+            &request_sha256,
+            &result,
+            received_at_ms,
+        )?;
+        Ok(result)
+    }
+
+    pub async fn remote_attempt_events(
+        &self,
+        environment_id: &EnvironmentId,
+        params: OrchestrationAttemptEventsParams,
+        received_at_ms: u64,
+    ) -> Result<OrchestrationAttemptEventsResult, RpcError> {
+        let prepared = require_hub_prepare_result(&self.store, &params.identity, None)?;
+        let runtime = self.remote_runtime()?;
+        let result = runtime
+            .environment_router
+            .orchestration_attempt_events(environment_id, &params)
+            .await?;
+        let request_sha256 = remote_request_sha256(&params)?;
+        if result.schema_version != pandamux_protocol::ORCHESTRATION_EXECUTION_SCHEMA_VERSION
+            || result.request_sha256 != request_sha256
+            || result.environment_id != *environment_id
+            || result.identity_sha256 != remote_identity_sha256(&params.identity)?
+            || result.node_store_id != prepared.receipt.node_store_id
+            || result.events_sha256 != remote_request_sha256(&result.events)?
+            || result
+                .events
+                .windows(2)
+                .any(|pair| pair[0].sequence >= pair[1].sequence)
+            || result.events.iter().any(|event| {
+                remote_request_sha256(&event.payload)
+                    .map_or(true, |digest| digest != event.payload_sha256)
+            })
+        {
+            return Err(remote_hub_invalid("remote_events_result_invalid"));
+        }
+        if let Some(terminal) = result.terminal_receipt.as_ref() {
+            validate_remote_terminal_receipt(
+                environment_id,
+                &params.identity,
+                &prepared,
+                terminal,
+            )?;
+        }
+        persist_hub_node_result(
+            &self.store,
+            crate::store::NodeReceiptKind::AttemptEvents,
+            &params.identity,
+            &result.node_store_id,
+            &request_sha256,
+            &result,
+            received_at_ms,
+        )?;
+        Ok(result)
+    }
+
+    pub async fn acknowledge_remote_events(
+        &self,
+        environment_id: &EnvironmentId,
+        params: OrchestrationAttemptAckParams,
+        received_at_ms: u64,
+    ) -> Result<OrchestrationAttemptAckResult, RpcError> {
+        let prepared = require_hub_prepare_result(&self.store, &params.identity, None)?;
+        let runtime = self.remote_runtime()?;
+        let result = runtime
+            .environment_router
+            .orchestration_attempt_ack(environment_id, &params)
+            .await?;
+        let request_sha256 = remote_request_sha256(&params)?;
+        if result.schema_version != pandamux_protocol::ORCHESTRATION_EXECUTION_SCHEMA_VERSION
+            || result.request_sha256 != request_sha256
+            || result.environment_id != *environment_id
+            || result.identity_sha256 != remote_identity_sha256(&params.identity)?
+            || result.node_store_id != prepared.receipt.node_store_id
+            || result.acknowledged_through_sequence != params.through_sequence
+            || sealed_remote_ack_sha256(&result)? != result.receipt_sha256
+        {
+            return Err(remote_hub_invalid("remote_ack_result_invalid"));
+        }
+        persist_hub_node_result(
+            &self.store,
+            crate::store::NodeReceiptKind::AttemptAck,
+            &params.identity,
+            &result.node_store_id,
+            &request_sha256,
+            &result,
+            received_at_ms,
+        )?;
+        Ok(result)
+    }
+
+    fn remote_runtime(&self) -> Result<RemoteProviderRuntime, RpcError> {
+        self.remote_provider.clone().ok_or_else(|| {
+            RpcError::with_data(
+                -32603,
+                "The remote provider runtime is not configured",
+                serde_json::json!({ "reason": "remote_provider_runtime_missing" }),
+            )
+        })
+    }
+
     pub async fn prepare_local_provider_attempt(
         &self,
         request: PrepareLocalProviderAttemptRequest,
@@ -307,6 +655,7 @@ impl RunExecutionService {
                 session_spec: prepared.session_spec.clone(),
                 admission_claim: prepared.admission_claim.clone(),
                 continuation_id: prepared.continuation_id.clone(),
+                remote_authority: None,
             })
             .await
             .map_err(|error| LocalProviderExecutionError::Rpc(error.message))?;
@@ -521,6 +870,363 @@ impl RunExecutionService {
         })?;
         complete_local_provider_event(self, &prepared, event).await
     }
+}
+
+fn validate_remote_ownership(
+    ownership: &EffectOwnership,
+    identity: &OrchestrationExecutionIdentity,
+) -> Result<(), RpcError> {
+    if ownership.effect_id != identity.effect_id
+        || ownership.expected_payload_sha256 != identity.payload_sha256.as_str()
+        || ownership.claim_revision != identity.lease_generation
+    {
+        return Err(remote_hub_invalid("remote_effect_ownership_mismatch"));
+    }
+    Ok(())
+}
+
+fn validate_remote_repository_result(
+    environment_id: &EnvironmentId,
+    params: &OrchestrationRepositoryPrepareParams,
+    request_sha256: &pandamux_core::ContentSha256,
+    result: &OrchestrationRepositoryPrepareResult,
+) -> Result<(), RpcError> {
+    let identity = &params.identity;
+    if result.schema_version != pandamux_protocol::ORCHESTRATION_EXECUTION_SCHEMA_VERSION
+        || result.environment_id != *environment_id
+        || result.request_sha256 != *request_sha256
+        || result.identity_sha256 != remote_identity_sha256(identity)?
+        || result.repository_id != identity.repository_id
+        || result.baseline_commit != identity.baseline_commit
+        || result.repository_key_sha256
+            != remote_repository_key_sha256(
+                identity,
+                &params.baseline_bundle_sha256,
+                &params.baseline_bundle_bytes_sha256,
+            )?
+        || result.node_store_id.as_str().trim().is_empty()
+        || result.baseline_present == result.private_artifact_ref.is_some()
+        || sealed_remote_repository_sha256(result)? != result.receipt_sha256
+    {
+        return Err(remote_hub_invalid("remote_repository_result_invalid"));
+    }
+    Ok(())
+}
+
+fn validate_remote_prepare_result(
+    environment_id: &EnvironmentId,
+    params: &OrchestrationAttemptPrepareParams,
+    request_sha256: &pandamux_core::ContentSha256,
+    result: &OrchestrationAttemptPrepareResult,
+) -> Result<(), RpcError> {
+    validate_remote_attempt_receipt(
+        environment_id,
+        &params.identity,
+        request_sha256,
+        &result.receipt,
+    )?;
+    let (worktree_id, thread_id, turn_id, turn_attempt_id) = remote_execution_ids(&params.identity);
+    let prepared = &result.prepared_execution;
+    if params.worktree_id != worktree_id
+        || params.thread_id != thread_id
+        || params.turn_id != turn_id
+        || params.turn_attempt_id != turn_attempt_id
+        || params.identity.route.selected_agent_id.as_ref() != Some(&params.agent_id)
+        || result.receipt.state != OrchestrationNodeAttemptState::Prepared
+        || result.receipt.boundary != AttemptBoundary::SafeToRetry
+        || result.receipt.terminal_status.is_some()
+        || result.receipt.result_sha256.is_some()
+        || result.receipt.safe_error_code.is_some()
+        || result.receipt.updated_at_ms != params.prepared_at_ms
+        || result.receipt.prepared_execution_sha256 != remote_request_sha256(prepared)?
+        || prepared.worktree_id != params.worktree_id
+        || prepared.agent_id != params.agent_id
+        || prepared.provider_instance_id
+            != params
+                .identity
+                .route
+                .provider
+                .selected_provider_instance_id
+                .clone()
+                .ok_or_else(|| remote_hub_invalid("remote_prepare_route_invalid"))?
+        || prepared.access_ceiling != params.access_ceiling
+        || prepared.compiled_instructions_sha256 != params.compiled_instructions_sha256
+        || prepared.tool_policy_sha256 != params.tool_policy_sha256
+        || prepared.prompt_sha256 != params.prompt_sha256
+        || prepared.task_prompt != params.task_prompt
+        || prepared.output_contract != params.output_contract
+        || prepared.prepared_at_ms != params.prepared_at_ms
+        || prepared.attempt_ordinal != params.attempt_ordinal
+        || prepared.run_concurrency_limit != params.run_concurrency_limit
+        || prepared.agent_concurrency_limit == 0
+        || prepared.organization_id.as_str().trim().is_empty()
+    {
+        return Err(remote_hub_invalid("remote_prepare_result_invalid"));
+    }
+    Ok(())
+}
+
+fn validate_remote_attempt_receipt(
+    environment_id: &EnvironmentId,
+    identity: &OrchestrationExecutionIdentity,
+    request_sha256: &pandamux_core::ContentSha256,
+    receipt: &OrchestrationAttemptReceipt,
+) -> Result<(), RpcError> {
+    let (_, thread_id, turn_id, turn_attempt_id) = remote_execution_ids(identity);
+    if receipt.schema_version != pandamux_protocol::ORCHESTRATION_EXECUTION_SCHEMA_VERSION
+        || receipt.environment_id != *environment_id
+        || receipt.request_sha256 != *request_sha256
+        || receipt.identity_sha256 != remote_identity_sha256(identity)?
+        || receipt.run_id != identity.run_id
+        || receipt.task_id != identity.task_id
+        || receipt.attempt_id != identity.attempt_id
+        || receipt.effect_id != identity.effect_id
+        || receipt.thread_id != thread_id
+        || receipt.turn_id != turn_id
+        || receipt.turn_attempt_id != turn_attempt_id
+        || receipt.node_store_id.as_str().trim().is_empty()
+        || sealed_remote_attempt_sha256(receipt)? != receipt.receipt_sha256
+    {
+        return Err(remote_hub_invalid("remote_attempt_receipt_invalid"));
+    }
+    Ok(())
+}
+
+fn validate_remote_prepared_authority(
+    prepared: &OrchestrationAttemptPrepareResult,
+    receipt: &OrchestrationAttemptReceipt,
+) -> Result<(), RpcError> {
+    if receipt.node_store_id != prepared.receipt.node_store_id
+        || receipt.identity_sha256 != prepared.receipt.identity_sha256
+        || receipt.prepared_execution_sha256 != prepared.receipt.prepared_execution_sha256
+        || receipt.thread_id != prepared.receipt.thread_id
+        || receipt.turn_id != prepared.receipt.turn_id
+        || receipt.turn_attempt_id != prepared.receipt.turn_attempt_id
+    {
+        return Err(remote_hub_invalid("remote_prepared_authority_changed"));
+    }
+    Ok(())
+}
+
+fn validate_remote_terminal_receipt(
+    environment_id: &EnvironmentId,
+    identity: &OrchestrationExecutionIdentity,
+    prepared: &OrchestrationAttemptPrepareResult,
+    receipt: &OrchestrationAttemptReceipt,
+) -> Result<(), RpcError> {
+    let (_, thread_id, turn_id, turn_attempt_id) = remote_execution_ids(identity);
+    if receipt.schema_version != pandamux_protocol::ORCHESTRATION_EXECUTION_SCHEMA_VERSION
+        || receipt.environment_id != *environment_id
+        || receipt.identity_sha256 != remote_identity_sha256(identity)?
+        || receipt.run_id != identity.run_id
+        || receipt.task_id != identity.task_id
+        || receipt.attempt_id != identity.attempt_id
+        || receipt.effect_id != identity.effect_id
+        || receipt.thread_id != thread_id
+        || receipt.turn_id != turn_id
+        || receipt.turn_attempt_id != turn_attempt_id
+        || sealed_remote_attempt_sha256(receipt)? != receipt.receipt_sha256
+        || !matches!(
+            receipt.state,
+            OrchestrationNodeAttemptState::Terminal
+                | OrchestrationNodeAttemptState::Cancelled
+                | OrchestrationNodeAttemptState::NotStarted
+                | OrchestrationNodeAttemptState::Ambiguous
+        )
+    {
+        return Err(remote_hub_invalid("remote_terminal_receipt_invalid"));
+    }
+    validate_remote_prepared_authority(prepared, receipt)
+}
+
+fn persist_hub_node_result<T: Serialize>(
+    store: &Store,
+    kind: crate::store::NodeReceiptKind,
+    identity: &OrchestrationExecutionIdentity,
+    node_store_id: &NodeStoreId,
+    request_sha256: &pandamux_core::ContentSha256,
+    result: &T,
+    received_at_ms: u64,
+) -> Result<NodeReceiptRecord, RpcError> {
+    let result_bytes = serde_json::to_vec(result)
+        .map_err(|_| remote_hub_invalid("remote_result_encoding_failed"))?;
+    let result_sha256 = format!("{:x}", Sha256::digest(&result_bytes));
+    if let Some(existing) = store
+        .get_node_receipt(node_store_id, kind, &identity.idempotency_key)
+        .map_err(remote_hub_store_error)?
+    {
+        if existing.request_sha256 == request_sha256.as_str()
+            && existing.result_sha256 == result_sha256
+            && existing.result_bytes == result_bytes
+            && existing.run_id == identity.run_id
+            && existing.task_id == identity.task_id
+            && existing.attempt_id == identity.attempt_id
+            && existing.effect_id == identity.effect_id
+        {
+            return Ok(existing);
+        }
+        return Err(remote_hub_invalid("remote_hub_receipt_conflict"));
+    }
+    let receipt_id = format!(
+        "hub-node-receipt-{}",
+        &stable_remote_digest(&[
+            node_store_id.as_str(),
+            remote_node_receipt_kind_name(kind),
+            &identity.idempotency_key,
+            request_sha256.as_str(),
+        ])[..32]
+    );
+    store
+        .record_hub_node_receipt(&NodeReceiptRecord {
+            receipt_id,
+            node_store_id: node_store_id.clone(),
+            run_id: identity.run_id.clone(),
+            task_id: identity.task_id.clone(),
+            attempt_id: identity.attempt_id.clone(),
+            effect_id: identity.effect_id.clone(),
+            request_kind: kind,
+            idempotency_key: identity.idempotency_key.clone(),
+            request_sha256: request_sha256.as_str().to_string(),
+            result_sha256,
+            result_bytes,
+            created_at_ms: received_at_ms,
+            updated_at_ms: received_at_ms,
+        })
+        .map_err(remote_hub_store_error)
+}
+
+fn require_hub_prepare_result(
+    store: &Store,
+    identity: &OrchestrationExecutionIdentity,
+    expected_receipt_sha256: Option<&pandamux_core::ContentSha256>,
+) -> Result<OrchestrationAttemptPrepareResult, RpcError> {
+    let expected_identity_sha256 = remote_identity_sha256(identity)?;
+    let mut matched: Option<OrchestrationAttemptPrepareResult> = None;
+    for record in store
+        .list_node_receipts_for_attempt(&identity.attempt_id)
+        .map_err(remote_hub_store_error)?
+    {
+        if record.request_kind != crate::store::NodeReceiptKind::AttemptPrepare
+            || record.run_id != identity.run_id
+            || record.task_id != identity.task_id
+            || record.effect_id != identity.effect_id
+        {
+            continue;
+        }
+        let result: OrchestrationAttemptPrepareResult =
+            serde_json::from_slice(&record.result_bytes)
+                .map_err(|_| remote_hub_invalid("remote_prepare_receipt_invalid"))?;
+        if result.receipt.node_store_id != record.node_store_id
+            || result.receipt.identity_sha256 != expected_identity_sha256
+            || expected_receipt_sha256
+                .is_some_and(|expected| result.receipt.receipt_sha256 != *expected)
+        {
+            continue;
+        }
+        if result.receipt.state != OrchestrationNodeAttemptState::Prepared
+            || result.receipt.prepared_execution_sha256
+                != remote_request_sha256(&result.prepared_execution)?
+            || sealed_remote_attempt_sha256(&result.receipt)? != result.receipt.receipt_sha256
+        {
+            return Err(remote_hub_invalid("remote_prepare_receipt_invalid"));
+        }
+        if matched.as_ref().is_some_and(|existing| existing != &result) {
+            return Err(remote_hub_invalid("remote_prepare_receipts_conflict"));
+        }
+        matched = Some(result);
+    }
+    matched.ok_or_else(|| remote_hub_invalid("remote_prepare_receipt_missing"))
+}
+
+fn find_hub_dispatch_receipt(
+    store: &Store,
+    identity: &OrchestrationExecutionIdentity,
+    idempotency_key: &str,
+) -> Result<Option<OrchestrationAttemptReceipt>, RpcError> {
+    for record in store
+        .list_node_receipts_for_attempt(&identity.attempt_id)
+        .map_err(remote_hub_store_error)?
+    {
+        if record.request_kind == crate::store::NodeReceiptKind::AttemptDispatch
+            && record.idempotency_key == idempotency_key
+            && record.run_id == identity.run_id
+            && record.task_id == identity.task_id
+            && record.effect_id == identity.effect_id
+        {
+            let receipt = serde_json::from_slice(&record.result_bytes)
+                .map_err(|_| remote_hub_invalid("remote_dispatch_receipt_invalid"))?;
+            return Ok(Some(receipt));
+        }
+    }
+    Ok(None)
+}
+
+fn sealed_remote_repository_sha256(
+    result: &OrchestrationRepositoryPrepareResult,
+) -> Result<pandamux_core::ContentSha256, RpcError> {
+    let mut unsigned = result.clone();
+    unsigned.receipt_sha256 = zero_remote_sha256();
+    remote_request_sha256(&unsigned)
+}
+
+fn sealed_remote_attempt_sha256(
+    result: &OrchestrationAttemptReceipt,
+) -> Result<pandamux_core::ContentSha256, RpcError> {
+    let mut unsigned = result.clone();
+    unsigned.receipt_sha256 = zero_remote_sha256();
+    remote_request_sha256(&unsigned)
+}
+
+fn sealed_remote_ack_sha256(
+    result: &OrchestrationAttemptAckResult,
+) -> Result<pandamux_core::ContentSha256, RpcError> {
+    let mut unsigned = result.clone();
+    unsigned.receipt_sha256 = zero_remote_sha256();
+    remote_request_sha256(&unsigned)
+}
+
+fn zero_remote_sha256() -> pandamux_core::ContentSha256 {
+    pandamux_core::ContentSha256::parse("0".repeat(64)).expect("zero digest")
+}
+
+fn stable_remote_digest(fields: &[&str]) -> String {
+    let mut hasher = Sha256::new();
+    for field in fields {
+        hasher.update((field.len() as u64).to_be_bytes());
+        hasher.update(field.as_bytes());
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+fn remote_node_receipt_kind_name(kind: crate::store::NodeReceiptKind) -> &'static str {
+    match kind {
+        crate::store::NodeReceiptKind::RepositoryPrepare => "repository_prepare",
+        crate::store::NodeReceiptKind::AttemptPrepare => "attempt_prepare",
+        crate::store::NodeReceiptKind::AttemptDispatch => "attempt_dispatch",
+        crate::store::NodeReceiptKind::AttemptStatus => "attempt_status",
+        crate::store::NodeReceiptKind::AttemptCancel => "attempt_cancel",
+        crate::store::NodeReceiptKind::AttemptEvents => "attempt_events",
+        crate::store::NodeReceiptKind::AttemptAck => "attempt_ack",
+    }
+}
+
+fn remote_hub_store_error(error: StoreError) -> RpcError {
+    RpcError::with_data(
+        -32043,
+        "Hub remote-execution persistence failed",
+        serde_json::json!({
+            "reason": "remote_hub_store_failed",
+            "detail": error.to_string(),
+        }),
+    )
+}
+
+fn remote_hub_invalid(reason: &'static str) -> RpcError {
+    RpcError::with_data(
+        -32043,
+        "Remote execution receipt failed validation",
+        serde_json::json!({ "reason": reason }),
+    )
 }
 
 #[derive(Serialize)]

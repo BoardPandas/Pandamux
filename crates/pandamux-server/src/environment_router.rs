@@ -5,7 +5,18 @@
 //! daemons and relay event streams back into the Hub's broadcast bus.
 
 use pandamux_core::ids::EnvironmentId;
-use pandamux_protocol::{EventEnvelope, RpcError, RpcRequest, RpcResponse};
+use pandamux_protocol::{
+    EventEnvelope, OrchestrationAttemptAckParams, OrchestrationAttemptAckResult,
+    OrchestrationAttemptCancelParams, OrchestrationAttemptCancelResult,
+    OrchestrationAttemptDispatchParams, OrchestrationAttemptEventsParams,
+    OrchestrationAttemptEventsResult, OrchestrationAttemptPrepareParams,
+    OrchestrationAttemptPrepareResult, OrchestrationAttemptReceipt,
+    OrchestrationAttemptStatusParams, OrchestrationAttemptStatusResult,
+    OrchestrationRepositoryPrepareParams, OrchestrationRepositoryPrepareResult, RpcError,
+    RpcRequest, RpcResponse,
+};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::path::Path;
 use std::pin::Pin;
@@ -264,6 +275,118 @@ impl EnvironmentRouter {
             )),
         }
     }
+
+    pub async fn orchestration_repository_prepare(
+        &self,
+        env_id: &EnvironmentId,
+        params: &OrchestrationRepositoryPrepareParams,
+    ) -> Result<OrchestrationRepositoryPrepareResult, RpcError> {
+        self.forward_orchestration(env_id, "orchestration.repository.prepare", params)
+            .await
+    }
+
+    pub async fn orchestration_attempt_prepare(
+        &self,
+        env_id: &EnvironmentId,
+        params: &OrchestrationAttemptPrepareParams,
+    ) -> Result<OrchestrationAttemptPrepareResult, RpcError> {
+        self.forward_orchestration(env_id, "orchestration.attempt.prepare", params)
+            .await
+    }
+
+    pub async fn orchestration_attempt_dispatch(
+        &self,
+        env_id: &EnvironmentId,
+        params: &OrchestrationAttemptDispatchParams,
+    ) -> Result<OrchestrationAttemptReceipt, RpcError> {
+        self.forward_orchestration(env_id, "orchestration.attempt.dispatch", params)
+            .await
+    }
+
+    pub async fn orchestration_attempt_status(
+        &self,
+        env_id: &EnvironmentId,
+        params: &OrchestrationAttemptStatusParams,
+    ) -> Result<OrchestrationAttemptStatusResult, RpcError> {
+        self.forward_orchestration(env_id, "orchestration.attempt.status", params)
+            .await
+    }
+
+    pub async fn orchestration_attempt_cancel(
+        &self,
+        env_id: &EnvironmentId,
+        params: &OrchestrationAttemptCancelParams,
+    ) -> Result<OrchestrationAttemptCancelResult, RpcError> {
+        self.forward_orchestration(env_id, "orchestration.attempt.cancel", params)
+            .await
+    }
+
+    pub async fn orchestration_attempt_events(
+        &self,
+        env_id: &EnvironmentId,
+        params: &OrchestrationAttemptEventsParams,
+    ) -> Result<OrchestrationAttemptEventsResult, RpcError> {
+        self.forward_orchestration(env_id, "orchestration.attempt.events", params)
+            .await
+    }
+
+    pub async fn orchestration_attempt_ack(
+        &self,
+        env_id: &EnvironmentId,
+        params: &OrchestrationAttemptAckParams,
+    ) -> Result<OrchestrationAttemptAckResult, RpcError> {
+        self.forward_orchestration(env_id, "orchestration.attempt.ack", params)
+            .await
+    }
+
+    async fn forward_orchestration<P: Serialize, R: DeserializeOwned>(
+        &self,
+        env_id: &EnvironmentId,
+        method: &str,
+        params: &P,
+    ) -> Result<R, RpcError> {
+        if self.is_local(&Some(env_id.clone())) {
+            return Err(RpcError::with_data(
+                -32010,
+                "Private node execution requires a registered remote transport",
+                serde_json::json!({
+                    "reason": "orchestration_remote_transport_required",
+                    "environmentId": env_id,
+                }),
+            ));
+        }
+        let value = serde_json::to_value(params)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        let request_id = format!("{method}:{}", orchestration_request_key(&value));
+        let response = self
+            .forward_request(env_id, &RpcRequest::new(request_id, method, Some(value)))
+            .await?;
+        if let Some(error) = response.error {
+            return Err(error);
+        }
+        let result = response.result.ok_or_else(|| {
+            RpcError::with_data(
+                -32603,
+                "Remote node returned no orchestration receipt",
+                serde_json::json!({ "reason": "orchestration_remote_receipt_missing" }),
+            )
+        })?;
+        serde_json::from_value(result).map_err(|_| {
+            RpcError::with_data(
+                -32603,
+                "Remote node returned an invalid orchestration receipt",
+                serde_json::json!({ "reason": "orchestration_remote_receipt_invalid" }),
+            )
+        })
+    }
+}
+
+fn orchestration_request_key(value: &serde_json::Value) -> &str {
+    value
+        .get("identity")
+        .and_then(|identity| identity.get("idempotencyKey"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("missing-idempotency-key")
 }
 
 async fn stop_registration(registration: TransportRegistration) {

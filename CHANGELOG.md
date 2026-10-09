@@ -40,6 +40,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Added authenticated Phase 5C node execution in version 0.60.98.** Private
+  NodeProxy/internal repository prepare, attempt prepare, dispatch, status,
+  cancellation, ordered events, and acknowledgement now bind every request to
+  the authenticated environment, exact effect lease, route, baseline, pinned
+  bundle, payload, and idempotency digest. Nodes retain content-addressed
+  baseline repositories, real attempt-owned branch refs, deterministic
+  worktree/thread/turn identities, and byte-exact durable receipts; conflicting
+  retries fail closed. A two-store Hub/node handshake persists both prepare and
+  dispatch authority before `ThreadManager` can obtain the shared admission and
+  provider permits. Lost replies reconcile through exact status, marked or
+  ambiguous starts never cause a replacement turn, and cancellation preserves
+  terminal or unverified-session authority. Local mock-node tests cover forged
+  environments and lease generations, replay conflicts, inline and staged
+  baselines, missing inputs, every prepare/dispatch marker boundary, exact live
+  reattachment, proxy disconnect, response loss, cancel replay, ordered events,
+  and acknowledgements. This checkpoint contacts no external provider or
+  repository, adds no native or live-provider acceptance, and does not push,
+  run CI, deploy, activate, package, sign, publish, or release.
+
 - **Added crash-safe local provider effect execution in version 0.60.97.**
   Orchestrated attempts now persist their exact effect, route, bundle,
   worktree, checkpoint, thread, turn, turn-attempt, capacity, and budget

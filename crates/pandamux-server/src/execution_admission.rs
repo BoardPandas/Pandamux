@@ -68,6 +68,22 @@ pub struct EnqueueOrchestratedAdmissionRequest {
     pub not_before_ms: u64,
 }
 
+/// A node-side orchestration candidate whose authority is the durable private
+/// attempt-prepare receipt rather than a duplicated Hub run snapshot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EnqueueRemoteOrchestratedAdmissionRequest {
+    pub queue_id: String,
+    pub run_id: RunId,
+    pub task_id: RunTaskId,
+    pub attempt_id: RunAttemptId,
+    pub agent_id: AgentId,
+    pub organization_id: OrganizationId,
+    pub agent_concurrency_limit: u32,
+    pub provider_instance_id: ProviderInstanceId,
+    pub environment_id: EnvironmentId,
+    pub enqueued_at_ms: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExecutionAdmissionClaimRequest {
     pub queue_id: String,
@@ -133,6 +149,14 @@ impl ExecutionAdmissionService {
         request: EnqueueOrchestratedAdmissionRequest,
     ) -> Result<OrchestrationQueueRecord, ExecutionAdmissionError> {
         let record = orchestrated_queue_record(request)?;
+        self.insert_record(record).await
+    }
+
+    pub async fn enqueue_remote_orchestrated(
+        &self,
+        request: EnqueueRemoteOrchestratedAdmissionRequest,
+    ) -> Result<OrchestrationQueueRecord, ExecutionAdmissionError> {
+        let record = remote_orchestrated_queue_record(request)?;
         self.insert_record(record).await
     }
 
@@ -508,6 +532,53 @@ fn orchestrated_queue_record(
         task_enqueued_at_ms: request.task_enqueued_at_ms,
         enqueued_at_ms: request.enqueued_at_ms,
         not_before_ms: request.not_before_ms,
+        state: QueueState::Queued,
+        owner_incarnation_id: None,
+        lease_id: None,
+        claim_revision: 0,
+        interactive: false,
+        claimed_at_ms: None,
+        claim_order: None,
+        interactive_streak: None,
+    })
+}
+
+fn remote_orchestrated_queue_record(
+    request: EnqueueRemoteOrchestratedAdmissionRequest,
+) -> Result<OrchestrationQueueRecord, ExecutionAdmissionError> {
+    if request.queue_id.trim().is_empty() || request.agent_concurrency_limit == 0 {
+        return Err(ExecutionAdmissionError::Store(StoreError::Data(
+            "remote orchestrated execution admission request is malformed".to_string(),
+        )));
+    }
+    let candidate_sha256 = admission_digest(&[
+        "remote_orchestrated",
+        &request.queue_id,
+        request.run_id.as_str(),
+        request.task_id.as_str(),
+        request.attempt_id.as_str(),
+        request.agent_id.as_str(),
+        request.organization_id.as_str(),
+        &request.agent_concurrency_limit.to_string(),
+        request.provider_instance_id.as_str(),
+        request.environment_id.as_str(),
+        &request.enqueued_at_ms.to_string(),
+    ]);
+    Ok(OrchestrationQueueRecord {
+        queue_id: request.queue_id,
+        run_id: request.run_id,
+        task_id: request.task_id,
+        attempt_id: request.attempt_id,
+        agent_id: request.agent_id,
+        organization_id: Some(request.organization_id),
+        agent_concurrency_limit: Some(request.agent_concurrency_limit),
+        provider_instance_id: request.provider_instance_id,
+        environment_id: request.environment_id,
+        candidate_sha256,
+        priority: 0,
+        task_enqueued_at_ms: request.enqueued_at_ms,
+        enqueued_at_ms: request.enqueued_at_ms,
+        not_before_ms: request.enqueued_at_ms,
         state: QueueState::Queued,
         owner_incarnation_id: None,
         lease_id: None,

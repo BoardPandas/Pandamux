@@ -2,18 +2,19 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, broadcast, mpsc};
 
 use pandamux_core::{
     AttemptBoundary, AttemptExecutionEvidence, CAPACITY_SNAPSHOT_SCHEMA_VERSION,
     CapacityConfidence, CapacityEvidenceScope, CapacityFreshness, CapacityInterruptionEvidence,
-    CapacitySnapshot, ContinuationDelivery, ContinuationDeliveryKind, ContinuationDeliveryState,
-    ContinuationId, ContinuationRecord, ContinuationState, DEFAULT_CAPACITY_MAX_AGE_MS,
-    EnvironmentId, OrganizationId, ProjectId, ProviderInstanceId, ProviderKind,
-    RoutingAuthentication, RoutingCandidate, RoutingDecision, RoutingEvaluation, RoutingHealth,
-    RoutingScore, RunAttemptId, SubscriptionKey, ToolLedgerEntry, ToolLedgerStatus, TurnAttempt,
-    TurnAttemptId, TurnAttemptStatus,
+    CapacitySnapshot, ContentSha256, ContinuationDelivery, ContinuationDeliveryKind,
+    ContinuationDeliveryState, ContinuationId, ContinuationRecord, ContinuationState,
+    DEFAULT_CAPACITY_MAX_AGE_MS, EnvironmentId, NodeStoreId, OrganizationId, ProjectId,
+    ProviderInstanceId, ProviderKind, RoutingAuthentication, RoutingCandidate, RoutingDecision,
+    RoutingEvaluation, RoutingHealth, RoutingScore, RunAttemptId, SubscriptionKey, ToolLedgerEntry,
+    ToolLedgerStatus, TurnAttempt, TurnAttemptId, TurnAttemptStatus,
     event::{ThreadEvent, ThreadEventKind, ToolCallStatus, TurnOutcome},
     ids::{ThreadId, TurnId},
     project_capacity_revisions, select_route,
@@ -21,10 +22,12 @@ use pandamux_core::{
 };
 use pandamux_protocol::{
     EventEnvelope, GitCommitParams, GitCommitResult, GitCreatePrParams, GitCreatePrResult,
-    GitPushParams, GitPushResult, GitStatusParams, GitStatusResult, HubRoutingContext, RpcError,
-    ThreadCancelTurnParams, ThreadContinueParams, ThreadContinueResult, ThreadCreateParams,
-    ThreadGetParams, ThreadGetResult, ThreadListParams, ThreadRespondApprovalParams,
-    ThreadResumeParams, ThreadResumeResult, ThreadSendTurnParams, ThreadSendTurnResult,
+    GitPushParams, GitPushResult, GitStatusParams, GitStatusResult, HubRoutingContext,
+    OrchestrationAttemptPrepareResult, OrchestrationAttemptReceipt, OrchestrationNodeAttemptState,
+    RpcError, ThreadCancelTurnParams, ThreadContinueParams, ThreadContinueResult,
+    ThreadCreateParams, ThreadGetParams, ThreadGetResult, ThreadListParams,
+    ThreadRespondApprovalParams, ThreadResumeParams, ThreadResumeResult, ThreadSendTurnParams,
+    ThreadSendTurnResult,
 };
 use pandamux_providers::traits::ProviderSession;
 use pandamux_providers::{
@@ -36,7 +39,7 @@ use crate::execution_admission::{
 };
 use crate::provider_resolver::{ProviderResolver, ResolvedProviderExecution};
 use crate::request_context::CapabilityAuthority;
-use crate::store::{ProviderExecutionAudit, Store};
+use crate::store::{NodeReceiptKind, ProviderExecutionAudit, Store};
 use crate::usage_scanner::{UsageScanTrigger, UsageScannerHandle};
 
 fn now_ms() -> u64 {
@@ -117,6 +120,14 @@ pub struct ActiveThreadSession {
     pub capability_authority: Arc<CapabilityAuthority>,
     pub execution_admission: ExecutionAdmissionService,
     pub admission_claim: ExecutionAdmissionClaim,
+    prepared_turn: Option<ActivePreparedTurn>,
+}
+
+#[derive(Clone)]
+struct ActivePreparedTurn {
+    turn_id: TurnId,
+    turn_attempt_id: TurnAttemptId,
+    prompt_accepted: Arc<AtomicBool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -164,6 +175,16 @@ pub struct PreparedOrchestratedTurn {
     pub session_spec: SessionSpec,
     pub admission_claim: ExecutionAdmissionClaim,
     pub continuation_id: Option<ContinuationId>,
+    pub remote_authority: Option<RemotePreparedTurnAuthority>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemotePreparedTurnAuthority {
+    pub node_store_id: NodeStoreId,
+    pub environment_id: EnvironmentId,
+    pub identity_sha256: ContentSha256,
+    pub prepare_receipt_sha256: ContentSha256,
+    pub dispatch_marker_idempotency_key: String,
 }
 
 #[derive(Clone)]
@@ -1039,6 +1060,7 @@ impl ThreadManager {
             capability_authority: self.capability_authority.clone(),
             execution_admission: self.execution_admission.clone(),
             admission_claim,
+            prepared_turn: None,
         };
         let dispatched_claim = match self
             .execution_admission
@@ -1217,6 +1239,11 @@ impl ThreadManager {
                         capability_authority: self.capability_authority.clone(),
                         execution_admission: self.execution_admission.clone(),
                         admission_claim: dispatched_claim,
+                        prepared_turn: Some(ActivePreparedTurn {
+                            turn_id: request.turn.id.clone(),
+                            turn_attempt_id: request.turn_attempt.id.clone(),
+                            prompt_accepted: Arc::new(AtomicBool::new(false)),
+                        }),
                     };
                     self.active_sessions
                         .lock()
@@ -1241,6 +1268,11 @@ impl ThreadManager {
             capability_authority: self.capability_authority.clone(),
             execution_admission: self.execution_admission.clone(),
             admission_claim: dispatched_claim,
+            prepared_turn: Some(ActivePreparedTurn {
+                turn_id: request.turn.id.clone(),
+                turn_attempt_id: request.turn_attempt.id.clone(),
+                prompt_accepted: Arc::new(AtomicBool::new(false)),
+            }),
         };
         let raced = {
             let mut active = self.active_sessions.lock().await;
@@ -1273,11 +1305,22 @@ impl ThreadManager {
         &self,
         request: PreparedOrchestratedTurn,
     ) -> Result<PreparedTurnDispatch, RpcError> {
-        let dispatch = self
-            .store
-            .get_attempt_dispatch(&request.run_attempt_id)
-            .map_err(|error| RpcError::internal_error(error.to_string()))?
-            .ok_or_else(|| RpcError::internal_error("Prepared attempt dispatch was not found"))?;
+        let durable_dispatch_matches = if let Some(authority) = request.remote_authority.as_ref() {
+            self.verify_remote_prepared_authority(&request, authority)?
+        } else {
+            let dispatch = self
+                .store
+                .get_attempt_dispatch(&request.run_attempt_id)
+                .map_err(|error| RpcError::internal_error(error.to_string()))?
+                .ok_or_else(|| {
+                    RpcError::internal_error("Prepared attempt dispatch was not found")
+                })?;
+            dispatch.state == crate::store::AttemptDispatchState::DispatchStarted
+                && dispatch.thread_id == request.thread.id
+                && dispatch.turn_id == request.turn.id
+                && dispatch.turn_attempt_id == request.turn_attempt.id
+                && dispatch.provider_instance_id == request.thread.provider_instance_id
+        };
         let stored_thread = self
             .store
             .get_thread(&request.thread.id)
@@ -1290,11 +1333,7 @@ impl ThreadManager {
             .store
             .get_turn_attempt(&request.turn_attempt.id)
             .map_err(|error| RpcError::internal_error(error.to_string()))?;
-        if dispatch.state != crate::store::AttemptDispatchState::DispatchStarted
-            || dispatch.thread_id != request.thread.id
-            || dispatch.turn_id != request.turn.id
-            || dispatch.turn_attempt_id != request.turn_attempt.id
-            || dispatch.provider_instance_id != request.thread.provider_instance_id
+        if !durable_dispatch_matches
             || stored_thread.as_ref() != Some(&request.thread)
             || stored_turn.as_ref() != Some(&request.turn)
             || stored_attempt.as_ref() != Some(&request.turn_attempt)
@@ -1359,6 +1398,64 @@ impl ThreadManager {
                 Err(_) => Err(error),
             },
         }
+    }
+
+    fn verify_remote_prepared_authority(
+        &self,
+        request: &PreparedOrchestratedTurn,
+        authority: &RemotePreparedTurnAuthority,
+    ) -> Result<bool, RpcError> {
+        if authority.environment_id != request.thread.environment_id
+            || authority.dispatch_marker_idempotency_key.trim().is_empty()
+        {
+            return Ok(false);
+        }
+        let receipts = self
+            .store
+            .list_node_receipts_for_attempt(&request.run_attempt_id)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        let prepared = receipts
+            .iter()
+            .filter(|receipt| {
+                receipt.node_store_id == authority.node_store_id
+                    && receipt.request_kind == NodeReceiptKind::AttemptPrepare
+            })
+            .find_map(|receipt| {
+                serde_json::from_slice::<OrchestrationAttemptPrepareResult>(&receipt.result_bytes)
+                    .ok()
+                    .filter(|result| {
+                        result.receipt.receipt_sha256 == authority.prepare_receipt_sha256
+                            && result.receipt.identity_sha256 == authority.identity_sha256
+                    })
+            });
+        let Some(prepared) = prepared else {
+            return Ok(false);
+        };
+        let marker = self
+            .store
+            .get_node_receipt(
+                &authority.node_store_id,
+                NodeReceiptKind::AttemptDispatch,
+                &authority.dispatch_marker_idempotency_key,
+            )
+            .map_err(|error| RpcError::internal_error(error.to_string()))?
+            .and_then(|receipt| {
+                serde_json::from_slice::<OrchestrationAttemptReceipt>(&receipt.result_bytes).ok()
+            });
+        Ok(marker.is_some_and(|marker| {
+            marker.state == OrchestrationNodeAttemptState::DispatchStarted
+                && marker.node_store_id == authority.node_store_id
+                && marker.environment_id == authority.environment_id
+                && marker.identity_sha256 == authority.identity_sha256
+                && marker.prepared_execution_sha256 == prepared.receipt.prepared_execution_sha256
+                && marker.run_id == prepared.receipt.run_id
+                && marker.task_id == prepared.receipt.task_id
+                && marker.attempt_id == request.run_attempt_id
+                && marker.effect_id == prepared.receipt.effect_id
+                && marker.thread_id == request.thread.id
+                && marker.turn_id == request.turn.id
+                && marker.turn_attempt_id == request.turn_attempt.id
+        }))
     }
 
     /// Creates and persists a new thread with optional git worktree.
@@ -1946,6 +2043,14 @@ impl ThreadManager {
                 });
             }
             return Err(RpcError::internal_error(provider_error.to_string()));
+        }
+        if let Some(prepared_turn) = active_sess.prepared_turn.as_ref() {
+            if prepared_turn.turn_id != turn_id || prepared_turn.turn_attempt_id != attempt_id {
+                return Err(RpcError::internal_error(
+                    "The active prepared session has different execution identities",
+                ));
+            }
+            prepared_turn.prompt_accepted.store(true, Ordering::Release);
         }
 
         // Take receiver for lock-free streaming in background task
@@ -3136,6 +3241,23 @@ impl ThreadManager {
             seq: started_seq,
             routing: route_for_result,
         })
+    }
+
+    pub(crate) async fn prepared_turn_prompt_accepted(
+        &self,
+        thread_id: &ThreadId,
+        turn_id: &TurnId,
+        turn_attempt_id: &TurnAttemptId,
+    ) -> bool {
+        let active = self.active_sessions.lock().await;
+        active
+            .get(thread_id)
+            .and_then(|session| session.prepared_turn.as_ref())
+            .is_some_and(|prepared| {
+                prepared.turn_id == *turn_id
+                    && prepared.turn_attempt_id == *turn_attempt_id
+                    && prepared.prompt_accepted.load(Ordering::Acquire)
+            })
     }
 
     /// Starts an audited continuation in a fresh provider session. Native

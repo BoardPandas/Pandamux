@@ -20,6 +20,7 @@ pub mod personal_repo;
 pub mod provider_resolver;
 pub mod proxy_connection;
 pub mod proxy_transport;
+pub mod remote_execution;
 pub mod request_context;
 pub mod router;
 pub mod run_execution_service;
@@ -89,6 +90,10 @@ pub use provider_resolver::{
 };
 pub use proxy_connection::serve_proxy_connection;
 pub use proxy_transport::ProxyEnvironmentTransport;
+pub use remote_execution::{
+    NodeExecutionFailpoint, NodeExecutionService, remote_dispatch_identity, remote_execution_ids,
+    remote_identity_sha256, remote_preparation_hashes, remote_request_sha256,
+};
 pub use request_context::{
     CapabilityAuthority, CapabilityScope, ClientIdentity, PeerRole, RequestContext,
 };

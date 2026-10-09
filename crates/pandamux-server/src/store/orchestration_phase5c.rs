@@ -16,6 +16,7 @@ use pandamux_core::{
     UsagePricingRates, UsageSourceKind, UsageUnknownField, WorktreeCleanupEligibility,
     WorktreeDirtyState, estimate_usage_micro_usd,
 };
+use pandamux_protocol::{OrchestrationAttemptPrepareResult, OrchestrationNodeAttemptState};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
@@ -739,7 +740,7 @@ impl Store {
             insert_recovery_review(&tx, review)?;
         }
         for receipt in &records.node_receipts {
-            insert_node_receipt(&tx, receipt)?;
+            insert_node_receipt(&tx, receipt, true)?;
         }
         tx.commit()?;
         Ok(())
@@ -2893,51 +2894,54 @@ fn insert_queue_record(
         return Err(data_error("orchestration queue record is malformed"));
     }
     if !record.interactive {
-        let snapshot = load_snapshot(tx, &record.run_id)?;
-        let task = snapshot
-            .tasks
-            .get(&record.task_id)
-            .ok_or_else(|| data_error("queue record has no canonical task"))?;
-        let route = snapshot
-            .routes
-            .get(&record.task_id)
-            .ok_or_else(|| data_error("queue record has no canonical task route"))?;
-        let task_state_matches = task.status == pandamux_core::RunTaskStatus::Ready
-            || (task.status == pandamux_core::RunTaskStatus::DispatchRequested
-                && snapshot
-                    .attempts
-                    .get(&record.attempt_id)
-                    .is_some_and(|attempt| attempt.task_id == record.task_id));
-        let existing_attempt = snapshot.attempts.get(&record.attempt_id);
-        let prior_attempt_count = snapshot
-            .attempts
-            .values()
-            .filter(|attempt| attempt.task_id == record.task_id)
-            .count();
-        let route_identity_matches = existing_attempt.map_or_else(
-            || {
-                route.selected_agent_id.as_ref() == Some(&record.agent_id)
-                    && (prior_attempt_count > 0
-                        || route.provider.selected_provider_instance_id.as_ref()
-                            == Some(&record.provider_instance_id))
-            },
-            |attempt| {
-                attempt.route.selected_agent_id.as_ref() == Some(&record.agent_id)
-                    && attempt
-                        .route
-                        .provider
-                        .selected_provider_instance_id
-                        .as_ref()
-                        == Some(&record.provider_instance_id)
-            },
-        );
-        if !task_state_matches
-            || Some(&snapshot.organization_id) != record.organization_id.as_ref()
-            || !route_identity_matches
-        {
-            return Err(data_error(
-                "orchestration queue record differs from the canonical run",
-            ));
+        if let Some(snapshot) = load_snapshot_optional(tx, &record.run_id)? {
+            let task = snapshot
+                .tasks
+                .get(&record.task_id)
+                .ok_or_else(|| data_error("queue record has no canonical task"))?;
+            let route = snapshot
+                .routes
+                .get(&record.task_id)
+                .ok_or_else(|| data_error("queue record has no canonical task route"))?;
+            let task_state_matches = task.status == pandamux_core::RunTaskStatus::Ready
+                || (task.status == pandamux_core::RunTaskStatus::DispatchRequested
+                    && snapshot
+                        .attempts
+                        .get(&record.attempt_id)
+                        .is_some_and(|attempt| attempt.task_id == record.task_id));
+            let existing_attempt = snapshot.attempts.get(&record.attempt_id);
+            let prior_attempt_count = snapshot
+                .attempts
+                .values()
+                .filter(|attempt| attempt.task_id == record.task_id)
+                .count();
+            let route_identity_matches = existing_attempt.map_or_else(
+                || {
+                    route.selected_agent_id.as_ref() == Some(&record.agent_id)
+                        && (prior_attempt_count > 0
+                            || route.provider.selected_provider_instance_id.as_ref()
+                                == Some(&record.provider_instance_id))
+                },
+                |attempt| {
+                    attempt.route.selected_agent_id.as_ref() == Some(&record.agent_id)
+                        && attempt
+                            .route
+                            .provider
+                            .selected_provider_instance_id
+                            .as_ref()
+                            == Some(&record.provider_instance_id)
+                },
+            );
+            if !task_state_matches
+                || Some(&snapshot.organization_id) != record.organization_id.as_ref()
+                || !route_identity_matches
+            {
+                return Err(data_error(
+                    "orchestration queue record differs from the canonical run",
+                ));
+            }
+        } else {
+            validate_remote_queue_binding(tx, record)?;
         }
     }
     tx.execute(
@@ -2986,6 +2990,65 @@ fn insert_queue_record(
         ],
     )?;
     Ok(())
+}
+
+fn validate_remote_queue_binding(
+    conn: &rusqlite::Connection,
+    record: &OrchestrationQueueRecord,
+) -> Result<(), StoreError> {
+    let prepared = remote_prepare_result_for_queue(conn, record)?
+        .ok_or_else(|| data_error("remote queue record has no durable node prepare receipt"))?;
+    if prepared.prepared_execution.agent_id != record.agent_id
+        || Some(&prepared.prepared_execution.organization_id) != record.organization_id.as_ref()
+        || prepared.prepared_execution.provider_instance_id != record.provider_instance_id
+        || prepared.receipt.environment_id != record.environment_id
+        || prepared.prepared_execution.agent_concurrency_limit
+            != record.agent_concurrency_limit.unwrap_or(0)
+    {
+        return Err(data_error(
+            "remote queue record differs from its durable node preparation",
+        ));
+    }
+    Ok(())
+}
+
+fn remote_prepare_result_for_queue(
+    conn: &rusqlite::Connection,
+    record: &OrchestrationQueueRecord,
+) -> Result<Option<OrchestrationAttemptPrepareResult>, StoreError> {
+    let mut matching: Option<OrchestrationAttemptPrepareResult> = None;
+    for receipt in load_node_receipts_for_attempt(conn, &record.attempt_id)? {
+        if receipt.request_kind != NodeReceiptKind::AttemptPrepare {
+            continue;
+        }
+        let result: OrchestrationAttemptPrepareResult =
+            serde_json::from_slice(&receipt.result_bytes)?;
+        let prepared_sha = sha256_hex(&serde_json::to_vec(&result.prepared_execution)?);
+        if result.receipt.schema_version
+            != pandamux_protocol::ORCHESTRATION_EXECUTION_SCHEMA_VERSION
+            || result.receipt.state != OrchestrationNodeAttemptState::Prepared
+            || result.receipt.node_store_id != receipt.node_store_id
+            || result.receipt.request_sha256.as_str() != receipt.request_sha256
+            || result.receipt.run_id != record.run_id
+            || result.receipt.task_id != record.task_id
+            || result.receipt.attempt_id != record.attempt_id
+            || result.receipt.effect_id != receipt.effect_id
+            || result.receipt.prepared_execution_sha256.as_str() != prepared_sha
+            || result.prepared_execution.run_concurrency_limit == 0
+            || result.prepared_execution.agent_concurrency_limit == 0
+        {
+            return Err(data_error("remote node prepare receipt is malformed"));
+        }
+        if let Some(existing) = matching.as_ref()
+            && existing != &result
+        {
+            return Err(data_error(
+                "remote attempt has conflicting durable prepare receipts",
+            ));
+        }
+        matching = Some(result);
+    }
+    Ok(matching)
 }
 
 fn insert_worktree(
@@ -3443,6 +3506,7 @@ fn insert_recovery_review(tx: &Transaction<'_>, review: &RecoveryReview) -> Resu
 fn insert_node_receipt(
     tx: &Transaction<'_>,
     receipt: &NodeReceiptRecord,
+    require_local_effect: bool,
 ) -> Result<(), StoreError> {
     if receipt.receipt_id.trim().is_empty()
         || receipt.idempotency_key.trim().is_empty()
@@ -3454,18 +3518,20 @@ fn insert_node_receipt(
     {
         return Err(data_error("node receipt is malformed"));
     }
-    let effect = load_effect_by_id(tx, &receipt.effect_id)?
-        .ok_or_else(|| data_error("node receipt references a missing effect"))?;
-    if !effect_matches_attempt(
-        &effect,
-        &receipt.run_id,
-        &receipt.task_id,
-        &receipt.attempt_id,
-        None,
-    ) {
-        return Err(data_error(
-            "node receipt differs from its canonical provider effect",
-        ));
+    if require_local_effect {
+        let effect = load_effect_by_id(tx, &receipt.effect_id)?
+            .ok_or_else(|| data_error("node receipt references a missing effect"))?;
+        if !effect_matches_attempt(
+            &effect,
+            &receipt.run_id,
+            &receipt.task_id,
+            &receipt.attempt_id,
+            None,
+        ) {
+            return Err(data_error(
+                "node receipt differs from its canonical provider effect",
+            ));
+        }
     }
     tx.execute(
         "INSERT INTO orchestration_node_receipts (
@@ -3490,6 +3556,77 @@ fn insert_node_receipt(
         ],
     )?;
     Ok(())
+}
+
+impl Store {
+    /// Persists a receipt returned by a remote node into the Hub store. The
+    /// receipt must remain bound to the exact local provider effect.
+    pub fn record_hub_node_receipt(
+        &self,
+        receipt: &NodeReceiptRecord,
+    ) -> Result<NodeReceiptRecord, StoreError> {
+        self.record_node_receipt(receipt, true)
+    }
+
+    /// Persists a receipt owned by this node. A node intentionally does not
+    /// mirror the Hub's complete run/effect store, so the authenticated request
+    /// digest is the local authority boundary.
+    pub fn record_local_node_receipt(
+        &self,
+        receipt: &NodeReceiptRecord,
+    ) -> Result<NodeReceiptRecord, StoreError> {
+        self.record_node_receipt(receipt, false)
+    }
+
+    fn record_node_receipt(
+        &self,
+        receipt: &NodeReceiptRecord,
+        require_local_effect: bool,
+    ) -> Result<NodeReceiptRecord, StoreError> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(existing) = load_node_receipt_by_key(
+            &tx,
+            &receipt.node_store_id,
+            receipt.request_kind,
+            &receipt.idempotency_key,
+        )? {
+            if existing == *receipt {
+                return Ok(existing);
+            }
+            return Err(data_error(
+                "node receipt idempotency identity was reused with different bytes",
+            ));
+        }
+        insert_node_receipt(&tx, receipt, require_local_effect)?;
+        let stored = load_node_receipt_by_key(
+            &tx,
+            &receipt.node_store_id,
+            receipt.request_kind,
+            &receipt.idempotency_key,
+        )?
+        .ok_or_else(|| data_error("node receipt disappeared after insertion"))?;
+        tx.commit()?;
+        Ok(stored)
+    }
+
+    pub fn get_node_receipt(
+        &self,
+        node_store_id: &NodeStoreId,
+        request_kind: NodeReceiptKind,
+        idempotency_key: &str,
+    ) -> Result<Option<NodeReceiptRecord>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        load_node_receipt_by_key(&conn, node_store_id, request_kind, idempotency_key)
+    }
+
+    pub fn list_node_receipts_for_attempt(
+        &self,
+        attempt_id: &RunAttemptId,
+    ) -> Result<Vec<NodeReceiptRecord>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        load_node_receipts_for_attempt(&conn, attempt_id)
+    }
 }
 
 impl Store {
@@ -3923,7 +4060,12 @@ impl Store {
                 "execution admission claim lost its compare-and-swap",
             ));
         }
-        if current.interactive != request.orchestration.is_none() {
+        let remote_orchestration = !current.interactive
+            && request.orchestration.is_none()
+            && remote_prepare_result_for_queue(&tx, &current)?.is_some();
+        if (current.interactive && request.orchestration.is_some())
+            || (!current.interactive && request.orchestration.is_none() && !remote_orchestration)
+        {
             return Err(data_error(
                 "execution admission class does not match its transition",
             ));
@@ -4308,7 +4450,10 @@ impl Store {
         if !matches!(current.state, QueueState::Claimed | QueueState::Dispatched) {
             return Err(data_error("execution admission cannot be released"));
         }
-        if current.state == QueueState::Claimed && !current.interactive {
+        if current.state == QueueState::Claimed
+            && !current.interactive
+            && load_snapshot_optional(&tx, &current.run_id)?.is_some()
+        {
             release_orchestration_budget_before_dispatch(&tx, &current, released_at_ms)?;
         }
         let next_state = if current.state == QueueState::Dispatched {
@@ -5078,10 +5223,22 @@ fn active_admission_counts(
                 .entry(record.agent_id.clone())
                 .and_modify(|limit| *limit = (*limit).min(agent_limit))
                 .or_insert(agent_limit);
-            let run = load_snapshot(conn, &record.run_id)?;
+            let run_limit = match load_snapshot_optional(conn, &record.run_id)? {
+                Some(run) => run.max_parallel_tasks,
+                None => {
+                    remote_prepare_result_for_queue(conn, record)?
+                        .ok_or_else(|| {
+                            data_error("remote orchestration admission lost its prepare receipt")
+                        })?
+                        .prepared_execution
+                        .run_concurrency_limit
+                }
+            };
             counts
                 .run_limits
-                .insert(record.run_id.clone(), run.max_parallel_tasks);
+                .entry(record.run_id.clone())
+                .and_modify(|limit| *limit = (*limit).min(run_limit))
+                .or_insert(run_limit);
         }
     }
     Ok(counts)
@@ -5176,8 +5333,18 @@ fn admission_has_capacity(
     if counts.agents.get(&record.agent_id).copied().unwrap_or(0) >= agent_limit {
         return Ok(false);
     }
-    let run = load_snapshot(conn, &record.run_id)?;
-    Ok(counts.runs.get(&record.run_id).copied().unwrap_or(0) < run.max_parallel_tasks)
+    let run_limit = match load_snapshot_optional(conn, &record.run_id)? {
+        Some(run) => run.max_parallel_tasks,
+        None => {
+            remote_prepare_result_for_queue(conn, record)?
+                .ok_or_else(|| {
+                    data_error("remote orchestration admission lost its prepare receipt")
+                })?
+                .prepared_execution
+                .run_concurrency_limit
+        }
+    };
+    Ok(counts.runs.get(&record.run_id).copied().unwrap_or(0) < run_limit)
 }
 
 fn admission_order_key(
@@ -7922,12 +8089,177 @@ fn load_node_receipts(
     Ok(receipts)
 }
 
-fn load_snapshot(conn: &rusqlite::Connection, run_id: &RunId) -> Result<Run, StoreError> {
-    let (bytes, digest) = conn.query_row(
-        "SELECT snapshot_bytes, snapshot_sha256 FROM orchestration_runs WHERE run_id = ?1",
-        [run_id.as_str()],
-        |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?)),
+fn load_node_receipt_by_key(
+    conn: &rusqlite::Connection,
+    node_store_id: &NodeStoreId,
+    request_kind: NodeReceiptKind,
+    idempotency_key: &str,
+) -> Result<Option<NodeReceiptRecord>, StoreError> {
+    let kind = enum_text(request_kind)?;
+    let row = conn
+        .query_row(
+            "SELECT receipt_id, run_id, task_id, attempt_id, effect_id,
+                    request_sha256, result_sha256, result_bytes,
+                    created_at_ms, updated_at_ms
+               FROM orchestration_node_receipts
+              WHERE node_store_id = ?1 AND request_kind = ?2
+                AND idempotency_key = ?3",
+            params![node_store_id.as_str(), kind, idempotency_key],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, Vec<u8>>(7)?,
+                    row.get::<_, i64>(8)?,
+                    row.get::<_, i64>(9)?,
+                ))
+            },
+        )
+        .optional()?;
+    row.map(|row| {
+        node_receipt_from_parts(
+            row,
+            node_store_id.clone(),
+            request_kind,
+            idempotency_key.to_string(),
+        )
+    })
+    .transpose()
+}
+
+fn load_node_receipts_for_attempt(
+    conn: &rusqlite::Connection,
+    attempt_id: &RunAttemptId,
+) -> Result<Vec<NodeReceiptRecord>, StoreError> {
+    let mut statement = conn.prepare(
+        "SELECT receipt_id, node_store_id, run_id, task_id, effect_id,
+                request_kind, idempotency_key, request_sha256, result_sha256,
+                result_bytes, created_at_ms, updated_at_ms
+           FROM orchestration_node_receipts WHERE attempt_id = ?1
+          ORDER BY created_at_ms, receipt_id",
     )?;
+    let rows = statement.query_map([attempt_id.as_str()], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, String>(5)?,
+            row.get::<_, String>(6)?,
+            row.get::<_, String>(7)?,
+            row.get::<_, String>(8)?,
+            row.get::<_, Vec<u8>>(9)?,
+            row.get::<_, i64>(10)?,
+            row.get::<_, i64>(11)?,
+        ))
+    })?;
+    let mut receipts = Vec::new();
+    for row in rows {
+        let (
+            receipt_id,
+            node_store_id,
+            run_id,
+            task_id,
+            effect_id,
+            request_kind,
+            idempotency_key,
+            request_sha256,
+            result_sha256,
+            result_bytes,
+            created_at_ms,
+            updated_at_ms,
+        ) = row?;
+        receipts.push(node_receipt_from_parts(
+            (
+                receipt_id,
+                run_id,
+                task_id,
+                attempt_id.as_str().to_string(),
+                effect_id,
+                request_sha256,
+                result_sha256,
+                result_bytes,
+                created_at_ms,
+                updated_at_ms,
+            ),
+            NodeStoreId::from(node_store_id),
+            parse_enum(&request_kind, "node receipt kind")?,
+            idempotency_key,
+        )?);
+    }
+    Ok(receipts)
+}
+
+#[allow(clippy::type_complexity)]
+fn node_receipt_from_parts(
+    row: (
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        Vec<u8>,
+        i64,
+        i64,
+    ),
+    node_store_id: NodeStoreId,
+    request_kind: NodeReceiptKind,
+    idempotency_key: String,
+) -> Result<NodeReceiptRecord, StoreError> {
+    let record = NodeReceiptRecord {
+        receipt_id: row.0,
+        node_store_id,
+        run_id: RunId::from(row.1),
+        task_id: RunTaskId::from(row.2),
+        attempt_id: RunAttemptId::from(row.3),
+        effect_id: OrchestrationEffectId::from(row.4),
+        request_kind,
+        idempotency_key,
+        request_sha256: row.5,
+        result_sha256: row.6,
+        result_bytes: row.7,
+        created_at_ms: checked_u64(row.8, "node receipt created at")?,
+        updated_at_ms: checked_u64(row.9, "node receipt updated at")?,
+    };
+    if record.receipt_id.trim().is_empty()
+        || record.idempotency_key.trim().is_empty()
+        || !is_sha256(&record.request_sha256)
+        || record.result_sha256 != sha256_hex(&record.result_bytes)
+        || record.result_bytes.is_empty()
+        || record.updated_at_ms < record.created_at_ms
+    {
+        return Err(data_error("node receipt row is malformed"));
+    }
+    Ok(record)
+}
+
+fn load_snapshot(conn: &rusqlite::Connection, run_id: &RunId) -> Result<Run, StoreError> {
+    load_snapshot_optional(conn, run_id)?
+        .ok_or_else(|| data_error("orchestration run snapshot was not found"))
+}
+
+fn load_snapshot_optional(
+    conn: &rusqlite::Connection,
+    run_id: &RunId,
+) -> Result<Option<Run>, StoreError> {
+    let row = conn
+        .query_row(
+            "SELECT snapshot_bytes, snapshot_sha256 FROM orchestration_runs WHERE run_id = ?1",
+            [run_id.as_str()],
+            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?;
+    let Some((bytes, digest)) = row else {
+        return Ok(None);
+    };
     if digest != sha256_hex(&bytes) {
         return Err(data_error("orchestration snapshot digest mismatch"));
     }
@@ -7935,7 +8267,7 @@ fn load_snapshot(conn: &rusqlite::Connection, run_id: &RunId) -> Result<Run, Sto
     if run.id != *run_id {
         return Err(data_error("orchestration snapshot identity mismatch"));
     }
-    Ok(run)
+    Ok(Some(run))
 }
 
 fn validate_json_bounds(value: &serde_json::Value, depth: usize) -> Result<(), StoreError> {

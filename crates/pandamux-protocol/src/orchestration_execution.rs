@@ -1,7 +1,8 @@
 use pandamux_core::{
     AccessMode, AgentId, ArchiveSha256, AttemptBoundary, AttemptStatus, AttemptWorktreeId,
-    BundleSha, ContentSha256, OrchestrationEffectId, ProjectRepositoryId, RunAttemptId, RunId,
-    RunTaskId, SourceCommitSha, TaskRouteDecision, ThreadId, TurnAttemptId, TurnId,
+    BundleSha, ContentSha256, EnvironmentId, NodeStoreId, OrchestrationEffectId, OrganizationId,
+    ProjectRepositoryId, ProviderInstanceId, RunAttemptId, RunId, RunTaskId, SourceCommitSha,
+    TaskRouteDecision, ThreadId, TurnAttemptId, TurnId,
 };
 use serde::{Deserialize, Serialize};
 
@@ -43,9 +44,15 @@ pub struct OrchestrationRepositoryPrepareResult {
     pub schema_version: u32,
     pub request_sha256: ContentSha256,
     pub receipt_sha256: ContentSha256,
+    pub node_store_id: NodeStoreId,
+    pub environment_id: EnvironmentId,
+    pub identity_sha256: ContentSha256,
+    pub repository_key_sha256: ContentSha256,
     pub repository_id: ProjectRepositoryId,
     pub baseline_commit: SourceCommitSha,
     pub baseline_present: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private_artifact_ref: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,6 +68,42 @@ pub struct OrchestrationAttemptPrepareParams {
     pub compiled_instructions_sha256: ContentSha256,
     pub tool_policy_sha256: ContentSha256,
     pub prompt_sha256: ContentSha256,
+    pub task_prompt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_contract: Option<String>,
+    pub prepared_at_ms: u64,
+    pub attempt_ordinal: u32,
+    pub run_concurrency_limit: u32,
+}
+
+/// Exact provider-neutral execution material retained by the node before a
+/// dispatch marker can be written. The node independently reconstructs role,
+/// knowledge, and tool policy from the pinned bundle and verifies the hashes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OrchestrationPreparedExecution {
+    pub worktree_id: AttemptWorktreeId,
+    pub agent_id: AgentId,
+    pub organization_id: OrganizationId,
+    pub provider_instance_id: ProviderInstanceId,
+    pub access_ceiling: AccessMode,
+    pub compiled_instructions_sha256: ContentSha256,
+    pub tool_policy_sha256: ContentSha256,
+    pub prompt_sha256: ContentSha256,
+    pub task_prompt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_contract: Option<String>,
+    pub prepared_at_ms: u64,
+    pub attempt_ordinal: u32,
+    pub run_concurrency_limit: u32,
+    pub agent_concurrency_limit: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OrchestrationAttemptPrepareResult {
+    pub receipt: OrchestrationAttemptReceipt,
+    pub prepared_execution: OrchestrationPreparedExecution,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,6 +161,10 @@ pub struct OrchestrationAttemptReceipt {
     pub schema_version: u32,
     pub request_sha256: ContentSha256,
     pub receipt_sha256: ContentSha256,
+    pub node_store_id: NodeStoreId,
+    pub environment_id: EnvironmentId,
+    pub identity_sha256: ContentSha256,
+    pub prepared_execution_sha256: ContentSha256,
     pub run_id: RunId,
     pub task_id: RunTaskId,
     pub attempt_id: RunAttemptId,
@@ -163,6 +210,9 @@ pub struct OrchestrationAttemptEventsResult {
     pub schema_version: u32,
     pub request_sha256: ContentSha256,
     pub events_sha256: ContentSha256,
+    pub node_store_id: NodeStoreId,
+    pub environment_id: EnvironmentId,
+    pub identity_sha256: ContentSha256,
     pub events: Vec<OrchestrationNodeEvent>,
     pub terminal_receipt: Option<OrchestrationAttemptReceipt>,
 }
@@ -173,6 +223,9 @@ pub struct OrchestrationAttemptAckResult {
     pub schema_version: u32,
     pub request_sha256: ContentSha256,
     pub receipt_sha256: ContentSha256,
+    pub node_store_id: NodeStoreId,
+    pub environment_id: EnvironmentId,
+    pub identity_sha256: ContentSha256,
     pub acknowledged_through_sequence: u64,
 }
 
@@ -228,6 +281,11 @@ mod tests {
             compiled_instructions_sha256: digest('d'),
             tool_policy_sha256: digest('e'),
             prompt_sha256: digest('f'),
+            task_prompt: "Execute the authenticated remote fixture".to_string(),
+            output_contract: Some("{\"type\":\"object\"}".to_string()),
+            prepared_at_ms: 1_700_000_000_000,
+            attempt_ordinal: 1,
+            run_concurrency_limit: 2,
         };
         let bytes = serde_json::to_vec(&params).expect("serialize private request");
         assert!(!String::from_utf8_lossy(&bytes).contains("environmentId"));
