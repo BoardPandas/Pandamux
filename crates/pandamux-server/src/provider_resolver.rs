@@ -488,6 +488,7 @@ mod tests {
             server_version: None,
             schedules_count: None,
             last_error: None,
+            execution_limit: pandamux_core::DEFAULT_ENVIRONMENT_EXECUTION_LIMIT,
             provider_overrides: BTreeMap::from([(
                 "claude-work".to_string(),
                 ProviderEnvironmentOverride {

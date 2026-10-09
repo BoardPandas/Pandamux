@@ -7,6 +7,7 @@ pub mod configuration_service;
 pub mod data_paths;
 pub mod driver_registry;
 pub mod environment_router;
+pub mod execution_admission;
 pub mod fs;
 pub mod git;
 pub mod hark;
@@ -55,6 +56,13 @@ pub use driver_registry::DriverRegistry;
 pub use environment_router::{
     EnvironmentRouter, EnvironmentTransport, EnvironmentTransportState, MockEnvironmentTransport,
 };
+pub use execution_admission::{
+    BASE_EXECUTION_RETRY_DELAY_MS, DEFAULT_EXECUTION_ADMISSION_TTL_MS,
+    EnqueueManualAdmissionRequest, EnqueueOrchestratedAdmissionRequest, ExecutionAdmissionClaim,
+    ExecutionAdmissionClaimRequest, ExecutionAdmissionError, ExecutionAdmissionService,
+    MAX_EXECUTION_ADMISSION_TTL_MS, MAX_EXECUTION_RETRY_DELAY_MS, MIN_EXECUTION_ADMISSION_TTL_MS,
+    bounded_execution_retry_delay_ms,
+};
 pub use git::{get_git_status, git_commit, git_create_pr, git_push};
 pub use hark::HarkBridge;
 pub use instructions_service::{
@@ -84,16 +92,19 @@ pub use run_execution_service::{RunExecutionService, RunTransitionNotice};
 pub use runtime::{RUNTIME_FILENAME, RuntimeInfo};
 pub use server::{Server, ServerConfig};
 pub use store::{
-    AssignedRunEvent, AttemptDispatchRecord, AttemptDispatchState, BundleActivationFailpoint,
+    AdmissionCapacityOverage, AdmissionCapacityReconciliation, AdmissionClaimStoreOutcome,
+    AdmissionClaimStoreRequest, AdmissionOwnership, AdmissionPolicySnapshot,
+    AdmissionRenewStoreRequest, AdmissionRequeueStoreRequest, AssignedRunEvent,
+    AttemptDispatchRecord, AttemptDispatchState, BundleActivationFailpoint,
     BundleDistributionRecord, BundleObjectRecord, DailyBudgetRecord, EffectClaimOutcome,
     EffectClaimRequest, EffectDispatchOutcome, EffectDispatchRequest, EffectOutcomeRecord,
     EffectOutcomeRequest, EffectOwnership, EffectPreparationOutcome, NodeReceiptKind,
-    NodeReceiptRecord, OrchestrationExecutionFailpoint, OrchestrationQueueRecord,
-    OrchestrationReplayAudit, OrchestrationRunRecord, OrchestrationRuntimeRecords,
-    OwnedAttemptWorktreeRecord, PersonalRepoStateRecord, ProviderExecutionAudit, QueueState,
-    RevisionedSettings, RunTransition, RunTransitionRequest, RunTransitionRows, Store, StoreError,
-    StoredBudgetReservation, StoredInstructionCandidate, StoredOrchestrationEffect,
-    orchestration_snapshot_sha256,
+    NodeReceiptRecord, OrchestratedAdmissionTransition, OrchestrationExecutionFailpoint,
+    OrchestrationQueueRecord, OrchestrationReplayAudit, OrchestrationRunRecord,
+    OrchestrationRuntimeRecords, OwnedAttemptWorktreeRecord, PersonalRepoStateRecord,
+    ProviderExecutionAudit, QueueState, RevisionedSettings, RunTransition, RunTransitionRequest,
+    RunTransitionRows, Store, StoreError, StoredBudgetReservation, StoredInstructionCandidate,
+    StoredOrchestrationEffect, orchestration_snapshot_sha256,
 };
 pub use terminal::TerminalServerManager;
 pub use thread_manager::ThreadManager;

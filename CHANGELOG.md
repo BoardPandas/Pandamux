@@ -40,6 +40,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Added durable shared execution admission in version 0.60.95.** Manual and
+  orchestrated provider starts now share stable SQLite queue identities,
+  owner-bound TTL leases, compare-and-swap claims, bounded retry delay, and
+  run, agent, provider, environment, organization, and global limits. Global
+  and per-environment capacity retain an interactive lane when possible, while
+  cap-one scheduling admits the oldest eligible orchestration after at most
+  four consecutive interactive claims. Orchestrated claims atomically reserve
+  capacity, the exact attempt budget and UTC daily ledger, canonical
+  `BudgetReserved` and `DispatchRequested` events, and the derived dispatch
+  effect. `ThreadManager` now obtains the same durable admission before its
+  final provider permit and releases exact ownership on every session teardown
+  path. Separate-connection race, ordering, reserve, starvation, replay,
+  rollback, renewal, reclaim, and cap-decrease fixtures pass locally. This
+  checkpoint does not connect a run effect to a provider, contact a node or
+  external repository, add native or live-provider acceptance, push, run CI,
+  deploy, activate, package, sign, publish, or release.
+
 - **Added crash-safe, attempt-owned Phase 5C worktrees and checkpoints in
   version 0.60.94.** Each attempt now commits an exact repository, baseline,
   full branch ref, private app-data path, environment, and active lease before

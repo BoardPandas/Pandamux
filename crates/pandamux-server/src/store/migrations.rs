@@ -1854,6 +1854,10 @@ pub(crate) fn apply_migrations_to(conn: &mut Connection, target_version: i64) ->
                 task_id TEXT NOT NULL CHECK(task_id <> ''),
                 attempt_id TEXT NOT NULL CHECK(attempt_id <> ''),
                 agent_id TEXT NOT NULL CHECK(agent_id <> ''),
+                organization_id TEXT,
+                agent_concurrency_limit INTEGER CHECK(
+                    agent_concurrency_limit IS NULL OR agent_concurrency_limit > 0
+                ),
                 provider_instance_id TEXT NOT NULL CHECK(provider_instance_id <> ''),
                 environment_id TEXT NOT NULL CHECK(environment_id <> ''),
                 candidate_sha256 TEXT NOT NULL CHECK(length(candidate_sha256) = 64),
@@ -1868,12 +1872,27 @@ pub(crate) fn apply_migrations_to(conn: &mut Connection, target_version: i64) ->
                 lease_id TEXT REFERENCES orchestration_leases(lease_id),
                 claim_revision INTEGER NOT NULL DEFAULT 0 CHECK(claim_revision >= 0),
                 interactive INTEGER NOT NULL DEFAULT 0 CHECK(interactive IN (0, 1)),
+                claimed_at_ms INTEGER CHECK(
+                    claimed_at_ms IS NULL OR claimed_at_ms >= enqueued_at_ms
+                ),
+                claim_order INTEGER UNIQUE CHECK(claim_order IS NULL OR claim_order > 0),
+                interactive_streak INTEGER CHECK(
+                    interactive_streak IS NULL OR interactive_streak BETWEEN 0 AND 4
+                ),
                 UNIQUE(run_id, task_id, attempt_id),
-                CHECK((owner_incarnation_id IS NULL) = (lease_id IS NULL))
+                CHECK((owner_incarnation_id IS NULL) = (lease_id IS NULL)),
+                CHECK(interactive = 1 OR (
+                    organization_id IS NOT NULL AND agent_concurrency_limit IS NOT NULL
+                )),
+                CHECK(interactive = 0 OR agent_concurrency_limit IS NULL),
+                CHECK(
+                    (claimed_at_ms IS NULL) = (claim_order IS NULL) AND
+                    (claimed_at_ms IS NULL) = (interactive_streak IS NULL)
+                )
             );
             CREATE INDEX idx_orchestration_queue_order
                 ON orchestration_queue(
-                    interactive DESC, priority DESC, enqueued_at_ms,
+                    interactive DESC, enqueued_at_ms,
                     run_id, task_id, attempt_id
                 ) WHERE state = 'queued';
 

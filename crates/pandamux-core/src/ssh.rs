@@ -332,6 +332,7 @@ pub fn import_ssh_config_into_environments(
                 server_version: None,
                 schedules_count: Some(0),
                 last_error: None,
+                execution_limit: crate::environment::DEFAULT_ENVIRONMENT_EXECUTION_LIMIT,
                 provider_overrides: std::collections::BTreeMap::new(),
             };
             imported.push(env);

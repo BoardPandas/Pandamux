@@ -1,15 +1,16 @@
-use super::{Store, StoreError, checked_i64, checked_u64};
+use super::{Store, StoreError, checked_i64, checked_u32, checked_u64};
 use pandamux_core::{
-    AgentId, ArtifactKey, AttemptBoundary, AttemptProgressId, AttemptProgressKind,
+    AgentId, ArtifactKey, Attempt, AttemptBoundary, AttemptProgressId, AttemptProgressKind,
     AttemptProgressRecord, AttemptWorktreeId, BlackboardEntry, BlackboardEntryId, BudgetGrantId,
-    BudgetReservation, CheckpointId, EffectDeliveryRecord, EffectDeliveryState, ExecutionLease,
-    ExecutionLeaseId, LeaseResourceKind, MAX_ARTIFACT_BYTES, MAX_ARTIFACT_CONTAINER_ITEMS,
-    MAX_ARTIFACT_JSON_DEPTH, MAX_ARTIFACT_STRING_BYTES, MAX_ARTIFACTS_PER_RUN,
-    MAX_ARTIFACTS_PER_TASK, MAX_RUN_ARTIFACT_BYTES, NodeStoreId, OrchestrationEffect,
-    OrchestrationEffectId, OrganizationId, OwnedAttemptWorktree, ProjectId, ProjectRepositoryId,
-    RecoveryReview, RecoveryReviewStatus, Run, RunAttemptId, RunCommand, RunEvent, RunEventId,
-    RunId, RunStatus, RunTaskId, ServerIncarnationId, SupplementalBudgetGrant, TaskRouteDecision,
-    ThreadId, TurnAttemptId, TurnId, WorktreeCleanupEligibility, WorktreeDirtyState,
+    BudgetReservation, CheckpointId, EffectDeliveryRecord, EffectDeliveryState, EnvironmentId,
+    ExecutionLease, ExecutionLeaseId, LeaseResourceKind, MAX_ARTIFACT_BYTES,
+    MAX_ARTIFACT_CONTAINER_ITEMS, MAX_ARTIFACT_JSON_DEPTH, MAX_ARTIFACT_STRING_BYTES,
+    MAX_ARTIFACTS_PER_RUN, MAX_ARTIFACTS_PER_TASK, MAX_RUN_ARTIFACT_BYTES, NodeStoreId,
+    OrchestrationEffect, OrchestrationEffectId, OrganizationId, OwnedAttemptWorktree, ProjectId,
+    ProjectRepositoryId, ProviderInstanceId, RecoveryReview, RecoveryReviewStatus, Run,
+    RunAttemptId, RunCommand, RunEvent, RunEventId, RunId, RunStatus, RunTaskId,
+    ServerIncarnationId, SupplementalBudgetGrant, TaskRouteDecision, ThreadId, TurnAttemptId,
+    TurnId, WorktreeCleanupEligibility, WorktreeDirtyState,
 };
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -84,6 +85,8 @@ pub struct OrchestrationQueueRecord {
     pub task_id: RunTaskId,
     pub attempt_id: RunAttemptId,
     pub agent_id: AgentId,
+    pub organization_id: Option<OrganizationId>,
+    pub agent_concurrency_limit: Option<u32>,
     pub provider_instance_id: pandamux_core::ProviderInstanceId,
     pub environment_id: pandamux_core::EnvironmentId,
     pub candidate_sha256: String,
@@ -96,6 +99,82 @@ pub struct OrchestrationQueueRecord {
     pub lease_id: Option<ExecutionLeaseId>,
     pub claim_revision: u64,
     pub interactive: bool,
+    pub claimed_at_ms: Option<u64>,
+    pub claim_order: Option<u64>,
+    pub interactive_streak: Option<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdmissionPolicySnapshot {
+    pub settings_revision: Option<u64>,
+    pub global_limit: u32,
+    pub environment_limits: BTreeMap<EnvironmentId, u32>,
+    pub provider_limits: BTreeMap<(EnvironmentId, ProviderInstanceId), u32>,
+    pub organization_limits: BTreeMap<OrganizationId, u32>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OrchestratedAdmissionTransition {
+    pub reservation: StoredBudgetReservation,
+    pub attempt: Attempt,
+    pub daily_budget_limit_micro_usd: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdmissionClaimStoreRequest {
+    pub queue_id: String,
+    pub expected_candidate_sha256: String,
+    pub expected_claim_revision: u64,
+    pub owner_incarnation_id: ServerIncarnationId,
+    pub lease_id: ExecutionLeaseId,
+    pub claimed_at_ms: u64,
+    pub lease_expires_at_ms: u64,
+    pub policy: AdmissionPolicySnapshot,
+    pub orchestration: Option<OrchestratedAdmissionTransition>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdmissionClaimStoreOutcome {
+    pub record: OrchestrationQueueRecord,
+    pub lease: ExecutionLease,
+    pub acquired: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdmissionOwnership {
+    pub queue_id: String,
+    pub expected_candidate_sha256: String,
+    pub owner_incarnation_id: ServerIncarnationId,
+    pub lease_id: ExecutionLeaseId,
+    pub claim_revision: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdmissionRenewStoreRequest {
+    pub ownership: AdmissionOwnership,
+    pub renewed_at_ms: u64,
+    pub lease_expires_at_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdmissionRequeueStoreRequest {
+    pub ownership: AdmissionOwnership,
+    pub reclaimed_at_ms: u64,
+    pub not_before_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdmissionCapacityOverage {
+    pub dimension: String,
+    pub resource_id: String,
+    pub active: u32,
+    pub limit: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdmissionCapacityReconciliation {
+    pub active_claims: u32,
+    pub overages: Vec<AdmissionCapacityOverage>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2060,36 +2139,80 @@ fn insert_queue_record(
         || record.enqueued_at_ms < record.task_enqueued_at_ms
         || record.not_before_ms < record.enqueued_at_ms
         || (record.owner_incarnation_id.is_none() != record.lease_id.is_none())
+        || record.interactive == record.agent_concurrency_limit.is_some()
+        || (!record.interactive && record.organization_id.is_none())
+        || record
+            .agent_concurrency_limit
+            .is_some_and(|limit| limit == 0)
+        || (record.claimed_at_ms.is_none() != record.claim_order.is_none())
+        || (record.claimed_at_ms.is_none() != record.interactive_streak.is_none())
+        || record
+            .claimed_at_ms
+            .is_some_and(|claimed| claimed < record.enqueued_at_ms)
+        || record.claim_order == Some(0)
+        || record.interactive_streak.is_some_and(|streak| streak > 4)
+        || match record.state {
+            QueueState::Queued | QueueState::Cancelled => {
+                record.owner_incarnation_id.is_some() || record.lease_id.is_some()
+            }
+            QueueState::Claimed => {
+                record.owner_incarnation_id.is_none()
+                    || record.lease_id.is_none()
+                    || record.claimed_at_ms.is_none()
+            }
+            QueueState::Dispatched => {
+                record.owner_incarnation_id.is_some() && record.claimed_at_ms.is_none()
+            }
+        }
     {
         return Err(data_error("orchestration queue record is malformed"));
     }
-    let snapshot = load_snapshot(tx, &record.run_id)?;
-    let route = snapshot
-        .routes
-        .get(&record.task_id)
-        .ok_or_else(|| data_error("queue record has no canonical task route"))?;
-    if !snapshot.tasks.contains_key(&record.task_id)
-        || route.selected_agent_id.as_ref() != Some(&record.agent_id)
-        || route.provider.selected_provider_instance_id.as_ref()
-            != Some(&record.provider_instance_id)
-    {
-        return Err(data_error(
-            "orchestration queue record differs from the canonical run",
-        ));
+    if !record.interactive {
+        let snapshot = load_snapshot(tx, &record.run_id)?;
+        let task = snapshot
+            .tasks
+            .get(&record.task_id)
+            .ok_or_else(|| data_error("queue record has no canonical task"))?;
+        let route = snapshot
+            .routes
+            .get(&record.task_id)
+            .ok_or_else(|| data_error("queue record has no canonical task route"))?;
+        let task_state_matches = task.status == pandamux_core::RunTaskStatus::Ready
+            || (task.status == pandamux_core::RunTaskStatus::DispatchRequested
+                && snapshot
+                    .attempts
+                    .get(&record.attempt_id)
+                    .is_some_and(|attempt| attempt.task_id == record.task_id));
+        if !task_state_matches
+            || Some(&snapshot.organization_id) != record.organization_id.as_ref()
+            || route.selected_agent_id.as_ref() != Some(&record.agent_id)
+            || route.provider.selected_provider_instance_id.as_ref()
+                != Some(&record.provider_instance_id)
+        {
+            return Err(data_error(
+                "orchestration queue record differs from the canonical run",
+            ));
+        }
     }
     tx.execute(
         "INSERT INTO orchestration_queue (
-            queue_id, run_id, task_id, attempt_id, agent_id, provider_instance_id,
-            environment_id, candidate_sha256, priority, task_enqueued_at_ms,
-            enqueued_at_ms, not_before_ms, state, owner_incarnation_id,
-            lease_id, claim_revision, interactive
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+            queue_id, run_id, task_id, attempt_id, agent_id, organization_id,
+            agent_concurrency_limit, provider_instance_id, environment_id,
+            candidate_sha256, priority, task_enqueued_at_ms, enqueued_at_ms,
+            not_before_ms, state, owner_incarnation_id, lease_id, claim_revision,
+            interactive, claimed_at_ms, claim_order, interactive_streak
+         ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
+            ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22
+         )",
         params![
             record.queue_id,
             record.run_id.as_str(),
             record.task_id.as_str(),
             record.attempt_id.as_str(),
             record.agent_id.as_str(),
+            record.organization_id.as_ref().map(OrganizationId::as_str),
+            record.agent_concurrency_limit.map(i64::from),
             record.provider_instance_id.as_str(),
             record.environment_id.as_str(),
             record.candidate_sha256,
@@ -2105,6 +2228,15 @@ fn insert_queue_record(
             record.lease_id.as_ref().map(ExecutionLeaseId::as_str),
             checked_i64(record.claim_revision, "queue claim revision")?,
             record.interactive,
+            record
+                .claimed_at_ms
+                .map(|value| checked_i64(value, "queue claimed timestamp"))
+                .transpose()?,
+            record
+                .claim_order
+                .map(|value| checked_i64(value, "queue claim order"))
+                .transpose()?,
+            record.interactive_streak.map(i64::from),
         ],
     )?;
     Ok(())
@@ -2953,6 +3085,1122 @@ impl Store {
         )?;
         Ok(count != 0)
     }
+
+    pub fn insert_execution_queue_record(
+        &self,
+        record: &OrchestrationQueueRecord,
+    ) -> Result<OrchestrationQueueRecord, StoreError> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(existing) = load_queue_record_by_id(&tx, &record.queue_id)? {
+            if &existing == record {
+                return Ok(existing);
+            }
+            return Err(data_error(
+                "execution queue identity was reused with different bytes",
+            ));
+        }
+        insert_queue_record(&tx, record)?;
+        let stored = load_queue_record_by_id(&tx, &record.queue_id)?
+            .ok_or_else(|| data_error("execution queue record disappeared"))?;
+        tx.commit()?;
+        Ok(stored)
+    }
+
+    pub fn list_execution_queue_records(
+        &self,
+    ) -> Result<Vec<OrchestrationQueueRecord>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        load_all_queue_records(&conn)
+    }
+
+    pub fn try_claim_execution_admission(
+        &self,
+        request: &AdmissionClaimStoreRequest,
+    ) -> Result<Option<AdmissionClaimStoreOutcome>, StoreError> {
+        validate_admission_claim_request(request)?;
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        validate_admission_policy(&tx, &request.policy)?;
+        let current = load_queue_record_by_id(&tx, &request.queue_id)?
+            .ok_or_else(|| data_error("execution queue record was not found"))?;
+        if current.candidate_sha256 != request.expected_candidate_sha256 {
+            return Err(data_error("execution queue candidate identity changed"));
+        }
+
+        if current.state == QueueState::Claimed
+            && current.owner_incarnation_id.as_ref() == Some(&request.owner_incarnation_id)
+            && current.lease_id.as_ref() == Some(&request.lease_id)
+            && current.claim_revision == request.expected_claim_revision.saturating_add(1)
+        {
+            let lease = load_lease(&tx, &request.lease_id)?
+                .ok_or_else(|| data_error("claimed execution lease disappeared"))?;
+            if lease.resource_kind != LeaseResourceKind::Capacity
+                || lease.resource_id != request.queue_id
+                || lease.owner_incarnation_id != request.owner_incarnation_id
+                || lease.last_heartbeat_ms != request.claimed_at_ms
+                || lease.expires_at_ms != request.lease_expires_at_ms
+                || lease.revision != current.claim_revision
+            {
+                return Err(data_error(
+                    "execution admission replay differs from the durable claim",
+                ));
+            }
+            return Ok(Some(AdmissionClaimStoreOutcome {
+                record: current,
+                lease,
+                acquired: false,
+            }));
+        }
+
+        if current.state != QueueState::Queued
+            || current.owner_incarnation_id.is_some()
+            || current.lease_id.is_some()
+            || current.claim_revision != request.expected_claim_revision
+        {
+            return Err(data_error(
+                "execution admission claim lost its compare-and-swap",
+            ));
+        }
+        if current.interactive != request.orchestration.is_none() {
+            return Err(data_error(
+                "execution admission class does not match its transition",
+            ));
+        }
+
+        let records = load_all_queue_records(&tx)?;
+        let counts = active_admission_counts(&tx, &records)?;
+        let mut interactive = records
+            .iter()
+            .filter(|record| {
+                record.state == QueueState::Queued
+                    && record.interactive
+                    && record.not_before_ms <= request.claimed_at_ms
+            })
+            .map(|record| {
+                admission_has_capacity(&tx, record, &counts, &request.policy)
+                    .map(|eligible| eligible.then_some(record))
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        let mut orchestrated = records
+            .iter()
+            .filter(|record| {
+                record.state == QueueState::Queued
+                    && !record.interactive
+                    && record.not_before_ms <= request.claimed_at_ms
+            })
+            .map(|record| {
+                admission_has_capacity(&tx, record, &counts, &request.policy)
+                    .map(|eligible| eligible.then_some(record))
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        interactive.sort_by_key(admission_order_key);
+        orchestrated.sort_by_key(admission_order_key);
+
+        let previous_streak = records
+            .iter()
+            .filter_map(|record| record.claim_order.zip(record.interactive_streak))
+            .max_by_key(|(order, _)| *order)
+            .map(|(_, streak)| streak)
+            .unwrap_or(0);
+        let selected = match (interactive.first(), orchestrated.first()) {
+            (Some(interactive), Some(orchestrated)) => {
+                if previous_streak >= 4 {
+                    *orchestrated
+                } else {
+                    *interactive
+                }
+            }
+            (Some(interactive), None) => *interactive,
+            (None, Some(orchestrated)) => *orchestrated,
+            (None, None) => return Ok(None),
+        };
+        if selected.queue_id != request.queue_id {
+            return Ok(None);
+        }
+
+        let claim_revision = request
+            .expected_claim_revision
+            .checked_add(1)
+            .ok_or_else(|| data_error("execution admission revision overflow"))?;
+        let claim_order = records
+            .iter()
+            .filter_map(|record| record.claim_order)
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| data_error("execution admission order overflow"))?;
+        let interactive_streak = if current.interactive {
+            previous_streak.saturating_add(1).min(4)
+        } else {
+            0
+        };
+        let lease = ExecutionLease {
+            id: request.lease_id.clone(),
+            resource_kind: LeaseResourceKind::Capacity,
+            resource_id: request.queue_id.clone(),
+            owner_incarnation_id: request.owner_incarnation_id.clone(),
+            expires_at_ms: request.lease_expires_at_ms,
+            last_heartbeat_ms: request.claimed_at_ms,
+            revision: claim_revision,
+        };
+        ensure_execution_lease(&tx, &lease)?;
+        if let Some(transition) = request.orchestration.as_ref() {
+            apply_admission_orchestration_transition(
+                &tx,
+                &current,
+                transition,
+                request.claimed_at_ms,
+            )?;
+        }
+        let changed = tx.execute(
+            "UPDATE orchestration_queue
+                SET state = 'claimed', owner_incarnation_id = ?1, lease_id = ?2,
+                    claim_revision = ?3, claimed_at_ms = ?4, claim_order = ?5,
+                    interactive_streak = ?6
+              WHERE queue_id = ?7 AND candidate_sha256 = ?8 AND state = 'queued'
+                AND owner_incarnation_id IS NULL AND lease_id IS NULL
+                AND claim_revision = ?9",
+            params![
+                request.owner_incarnation_id.as_str(),
+                request.lease_id.as_str(),
+                checked_i64(claim_revision, "claimed queue revision")?,
+                checked_i64(request.claimed_at_ms, "queue claim timestamp")?,
+                checked_i64(claim_order, "queue claim order")?,
+                i64::from(interactive_streak),
+                request.queue_id,
+                request.expected_candidate_sha256,
+                checked_i64(request.expected_claim_revision, "expected queue revision")?,
+            ],
+        )?;
+        if changed != 1 {
+            return Err(data_error(
+                "execution admission claim lost its compare-and-swap",
+            ));
+        }
+        let record = load_queue_record_by_id(&tx, &request.queue_id)?
+            .ok_or_else(|| data_error("claimed execution queue record disappeared"))?;
+        tx.commit()?;
+        Ok(Some(AdmissionClaimStoreOutcome {
+            record,
+            lease,
+            acquired: true,
+        }))
+    }
+
+    pub fn cancel_queued_execution_admission(
+        &self,
+        queue_id: &str,
+        expected_candidate_sha256: &str,
+    ) -> Result<OrchestrationQueueRecord, StoreError> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = load_queue_record_by_id(&tx, queue_id)?
+            .ok_or_else(|| data_error("execution queue record was not found"))?;
+        if current.candidate_sha256 != expected_candidate_sha256 {
+            return Err(data_error("execution queue candidate identity changed"));
+        }
+        match current.state {
+            QueueState::Cancelled => return Ok(current),
+            QueueState::Queued
+                if current.owner_incarnation_id.is_none() && current.lease_id.is_none() => {}
+            _ => return Err(data_error("execution queue record cannot be cancelled")),
+        }
+        let changed = tx.execute(
+            "UPDATE orchestration_queue SET state = 'cancelled'
+              WHERE queue_id = ?1 AND candidate_sha256 = ?2 AND state = 'queued'
+                AND owner_incarnation_id IS NULL AND lease_id IS NULL",
+            params![queue_id, expected_candidate_sha256],
+        )?;
+        if changed != 1 {
+            return Err(data_error(
+                "execution queue cancellation lost its compare-and-swap",
+            ));
+        }
+        let updated = load_queue_record_by_id(&tx, queue_id)?
+            .ok_or_else(|| data_error("cancelled execution queue record disappeared"))?;
+        tx.commit()?;
+        Ok(updated)
+    }
+
+    pub fn mark_execution_admission_dispatched(
+        &self,
+        ownership: &AdmissionOwnership,
+    ) -> Result<OrchestrationQueueRecord, StoreError> {
+        validate_admission_ownership(ownership)?;
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (current, _) = load_owned_admission(&tx, ownership)?;
+        match current.state {
+            QueueState::Dispatched => return Ok(current),
+            QueueState::Claimed => {}
+            _ => return Err(data_error("execution admission cannot be dispatched")),
+        }
+        let changed = tx.execute(
+            "UPDATE orchestration_queue SET state = 'dispatched'
+              WHERE queue_id = ?1 AND candidate_sha256 = ?2 AND state = 'claimed'
+                AND owner_incarnation_id = ?3 AND lease_id = ?4
+                AND claim_revision = ?5",
+            params![
+                ownership.queue_id,
+                ownership.expected_candidate_sha256,
+                ownership.owner_incarnation_id.as_str(),
+                ownership.lease_id.as_str(),
+                checked_i64(ownership.claim_revision, "queue claim revision")?,
+            ],
+        )?;
+        if changed != 1 {
+            return Err(data_error(
+                "execution dispatch marker lost its compare-and-swap",
+            ));
+        }
+        let updated = load_queue_record_by_id(&tx, &ownership.queue_id)?
+            .ok_or_else(|| data_error("dispatched execution queue record disappeared"))?;
+        tx.commit()?;
+        Ok(updated)
+    }
+
+    pub fn renew_execution_admission(
+        &self,
+        request: &AdmissionRenewStoreRequest,
+    ) -> Result<AdmissionClaimStoreOutcome, StoreError> {
+        validate_admission_ownership(&request.ownership)?;
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (current, lease) = load_owned_admission(&tx, &request.ownership)?;
+        if !matches!(current.state, QueueState::Claimed | QueueState::Dispatched)
+            || request.renewed_at_ms < lease.last_heartbeat_ms
+            || request.renewed_at_ms >= lease.expires_at_ms
+            || request.lease_expires_at_ms <= request.renewed_at_ms
+        {
+            return Err(data_error("execution admission lease cannot be renewed"));
+        }
+        let next_revision = request
+            .ownership
+            .claim_revision
+            .checked_add(1)
+            .ok_or_else(|| data_error("execution admission revision overflow"))?;
+        let queue_changed = tx.execute(
+            "UPDATE orchestration_queue SET claim_revision = ?1
+              WHERE queue_id = ?2 AND candidate_sha256 = ?3
+                AND owner_incarnation_id = ?4 AND lease_id = ?5
+                AND claim_revision = ?6 AND state IN ('claimed', 'dispatched')",
+            params![
+                checked_i64(next_revision, "renewed queue claim revision")?,
+                request.ownership.queue_id,
+                request.ownership.expected_candidate_sha256,
+                request.ownership.owner_incarnation_id.as_str(),
+                request.ownership.lease_id.as_str(),
+                checked_i64(request.ownership.claim_revision, "queue claim revision")?,
+            ],
+        )?;
+        let lease_changed = tx.execute(
+            "UPDATE orchestration_leases
+                SET expires_at_ms = ?1, last_heartbeat_ms = ?2, revision = ?3
+              WHERE lease_id = ?4 AND resource_kind = 'capacity' AND resource_id = ?5
+                AND owner_incarnation_id = ?6 AND revision = ?7",
+            params![
+                checked_i64(request.lease_expires_at_ms, "renewed lease expiry")?,
+                checked_i64(request.renewed_at_ms, "renewed lease heartbeat")?,
+                checked_i64(next_revision, "renewed lease revision")?,
+                request.ownership.lease_id.as_str(),
+                request.ownership.queue_id,
+                request.ownership.owner_incarnation_id.as_str(),
+                checked_i64(request.ownership.claim_revision, "lease revision")?,
+            ],
+        )?;
+        if queue_changed != 1 || lease_changed != 1 {
+            return Err(data_error(
+                "execution admission renewal lost its compare-and-swap",
+            ));
+        }
+        let record = load_queue_record_by_id(&tx, &request.ownership.queue_id)?
+            .ok_or_else(|| data_error("renewed execution queue record disappeared"))?;
+        let lease = load_lease(&tx, &request.ownership.lease_id)?
+            .ok_or_else(|| data_error("renewed execution lease disappeared"))?;
+        tx.commit()?;
+        Ok(AdmissionClaimStoreOutcome {
+            record,
+            lease,
+            acquired: false,
+        })
+    }
+
+    pub fn requeue_expired_execution_admission(
+        &self,
+        request: &AdmissionRequeueStoreRequest,
+    ) -> Result<OrchestrationQueueRecord, StoreError> {
+        validate_admission_ownership(&request.ownership)?;
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (current, lease) = load_owned_admission(&tx, &request.ownership)?;
+        if current.state != QueueState::Claimed
+            || lease.expires_at_ms > request.reclaimed_at_ms
+            || request.not_before_ms < request.reclaimed_at_ms
+            || request.not_before_ms < current.enqueued_at_ms
+        {
+            return Err(data_error("execution admission lease cannot be reclaimed"));
+        }
+        let next_revision = request
+            .ownership
+            .claim_revision
+            .checked_add(1)
+            .ok_or_else(|| data_error("execution admission revision overflow"))?;
+        let changed = tx.execute(
+            "UPDATE orchestration_queue
+                SET state = 'queued', owner_incarnation_id = NULL, lease_id = NULL,
+                    claim_revision = ?1, not_before_ms = ?2
+              WHERE queue_id = ?3 AND candidate_sha256 = ?4 AND state = 'claimed'
+                AND owner_incarnation_id = ?5 AND lease_id = ?6
+                AND claim_revision = ?7",
+            params![
+                checked_i64(next_revision, "requeued claim revision")?,
+                checked_i64(request.not_before_ms, "requeued not-before")?,
+                request.ownership.queue_id,
+                request.ownership.expected_candidate_sha256,
+                request.ownership.owner_incarnation_id.as_str(),
+                request.ownership.lease_id.as_str(),
+                checked_i64(request.ownership.claim_revision, "queue claim revision")?,
+            ],
+        )?;
+        if changed != 1 {
+            return Err(data_error(
+                "execution admission reclaim lost its compare-and-swap",
+            ));
+        }
+        let deleted = tx.execute(
+            "DELETE FROM orchestration_leases
+              WHERE lease_id = ?1 AND resource_kind = 'capacity' AND resource_id = ?2
+                AND owner_incarnation_id = ?3 AND revision = ?4
+                AND expires_at_ms <= ?5",
+            params![
+                request.ownership.lease_id.as_str(),
+                request.ownership.queue_id,
+                request.ownership.owner_incarnation_id.as_str(),
+                checked_i64(request.ownership.claim_revision, "lease revision")?,
+                checked_i64(request.reclaimed_at_ms, "lease reclaim timestamp")?,
+            ],
+        )?;
+        if deleted != 1 {
+            return Err(data_error(
+                "execution admission lease reclaim was not exact",
+            ));
+        }
+        let updated = load_queue_record_by_id(&tx, &request.ownership.queue_id)?
+            .ok_or_else(|| data_error("requeued execution record disappeared"))?;
+        tx.commit()?;
+        Ok(updated)
+    }
+
+    pub fn release_execution_admission(
+        &self,
+        ownership: &AdmissionOwnership,
+    ) -> Result<OrchestrationQueueRecord, StoreError> {
+        validate_admission_ownership(ownership)?;
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = load_queue_record_by_id(&tx, &ownership.queue_id)?
+            .ok_or_else(|| data_error("execution queue record was not found"))?;
+        if current.candidate_sha256 != ownership.expected_candidate_sha256 {
+            return Err(data_error("execution queue candidate identity changed"));
+        }
+        if current.lease_id.is_none() && current.owner_incarnation_id.is_none() {
+            let released_revision = ownership
+                .claim_revision
+                .checked_add(1)
+                .ok_or_else(|| data_error("execution admission revision overflow"))?;
+            if matches!(
+                current.state,
+                QueueState::Dispatched | QueueState::Cancelled
+            ) && current.claim_revision == released_revision
+            {
+                return Ok(current);
+            }
+            return Err(data_error("execution admission is not owned"));
+        }
+        let (_, _) = load_owned_admission(&tx, ownership)?;
+        if !matches!(current.state, QueueState::Claimed | QueueState::Dispatched) {
+            return Err(data_error("execution admission cannot be released"));
+        }
+        let next_state = if current.state == QueueState::Dispatched {
+            "dispatched"
+        } else {
+            "cancelled"
+        };
+        let next_revision = ownership
+            .claim_revision
+            .checked_add(1)
+            .ok_or_else(|| data_error("execution admission revision overflow"))?;
+        let changed = tx.execute(
+            "UPDATE orchestration_queue
+                SET state = ?1, owner_incarnation_id = NULL, lease_id = NULL,
+                    claim_revision = ?2
+              WHERE queue_id = ?3 AND candidate_sha256 = ?4
+                AND owner_incarnation_id = ?5 AND lease_id = ?6
+                AND claim_revision = ?7 AND state IN ('claimed', 'dispatched')",
+            params![
+                next_state,
+                checked_i64(next_revision, "released claim revision")?,
+                ownership.queue_id,
+                ownership.expected_candidate_sha256,
+                ownership.owner_incarnation_id.as_str(),
+                ownership.lease_id.as_str(),
+                checked_i64(ownership.claim_revision, "queue claim revision")?,
+            ],
+        )?;
+        if changed != 1 {
+            return Err(data_error(
+                "execution admission release lost its compare-and-swap",
+            ));
+        }
+        let deleted = tx.execute(
+            "DELETE FROM orchestration_leases
+              WHERE lease_id = ?1 AND resource_kind = 'capacity' AND resource_id = ?2
+                AND owner_incarnation_id = ?3 AND revision = ?4",
+            params![
+                ownership.lease_id.as_str(),
+                ownership.queue_id,
+                ownership.owner_incarnation_id.as_str(),
+                checked_i64(ownership.claim_revision, "lease revision")?,
+            ],
+        )?;
+        if deleted != 1 {
+            return Err(data_error(
+                "execution admission lease release was not exact",
+            ));
+        }
+        let updated = load_queue_record_by_id(&tx, &ownership.queue_id)?
+            .ok_or_else(|| data_error("released execution queue record disappeared"))?;
+        tx.commit()?;
+        Ok(updated)
+    }
+
+    pub fn reconcile_execution_capacity(
+        &self,
+        policy: &AdmissionPolicySnapshot,
+    ) -> Result<AdmissionCapacityReconciliation, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        validate_admission_policy(&conn, policy)?;
+        let records = load_all_queue_records(&conn)?;
+        let counts = active_admission_counts(&conn, &records)?;
+        Ok(capacity_reconciliation(policy, &counts))
+    }
+}
+
+#[derive(Default)]
+struct ActiveAdmissionCounts {
+    global: u32,
+    orchestrated_global: u32,
+    environments: BTreeMap<EnvironmentId, u32>,
+    orchestrated_environments: BTreeMap<EnvironmentId, u32>,
+    providers: BTreeMap<(EnvironmentId, ProviderInstanceId), u32>,
+    organizations: BTreeMap<OrganizationId, u32>,
+    runs: BTreeMap<RunId, u32>,
+    run_limits: BTreeMap<RunId, u32>,
+    agents: BTreeMap<AgentId, u32>,
+    agent_limits: BTreeMap<AgentId, u32>,
+}
+
+fn validate_admission_claim_request(
+    request: &AdmissionClaimStoreRequest,
+) -> Result<(), StoreError> {
+    if request.queue_id.trim().is_empty()
+        || !is_sha256(&request.expected_candidate_sha256)
+        || request.owner_incarnation_id.as_str().trim().is_empty()
+        || request.lease_id.as_str().trim().is_empty()
+        || request.lease_expires_at_ms <= request.claimed_at_ms
+    {
+        return Err(data_error("execution admission claim is malformed"));
+    }
+    Ok(())
+}
+
+fn validate_admission_ownership(ownership: &AdmissionOwnership) -> Result<(), StoreError> {
+    if ownership.queue_id.trim().is_empty()
+        || !is_sha256(&ownership.expected_candidate_sha256)
+        || ownership.owner_incarnation_id.as_str().trim().is_empty()
+        || ownership.lease_id.as_str().trim().is_empty()
+        || ownership.claim_revision == 0
+    {
+        return Err(data_error("execution admission ownership is malformed"));
+    }
+    Ok(())
+}
+
+fn validate_admission_policy(
+    conn: &rusqlite::Connection,
+    policy: &AdmissionPolicySnapshot,
+) -> Result<(), StoreError> {
+    if policy.global_limit == 0
+        || policy
+            .environment_limits
+            .values()
+            .any(|limit| *limit == 0 || *limit > policy.global_limit)
+        || policy.provider_limits.values().any(|limit| *limit == 0)
+        || policy.organization_limits.values().any(|limit| *limit == 0)
+    {
+        return Err(data_error("execution admission policy is malformed"));
+    }
+    if let Some(expected) = policy.settings_revision {
+        let actual = conn
+            .query_row(
+                "SELECT revision FROM settings WHERE key = 'user_settings'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .map(|value| checked_u64(value, "settings revision"))
+            .transpose()?;
+        if actual != Some(expected) {
+            return Err(data_error(
+                "execution admission policy settings revision changed",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn load_queue_record_by_id(
+    conn: &rusqlite::Connection,
+    queue_id: &str,
+) -> Result<Option<OrchestrationQueueRecord>, StoreError> {
+    let run_id = conn
+        .query_row(
+            "SELECT run_id FROM orchestration_queue WHERE queue_id = ?1",
+            [queue_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let Some(run_id) = run_id else {
+        return Ok(None);
+    };
+    Ok(load_queue_records(conn, &RunId::from(run_id))?
+        .into_iter()
+        .find(|record| record.queue_id == queue_id))
+}
+
+fn load_all_queue_records(
+    conn: &rusqlite::Connection,
+) -> Result<Vec<OrchestrationQueueRecord>, StoreError> {
+    let mut statement = conn.prepare("SELECT DISTINCT run_id FROM orchestration_queue")?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+    let mut run_ids = Vec::new();
+    for row in rows {
+        run_ids.push(RunId::from(row?));
+    }
+    drop(statement);
+    let mut records = Vec::new();
+    for run_id in run_ids {
+        records.extend(load_queue_records(conn, &run_id)?);
+    }
+    Ok(records)
+}
+
+fn load_owned_admission(
+    conn: &rusqlite::Connection,
+    ownership: &AdmissionOwnership,
+) -> Result<(OrchestrationQueueRecord, ExecutionLease), StoreError> {
+    let record = load_queue_record_by_id(conn, &ownership.queue_id)?
+        .ok_or_else(|| data_error("execution queue record was not found"))?;
+    if record.candidate_sha256 != ownership.expected_candidate_sha256
+        || record.owner_incarnation_id.as_ref() != Some(&ownership.owner_incarnation_id)
+        || record.lease_id.as_ref() != Some(&ownership.lease_id)
+        || record.claim_revision != ownership.claim_revision
+    {
+        return Err(data_error("execution admission ownership changed"));
+    }
+    let lease = load_lease(conn, &ownership.lease_id)?
+        .ok_or_else(|| data_error("execution admission lease was not found"))?;
+    if lease.resource_kind != LeaseResourceKind::Capacity
+        || lease.resource_id != ownership.queue_id
+        || lease.owner_incarnation_id != ownership.owner_incarnation_id
+        || lease.revision != ownership.claim_revision
+    {
+        return Err(data_error("execution admission lease ownership changed"));
+    }
+    Ok((record, lease))
+}
+
+fn active_admission_counts(
+    conn: &rusqlite::Connection,
+    records: &[OrchestrationQueueRecord],
+) -> Result<ActiveAdmissionCounts, StoreError> {
+    let mut counts = ActiveAdmissionCounts::default();
+    for record in records.iter().filter(|record| {
+        matches!(record.state, QueueState::Claimed | QueueState::Dispatched)
+            && record.owner_incarnation_id.is_some()
+    }) {
+        let lease_id = record
+            .lease_id
+            .as_ref()
+            .ok_or_else(|| data_error("active execution admission has no lease"))?;
+        let lease = load_lease(conn, lease_id)?
+            .ok_or_else(|| data_error("active execution admission lease disappeared"))?;
+        if lease.resource_kind != LeaseResourceKind::Capacity
+            || lease.resource_id != record.queue_id
+            || record.owner_incarnation_id.as_ref() != Some(&lease.owner_incarnation_id)
+            || lease.revision != record.claim_revision
+        {
+            return Err(data_error(
+                "active execution admission lease differs from its queue row",
+            ));
+        }
+        increment_count(&mut counts.global)?;
+        increment_map(&mut counts.environments, record.environment_id.clone())?;
+        increment_map(
+            &mut counts.providers,
+            (
+                record.environment_id.clone(),
+                record.provider_instance_id.clone(),
+            ),
+        )?;
+        if let Some(organization_id) = record.organization_id.clone() {
+            increment_map(&mut counts.organizations, organization_id)?;
+        }
+        if !record.interactive {
+            increment_count(&mut counts.orchestrated_global)?;
+            increment_map(
+                &mut counts.orchestrated_environments,
+                record.environment_id.clone(),
+            )?;
+            if record.organization_id.is_none() {
+                return Err(data_error("orchestrated admission has no organization"));
+            }
+            let agent_limit = record
+                .agent_concurrency_limit
+                .ok_or_else(|| data_error("orchestrated admission has no agent limit"))?;
+            increment_map(&mut counts.runs, record.run_id.clone())?;
+            increment_map(&mut counts.agents, record.agent_id.clone())?;
+            counts
+                .agent_limits
+                .entry(record.agent_id.clone())
+                .and_modify(|limit| *limit = (*limit).min(agent_limit))
+                .or_insert(agent_limit);
+            let run = load_snapshot(conn, &record.run_id)?;
+            counts
+                .run_limits
+                .insert(record.run_id.clone(), run.max_parallel_tasks);
+        }
+    }
+    Ok(counts)
+}
+
+fn increment_count(value: &mut u32) -> Result<(), StoreError> {
+    *value = value
+        .checked_add(1)
+        .ok_or_else(|| data_error("execution admission count overflow"))?;
+    Ok(())
+}
+
+fn increment_map<K: Ord>(map: &mut BTreeMap<K, u32>, key: K) -> Result<(), StoreError> {
+    increment_count(map.entry(key).or_default())
+}
+
+fn admission_has_capacity(
+    conn: &rusqlite::Connection,
+    record: &OrchestrationQueueRecord,
+    counts: &ActiveAdmissionCounts,
+    policy: &AdmissionPolicySnapshot,
+) -> Result<bool, StoreError> {
+    let environment_limit = policy
+        .environment_limits
+        .get(&record.environment_id)
+        .copied()
+        .unwrap_or_else(|| {
+            pandamux_core::DEFAULT_ENVIRONMENT_EXECUTION_LIMIT.min(policy.global_limit)
+        });
+    let provider_limit = policy
+        .provider_limits
+        .get(&(
+            record.environment_id.clone(),
+            record.provider_instance_id.clone(),
+        ))
+        .copied();
+    let provider_count = counts
+        .providers
+        .get(&(
+            record.environment_id.clone(),
+            record.provider_instance_id.clone(),
+        ))
+        .copied()
+        .unwrap_or(0);
+    if counts.global >= policy.global_limit
+        || counts
+            .environments
+            .get(&record.environment_id)
+            .copied()
+            .unwrap_or(0)
+            >= environment_limit
+        || provider_limit.is_none_or(|limit| provider_count >= limit)
+    {
+        return Ok(false);
+    }
+    if let Some(organization_id) = record.organization_id.as_ref()
+        && policy
+            .organization_limits
+            .get(organization_id)
+            .is_some_and(|limit| {
+                counts
+                    .organizations
+                    .get(organization_id)
+                    .copied()
+                    .unwrap_or(0)
+                    >= *limit
+            })
+    {
+        return Ok(false);
+    }
+    if record.interactive {
+        return Ok(true);
+    }
+    if (policy.global_limit >= 2
+        && counts.orchestrated_global >= policy.global_limit.saturating_sub(1))
+        || (environment_limit >= 2
+            && counts
+                .orchestrated_environments
+                .get(&record.environment_id)
+                .copied()
+                .unwrap_or(0)
+                >= environment_limit.saturating_sub(1))
+    {
+        return Ok(false);
+    }
+    if record.organization_id.is_none() {
+        return Err(data_error("orchestrated queue record has no organization"));
+    }
+    let agent_limit = record
+        .agent_concurrency_limit
+        .ok_or_else(|| data_error("orchestrated queue record has no agent limit"))?;
+    if counts.agents.get(&record.agent_id).copied().unwrap_or(0) >= agent_limit {
+        return Ok(false);
+    }
+    let run = load_snapshot(conn, &record.run_id)?;
+    Ok(counts.runs.get(&record.run_id).copied().unwrap_or(0) < run.max_parallel_tasks)
+}
+
+fn admission_order_key(
+    record: &&OrchestrationQueueRecord,
+) -> (u64, RunId, RunTaskId, RunAttemptId) {
+    (
+        record.enqueued_at_ms,
+        record.run_id.clone(),
+        record.task_id.clone(),
+        record.attempt_id.clone(),
+    )
+}
+
+fn capacity_reconciliation(
+    policy: &AdmissionPolicySnapshot,
+    counts: &ActiveAdmissionCounts,
+) -> AdmissionCapacityReconciliation {
+    let mut overages = Vec::new();
+    push_capacity_overage(
+        &mut overages,
+        "global",
+        "global",
+        counts.global,
+        policy.global_limit,
+    );
+    for (environment_id, active) in &counts.environments {
+        let limit = policy
+            .environment_limits
+            .get(environment_id)
+            .copied()
+            .unwrap_or_else(|| {
+                pandamux_core::DEFAULT_ENVIRONMENT_EXECUTION_LIMIT.min(policy.global_limit)
+            });
+        push_capacity_overage(
+            &mut overages,
+            "environment",
+            environment_id.as_str(),
+            *active,
+            limit,
+        );
+    }
+    for ((environment_id, provider_id), active) in &counts.providers {
+        if let Some(limit) = policy
+            .provider_limits
+            .get(&(environment_id.clone(), provider_id.clone()))
+        {
+            push_capacity_overage(
+                &mut overages,
+                "provider",
+                &format!("{}:{}", environment_id.as_str(), provider_id.as_str()),
+                *active,
+                *limit,
+            );
+        }
+    }
+    for (organization_id, active) in &counts.organizations {
+        if let Some(limit) = policy.organization_limits.get(organization_id) {
+            push_capacity_overage(
+                &mut overages,
+                "organization",
+                organization_id.as_str(),
+                *active,
+                *limit,
+            );
+        }
+    }
+    for (run_id, active) in &counts.runs {
+        if let Some(limit) = counts.run_limits.get(run_id) {
+            push_capacity_overage(&mut overages, "run", run_id.as_str(), *active, *limit);
+        }
+    }
+    for (agent_id, active) in &counts.agents {
+        if let Some(limit) = counts.agent_limits.get(agent_id) {
+            push_capacity_overage(&mut overages, "agent", agent_id.as_str(), *active, *limit);
+        }
+    }
+    overages.sort_by(|left, right| {
+        (&left.dimension, &left.resource_id).cmp(&(&right.dimension, &right.resource_id))
+    });
+    AdmissionCapacityReconciliation {
+        active_claims: counts.global,
+        overages,
+    }
+}
+
+fn push_capacity_overage(
+    overages: &mut Vec<AdmissionCapacityOverage>,
+    dimension: &str,
+    resource_id: &str,
+    active: u32,
+    limit: u32,
+) {
+    if active > limit {
+        overages.push(AdmissionCapacityOverage {
+            dimension: dimension.to_string(),
+            resource_id: resource_id.to_string(),
+            active,
+            limit,
+        });
+    }
+}
+
+fn apply_admission_orchestration_transition(
+    tx: &Transaction<'_>,
+    queue: &OrchestrationQueueRecord,
+    transition: &OrchestratedAdmissionTransition,
+    at_ms: u64,
+) -> Result<(), StoreError> {
+    let reservation = &transition.reservation;
+    let attempt = &transition.attempt;
+    if queue.interactive
+        || reservation.run_id != queue.run_id
+        || reservation.agent_id != queue.agent_id
+        || Some(&reservation.organization_id) != queue.organization_id.as_ref()
+        || reservation.reservation.task_id != queue.task_id
+        || reservation.reservation.attempt_id != queue.attempt_id
+        || attempt.id != queue.attempt_id
+        || attempt.task_id != queue.task_id
+        || attempt.route.selected_agent_id.as_ref() != Some(&queue.agent_id)
+        || attempt
+            .route
+            .provider
+            .selected_provider_instance_id
+            .as_ref()
+            != Some(&queue.provider_instance_id)
+    {
+        return Err(data_error(
+            "orchestrated admission transition differs from its queue identity",
+        ));
+    }
+    let current = load_snapshot(tx, &queue.run_id)?;
+    let events = load_events(tx, &queue.run_id)?;
+    let (replayed, effects) = replay_with_effects(&events)?;
+    if pandamux_orchestrator::canonical_run_bytes(&current)
+        != pandamux_orchestrator::canonical_run_bytes(&replayed)
+    {
+        return Err(data_error(
+            "orchestration replay differs from stored snapshot during admission",
+        ));
+    }
+    verify_effect_rows(&effects, &load_effects(tx, &queue.run_id)?)?;
+    let expected_last_seq = current.last_seq;
+    let expected_snapshot_sha256 = orchestration_snapshot_sha256(&current);
+    let commands = [
+        (
+            RunCommand::ReserveBudget {
+                reservation: reservation.reservation.clone(),
+            },
+            RunEventId::new(format!(
+                "run-event-admission-budget-{}",
+                reservation.reservation.id.as_str()
+            )),
+            format!(
+                "execution-admission:budget:{}",
+                reservation.reservation.id.as_str()
+            ),
+        ),
+        (
+            RunCommand::RequestDispatch {
+                attempt: attempt.clone(),
+            },
+            RunEventId::new(format!(
+                "run-event-admission-dispatch-{}",
+                attempt.id.as_str()
+            )),
+            format!("execution-admission:dispatch:{}", attempt.id.as_str()),
+        ),
+    ];
+    let mut next = current.clone();
+    let mut new_events = Vec::new();
+    let mut new_effects = Vec::new();
+    for (command, event_id, idempotency_key) in commands {
+        let kinds = pandamux_orchestrator::decide(&next, command).map_err(orchestration_error)?;
+        if kinds.len() != 1 {
+            return Err(data_error(
+                "execution admission transition did not produce one event",
+            ));
+        }
+        let event = RunEvent {
+            event_id,
+            run_id: queue.run_id.clone(),
+            seq: next
+                .last_seq
+                .checked_add(1)
+                .ok_or_else(|| data_error("orchestration event sequence overflow"))?,
+            at_ms,
+            idempotency_key,
+            kind: kinds.into_iter().next().expect("one decided event"),
+        };
+        let outcome = pandamux_orchestrator::apply(&next, &event).map_err(orchestration_error)?;
+        next = outcome.run;
+        new_effects.extend(outcome.new_effects);
+        new_events.push(event);
+    }
+    if transition_events_collide(tx, &new_events)? {
+        return Err(data_error(
+            "execution admission event identity already exists",
+        ));
+    }
+    for event in &new_events {
+        insert_event(tx, event)?;
+    }
+    for effect in new_effects {
+        insert_effect(tx, &stored_effect_from_run(&next, &new_events, effect)?)?;
+    }
+    update_run_snapshot(
+        tx,
+        &queue.run_id,
+        &next,
+        expected_last_seq,
+        &expected_snapshot_sha256,
+    )?;
+    reserve_daily_budget_for_admission(
+        tx,
+        reservation,
+        transition.daily_budget_limit_micro_usd,
+        at_ms,
+    )?;
+    insert_budget_reservation(tx, reservation)?;
+    Ok(())
+}
+
+fn reserve_daily_budget_for_admission(
+    tx: &Transaction<'_>,
+    reservation: &StoredBudgetReservation,
+    limit_micro_usd: u64,
+    updated_at_ms: u64,
+) -> Result<(), StoreError> {
+    if limit_micro_usd == 0 || limit_micro_usd > i64::MAX as u64 {
+        return Err(data_error(
+            "execution admission daily budget limit is malformed",
+        ));
+    }
+    let amount = reservation.reservation.amount.cost_micro_usd;
+    let current = load_daily_budget(
+        tx,
+        &reservation.organization_id,
+        &reservation.reservation.ledger_utc_date,
+    )?;
+    let record = if let Some(current) = current {
+        if current.limit_micro_usd != limit_micro_usd || updated_at_ms < current.updated_at_ms {
+            return Err(data_error(
+                "execution admission daily budget policy changed",
+            ));
+        }
+        let reserved_micro_usd = current
+            .reserved_micro_usd
+            .checked_add(amount)
+            .ok_or_else(|| data_error("daily budget reservation overflow"))?;
+        let revision = current
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| data_error("daily budget revision overflow"))?;
+        let available = current
+            .limit_micro_usd
+            .checked_add(current.granted_micro_usd)
+            .ok_or_else(|| data_error("daily budget available amount overflow"))?;
+        let committed = reserved_micro_usd
+            .checked_add(current.reconciled_micro_usd)
+            .ok_or_else(|| data_error("daily budget committed amount overflow"))?;
+        if committed > available {
+            return Err(data_error("daily budget limit would be exceeded"));
+        }
+        let changed = tx.execute(
+            "UPDATE orchestration_daily_budgets
+                SET reserved_micro_usd = ?1, revision = ?2, updated_at_ms = ?3
+              WHERE organization_id = ?4 AND ledger_utc_date = ?5
+                AND limit_micro_usd = ?6 AND reserved_micro_usd = ?7
+                AND reconciled_micro_usd = ?8 AND granted_micro_usd = ?9
+                AND revision = ?10 AND updated_at_ms = ?11",
+            params![
+                checked_i64(reserved_micro_usd, "daily budget reserved")?,
+                checked_i64(revision, "daily budget revision")?,
+                checked_i64(updated_at_ms, "daily budget updated at")?,
+                current.organization_id.as_str(),
+                current.ledger_utc_date,
+                checked_i64(current.limit_micro_usd, "daily budget limit")?,
+                checked_i64(current.reserved_micro_usd, "prior daily budget reserved")?,
+                checked_i64(
+                    current.reconciled_micro_usd,
+                    "prior daily budget reconciled"
+                )?,
+                checked_i64(current.granted_micro_usd, "prior daily budget granted")?,
+                checked_i64(current.revision, "prior daily budget revision")?,
+                checked_i64(current.updated_at_ms, "prior daily budget updated at")?,
+            ],
+        )?;
+        if changed != 1 {
+            return Err(data_error(
+                "daily budget reservation lost its compare-and-swap",
+            ));
+        }
+        DailyBudgetRecord {
+            reserved_micro_usd,
+            revision,
+            updated_at_ms,
+            ..current
+        }
+    } else {
+        if amount > limit_micro_usd {
+            return Err(data_error("daily budget limit would be exceeded"));
+        }
+        let record = DailyBudgetRecord {
+            organization_id: reservation.organization_id.clone(),
+            ledger_utc_date: reservation.reservation.ledger_utc_date.clone(),
+            limit_micro_usd,
+            reserved_micro_usd: amount,
+            reconciled_micro_usd: 0,
+            granted_micro_usd: 0,
+            revision: 1,
+            updated_at_ms,
+        };
+        insert_daily_budget(tx, &record)?;
+        record
+    };
+    if record.reserved_micro_usd < amount {
+        return Err(data_error("daily budget reservation was not recorded"));
+    }
+    Ok(())
 }
 
 fn load_worktree_by_id(
@@ -3318,10 +4566,12 @@ fn load_queue_records(
     run_id: &RunId,
 ) -> Result<Vec<OrchestrationQueueRecord>, StoreError> {
     let mut statement = conn.prepare(
-        "SELECT queue_id, task_id, attempt_id, agent_id, provider_instance_id,
-                environment_id, candidate_sha256, priority, task_enqueued_at_ms,
-                enqueued_at_ms, not_before_ms, state, owner_incarnation_id,
-                lease_id, claim_revision, interactive
+        "SELECT queue_id, task_id, attempt_id, agent_id, organization_id,
+                agent_concurrency_limit, provider_instance_id, environment_id,
+                candidate_sha256, priority, task_enqueued_at_ms, enqueued_at_ms,
+                not_before_ms, state, owner_incarnation_id, lease_id,
+                claim_revision, interactive, claimed_at_ms, claim_order,
+                interactive_streak
            FROM orchestration_queue WHERE run_id = ?1
           ORDER BY enqueued_at_ms, task_id, attempt_id",
     )?;
@@ -3331,18 +4581,23 @@ fn load_queue_records(
             row.get::<_, String>(1)?,
             row.get::<_, String>(2)?,
             row.get::<_, String>(3)?,
-            row.get::<_, String>(4)?,
-            row.get::<_, String>(5)?,
+            row.get::<_, Option<String>>(4)?,
+            row.get::<_, Option<i64>>(5)?,
             row.get::<_, String>(6)?,
-            row.get::<_, i64>(7)?,
-            row.get::<_, i64>(8)?,
+            row.get::<_, String>(7)?,
+            row.get::<_, String>(8)?,
             row.get::<_, i64>(9)?,
             row.get::<_, i64>(10)?,
-            row.get::<_, String>(11)?,
-            row.get::<_, Option<String>>(12)?,
-            row.get::<_, Option<String>>(13)?,
-            row.get::<_, i64>(14)?,
-            row.get::<_, bool>(15)?,
+            row.get::<_, i64>(11)?,
+            row.get::<_, i64>(12)?,
+            row.get::<_, String>(13)?,
+            row.get::<_, Option<String>>(14)?,
+            row.get::<_, Option<String>>(15)?,
+            row.get::<_, i64>(16)?,
+            row.get::<_, bool>(17)?,
+            row.get::<_, Option<i64>>(18)?,
+            row.get::<_, Option<i64>>(19)?,
+            row.get::<_, Option<i64>>(20)?,
         ))
     })?;
     let mut records = Vec::new();
@@ -3352,6 +4607,8 @@ fn load_queue_records(
             task_id,
             attempt_id,
             agent_id,
+            organization_id,
+            agent_concurrency_limit,
             provider_instance_id,
             environment_id,
             candidate_sha256,
@@ -3364,6 +4621,9 @@ fn load_queue_records(
             lease_id,
             claim_revision,
             interactive,
+            claimed_at_ms,
+            claim_order,
+            interactive_streak,
         ) = row?;
         let record = OrchestrationQueueRecord {
             queue_id,
@@ -3371,6 +4631,10 @@ fn load_queue_records(
             task_id: RunTaskId::from(task_id),
             attempt_id: RunAttemptId::from(attempt_id),
             agent_id: AgentId::from(agent_id),
+            organization_id: organization_id.map(OrganizationId::from),
+            agent_concurrency_limit: agent_concurrency_limit
+                .map(|value| checked_u32(value, "agent concurrency limit"))
+                .transpose()?,
             provider_instance_id: pandamux_core::ProviderInstanceId::from(provider_instance_id),
             environment_id: pandamux_core::EnvironmentId::from(environment_id),
             candidate_sha256,
@@ -3383,11 +4647,48 @@ fn load_queue_records(
             lease_id: lease_id.map(ExecutionLeaseId::from),
             claim_revision: checked_u64(claim_revision, "queue claim revision")?,
             interactive,
+            claimed_at_ms: claimed_at_ms
+                .map(|value| checked_u64(value, "queue claimed timestamp"))
+                .transpose()?,
+            claim_order: claim_order
+                .map(|value| checked_u64(value, "queue claim order"))
+                .transpose()?,
+            interactive_streak: interactive_streak
+                .map(|value| {
+                    u8::try_from(value)
+                        .map_err(|_| data_error("queue interactive streak is out of range"))
+                })
+                .transpose()?,
         };
         if !is_sha256(&record.candidate_sha256)
             || record.enqueued_at_ms < record.task_enqueued_at_ms
             || record.not_before_ms < record.enqueued_at_ms
             || (record.owner_incarnation_id.is_none() != record.lease_id.is_none())
+            || record.interactive == record.agent_concurrency_limit.is_some()
+            || (!record.interactive && record.organization_id.is_none())
+            || record
+                .agent_concurrency_limit
+                .is_some_and(|limit| limit == 0)
+            || (record.claimed_at_ms.is_none() != record.claim_order.is_none())
+            || (record.claimed_at_ms.is_none() != record.interactive_streak.is_none())
+            || record
+                .claimed_at_ms
+                .is_some_and(|claimed| claimed < record.enqueued_at_ms)
+            || record.claim_order == Some(0)
+            || record.interactive_streak.is_some_and(|streak| streak > 4)
+            || match record.state {
+                QueueState::Queued | QueueState::Cancelled => {
+                    record.owner_incarnation_id.is_some() || record.lease_id.is_some()
+                }
+                QueueState::Claimed => {
+                    record.owner_incarnation_id.is_none()
+                        || record.lease_id.is_none()
+                        || record.claimed_at_ms.is_none()
+                }
+                QueueState::Dispatched => {
+                    record.owner_incarnation_id.is_some() && record.claimed_at_ms.is_none()
+                }
+            }
         {
             return Err(data_error("orchestration queue row is malformed"));
         }
@@ -4583,6 +5884,8 @@ mod tests {
                 task_id: RunTaskId::new("task-phase5c"),
                 attempt_id: RunAttemptId::new("run-attempt-phase5c"),
                 agent_id: AgentId::new("agent-phase5c"),
+                organization_id: Some(OrganizationId::new("org-phase5c")),
+                agent_concurrency_limit: Some(2),
                 provider_instance_id: ProviderInstanceId::new("provider-phase5c"),
                 environment_id: pandamux_core::EnvironmentId::new("env-phase5c"),
                 candidate_sha256: "c".repeat(64),
@@ -4597,6 +5900,9 @@ mod tests {
                 lease_id: Some(capacity_lease.id.clone()),
                 claim_revision: 1,
                 interactive: false,
+                claimed_at_ms: Some(30_000),
+                claim_order: Some(1),
+                interactive_streak: Some(0),
             }],
             leases: vec![capacity_lease, worktree_lease.clone()],
             worktrees: vec![OwnedAttemptWorktreeRecord {

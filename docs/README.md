@@ -5,6 +5,10 @@ workspace. Read the root [`Cargo.toml`](../Cargo.toml) for the version;
 documentation does not duplicate it.
 
 > **Latest Updates (October 2026):**
+> - **v0.60.95:** Durable shared execution admission, multi-scope caps, interactive reserve, and lease recovery.
+> - **v0.60.94:** Crash-safe Phase 5C attempt worktrees and private checkpoints.
+> - **v0.60.93:** Replay-safe Phase 5C run transitions and effect outbox.
+> - **v0.60.92:** Migration 14 and the durable Phase 5C execution store.
 > - **v0.60.89:** Final Phase 5B local and native Windows acceptance reconciliation.
 > - **v0.60.88:** Native terminal confirmation controls now publish their disabled UI Automation state.
 > - **v0.60.87:** Physical keyboard traversal restored for both confirmation actions.

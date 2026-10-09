@@ -459,6 +459,7 @@ mod tests {
             server_version: None,
             schedules_count: Some(1),
             last_error: Some("environment-error-sentinel".to_string()),
+            execution_limit: pandamux_core::DEFAULT_ENVIRONMENT_EXECUTION_LIMIT,
             provider_overrides: BTreeMap::from([(
                 "provider-safe-id".to_string(),
                 ProviderEnvironmentOverride {

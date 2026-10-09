@@ -1,6 +1,12 @@
 use crate::ids::{EnvironmentId, SshProfileId};
 use serde::{Deserialize, Serialize};
 
+pub const DEFAULT_ENVIRONMENT_EXECUTION_LIMIT: u32 = 4;
+
+const fn default_execution_limit() -> u32 {
+    DEFAULT_ENVIRONMENT_EXECUTION_LIMIT
+}
+
 /// Target machine or execution host where threads, worktrees, and schedules run.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -18,6 +24,8 @@ pub struct Environment {
     pub schedules_count: Option<usize>,
     #[serde(default)]
     pub last_error: Option<String>,
+    #[serde(default = "default_execution_limit")]
+    pub execution_limit: u32,
     #[serde(default)]
     pub provider_overrides:
         std::collections::BTreeMap<String, crate::provider_config::ProviderEnvironmentOverride>,
@@ -38,6 +46,7 @@ impl Environment {
             server_version: Some(env!("CARGO_PKG_VERSION").to_string()),
             schedules_count: Some(0),
             last_error: None,
+            execution_limit: DEFAULT_ENVIRONMENT_EXECUTION_LIMIT,
             provider_overrides: std::collections::BTreeMap::new(),
         }
     }

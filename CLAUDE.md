@@ -313,7 +313,16 @@ for this Phase 5B surface and must not be inferred from that result.
 
 Every executable provider path starts from a stored `ProviderInstanceConfig` resolved for the thread's environment. The shared resolver applies the exact provider kind, binary override, profile directory, settings, environment overrides, enabled state, capability map, authentication probe, and concurrency limit. Missing or incompatible instances fail with structured errors. Production code never falls back to the Custom mock.
 
-Per-instance permits are held for the complete provider-process lifetime, including approval waits, and are released on cancellation, crash, configuration replacement, or shutdown. The selected instance ID is carried through the thread, health and login paths, turn, process audit, and provider launch.
+Before `ThreadManager` acquires that final provider permit, the shared durable
+`ExecutionAdmissionService` must claim capacity. Manual and orchestrated work
+share provider, environment, organization, and global accounting;
+orchestrated work also checks run and agent limits. Queue order, interactive
+reserve, owner, TTL, and claim revision are persisted in SQLite. Per-instance
+permits and admission claims are held for the complete provider-process
+lifetime, including approval waits, and are released on cancellation, crash,
+configuration replacement, or shutdown. The selected instance ID is carried
+through the queue, thread, health and login paths, turn, process audit, and
+provider launch.
 
 The desktop composer never converts a provider kind into an instance ID. After bounded
 health checks, it builds its routes from enabled, authenticated stored instances and

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const SETTINGS_SCHEMA_VERSION: u32 = 8;
+pub const SETTINGS_SCHEMA_VERSION: u32 = 9;
 
 /// Bounds for `terminal.scrollbackLines` (clamped on load and set).
 pub const SCROLLBACK_LINES_MIN: u32 = 1_000;
@@ -290,6 +290,9 @@ impl UserSettings {
         if self.version < 8 {
             self.version = 8;
         }
+        if self.version < 9 {
+            self.version = 9;
+        }
         for provider in &mut self.providers {
             if provider.enabled {
                 provider.disabled_reason = None;
@@ -301,6 +304,12 @@ impl UserSettings {
             .clamp(SCROLLBACK_LINES_MIN, SCROLLBACK_LINES_MAX);
         if self.advanced.global_concurrency_limit == 0 {
             self.advanced.global_concurrency_limit = 1;
+        }
+        for environment in &mut self.environments {
+            environment.execution_limit = environment
+                .execution_limit
+                .max(1)
+                .min(self.advanced.global_concurrency_limit);
         }
         if self.advanced.max_checkpoints_per_thread == 0 {
             self.advanced.max_checkpoints_per_thread = 10;

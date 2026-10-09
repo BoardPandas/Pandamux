@@ -42,7 +42,7 @@ Sources: [settings.rs:1-39](../../crates/pandamux-core/src/settings.rs#L1-L39), 
 <!-- BEGIN:AUTOGEN pandamux_08_configuration_settings -->
 ## Application Settings
 
-The settings schema is at version 7. Every top-level field participates in Serde defaults, allowing older or partial serialized settings to gain current defaults before normalization ([settings.rs:14-39](../../crates/pandamux-core/src/settings.rs#L14-L39), [settings.rs:205-220](../../crates/pandamux-core/src/settings.rs#L205-L220)).
+The settings schema is at version 9. Every top-level field participates in Serde defaults, allowing older or partial serialized settings to gain current defaults before normalization ([settings.rs:14-39](../../crates/pandamux-core/src/settings.rs#L14-L39), [settings.rs:205-220](../../crates/pandamux-core/src/settings.rs#L205-L220)).
 
 | Group | Important fields | Defaults and validation |
 |---|---|---|
@@ -51,7 +51,7 @@ The settings schema is at version 7. Every top-level field participates in Serde
 | `keyboard` | `passThrough`, `overrides` | Empty collections; overrides map action IDs to a chord or `null` to unbind ([settings.rs:381-390](../../crates/pandamux-core/src/settings.rs#L381-L390)) |
 | `advanced` | Global concurrency, checkpoint and attachment limits, usage scanning/sync, capacity routing, failover | Concurrency 8, 50 checkpoints, and all four Phase 4 switches enabled ([settings.rs:350-378](../../crates/pandamux-core/src/settings.rs#L350-L378)) |
 
-`terminal.scrollbackLines` is clamped to 1,000 through 200,000. Zero global concurrency becomes 1, and zero checkpoint retention becomes 10 during normalization ([settings.rs:16-18](../../crates/pandamux-core/src/settings.rs#L16-L18), [settings.rs:282-291](../../crates/pandamux-core/src/settings.rs#L282-L291)).
+`terminal.scrollbackLines` is clamped to 1,000 through 200,000. Zero global concurrency becomes 1, every environment execution limit is clamped from 1 through the global limit, and zero checkpoint retention becomes 10 during normalization ([settings.rs:16-18](../../crates/pandamux-core/src/settings.rs#L16-L18), [settings.rs:282-318](../../crates/pandamux-core/src/settings.rs#L282-L318)).
 
 Settings RPCs use dotted camelCase paths. Reads reject unknown segments; writes reject an empty key, the `version` field, unknown paths, and values that cannot deserialize back into the full schema. Only `keyboard.overrides` permits insertion of a new leaf ([settings.rs:392-440](../../crates/pandamux-core/src/settings.rs#L392-L440)).
 
@@ -74,13 +74,13 @@ Organizations define policy and budget boundaries, while environments identify t
 |---|---|---|
 | `OrganizationPolicy` | Projects, allowed provider instances, allowed subscriptions, failover pools, tier mapping, concurrency, daily budget, Broadside policy, revision | Requires identifiers, display name, nonzero revision, nonempty provider and subscription allowlists, unique references, and valid tier targets ([organization.rs:168-194](../../crates/pandamux-core/src/organization.rs#L168-L194), [organization.rs:360-419](../../crates/pandamux-core/src/organization.rs#L360-L419)) |
 | `FailoverPool` | Members, capability requirements, revision | Rejects empty pools, duplicate instances, missing models, preferences above 1,000, and capability mismatches ([organization.rs:36-62](../../crates/pandamux-core/src/organization.rs#L36-L62), [organization.rs:112-165](../../crates/pandamux-core/src/organization.rs#L112-L165)) |
-| `Environment` | Kind, display name, status, platform, server version, schedule count, last error, provider overrides | Local and SSH environments share one routing record ([environment.rs:4-24](../../crates/pandamux-core/src/environment.rs#L4-L24)) |
+| `Environment` | Kind, display name, status, platform, server version, schedule count, last error, execution limit, provider overrides | Local and SSH environments share one routing record. The execution limit defaults to 4 and is clamped to the trusted global limit ([environment.rs:4-35](../../crates/pandamux-core/src/environment.rs#L4-L35), [settings.rs:305-313](../../crates/pandamux-core/src/settings.rs#L305-L313)) |
 
-The default environment is `env_local`, named `Local Machine`, with ready status, detected OS and architecture, current server version, and no provider overrides ([environment.rs:26-43](../../crates/pandamux-core/src/environment.rs#L26-L43)). Environment kinds are `local` or `ssh` with a stable SSH profile ID; status distinguishes connecting, bootstrapping, ready, degraded, offline, disconnected, unreachable, and explicit error states ([environment.rs:46-68](../../crates/pandamux-core/src/environment.rs#L46-L68)).
+The default environment is `env_local`, named `Local Machine`, with ready status, detected OS and architecture, current server version, an execution limit of 4, and no provider overrides ([environment.rs:37-54](../../crates/pandamux-core/src/environment.rs#L37-L54)). Environment kinds are `local` or `ssh` with a stable SSH profile ID; status distinguishes connecting, bootstrapping, ready, degraded, offline, disconnected, unreachable, and explicit error states ([environment.rs:57-79](../../crates/pandamux-core/src/environment.rs#L57-L79)).
 
 Organization authorization is fail closed: provider instances and subscription keys must be allowlisted before routing, and failover candidates are hard-filtered by those allowlists before scoring ([organization.rs:421-492](../../crates/pandamux-core/src/organization.rs#L421-L492)).
 
-Sources: [settings.rs:27-38](../../crates/pandamux-core/src/settings.rs#L27-L38), [organization.rs:36-194](../../crates/pandamux-core/src/organization.rs#L36-L194), [organization.rs:360-492](../../crates/pandamux-core/src/organization.rs#L360-L492), [environment.rs:4-68](../../crates/pandamux-core/src/environment.rs#L4-L68)
+Sources: [settings.rs:27-38](../../crates/pandamux-core/src/settings.rs#L27-L38), [settings.rs:282-318](../../crates/pandamux-core/src/settings.rs#L282-L318), [organization.rs:36-194](../../crates/pandamux-core/src/organization.rs#L36-L194), [organization.rs:360-492](../../crates/pandamux-core/src/organization.rs#L360-L492), [environment.rs:4-79](../../crates/pandamux-core/src/environment.rs#L4-L79)
 <!-- END:AUTOGEN pandamux_08_configuration_organizations -->
 
 ---

@@ -10,9 +10,9 @@ use pandamux_core::{
     CapacityConfidence, CapacityEvidenceScope, CapacityFreshness, CapacityInterruptionEvidence,
     CapacitySnapshot, ContinuationDelivery, ContinuationDeliveryKind, ContinuationDeliveryState,
     ContinuationId, ContinuationRecord, ContinuationState, DEFAULT_CAPACITY_MAX_AGE_MS,
-    EnvironmentId, ProjectId, ProviderInstanceId, ProviderKind, RoutingAuthentication,
-    RoutingCandidate, RoutingDecision, RoutingEvaluation, RoutingHealth, RoutingScore,
-    SubscriptionKey, ToolLedgerEntry, ToolLedgerStatus, TurnAttempt, TurnAttemptId,
+    EnvironmentId, OrganizationId, ProjectId, ProviderInstanceId, ProviderKind,
+    RoutingAuthentication, RoutingCandidate, RoutingDecision, RoutingEvaluation, RoutingHealth,
+    RoutingScore, SubscriptionKey, ToolLedgerEntry, ToolLedgerStatus, TurnAttempt, TurnAttemptId,
     TurnAttemptStatus,
     event::{ThreadEvent, ThreadEventKind, ToolCallStatus, TurnOutcome},
     ids::{ThreadId, TurnId},
@@ -31,6 +31,9 @@ use pandamux_providers::{
     ProviderAuthStatus, ProviderEvent, ProviderHealth, ProviderSnapshot, SessionSpec,
 };
 
+use crate::execution_admission::{
+    EnqueueManualAdmissionRequest, ExecutionAdmissionClaim, ExecutionAdmissionService,
+};
 use crate::provider_resolver::{ProviderResolver, ResolvedProviderExecution};
 use crate::request_context::CapabilityAuthority;
 use crate::store::{ProviderExecutionAudit, Store};
@@ -112,6 +115,8 @@ pub struct ActiveThreadSession {
     pub generation: uuid::Uuid,
     pub child_capability_token: String,
     pub capability_authority: Arc<CapabilityAuthority>,
+    pub execution_admission: ExecutionAdmissionService,
+    pub admission_claim: ExecutionAdmissionClaim,
 }
 
 async fn shutdown_active_session(active: ActiveThreadSession, interrupt: bool) {
@@ -128,6 +133,10 @@ async fn shutdown_active_session(active: ActiveThreadSession, interrupt: bool) {
     active
         .capability_authority
         .revoke(&active.child_capability_token);
+    let _ = active
+        .execution_admission
+        .release(&active.admission_claim)
+        .await;
 }
 
 async fn remove_active_generation(
@@ -152,6 +161,7 @@ pub struct ThreadManager {
     store: Store,
     provider_resolver: Arc<ProviderResolver>,
     capability_authority: Arc<CapabilityAuthority>,
+    execution_admission: ExecutionAdmissionService,
     environment_id: String,
     active_sessions: Arc<Mutex<HashMap<ThreadId, ActiveThreadSession>>>,
     continuation_dispatch: Arc<Mutex<()>>,
@@ -335,6 +345,7 @@ impl ThreadManager {
         let (broadcaster, _) = broadcast::channel(512);
 
         Self {
+            execution_admission: ExecutionAdmissionService::new(store.clone()),
             store,
             provider_resolver,
             capability_authority,
@@ -361,6 +372,30 @@ impl ThreadManager {
     /// Access the raw broadcast channel sender for event relaying.
     pub fn broadcaster(&self) -> &broadcast::Sender<EventEnvelope> {
         &self.broadcaster
+    }
+
+    fn execution_organization_id(
+        &self,
+        thread: &Thread,
+        hub_routing_context: Option<&HubRoutingContext>,
+        use_local_policy: bool,
+    ) -> Result<Option<OrganizationId>, RpcError> {
+        if let Some(context) = hub_routing_context {
+            return Ok(Some(context.organization.id.clone()));
+        }
+        let Some(project_id) = thread.project_id.as_ref() else {
+            return Ok(None);
+        };
+        if !use_local_policy {
+            return Err(organization_policy_error(
+                project_id,
+                "Remote project execution requires a canonical Hub policy snapshot",
+            ));
+        }
+        self.store
+            .organization_policy_for_project(project_id)
+            .map(|policy| Some(policy.id))
+            .map_err(|error| organization_policy_error(project_id, error.to_string()))
     }
 
     pub async fn shutdown_all(&self) {
@@ -813,6 +848,8 @@ impl ThreadManager {
         &self,
         thread: &Thread,
         allow_resume: bool,
+        turn_id: &TurnId,
+        organization_id: Option<OrganizationId>,
     ) -> Result<ActiveThreadSession, RpcError> {
         if !allow_resume {
             self.store
@@ -838,11 +875,44 @@ impl ThreadManager {
             }
         }
 
-        let execution = Arc::new(
-            self.provider_resolver
-                .acquire_execution(&thread.provider_instance_id, &thread.environment_id)
-                .await?,
-        );
+        let admission_claim = self
+            .execution_admission
+            .admit_manual_immediately(EnqueueManualAdmissionRequest {
+                thread_id: thread.id.clone(),
+                turn_id: turn_id.clone(),
+                agent_id: thread.agent.as_ref().map(|agent| agent.agent_id.clone()),
+                organization_id,
+                provider_instance_id: thread.provider_instance_id.clone(),
+                environment_id: thread.environment_id.clone(),
+                enqueued_at_ms: now_ms(),
+            })
+            .await
+            .map_err(|error| RpcError::internal_error(error.to_string()))?
+            .ok_or_else(|| {
+                RpcError::with_data(
+                    -32023,
+                    "Execution capacity is currently unavailable",
+                    serde_json::json!({
+                        "reason": "provider_capacity_reached",
+                        "threadId": thread.id,
+                        "turnId": turn_id,
+                        "providerInstanceId": thread.provider_instance_id,
+                        "environmentId": thread.environment_id,
+                    }),
+                )
+            })?;
+
+        let execution = match self
+            .provider_resolver
+            .acquire_execution(&thread.provider_instance_id, &thread.environment_id)
+            .await
+        {
+            Ok(execution) => Arc::new(execution),
+            Err(error) => {
+                let _ = self.execution_admission.release(&admission_claim).await;
+                return Err(error);
+            }
+        };
         let resume_token = if allow_resume {
             self.store
                 .get_resume_token(&thread.id)
@@ -893,6 +963,7 @@ impl ThreadManager {
             Ok(session) => session,
             Err(error) => {
                 self.capability_authority.revoke(&child_capability_token);
+                let _ = self.execution_admission.release(&admission_claim).await;
                 return Err(RpcError::internal_error(error.to_string()));
             }
         };
@@ -905,6 +976,23 @@ impl ThreadManager {
             generation: uuid::Uuid::new_v4(),
             child_capability_token,
             capability_authority: self.capability_authority.clone(),
+            execution_admission: self.execution_admission.clone(),
+            admission_claim,
+        };
+        let dispatched_claim = match self
+            .execution_admission
+            .mark_dispatched(&candidate.admission_claim)
+            .await
+        {
+            Ok(claim) => claim,
+            Err(error) => {
+                shutdown_active_session(candidate, false).await;
+                return Err(RpcError::internal_error(error.to_string()));
+            }
+        };
+        let candidate = ActiveThreadSession {
+            admission_claim: dispatched_claim,
+            ..candidate
         };
 
         let raced = {
@@ -1226,8 +1314,18 @@ impl ThreadManager {
         )
         .unwrap_or(None);
 
+        let organization_id = self.execution_organization_id(
+            &thread,
+            hub_routing_context.as_ref(),
+            enforce_organization_policy,
+        )?;
         let active_sess = self
-            .get_or_start_session_with_resume(&thread, allow_native_resume && !provider_changed)
+            .get_or_start_session_with_resume(
+                &thread,
+                allow_native_resume && !provider_changed,
+                &turn_id,
+                organization_id,
+            )
             .await?;
 
         let turn = Turn {
@@ -2051,9 +2149,22 @@ impl ThreadManager {
                                 retry_thread.model = retry_route.model.clone();
                                 retry_thread.status = ThreadStatus::Working;
                                 retry_thread.updated_at_ms = now_ms();
+                                let retry_organization_id = manager
+                                    .execution_organization_id(
+                                        &retry_thread,
+                                        hub_routing_context_for_retry.as_ref(),
+                                        use_local_policy_for_retry,
+                                    )
+                                    .ok()
+                                    .flatten();
                                 if store.save_thread(&retry_thread).is_ok()
                                     && let Ok(retry_session) = manager
-                                        .get_or_start_session_with_resume(&retry_thread, false)
+                                        .get_or_start_session_with_resume(
+                                            &retry_thread,
+                                            false,
+                                            &turn_id,
+                                            retry_organization_id,
+                                        )
                                         .await
                                 {
                                     let retry_attempt_id = TurnAttemptId::generate();

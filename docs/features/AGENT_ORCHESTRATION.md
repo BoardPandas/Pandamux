@@ -27,9 +27,11 @@ The following files were used as evidence for this page:
 - [models.rs:93-292](../../crates/pandamux-providers/src/models.rs#L93-L292)
 - [thread_manager.rs:107-3110](../../crates/pandamux-server/src/thread_manager.rs#L107-L3110)
 - [run_execution_service.rs](../../crates/pandamux-server/src/run_execution_service.rs)
+- [execution_admission.rs](../../crates/pandamux-server/src/execution_admission.rs)
 - [attempt_worktree.rs](../../crates/pandamux-server/src/attempt_worktree.rs)
 - [orchestration_phase5c.rs](../../crates/pandamux-server/src/store/orchestration_phase5c.rs)
 - [attempt_worktrees.rs](../../crates/pandamux-server/tests/attempt_worktrees.rs)
+- [execution_admission.rs](../../crates/pandamux-server/tests/execution_admission.rs)
 
 </details>
 
@@ -79,7 +81,7 @@ Sources: [lib.rs:9-55](../../crates/pandamux-orchestrator/src/lib.rs#L9-L55), [s
 <!-- BEGIN:AUTOGEN pandamux_12_agent-orchestration_phase5c-foundation -->
 ## Phase 5C Durable Execution Foundation
 
-Phase 5C checkpoints C-B through C-D connect the pure run model to a private
+Phase 5C checkpoints C-B through C-E connect the pure run model to a private
 durable foundation without starting a provider. Migration 14 stores canonical
 snapshots, immutable events, derived effects, queue and lease records,
 attempt-owned worktrees, budgets, artifacts, progress, recovery reviews, and
@@ -113,12 +115,35 @@ non-forced `git worktree remove`. Dirty, locked, foreign, or ambiguous trees are
 retained
 ([attempt_worktrees.rs](../../crates/pandamux-server/tests/attempt_worktrees.rs)).
 
-This is still a foundation checkpoint. `ThreadManager` remains the sole
-provider-session owner, and C-D does not yet connect a run effect to provider
-execution. Shared admission, budgets, artifact settlement, watchdogs, recovery
-coordination, authenticated remote dispatch, shutdown ownership, public RPC,
-CLI, desktop UI, and native/live-provider acceptance remain later Phase 5C or
-Phase 5D work.
+`ExecutionAdmissionService` is now the one durable admission path for manual
+and orchestrated starts. An immediate SQLite transaction orders eligible work,
+checks run, agent, provider, environment, organization, and global limits, and
+creates an owner, TTL, and compare-and-swap capacity lease. Orchestrated claims
+also reserve the exact attempt budget and UTC daily-ledger amount and append
+`BudgetReserved` plus `DispatchRequested` before commit. Separate SQLite
+connections cannot overclaim the same capacity
+([execution_admission.rs:101-391](../../crates/pandamux-server/src/execution_admission.rs#L101-L391), [orchestration_phase5c.rs:3040-4140](../../crates/pandamux-server/src/store/orchestration_phase5c.rs#L3040-L4140)).
+
+Queue selection preserves `(enqueued_at, run, task, attempt)` order within each
+class while bypassing a resource-blocked head. Global and per-environment caps
+of at least two retain one interactive slot; at cap one, an orchestrated item
+wins after at most four consecutive interactive claims. Cap decreases leave
+active owners intact and block new claims until capacity drains. Expired claims
+can be requeued only by exact owner and lease identity with bounded backoff
+([execution_admission.rs:217-401](../../crates/pandamux-server/src/execution_admission.rs#L217-L401), [execution_admission.rs:531-1165](../../crates/pandamux-server/tests/execution_admission.rs#L531-L1165)).
+
+`ThreadManager` remains the sole provider-session owner. Every new manual
+session now commits an interactive admission before
+`ProviderResolver::acquire_execution`; start failures, losing session races,
+cancellation, terminal failure, and shutdown release the exact claim. A
+successful reusable session keeps its existing process-lifetime claim
+([thread_manager.rs:848-1010](../../crates/pandamux-server/src/thread_manager.rs#L848-L1010)).
+
+This is still an internal runtime checkpoint. C-E does not yet interpret a run
+dispatch effect through a provider, finish grant and usage reconciliation,
+settle artifacts, own watchdog recovery, authenticate remote dispatch, expose
+public run RPC or CLI, or add desktop UI. Native and live-provider acceptance
+remain open.
 <!-- END:AUTOGEN pandamux_12_agent-orchestration_phase5c-foundation -->
 
 ---

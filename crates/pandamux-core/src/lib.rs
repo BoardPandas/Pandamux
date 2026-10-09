@@ -47,7 +47,9 @@ pub use configuration::{
     InvalidConfigurationIdentity, ProjectLayerTrustRecord, ProjectRepositoryRecord,
     SourceCommitSha, TrackingRef,
 };
-pub use environment::{Environment, EnvironmentKind, EnvironmentStatus};
+pub use environment::{
+    DEFAULT_ENVIRONMENT_EXECUTION_LIMIT, Environment, EnvironmentKind, EnvironmentStatus,
+};
 pub use event::{
     ApprovalDecision, ApprovalKind, FileChangeKind, PlanStep, PlanStepStatus, ThreadEvent,
     ThreadEventKind, ToolCallStatus, TurnOutcome,
