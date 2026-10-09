@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Added
 
+- **Added the trust-aware Phase 5 instruction-bundle compiler in version
+  0.60.71.** Bounded authored documents now compile only with server-issued
+  layer grants bound to exact source hashes, project and organization scope,
+  and a trusted tier mapping. References resolve before merge, effective values
+  retain their source origins, and project or personal overrides cannot widen
+  access, tools, environments, capability requirements, prompt control, or
+  FullAccess. Canonical ordered JSON is signed internally with the exact-pinned
+  SHA-256 dependency, produces identical bytes across source permutations, and
+  fails closed if either the payload or nested agent bundle identity changes.
+
 - **Added strict Phase 5 authored schemas and safe diagnostics in version
   0.60.70.** The pure orchestrator now parses all five authored v1 document
   kinds through version-first, deny-unknown decoding; rejects unsafe YAML,

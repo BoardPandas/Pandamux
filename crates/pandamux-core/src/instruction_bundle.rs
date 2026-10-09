@@ -55,7 +55,7 @@ pub struct BundleReference {
     pub resolved_id: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ValueLayer {
     Instructions,
@@ -76,10 +76,20 @@ pub struct ValueOrigin {
 #[serde(rename_all = "camelCase")]
 pub struct CompiledClassRule {
     pub id: String,
-    pub agent_id: AgentId,
-    pub priority: i32,
+    /// Agent order is semantic and follows the authored preference order.
+    pub agents: Vec<AgentId>,
     #[serde(default)]
-    pub specialties: BTreeSet<String>,
+    pub match_keywords: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_files_hint: Option<u32>,
+    #[serde(default)]
+    pub decompose: bool,
+    #[serde(default)]
+    pub require_approval: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_agent: Option<AgentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_when: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,14 +131,19 @@ pub struct CompiledOrchestrationPolicy {
     pub on_no_provider: NoProviderFallback,
     pub on_failure: FailureFallback,
     pub use_project_commands: bool,
+    /// Command order is semantic and preserved from the trusted project document.
+    #[serde(default)]
+    pub project_verification: Vec<String>,
     pub tier_mapping: TierMapping,
 }
 
-/// Canonical JSON envelope. `payload_sha256` hashes this value with that field empty.
+/// Canonical JSON envelope. `payload_sha256` hashes the unsigned form with this
+/// field and every nested agent `bundle_sha` empty.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompiledInstructionBundleV1 {
     pub schema_version: u32,
+    pub kind: String,
     pub compiler_version: String,
     pub source_manifest: BundleSourceManifest,
     pub project_id: ProjectId,

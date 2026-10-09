@@ -50,6 +50,7 @@ pub enum AuthoredAccessMode {
     WorkspaceOnly,
     Ask,
     AutoEdit,
+    FullAccess,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
