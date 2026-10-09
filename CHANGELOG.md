@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Added
 
+- **Added bounded model proposals and replayable Phase 5 run state in version
+  0.60.74.** Model output now accepts only one size- and depth-bounded strict
+  V1 JSON object, allows one parse-only correction, and cannot grant authority
+  through unknown fields or hostile content. Pure command decision, durable
+  event application, and prefix replay enforce canonical event receipts,
+  sequence and idempotency conflicts, terminal absorption, immutable route
+  ledgers, approval replacement and expiry, checked budget reservations,
+  parallel dispatch limits, safe retry boundaries, deterministic cancellation
+  effects, hash-bound blackboard entries, partial-failure propagation, and
+  settlement only after effects and usage are reconciled.
+
 - **Added deterministic Phase 5 routing and approval reconciliation in version
   0.60.73.** Task routing now hard-filters every agent and trusted environment,
   organization, access, output, concurrency, tier, capability, capacity, and

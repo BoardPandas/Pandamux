@@ -10,9 +10,11 @@ pub mod bundle;
 pub mod compatibility;
 pub mod dag;
 pub mod diagnostics;
+pub mod model_output;
 pub mod policy;
 pub mod routing;
 pub mod schema;
+pub mod state;
 
 pub use bundle::{
     CompileBundleInput, LayeredSourceDocument, canonical_bundle_bytes, compile_instruction_bundle,
@@ -30,6 +32,10 @@ pub use diagnostics::{
     ConfigurationIssue, ConfigurationIssueCode, ConfigurationStage, DiagnosticSet,
     InvalidRelativeConfigPath, JsonPointer, RelativeConfigPath, SafeText,
 };
+pub use model_output::{
+    ModelOutputAttempt, ModelParseError, ModelParseErrorCode, ModelParseOutcome, ModelParseState,
+    parse_model_attempt,
+};
 pub use policy::{
     ApprovalAction, ApprovalDecisionIdentity, ApprovalReconciliation, ApprovalSafetyClass,
     LayerGrant, TrustedBundleSettings, approval_identity, canonical_action_digest,
@@ -42,4 +48,8 @@ pub use routing::{
 pub use schema::{
     ParsedDocumentV1, SourceDocument, generated_authored_schema_json, parse_source_document,
     validate_source_set_bounds,
+};
+pub use state::{
+    ApplyOutcome, OrchestrationError, OrchestrationErrorCode, apply, canonical_blackboard_sha256,
+    canonical_run_bytes, decide, replay, replay_from,
 };
