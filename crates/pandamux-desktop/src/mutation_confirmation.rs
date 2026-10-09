@@ -1,9 +1,147 @@
-use gpui_kit::base::{Disableable as _, StyledExt as _};
+use gpui_kit::base::{Disableable as _, StyledExt as _, TestSupportExt as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::gpui::*;
+use gpui_kit::prelude::FluentBuilder as _;
 use pandamux_client::MutationConfirmationProjection;
 
 use crate::theme::{Radii, Theme, Typography};
+
+/// A terminal confirmation action that remains visibly disabled and reports
+/// the same state through AccessKit.
+///
+/// GPUI Kit's disabled button is correctly inert and leaves keyboard focus,
+/// but its current public API does not expose AccessKit's disabled property.
+/// Wrapping the presentational button lets native accessibility clients see
+/// the control as disabled without duplicating any action handler.
+struct DisabledConfirmationAction {
+    element: Stateful<Div>,
+}
+
+impl DisabledConfirmationAction {
+    fn new(
+        id: SharedString,
+        label: &'static str,
+        accessibility_label: String,
+        primary: bool,
+    ) -> Self {
+        let visual_id = SharedString::from(format!("{id}-visual"));
+        let button = Button::new(visual_id)
+            .role(None::<Role>)
+            .label(label)
+            .disabled(true);
+        let button = if primary {
+            button.primary()
+        } else {
+            button.ghost()
+        };
+
+        Self {
+            element: div()
+                .id(id)
+                .flex_shrink_0()
+                .role(Role::Button)
+                .aria_label(accessibility_label)
+                .child(button),
+        }
+    }
+}
+
+impl IntoElement for DisabledConfirmationAction {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for DisabledConfirmationAction {
+    type RequestLayoutState = <Stateful<Div> as Element>::RequestLayoutState;
+    type PrepaintState = <Stateful<Div> as Element>::PrepaintState;
+
+    fn id(&self) -> Option<ElementId> {
+        Element::id(&self.element)
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        self.element.source_location()
+    }
+
+    fn request_layout(
+        &mut self,
+        id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        self.element.request_layout(id, inspector_id, window, cx)
+    }
+
+    fn prepaint(
+        &mut self,
+        id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        self.element
+            .prepaint(id, inspector_id, bounds, request_layout, window, cx)
+    }
+
+    fn paint(
+        &mut self,
+        id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        request_layout: &mut Self::RequestLayoutState,
+        prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.element.paint(
+            id,
+            inspector_id,
+            bounds,
+            request_layout,
+            prepaint,
+            window,
+            cx,
+        );
+    }
+
+    fn a11y_role(&self) -> Option<Role> {
+        self.element.a11y_role()
+    }
+
+    fn write_a11y_info(&self, node: &mut accesskit::Node) {
+        self.element.write_a11y_info(node);
+        node.set_disabled();
+    }
+
+    fn a11y_synthetic_children(
+        &mut self,
+        prepaint: &mut Self::PrepaintState,
+        builder: &mut A11ySubtreeBuilder,
+    ) {
+        Element::a11y_synthetic_children(&mut self.element, prepaint, builder);
+    }
+}
+
+impl InteractiveElement for DisabledConfirmationAction {
+    fn interactivity(&mut self) -> &mut Interactivity {
+        self.element.interactivity()
+    }
+}
+
+fn disabled_confirmation_action(
+    id: SharedString,
+    label: &'static str,
+    accessibility_label: String,
+    primary: bool,
+) -> impl IntoElement {
+    DisabledConfirmationAction::new(id, label, accessibility_label, primary).test_support()
+}
 
 pub fn confirmation_accessibility_summary(proposal: &MutationConfirmationProjection) -> String {
     format!(
@@ -95,30 +233,46 @@ pub fn render_mutation_confirmation<V: 'static>(
             div()
                 .h_flex()
                 .gap_2()
-                .child(
-                    Button::new(SharedString::from(format!("approve-{proposal_id}")))
-                        .primary()
-                        .label("Approve once")
-                        .accessibility_label(format!(
-                            "Approve configuration proposal {proposal_id} once"
+                .when(can_resolve, |actions| {
+                    actions
+                        .child(
+                            Button::new(SharedString::from(format!("approve-{proposal_id}")))
+                                .primary()
+                                .label("Approve once")
+                                .accessibility_label(format!(
+                                    "Approve configuration proposal {proposal_id} once"
+                                ))
+                                .on_click(cx.listener(move |this, _event, window, cx| {
+                                    on_approve(this, approve_id.clone(), window, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new(SharedString::from(format!("reject-{proposal_id}")))
+                                .ghost()
+                                .label("Reject")
+                                .accessibility_label(format!(
+                                    "Reject configuration proposal {proposal_id} without changes"
+                                ))
+                                .on_click(cx.listener(move |this, _event, window, cx| {
+                                    on_reject(this, reject_id.clone(), window, cx);
+                                })),
+                        )
+                })
+                .when(!can_resolve, |actions| {
+                    actions
+                        .child(disabled_confirmation_action(
+                            SharedString::from(format!("approve-{proposal_id}")),
+                            "Approve once",
+                            format!("Approve configuration proposal {proposal_id} once"),
+                            true,
                         ))
-                        .disabled(!can_resolve)
-                        .on_click(cx.listener(move |this, _event, window, cx| {
-                            on_approve(this, approve_id.clone(), window, cx);
-                        })),
-                )
-                .child(
-                    Button::new(SharedString::from(format!("reject-{proposal_id}")))
-                        .ghost()
-                        .label("Reject")
-                        .accessibility_label(format!(
-                            "Reject configuration proposal {proposal_id} without changes"
+                        .child(disabled_confirmation_action(
+                            SharedString::from(format!("reject-{proposal_id}")),
+                            "Reject",
+                            format!("Reject configuration proposal {proposal_id} without changes"),
+                            false,
                         ))
-                        .disabled(!can_resolve)
-                        .on_click(cx.listener(move |this, _event, window, cx| {
-                            on_reject(this, reject_id.clone(), window, cx);
-                        })),
-                ),
+                }),
         )
         .into_any_element()
 }
@@ -247,5 +401,40 @@ mod tests {
         });
         activate(cx, "space");
         cx.update(|_, cx| assert_eq!(view.read(cx).rejections, 1));
+    }
+
+    #[gpui_kit::test]
+    fn terminal_confirmation_actions_are_accessibly_disabled(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (view, cx) = cx.add_window_view(|_, _| ConfirmationHarness {
+            proposal: projection(false, "Approved and applied"),
+            approvals: 0,
+            rejections: 0,
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        cx.update(|window, _| {
+            let approve = window.find("approve-proposal-one");
+            assert_eq!(approve.role(), Some(Role::Button));
+            assert_eq!(approve.disabled(), Some(true));
+            assert_eq!(approve.focused(), None);
+            assert_eq!(
+                approve.label(),
+                Some("Approve configuration proposal proposal-one once")
+            );
+
+            let reject = window.find("reject-proposal-one");
+            assert_eq!(reject.role(), Some(Role::Button));
+            assert_eq!(reject.disabled(), Some(true));
+            assert_eq!(reject.focused(), None);
+            assert_eq!(
+                reject.label(),
+                Some("Reject configuration proposal proposal-one without changes")
+            );
+        });
+        cx.update(|_, cx| {
+            assert_eq!(view.read(cx).approvals, 0);
+            assert_eq!(view.read(cx).rejections, 0);
+        });
     }
 }

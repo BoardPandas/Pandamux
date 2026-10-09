@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Reported terminal confirmation actions as disabled to native accessibility
+  clients in version 0.60.88.** Resolved trusted-configuration cards retain
+  their visible disabled controls while a narrow AccessKit wrapper now exposes
+  the disabled property, complete action name, and no focus or invocation
+  surface. A retained render-level test covers both terminal actions after
+  physical Windows UI Automation found that the framework's inert button did
+  not publish its disabled state.
+
 - **Restored keyboard traversal for trusted-configuration confirmations in
   version 0.60.87.** Confirmation cards now establish a GPUI tab group so
   `Approve once` and `Reject` participate in native focus traversal and retain
