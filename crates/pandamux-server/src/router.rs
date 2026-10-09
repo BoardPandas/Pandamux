@@ -44,6 +44,7 @@ use crate::attachment::AttachmentManager;
 use crate::data_paths::DataPaths;
 use crate::driver_registry::DriverRegistry;
 use crate::mcp_server::McpServer;
+use crate::personal_repo::PersonalRepoService;
 use crate::provider_resolver::ProviderResolver;
 use crate::request_context::{CapabilityAuthority, PeerRole, RequestContext};
 use crate::store::{Store, StoreError};
@@ -67,6 +68,7 @@ pub struct Router {
     remote_terminals: Arc<std::sync::Mutex<HashMap<String, pandamux_core::ids::EnvironmentId>>>,
     login_previews: Arc<std::sync::Mutex<HashMap<String, LoginPreviewRecord>>>,
     hark: Arc<crate::hark::HarkBridge>,
+    personal_repo: PersonalRepoService,
     data_paths: DataPaths,
     role: ServerRole,
     environment_id: String,
@@ -501,6 +503,7 @@ impl Router {
             capability_authority.clone(),
         );
         let attachments = AttachmentManager::new(data_paths.attachments().to_path_buf());
+        let personal_repo = PersonalRepoService::new(data_paths.clone(), store.clone());
         let terminal = TerminalServerManager::new();
         let environment_router = Arc::new(crate::environment_router::EnvironmentRouter::new(
             pandamux_core::ids::EnvironmentId::new(environment_id.clone()),
@@ -522,6 +525,7 @@ impl Router {
             remote_terminals: Arc::new(std::sync::Mutex::new(HashMap::new())),
             login_previews: Arc::new(std::sync::Mutex::new(HashMap::new())),
             hark: Arc::new(crate::hark::HarkBridge::default()),
+            personal_repo,
             data_paths,
             role,
             environment_id,
@@ -568,6 +572,8 @@ impl Router {
             self.provider_resolver.set_data_dir(dir.clone());
         }
         self.attachments = AttachmentManager::new(data_paths.attachments().to_path_buf());
+        self.personal_repo.shutdown();
+        self.personal_repo = PersonalRepoService::new(data_paths.clone(), self.store.clone());
         self.data_paths = data_paths;
         self
     }
@@ -582,6 +588,10 @@ impl Router {
 
     pub fn data_paths(&self) -> &DataPaths {
         &self.data_paths
+    }
+
+    pub fn personal_repo(&self) -> &PersonalRepoService {
+        &self.personal_repo
     }
 
     pub async fn shutdown_antigravity_auth(&self) {

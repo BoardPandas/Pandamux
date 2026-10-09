@@ -6,7 +6,9 @@ pub mod environment_router;
 pub mod fs;
 pub mod git;
 pub mod hark;
+mod managed_git;
 pub mod mcp_server;
+pub mod personal_repo;
 pub mod provider_resolver;
 pub mod proxy_connection;
 pub mod proxy_transport;
@@ -36,6 +38,10 @@ pub use environment_router::{
 pub use git::{get_git_status, git_commit, git_create_pr, git_push};
 pub use hark::HarkBridge;
 pub use mcp_server::McpServer;
+pub use personal_repo::{
+    PersonalConfigDiff, PersonalEditRequest, PersonalEditResult, PersonalRepoError,
+    PersonalRepoFailpoint, PersonalRepoService,
+};
 pub use provider_resolver::{
     ProviderResolver, ResolvedProviderExecution, ResolvedProviderInstance,
 };
@@ -48,7 +54,8 @@ pub use router::Router;
 pub use runtime::{RUNTIME_FILENAME, RuntimeInfo};
 pub use server::{Server, ServerConfig};
 pub use store::{
-    ProviderExecutionAudit, RevisionedSettings, Store, StoreError, StoredInstructionCandidate,
+    PersonalRepoStateRecord, ProviderExecutionAudit, RevisionedSettings, Store, StoreError,
+    StoredInstructionCandidate,
 };
 pub use terminal::TerminalServerManager;
 pub use thread_manager::ThreadManager;

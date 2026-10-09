@@ -100,6 +100,19 @@ impl Server {
         &self.config.environment_id
     }
 
+    pub async fn initialize_personal_repository(
+        &self,
+    ) -> Result<pandamux_core::SourceCommitSha, crate::PersonalRepoError> {
+        let service = self.router.personal_repo().clone();
+        tokio::task::spawn_blocking(move || service.ensure_initialized())
+            .await
+            .map_err(|_| crate::PersonalRepoError {
+                reason: "personal_repo_worker_join_failed",
+                safe_message: "The personal repository worker did not join cleanly".to_string(),
+                retryable: true,
+            })?
+    }
+
     pub fn runtime_dir(&self) -> &std::path::Path {
         &self.config.runtime_dir
     }
@@ -316,6 +329,7 @@ impl Server {
     /// Trigger provable graceful shutdown.
     pub fn shutdown(&self) {
         if !self.is_shutting_down.swap(true, Ordering::SeqCst) {
+            self.router.personal_repo().shutdown();
             let _ = self.shutdown_tx.send(());
         }
     }
@@ -550,6 +564,33 @@ mod tests {
                 .await
         });
         (BufReader::new(client), task)
+    }
+
+    #[tokio::test]
+    async fn personal_repository_initializes_before_runtime_publication() {
+        let root = tempfile::tempdir().expect("temporary app-data root");
+        let server = Server::new(ServerConfig {
+            role: ServerRole::Hub,
+            environment_id: "env-local".to_string(),
+            runtime_dir: root.path().join("run"),
+            db_path: None,
+        })
+        .expect("server");
+        assert!(!server.data_paths().personal().join(".git/HEAD").exists());
+        let head = server
+            .initialize_personal_repository()
+            .await
+            .expect("initialize managed personal repository");
+        assert_eq!(
+            server
+                .router()
+                .personal_repo()
+                .current_head_sha()
+                .expect("read managed personal HEAD"),
+            head
+        );
+        assert!(server.data_paths().personal().join(".git/HEAD").is_file());
+        server.shutdown();
     }
 
     async fn exchange(

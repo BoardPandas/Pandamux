@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Added
 
+- **Added the managed personal configuration repository in version 0.60.79.**
+  PandaMUX now initializes and recovers one private local Git repository under
+  its injected app-data root, retains exact authored bytes, and records each
+  accepted logical edit as one compare-and-swap commit with durable request
+  identity. Bounded plumbing rejects secrets, runtime files, unsafe paths,
+  case collisions, hooks, signing, inherited Git redirects, and stale writers
+  before they can change the active ref. Retained history, exact diff, and
+  inverse-commit revert operations preserve a valid last-good HEAD across
+  interruption and response-loss retries, while startup and shutdown keep Git
+  process work off asynchronous workers. Agent-specific authoring, candidate
+  activation, and user interface controls remain assigned to later Phase 5B
+  checkpoints.
+
 - **Added the Phase 5B trusted-configuration foundation in version 0.60.78.**
   Configuration identities now distinguish source commits, layer content,
   compiled bundles, transfer archives, and monotonic settings revisions.

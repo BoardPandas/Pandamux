@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 base64.workspace = true
 pandamux-core = { path = "../pandamux-core" }
+pandamux-orchestrator = { path = "../pandamux-orchestrator" }
 pandamux-protocol = { path = "../pandamux-protocol" }
 pandamux-providers = { path = "../pandamux-providers" }
 pandamux-remote = { path = "../pandamux-remote" }

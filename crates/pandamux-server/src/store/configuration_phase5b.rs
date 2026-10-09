@@ -12,7 +12,99 @@ pub struct StoredInstructionCandidate {
     pub inspection: serde_json::Value,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct PersonalRepoStateRecord {
+    pub head_source_commit_sha: SourceCommitSha,
+    pub revision: pandamux_core::ConfigurationRevision,
+    pub last_request_identity: Option<ContentSha256>,
+    pub last_request_digest: Option<ContentSha256>,
+    pub last_result: Option<serde_json::Value>,
+    pub updated_at_ms: u64,
+}
+
 impl Store {
+    pub fn get_personal_repo_state(&self) -> Result<Option<PersonalRepoStateRecord>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT head_source_commit_sha, revision, last_request_identity,
+                    last_request_digest, last_result_json, updated_at_ms
+             FROM personal_repo_state WHERE singleton = 1",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, i64>(5)?,
+                ))
+            },
+        )
+        .optional()?
+        .map(
+            |(head, revision, identity, digest, result, updated_at_ms)| {
+                Ok(PersonalRepoStateRecord {
+                    head_source_commit_sha: SourceCommitSha::parse(head)
+                        .map_err(|error| StoreError::Data(error.to_string()))?,
+                    revision: configuration_revision(revision, "personal_repo_state.revision")?,
+                    last_request_identity: identity
+                        .map(ContentSha256::parse)
+                        .transpose()
+                        .map_err(|error| StoreError::Data(error.to_string()))?,
+                    last_request_digest: digest
+                        .map(ContentSha256::parse)
+                        .transpose()
+                        .map_err(|error| StoreError::Data(error.to_string()))?,
+                    last_result: result
+                        .map(|value| serde_json::from_str(&value))
+                        .transpose()?,
+                    updated_at_ms: checked_u64(updated_at_ms, "personal_repo_state.updated_at_ms")?,
+                })
+            },
+        )
+        .transpose()
+    }
+
+    pub fn reconcile_personal_repo_state(
+        &self,
+        state: &PersonalRepoStateRecord,
+    ) -> Result<(), StoreError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO personal_repo_state (
+                singleton, head_source_commit_sha, revision, last_request_identity,
+                last_request_digest, last_result_json, updated_at_ms
+             ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(singleton) DO UPDATE SET
+                head_source_commit_sha = excluded.head_source_commit_sha,
+                revision = excluded.revision,
+                last_request_identity = excluded.last_request_identity,
+                last_request_digest = excluded.last_request_digest,
+                last_result_json = excluded.last_result_json,
+                updated_at_ms = excluded.updated_at_ms",
+            params![
+                state.head_source_commit_sha.as_str(),
+                checked_i64(state.revision.get(), "personal repository revision")?,
+                state
+                    .last_request_identity
+                    .as_ref()
+                    .map(ContentSha256::as_str),
+                state
+                    .last_request_digest
+                    .as_ref()
+                    .map(ContentSha256::as_str),
+                state
+                    .last_result
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()?,
+                checked_i64(state.updated_at_ms, "personal repository updated_at_ms")?,
+            ],
+        )?;
+        Ok(())
+    }
+
     pub fn save_instruction_source(
         &self,
         source: &InstructionsSourceRecord,

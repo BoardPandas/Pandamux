@@ -84,6 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         db_path,
     };
     let server = Arc::new(Server::new(config)?);
+    server.initialize_personal_repository().await?;
     let token = uuid::Uuid::new_v4().to_string();
     server.register_runtime_with_proxy_and_ownership(
         &pipe_path,

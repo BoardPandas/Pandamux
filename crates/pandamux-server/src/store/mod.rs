@@ -5,7 +5,7 @@ pub mod migrations;
 mod usage_phase4c;
 mod usage_query_phase4c;
 
-pub use configuration_phase5b::StoredInstructionCandidate;
+pub use configuration_phase5b::{PersonalRepoStateRecord, StoredInstructionCandidate};
 pub use usage_phase4c::{
     DEFAULT_USAGE_OUTBOX_MAX_AGE_MS, DEFAULT_USAGE_OUTBOX_MAX_BYTES, DEFAULT_USAGE_OUTBOX_MAX_ROWS,
     UsageHubIngestOutcome, UsageHubSyncState, UsageOutboxCompaction, UsageOutboxRetention,
