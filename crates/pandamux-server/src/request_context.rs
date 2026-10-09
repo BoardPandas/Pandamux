@@ -42,6 +42,7 @@ pub struct RequestContext {
     pub authenticated_environment_id: EnvironmentId,
     pub client_identity: ClientIdentity,
     pub capability_scope: CapabilityScope,
+    pub connection_id: String,
 }
 
 impl RequestContext {
@@ -54,15 +55,18 @@ impl RequestContext {
                 ..ClientIdentity::default()
             },
             capability_scope: CapabilityScope::Internal,
+            connection_id: "server-internal".to_string(),
         }
     }
 
     pub fn node_proxy(environment_id: EnvironmentId, client_identity: ClientIdentity) -> Self {
+        let connection_id = format!("node-proxy:{}", environment_id.as_str());
         Self {
             peer_role: PeerRole::NodeProxy,
             authenticated_environment_id: environment_id,
             client_identity,
             capability_scope: CapabilityScope::NodeProxy,
+            connection_id,
         }
     }
 
@@ -154,6 +158,7 @@ impl CapabilityAuthority {
                 authenticated_environment_id: self.environment_id.clone(),
                 client_identity: ClientIdentity::default(),
                 capability_scope: CapabilityScope::Control,
+                connection_id: String::new(),
             },
         );
         grants.insert(
@@ -163,6 +168,7 @@ impl CapabilityAuthority {
                 authenticated_environment_id: self.environment_id.clone(),
                 client_identity: ClientIdentity::default(),
                 capability_scope: CapabilityScope::Mcp,
+                connection_id: String::new(),
             },
         );
     }
@@ -187,6 +193,7 @@ impl CapabilityAuthority {
         }
         Ok(RequestContext {
             client_identity,
+            connection_id: uuid::Uuid::new_v4().to_string(),
             ..context
         })
     }
@@ -209,6 +216,7 @@ impl CapabilityAuthority {
                     methods: methods.into_iter().collect(),
                     expires_at_ms: now_ms().saturating_add(ttl_ms),
                 },
+                connection_id: String::new(),
             },
         );
         token

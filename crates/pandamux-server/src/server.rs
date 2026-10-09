@@ -19,6 +19,7 @@ use crate::ProxyEnvironmentTransport;
 use crate::request_context::{CapabilityAuthority, ClientIdentity};
 use crate::usage_scanner::{UsageScannerRuntimeConfig, UsageScannerService};
 use crate::usage_sync::{UsageHubSyncService, UsageSyncRuntimeConfig};
+use crate::{MutationService, MutationSweepService};
 
 fn current_time_ms() -> u64 {
     std::time::SystemTime::now()
@@ -45,6 +46,7 @@ pub struct Server {
     usage_scanner: Mutex<Option<UsageScannerService>>,
     usage_sync: Mutex<Option<UsageHubSyncService>>,
     instructions_polling: Mutex<Option<InstructionsPollingService>>,
+    mutation_sweep: Mutex<Option<MutationSweepService>>,
 }
 
 impl Server {
@@ -91,6 +93,7 @@ impl Server {
             usage_scanner: Mutex::new(None),
             usage_sync: Mutex::new(None),
             instructions_polling: Mutex::new(None),
+            mutation_sweep: Mutex::new(None),
         })
     }
 
@@ -134,6 +137,22 @@ impl Server {
         if polling.is_none() {
             *polling = Some(InstructionsPollingService::start(
                 self.router.instructions().clone(),
+            )?);
+        }
+        Ok(())
+    }
+
+    pub fn start_mutation_sweep(&self) -> std::io::Result<()> {
+        if self.config.role != ServerRole::Hub {
+            return Ok(());
+        }
+        let mut sweep = self
+            .mutation_sweep
+            .lock()
+            .expect("mutation sweep service lock");
+        if sweep.is_none() {
+            *sweep = Some(MutationSweepService::start(
+                self.router.mutation_service().clone(),
             )?);
         }
         Ok(())
@@ -373,6 +392,14 @@ impl Server {
             {
                 let _ = polling.shutdown();
             }
+            if let Some(sweep) = self
+                .mutation_sweep
+                .lock()
+                .expect("mutation sweep service lock")
+                .take()
+            {
+                let _ = sweep.shutdown();
+            }
             let _ = self.shutdown_tx.send(());
         }
     }
@@ -466,6 +493,8 @@ impl Server {
         let (reader, mut writer) = tokio::io::split(stream);
         let mut lines = BufReader::new(reader).lines();
         let mut context = None;
+        let mut mutation_guard =
+            ConnectionMutationGuard::new(self.router.mutation_service().clone());
         while let Some(line) = lines.next_line().await? {
             let mut request: RpcRequest = match serde_json::from_str(line.trim()) {
                 Ok(request) => request,
@@ -515,6 +544,7 @@ impl Server {
                     });
                 match authenticated {
                     Ok(authenticated) => {
+                        mutation_guard.set_context(authenticated.clone());
                         context = Some(authenticated);
                         if let Some(params) = request.params.as_mut().and_then(Value::as_object_mut)
                         {
@@ -541,6 +571,32 @@ impl Server {
             }
         }
         Ok(())
+    }
+}
+
+struct ConnectionMutationGuard {
+    service: MutationService,
+    context: Option<crate::RequestContext>,
+}
+
+impl ConnectionMutationGuard {
+    fn new(service: MutationService) -> Self {
+        Self {
+            service,
+            context: None,
+        }
+    }
+
+    fn set_context(&mut self, context: crate::RequestContext) {
+        self.context = Some(context);
+    }
+}
+
+impl Drop for ConnectionMutationGuard {
+    fn drop(&mut self) {
+        if let Some(context) = &self.context {
+            let _ = self.service.cancel_owned(context, current_time_ms());
+        }
     }
 }
 

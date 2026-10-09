@@ -4,6 +4,7 @@ pub mod app_view;
 pub mod command_palette;
 pub mod composer;
 pub mod diff_view;
+pub mod mutation_confirmation;
 pub mod notification;
 pub mod picker;
 pub mod scratchpad;
@@ -16,6 +17,7 @@ pub mod theme;
 pub mod timeline;
 pub mod titlebar;
 pub mod tray;
+pub mod trusted_configuration_view;
 pub mod usage_view;
 
 pub use app_view::AppView;
@@ -28,6 +30,7 @@ pub use diff_view::{
     DiffFile, DiffHunk, DiffLine, DiffLineKind, DiffViewMode, DiffViewerState, DiffWord,
     SplitDiffRow, parse_unified_diff, render_diff_file, render_diff_viewer,
 };
+pub use mutation_confirmation::{confirmation_accessibility_summary, render_mutation_confirmation};
 pub use notification::{
     NotificationLevel, ToastNotification, dispatch_os_notification, render_toast_overlay,
 };
@@ -57,6 +60,11 @@ pub use timeline::{
 };
 pub use titlebar::CustomTitlebar;
 pub use tray::{SystemTrayState, TrayAction, TrayMenuItem};
+pub use trusted_configuration_view::{
+    TrustedConfigurationHandler, TrustedConfigurationIntent, candidate_accessibility_summary,
+    candidate_approval_enabled, render_trusted_configuration, safe_diff_category_labels,
+    source_accessibility_summary,
+};
 pub use usage_view::{UsageEditorTarget, UsageFilterIntent, render_usage_view};
 
 #[cfg(test)]

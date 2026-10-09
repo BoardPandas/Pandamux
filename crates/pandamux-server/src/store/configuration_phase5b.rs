@@ -1037,6 +1037,7 @@ impl Store {
         &self,
         activation: &BundleActivationRecord,
         candidate_id: Option<&InstructionCandidateId>,
+        expected_source_revision: Option<pandamux_core::ConfigurationRevision>,
         audit: &ConfigurationAuditRecord,
         distributions: &[BundleDistributionRecord],
         failpoint: Option<BundleActivationFailpoint>,
@@ -1128,6 +1129,11 @@ impl Store {
         )?;
         insert_bundle_activation(&tx, activation, candidate_id)?;
         if let Some(candidate_id) = candidate_id {
+            let expected_source_revision = expected_source_revision.ok_or_else(|| {
+                StoreError::Data(
+                    "candidate activation requires an expected source revision".to_string(),
+                )
+            })?;
             let changed = tx.execute(
                 "UPDATE instruction_candidates
                  SET state = 'activated', updated_at_ms = ?1
@@ -1143,18 +1149,35 @@ impl Store {
                     "instruction candidate is not activatable".to_string(),
                 ));
             }
-            tx.execute(
+            let source_changed = tx.execute(
                 "UPDATE instruction_sources
                  SET active_source_commit_sha = (
                          SELECT observed_source_commit_sha
                          FROM instruction_candidates WHERE id = ?1
                      ),
-                     active_bundle_sha = ?2
+                     active_bundle_sha = ?2,
+                     revision = revision + 1,
+                     updated_at_ms = ?3
                  WHERE id = (
                      SELECT source_id FROM instruction_candidates WHERE id = ?1
-                 )",
-                params![candidate_id.as_str(), activation.bundle_sha.as_str()],
+                 ) AND revision = ?4",
+                params![
+                    candidate_id.as_str(),
+                    activation.bundle_sha.as_str(),
+                    checked_i64(activation.activated_at_ms, "source activation time")?,
+                    checked_i64(expected_source_revision.get(), "source activation revision")?,
+                ],
             )?;
+            if source_changed != 1 {
+                return Err(StoreError::RevisionDrift {
+                    expected: expected_source_revision,
+                    actual: None,
+                });
+            }
+        } else if expected_source_revision.is_some() {
+            return Err(StoreError::Data(
+                "source revision was supplied without a candidate".to_string(),
+            ));
         }
         insert_configuration_audit(&tx, audit)?;
         for distribution in distributions {
@@ -1393,6 +1416,60 @@ impl Store {
             ],
         )?;
         Ok(())
+    }
+
+    pub fn list_configuration_audit(
+        &self,
+        before_at_ms: Option<u64>,
+        limit: u32,
+    ) -> Result<(Vec<ConfigurationAuditRecord>, bool), StoreError> {
+        let limit = limit.clamp(1, 100);
+        let fetch = limit.saturating_add(1);
+        let before = before_at_ms
+            .map(|value| checked_i64(value, "configuration audit cursor"))
+            .transpose()?;
+        let conn = self.conn.lock().unwrap();
+        let mut statement = conn.prepare(
+            "SELECT id, kind, actor, source_id, candidate_id, bundle_sha,
+                    details_json, created_at_ms
+             FROM configuration_audit
+             WHERE (?1 IS NULL OR created_at_ms < ?1)
+             ORDER BY created_at_ms DESC, id DESC
+             LIMIT ?2",
+        )?;
+        let rows = statement.query_map(params![before, i64::from(fetch)], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, i64>(7)?,
+            ))
+        })?;
+        let mut entries = rows
+            .map(|row| {
+                let (id, kind, actor, source, candidate, bundle, details, created) = row?;
+                Ok(ConfigurationAuditRecord {
+                    id: pandamux_core::ConfigurationAuditId::from(id),
+                    kind,
+                    actor,
+                    source_id: source.map(InstructionSourceId::from),
+                    candidate_id: candidate.map(InstructionCandidateId::from),
+                    bundle_sha: bundle
+                        .map(BundleSha::parse)
+                        .transpose()
+                        .map_err(|error| StoreError::Data(error.to_string()))?,
+                    details: serde_json::from_str(&details)?,
+                    created_at_ms: checked_u64(created, "configuration audit created_at_ms")?,
+                })
+            })
+            .collect::<Result<Vec<_>, StoreError>>()?;
+        let has_more = entries.len() > limit as usize;
+        entries.truncate(limit as usize);
+        Ok((entries, has_more))
     }
 }
 
@@ -2081,6 +2158,7 @@ mod tests {
             .activate_bundle_with_outbox(
                 &first,
                 None,
+                None,
                 &test_activation_audit(&first, "audit-first"),
                 &[],
                 None,
@@ -2113,6 +2191,7 @@ mod tests {
                 .activate_bundle_with_outbox(
                     &second,
                     None,
+                    None,
                     &test_activation_audit(&second, "audit-second-before"),
                     std::slice::from_ref(&distribution),
                     Some(BundleActivationFailpoint::BeforeTransaction),
@@ -2136,6 +2215,7 @@ mod tests {
             store
                 .activate_bundle_with_outbox(
                     &second,
+                    None,
                     None,
                     &test_activation_audit(&second, "audit-second-after"),
                     std::slice::from_ref(&distribution),

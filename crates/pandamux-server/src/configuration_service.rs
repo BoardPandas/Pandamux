@@ -196,8 +196,6 @@ impl ConfigurationService {
         instruction_source_id: &InstructionSourceId,
         compiled_at_ms: u64,
     ) -> Result<ConfigurationCompilation, ConfigurationServiceError> {
-        let project_layer =
-            self.inspect_project_layer(project_id, workspace_root, compiled_at_ms)?;
         let (instruction_source, instruction_documents) = self
             .instructions
             .active_snapshot(instruction_source_id)
@@ -217,6 +215,51 @@ impl ConfigurationService {
             .active_source_commit_sha
             .clone()
             .ok_or_else(state_error)?;
+        self.compile_with_instructions(
+            project_id,
+            workspace_root,
+            instructions_commit_sha,
+            instruction_documents,
+            compiled_at_ms,
+        )
+    }
+
+    pub fn compile_for_candidate(
+        &self,
+        project_id: &ProjectId,
+        workspace_root: &Path,
+        candidate_id: &pandamux_core::InstructionCandidateId,
+        compiled_at_ms: u64,
+    ) -> Result<ConfigurationCompilation, ConfigurationServiceError> {
+        let (_, candidate, documents) = self
+            .instructions
+            .candidate_snapshot(candidate_id)
+            .map_err(instructions_configuration_error)?
+            .ok_or_else(|| ConfigurationServiceError {
+                reason: "instructions_candidate_not_found",
+                safe_message: "The instructions candidate was not found".to_string(),
+                retryable: false,
+                issues: Vec::new(),
+            })?;
+        self.compile_with_instructions(
+            project_id,
+            workspace_root,
+            candidate.observed_source_commit_sha,
+            documents,
+            compiled_at_ms,
+        )
+    }
+
+    fn compile_with_instructions(
+        &self,
+        project_id: &ProjectId,
+        workspace_root: &Path,
+        instructions_commit_sha: pandamux_core::SourceCommitSha,
+        instruction_documents: Vec<SourceDocument>,
+        compiled_at_ms: u64,
+    ) -> Result<ConfigurationCompilation, ConfigurationServiceError> {
+        let project_layer =
+            self.inspect_project_layer(project_id, workspace_root, compiled_at_ms)?;
         let (personal_commit_sha, personal_documents) =
             self.personal
                 .current_documents()
@@ -367,6 +410,58 @@ impl ConfigurationService {
                 retryable: error.retryable,
                 issues: Vec::new(),
             })?;
+        let (personal_ref, personal_git_bundle) = self
+            .personal
+            .export_head_git_bundle(&personal_commit)
+            .map_err(|error| ConfigurationServiceError {
+                reason: error.reason,
+                safe_message: error.safe_message,
+                retryable: error.retryable,
+                issues: Vec::new(),
+            })?;
+        let project_documents = compilation
+            .bundle
+            .source_manifest
+            .project_layer_content_sha256
+            .as_ref()
+            .map(|_| compilation.project_layer.documents.clone())
+            .unwrap_or_default();
+        Ok(BundleMaterializationInput {
+            bundle: compilation.bundle,
+            instructions_documents: compilation.instructions_documents,
+            project_documents,
+            personal_documents: compilation.personal_documents,
+            instructions_ref,
+            instructions_git_bundle,
+            personal_ref,
+            personal_git_bundle,
+        })
+    }
+
+    pub fn materialization_for_candidate(
+        &self,
+        project_id: &ProjectId,
+        workspace_root: &Path,
+        candidate_id: &pandamux_core::InstructionCandidateId,
+        compiled_at_ms: u64,
+    ) -> Result<BundleMaterializationInput, ConfigurationServiceError> {
+        let compilation =
+            self.compile_for_candidate(project_id, workspace_root, candidate_id, compiled_at_ms)?;
+        let instructions_commit = compilation
+            .bundle
+            .source_manifest
+            .instructions_commit_sha
+            .clone();
+        let personal_commit = compilation
+            .bundle
+            .source_manifest
+            .personal_commit_sha
+            .clone()
+            .ok_or_else(state_error)?;
+        let (instructions_ref, instructions_git_bundle) = self
+            .instructions
+            .export_candidate_git_bundle(candidate_id, &instructions_commit)
+            .map_err(instructions_configuration_error)?;
         let (personal_ref, personal_git_bundle) = self
             .personal
             .export_head_git_bundle(&personal_commit)
@@ -918,6 +1013,17 @@ fn diagnostics_error(error: DiagnosticSet) -> ConfigurationServiceError {
             .into_iter()
             .filter_map(|issue| serde_json::to_value(issue).ok())
             .collect(),
+    }
+}
+
+fn instructions_configuration_error(
+    error: crate::instructions_service::InstructionsServiceError,
+) -> ConfigurationServiceError {
+    ConfigurationServiceError {
+        reason: error.reason,
+        safe_message: error.safe_message,
+        retryable: error.retryable,
+        issues: Vec::new(),
     }
 }
 

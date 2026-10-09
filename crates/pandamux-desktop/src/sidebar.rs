@@ -1116,6 +1116,11 @@ fn render_settings_sidebar<V: 'static>(
         (SettingsCategory::Providers, "🔑", "Providers & Tiers"),
         (SettingsCategory::Organizations, "🏢", "Organizations"),
         (SettingsCategory::Environments, "🖥️", "Environments"),
+        (
+            SettingsCategory::TrustedConfiguration,
+            "🛡️",
+            "Trusted Configuration",
+        ),
         (SettingsCategory::Terminal, "📟", "Terminal"),
         (SettingsCategory::General, "🎨", "General & UI"),
         (SettingsCategory::Advanced, "⚙️", "Advanced Engine"),

@@ -86,6 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = Arc::new(Server::new(config)?);
     server.initialize_personal_repository().await?;
     server.start_instructions_polling()?;
+    server.start_mutation_sweep()?;
     let token = uuid::Uuid::new_v4().to_string();
     server.register_runtime_with_proxy_and_ownership(
         &pipe_path,

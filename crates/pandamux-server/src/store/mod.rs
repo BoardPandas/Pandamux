@@ -2,12 +2,16 @@ mod capacity_phase4d;
 mod configuration_phase5b;
 mod failover_phase4f;
 pub mod migrations;
+mod mutation_phase5b;
 mod usage_phase4c;
 mod usage_query_phase4c;
 
 pub use configuration_phase5b::{
     BundleActivationFailpoint, BundleDistributionRecord, BundleObjectRecord,
     PersonalRepoStateRecord, StoredInstructionCandidate,
+};
+pub use mutation_phase5b::{
+    MutationApplyFailpoint, MutationProposalSave, ProjectTrustMutationState, StoredMutationProposal,
 };
 pub use usage_phase4c::{
     DEFAULT_USAGE_OUTBOX_MAX_AGE_MS, DEFAULT_USAGE_OUTBOX_MAX_BYTES, DEFAULT_USAGE_OUTBOX_MAX_ROWS,
@@ -37,6 +41,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 const MAX_RETAINED_SCANNER_QUARANTINES_PER_SOURCE: i64 = 4_096;
 
@@ -220,6 +225,7 @@ impl Store {
     }
 
     fn init_connection(conn: &mut Connection) -> Result<(), StoreError> {
+        conn.busy_timeout(Duration::from_secs(5))?;
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;

@@ -5,7 +5,7 @@ use crate::{
 use pandamux_core::{
     BundleActivationId, BundleActivationKind, BundleActivationRecord, BundleDistributionReceipt,
     BundleDistributionState, BundleTransferId, ConfigurationAuditId, ConfigurationAuditRecord,
-    EnvironmentId, InstructionCandidateId, InstructionSourceId,
+    ConfigurationRevision, EnvironmentId, InstructionCandidateId, InstructionSourceId,
 };
 use pandamux_protocol::{
     BUNDLE_PUSH_SCHEMA_VERSION, BundleDiscardUploadParams, BundlePrepareUploadParams,
@@ -82,6 +82,7 @@ impl BundleSyncService {
         materialization: &BundleMaterializationInput,
         source_id: Option<&InstructionSourceId>,
         candidate_id: Option<&InstructionCandidateId>,
+        expected_source_revision: Option<ConfigurationRevision>,
         kind: BundleActivationKind,
         actor: &str,
         target_environments: &[EnvironmentId],
@@ -147,6 +148,7 @@ impl BundleSyncService {
         self.store.activate_bundle_with_outbox(
             &activation,
             candidate_id,
+            expected_source_revision,
             &audit,
             &distributions,
             failpoint,
@@ -411,6 +413,7 @@ mod tests {
         let activation = sync
             .activate(
                 &input,
+                None,
                 None,
                 None,
                 BundleActivationKind::TrustedBranch,

@@ -70,7 +70,7 @@ pub use instruction_bundle::{
 };
 pub use mutation::{
     MutationAuditRecord, MutationCaller, MutationImpact, MutationProposal, MutationResolution,
-    MutationTarget,
+    MutationTarget, TrustedSettingsMutationState,
 };
 pub use notification::{NewNotification, NotificationInfo, NotificationSource, Notifications};
 pub use organization::{

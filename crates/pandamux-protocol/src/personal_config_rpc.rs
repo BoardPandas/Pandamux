@@ -23,6 +23,8 @@ pub struct PersonalConfigHistoryEntry {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PersonalConfigHistoryResult {
+    pub head_source_commit_sha: SourceCommitSha,
+    pub revision: ConfigurationRevision,
     pub entries: Vec<PersonalConfigHistoryEntry>,
     pub has_more: bool,
 }

@@ -26,10 +26,17 @@ use pandamux_protocol::{
     EnvironmentImportSshConfigParams, EnvironmentImportSshConfigResult, EnvironmentListResult,
     GitCommitParams, GitCreatePrParams, GitPushParams, GitStatusParams, HarkDictatePromptParams,
     HarkSpellbookSyncParams, HelloParams, HelloResult, HubRoutingContext, IdentifyResult,
-    InstructionsCheckParams, InstructionsCheckResult, InstructionsDiffParams,
-    InstructionsDiffResult, InstructionsStatusParams, InstructionsStatusResult, McpCallToolParams,
-    PROTOCOL_VERSION, PingResult, ProjectLayerDiffParams, ProjectLayerDiffResult,
-    ProjectLayerStatusParams, ProjectLayerStatusResult, ProviderHealthParams, ProviderHealthReport,
+    InstructionsApproveParams, InstructionsApproveResult, InstructionsCheckParams,
+    InstructionsCheckResult, InstructionsDiffParams, InstructionsDiffResult,
+    InstructionsHistoryParams, InstructionsHistoryResult, InstructionsProposalResult,
+    InstructionsRevertParams, InstructionsSetPolicyParams, InstructionsSetTrackingParams,
+    InstructionsStatusParams, InstructionsStatusResult, McpCallToolParams, MutationGetParams,
+    MutationGetResult, MutationListParams, MutationResolveParams, MutationResolveResult,
+    PROTOCOL_VERSION, PersonalConfigDiffParams, PersonalConfigDiffResult,
+    PersonalConfigHistoryParams, PersonalConfigHistoryResult, PersonalConfigRevertParams,
+    PersonalConfigRevertResult, PingResult, ProjectLayerDiffParams, ProjectLayerDiffResult,
+    ProjectLayerProposalResult, ProjectLayerRevokeParams, ProjectLayerStatusParams,
+    ProjectLayerStatusResult, ProjectLayerTrustParams, ProviderHealthParams, ProviderHealthReport,
     ProviderHealthResult, ProviderLoginFlow, ProviderLoginGuidance, ProviderLoginLaunchParams,
     ProviderLoginLaunchResult, ProviderLoginPreview, ProviderLoginPreviewParams, ProviderModelInfo,
     ProviderModelsParams, ProviderModelsReport, ProviderModelsResult, RoutingProviderCatalogEntry,
@@ -46,16 +53,19 @@ use pandamux_protocol::{
 
 use crate::attachment::AttachmentManager;
 use crate::bundle_store::{BundleStore, BundleStoreError};
-use crate::bundle_sync::BundleSyncService;
+use crate::bundle_sync::{BundleSyncError, BundleSyncService};
 use crate::configuration_service::{ConfigurationService, ConfigurationServiceError};
 use crate::data_paths::DataPaths;
 use crate::driver_registry::DriverRegistry;
 use crate::instructions_service::{InstructionsService, InstructionsServiceError};
 use crate::mcp_server::McpServer;
+use crate::mutation_service::{
+    MutationProposalRequest, MutationService, MutationServiceError, PersonalMutationState,
+};
 use crate::personal_repo::PersonalRepoService;
 use crate::provider_resolver::ProviderResolver;
 use crate::request_context::{CapabilityAuthority, PeerRole, RequestContext};
-use crate::store::{Store, StoreError};
+use crate::store::{ProjectTrustMutationState, Store, StoreError};
 use crate::terminal::TerminalServerManager;
 use crate::thread_manager::ThreadManager;
 use tokio::sync::Semaphore;
@@ -81,6 +91,7 @@ pub struct Router {
     configuration: ConfigurationService,
     bundle_store: BundleStore,
     bundle_sync: BundleSyncService,
+    mutation: MutationService,
     data_paths: DataPaths,
     role: ServerRole,
     environment_id: String,
@@ -498,6 +509,91 @@ fn configuration_rpc_error(error: ConfigurationServiceError) -> RpcError {
     )
 }
 
+fn mutation_rpc_error(error: MutationServiceError) -> RpcError {
+    RpcError::with_data(
+        -32043,
+        error.safe_message,
+        json!({
+            "reason": error.reason,
+            "retryable": error.retryable,
+        }),
+    )
+}
+
+fn bundle_sync_rpc_error(error: BundleSyncError) -> RpcError {
+    RpcError::with_data(
+        -32042,
+        error.safe_message,
+        json!({
+            "reason": error.reason,
+            "retryable": error.retryable,
+        }),
+    )
+}
+
+fn personal_rpc_error(error: crate::personal_repo::PersonalRepoError) -> RpcError {
+    RpcError::with_data(
+        -32044,
+        error.safe_message,
+        json!({
+            "reason": error.reason,
+            "retryable": error.retryable,
+        }),
+    )
+}
+
+fn configuration_worker_error() -> RpcError {
+    RpcError::with_data(
+        -32000,
+        "The configuration worker did not join cleanly",
+        json!({ "reason": "configuration_worker_join_failed", "retryable": true }),
+    )
+}
+
+fn revision_drift_rpc(
+    resource_id: &str,
+    expected: pandamux_core::ConfigurationRevision,
+    actual: Option<pandamux_core::ConfigurationRevision>,
+) -> RpcError {
+    RpcError::with_data(
+        -32009,
+        "Configuration changed before the reviewed operation could be applied",
+        json!({
+            "reason": "revision_drift",
+            "resourceId": resource_id,
+            "expectedRevision": expected,
+            "actualRevision": actual,
+            "retryable": true,
+        }),
+    )
+}
+
+fn validate_request_id(request_id: &str) -> Result<(), RpcError> {
+    if request_id.trim().is_empty()
+        || request_id.len() > 256
+        || request_id.chars().any(char::is_control)
+    {
+        return Err(RpcError::with_data(
+            -32602,
+            "A bounded requestId is required",
+            json!({ "reason": "request_id_invalid" }),
+        ));
+    }
+    Ok(())
+}
+
+fn require_authenticated_local_control(context: &RequestContext) -> Result<(), RpcError> {
+    if context.peer_role == PeerRole::LocalControl {
+        Ok(())
+    } else {
+        Err(RpcError::with_data(
+            -32001,
+            "This operation requires authenticated local control",
+            json!({ "reason": "capability_scope_denied" }),
+        ))
+    }
+}
+
 fn bundle_rpc_error(error: BundleStoreError) -> RpcError {
     RpcError::with_data(
         -32042,
@@ -618,6 +714,7 @@ impl Router {
             environment_router.clone(),
             EnvironmentId::new(environment_id.clone()),
         );
+        let mutation = MutationService::new(store.clone(), personal_repo.clone());
         Self {
             store,
             mcp,
@@ -640,6 +737,7 @@ impl Router {
             configuration,
             bundle_store,
             bundle_sync,
+            mutation,
             data_paths,
             role,
             environment_id,
@@ -703,6 +801,7 @@ impl Router {
             self.environment_router.clone(),
             EnvironmentId::new(self.environment_id.clone()),
         );
+        self.mutation = MutationService::new(self.store.clone(), self.personal_repo.clone());
         self.data_paths = data_paths;
         self
     }
@@ -737,6 +836,10 @@ impl Router {
 
     pub fn bundle_sync(&self) -> &BundleSyncService {
         &self.bundle_sync
+    }
+
+    pub fn mutation_service(&self) -> &MutationService {
+        &self.mutation
     }
 
     pub async fn shutdown_antigravity_auth(&self) {
@@ -1400,12 +1503,32 @@ impl Router {
             }
             "thread.resume" => self.handle_thread_resume(params),
             "settings.get" | "config.get" => self.handle_settings_get(params),
-            "settings.set" | "config.set" => self.handle_settings_set(params),
+            "settings.set" | "config.set" => self.handle_settings_set(context, params).await,
             "instructions.status" => self.handle_instructions_status(context, params),
             "instructions.check" => self.handle_instructions_check(context, params).await,
             "instructions.diff" => self.handle_instructions_diff(context, params),
+            "instructions.approve" => self.handle_instructions_approve(context, params).await,
+            "instructions.setTracking" | "instructions.set_tracking" => {
+                self.handle_instructions_set_tracking(context, params).await
+            }
+            "instructions.setPolicy" | "instructions.set_policy" => {
+                self.handle_instructions_set_policy(context, params).await
+            }
+            "instructions.history" => self.handle_instructions_history(context, params),
+            "instructions.revert" => self.handle_instructions_revert(context, params).await,
             "projectLayer.status" => self.handle_project_layer_status(context, params).await,
             "projectLayer.diff" => self.handle_project_layer_diff(context, params).await,
+            "projectLayer.trust" => self.handle_project_layer_trust(context, params).await,
+            "projectLayer.revoke" => self.handle_project_layer_revoke(context, params).await,
+            "personalConfig.history" => self.handle_personal_history(context, params).await,
+            "personalConfig.diff" => self.handle_personal_diff(context, params).await,
+            "personalConfig.revert" => self.handle_personal_revert(context, params).await,
+            "mutation.list" => self.handle_mutation_list(context, params),
+            "mutation.get" => self.handle_mutation_get(context, params),
+            "mutation.approveOnce" | "mutation.approve_once" => {
+                self.handle_mutation_approve(context, params).await
+            }
+            "mutation.reject" => self.handle_mutation_reject(context, params),
             "bundle.prepareUpload" | "bundle.prepare_upload" => {
                 self.handle_bundle_prepare_upload(context, params)
             }
@@ -1430,7 +1553,7 @@ impl Router {
             "schedule.save" => self.handle_schedule_save(context, params),
             "schedule.run" => self.handle_schedule_run(context, params).await,
             "mcp.list_tools" => self.handle_mcp_list_tools(),
-            "mcp.call_tool" => self.handle_mcp_call_tool(params),
+            "mcp.call_tool" => self.handle_mcp_call_tool(context, params).await,
             "notification.post" => self.handle_notification_post(params).await,
             "notification.list" => self.handle_notification_list().await,
             "notification.clear" => self.handle_notification_clear(params).await,
@@ -1665,6 +1788,444 @@ impl Router {
         serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
     }
 
+    async fn persist_mutation_proposal(
+        &self,
+        context: &RequestContext,
+        request: MutationProposalRequest,
+    ) -> Result<pandamux_core::MutationProposal, RpcError> {
+        let outcome = self
+            .mutation
+            .propose(context, request)
+            .map_err(mutation_rpc_error)?;
+        if outcome.created {
+            let proposal = &outcome.proposal;
+            let info = pandamux_core::notification::NotificationInfo {
+                id: format!("notif-{}", uuid::Uuid::new_v4().simple()),
+                workspace_id: None,
+                surface_id: None,
+                title: "Configuration confirmation required".to_string(),
+                body: format!(
+                    "{} requested a reviewed change with proposal {}",
+                    proposal.caller.display_name, proposal.id
+                ),
+                source: pandamux_core::notification::NotificationSource::Generic,
+                timestamp_ms: Self::now_ms(),
+                read: false,
+            };
+            self.notifications.lock().await.push(info);
+        }
+        Ok(outcome.proposal)
+    }
+
+    fn handle_mutation_list(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        let params = if params.is_null() {
+            MutationListParams::default()
+        } else {
+            serde_json::from_value::<MutationListParams>(params)
+                .map_err(|error| RpcError::invalid_params(error.to_string()))?
+        };
+        let result = self
+            .mutation
+            .list(context, &params, Self::now_ms())
+            .map_err(mutation_rpc_error)?;
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn handle_mutation_get(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        let params = serde_json::from_value::<MutationGetParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let proposal = self
+            .mutation
+            .get(context, &params.proposal_id, Self::now_ms())
+            .map_err(mutation_rpc_error)?;
+        serde_json::to_value(MutationGetResult { proposal })
+            .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_mutation_approve(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        let params = serde_json::from_value::<MutationResolveParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let service = self.mutation.clone();
+        let resolver_context = context.clone();
+        let proposal_id = params.proposal_id;
+        let proposal = tokio::task::spawn_blocking(move || {
+            service.approve_once(&resolver_context, &proposal_id, Self::now_ms(), None)
+        })
+        .await
+        .map_err(|_| {
+            RpcError::with_data(
+                -32000,
+                "The mutation resolution worker did not join cleanly",
+                json!({ "reason": "mutation_worker_join_failed", "retryable": true }),
+            )
+        })?
+        .map_err(mutation_rpc_error)?;
+        let resolver = self.mutation.caller(context);
+        serde_json::to_value(MutationResolveResult { proposal, resolver })
+            .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn handle_mutation_reject(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        let params = serde_json::from_value::<MutationResolveParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let proposal = self
+            .mutation
+            .reject(context, &params.proposal_id, Self::now_ms())
+            .map_err(mutation_rpc_error)?;
+        let resolver = self.mutation.caller(context);
+        serde_json::to_value(MutationResolveResult { proposal, resolver })
+            .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_instructions_approve(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_authenticated_local_control(context)?;
+        let params = serde_json::from_value::<InstructionsApproveParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        validate_request_id(&params.request_id)?;
+        let (candidate, _) = self
+            .instructions
+            .load_candidate_inspection(&params.candidate_id)
+            .map_err(|error| instructions_rpc_error(error, None, None))?
+            .ok_or_else(|| {
+                RpcError::with_data(
+                    -32004,
+                    "The instructions candidate was not found",
+                    json!({ "reason": "instructions_candidate_not_found" }),
+                )
+            })?;
+        if candidate.observed_source_commit_sha != params.observed_source_commit_sha
+            || candidate.diff_digest != params.diff_digest
+            || !candidate.activatable
+            || !matches!(
+                candidate.state,
+                pandamux_core::InstructionCandidateState::AwaitingApproval
+                    | pandamux_core::InstructionCandidateState::Approved
+            )
+        {
+            return Err(RpcError::with_data(
+                -32009,
+                "The instructions candidate changed before approval",
+                json!({ "reason": "instructions_candidate_changed", "retryable": true }),
+            ));
+        }
+        let source = self
+            .store
+            .get_instruction_source(&candidate.source_id)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?
+            .ok_or_else(|| {
+                RpcError::with_data(
+                    -32004,
+                    "The instructions source was not found",
+                    json!({ "reason": "instructions_source_not_found" }),
+                )
+            })?;
+        if source.revision != params.expected_revision {
+            return Err(revision_drift_rpc(
+                "instructions_source",
+                params.expected_revision,
+                Some(source.revision),
+            ));
+        }
+        let workspace_root = self.local_project_workspace(&params.project_id)?;
+        let configuration = self.configuration.clone();
+        let project_id = params.project_id;
+        let candidate_id = params.candidate_id.clone();
+        let materialization = tokio::task::spawn_blocking(move || {
+            configuration.materialization_for_candidate(
+                &project_id,
+                &workspace_root,
+                &candidate_id,
+                Self::now_ms(),
+            )
+        })
+        .await
+        .map_err(|_| configuration_worker_error())?
+        .map_err(configuration_rpc_error)?;
+        let targets = self
+            .store
+            .get_or_initialize_settings(Self::now_ms())
+            .map_err(|error| RpcError::internal_error(error.to_string()))?
+            .settings
+            .environments
+            .into_iter()
+            .map(|environment| environment.id)
+            .collect::<Vec<_>>();
+        let sync = self.bundle_sync.clone();
+        let source_id = candidate.source_id;
+        let candidate_id = params.candidate_id;
+        let expected_revision = params.expected_revision;
+        let actor = self.mutation.caller(context).client_id;
+        let activation = tokio::task::spawn_blocking(move || {
+            sync.activate(
+                &materialization,
+                Some(&source_id),
+                Some(&candidate_id),
+                Some(expected_revision),
+                pandamux_core::BundleActivationKind::CandidateApproval,
+                &actor,
+                &targets,
+                Self::now_ms(),
+                None,
+            )
+        })
+        .await
+        .map_err(|_| configuration_worker_error())?
+        .map_err(bundle_sync_rpc_error)?;
+        let result = InstructionsApproveResult {
+            activation,
+            source_revision: expected_revision
+                .checked_next()
+                .map_err(|error| RpcError::internal_error(error.to_string()))?,
+        };
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_instructions_set_tracking(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_authenticated_local_control(context)?;
+        let params = serde_json::from_value::<InstructionsSetTrackingParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        validate_request_id(&params.request_id)?;
+        let current =
+            self.load_instruction_source_at_revision(&params.source_id, params.expected_revision)?;
+        let mut next = current.clone();
+        next.revision = current
+            .revision
+            .checked_next()
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        next.tracking = params.tracking;
+        next.last_error_reason = None;
+        let mut impact = pandamux_core::MutationImpact::default();
+        impact.tracking_summaries.insert(format!(
+            "Change instructions tracking for {}",
+            current.id.as_str()
+        ));
+        let proposal = self
+            .persist_mutation_proposal(
+                context,
+                MutationProposalRequest {
+                    request_id: params.request_id,
+                    tool_name: "instructions.setTracking".to_string(),
+                    target: pandamux_core::MutationTarget::InstructionsSource {
+                        source_id: current.id.as_str().to_string(),
+                    },
+                    expected_revision: current.revision,
+                    old_json: serde_json::to_value(current)
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?,
+                    new_json: serde_json::to_value(next)
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?,
+                    impact,
+                    created_at_ms: Self::now_ms(),
+                    ttl_ms: None,
+                },
+            )
+            .await?;
+        serde_json::to_value(InstructionsProposalResult {
+            proposal_id: proposal.id,
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_instructions_set_policy(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_authenticated_local_control(context)?;
+        let params = serde_json::from_value::<InstructionsSetPolicyParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        validate_request_id(&params.request_id)?;
+        let current =
+            self.load_instruction_source_at_revision(&params.source_id, params.expected_revision)?;
+        let mut next = current.clone();
+        next.revision = current
+            .revision
+            .checked_next()
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        next.policy = params.policy;
+        let mut impact = pandamux_core::MutationImpact::default();
+        impact.tracking_summaries.insert(format!(
+            "Change instructions update policy for {}",
+            current.id.as_str()
+        ));
+        let proposal = self
+            .persist_mutation_proposal(
+                context,
+                MutationProposalRequest {
+                    request_id: params.request_id,
+                    tool_name: "instructions.setPolicy".to_string(),
+                    target: pandamux_core::MutationTarget::InstructionsSource {
+                        source_id: current.id.as_str().to_string(),
+                    },
+                    expected_revision: current.revision,
+                    old_json: serde_json::to_value(current)
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?,
+                    new_json: serde_json::to_value(next)
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?,
+                    impact,
+                    created_at_ms: Self::now_ms(),
+                    ttl_ms: None,
+                },
+            )
+            .await?;
+        serde_json::to_value(InstructionsProposalResult {
+            proposal_id: proposal.id,
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn handle_instructions_history(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_authenticated_local_control(context)?;
+        let params = if params.is_null() {
+            InstructionsHistoryParams::default()
+        } else {
+            serde_json::from_value::<InstructionsHistoryParams>(params)
+                .map_err(|error| RpcError::invalid_params(error.to_string()))?
+        };
+        let (entries, has_more) = self
+            .store
+            .list_configuration_audit(params.before_at_ms, params.limit.unwrap_or(50))
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        serde_json::to_value(InstructionsHistoryResult { entries, has_more })
+            .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_instructions_revert(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_authenticated_local_control(context)?;
+        let params = serde_json::from_value::<InstructionsRevertParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        validate_request_id(&params.request_id)?;
+        let current =
+            self.load_instruction_source_at_revision(&params.source_id, params.expected_revision)?;
+        if current.active_bundle_sha.as_ref() == Some(&params.bundle_sha) {
+            return Err(RpcError::with_data(
+                -32602,
+                "The selected bundle is already active",
+                json!({
+                    "reason": "bundle_already_active",
+                    "bundleSha": params.bundle_sha,
+                    "retryable": false,
+                }),
+            ));
+        }
+        let object = self
+            .store
+            .get_bundle_object(&params.bundle_sha)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?
+            .ok_or_else(|| {
+                RpcError::with_data(
+                    -32004,
+                    "The retained bundle was not found",
+                    json!({ "reason": "bundle_object_not_found" }),
+                )
+            })?;
+        let mut next = current.clone();
+        next.revision = current
+            .revision
+            .checked_next()
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        next.active_source_commit_sha = Some(object.source_manifest.instructions_commit_sha);
+        next.active_bundle_sha = Some(params.bundle_sha);
+        next.last_error_reason = None;
+        let mut impact = pandamux_core::MutationImpact::default();
+        impact.tracking_summaries.insert(format!(
+            "Reactivate a retained bundle for {}",
+            current.id.as_str()
+        ));
+        let settings = self
+            .store
+            .get_or_initialize_settings(Self::now_ms())
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        impact.environment_ids.extend(
+            settings
+                .settings
+                .environments
+                .into_iter()
+                .map(|environment| environment.id),
+        );
+        let proposal = self
+            .persist_mutation_proposal(
+                context,
+                MutationProposalRequest {
+                    request_id: params.request_id,
+                    tool_name: "instructions.revert".to_string(),
+                    target: pandamux_core::MutationTarget::InstructionsSource {
+                        source_id: current.id.as_str().to_string(),
+                    },
+                    expected_revision: current.revision,
+                    old_json: serde_json::to_value(current)
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?,
+                    new_json: serde_json::to_value(next)
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?,
+                    impact,
+                    created_at_ms: Self::now_ms(),
+                    ttl_ms: None,
+                },
+            )
+            .await?;
+        serde_json::to_value(InstructionsProposalResult {
+            proposal_id: proposal.id,
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn load_instruction_source_at_revision(
+        &self,
+        source_id: &pandamux_core::InstructionSourceId,
+        expected_revision: pandamux_core::ConfigurationRevision,
+    ) -> Result<pandamux_core::InstructionsSourceRecord, RpcError> {
+        let source = self
+            .store
+            .get_instruction_source(source_id)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?
+            .ok_or_else(|| {
+                RpcError::with_data(
+                    -32004,
+                    "The instructions source was not found",
+                    json!({ "reason": "instructions_source_not_found" }),
+                )
+            })?;
+        if source.revision != expected_revision {
+            return Err(revision_drift_rpc(
+                "instructions_source",
+                expected_revision,
+                Some(source.revision),
+            ));
+        }
+        Ok(source)
+    }
+
     async fn handle_project_layer_status(
         &self,
         context: &RequestContext,
@@ -1776,6 +2337,322 @@ impl Router {
             behavioral_diff: serde_json::to_value(report.behavioral_diff)
                 .map_err(|error| RpcError::internal_error(error.to_string()))?,
             issues,
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_project_layer_trust(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_authenticated_local_control(context)?;
+        let params = serde_json::from_value::<ProjectLayerTrustParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        validate_request_id(&params.request_id)?;
+        let snapshot = self.load_project_layer_snapshot(&params.project_id).await?;
+        if snapshot.repository.revision != params.expected_revision {
+            return Err(revision_drift_rpc(
+                "project_repository",
+                params.expected_revision,
+                Some(snapshot.repository.revision),
+            ));
+        }
+        if !snapshot.issues.is_empty()
+            || snapshot.project_content_sha256.as_ref() != Some(&params.project_content_sha256)
+        {
+            return Err(RpcError::with_data(
+                -32009,
+                "The project configuration changed or is not valid for trust",
+                json!({
+                    "reason": "project_content_changed",
+                    "issues": snapshot.issues,
+                    "retryable": true,
+                }),
+            ));
+        }
+        let old = ProjectTrustMutationState {
+            project_id: params.project_id.clone(),
+            repository_id: snapshot.repository.id.clone(),
+            project_content_sha256: params.project_content_sha256.clone(),
+            trusted: snapshot.trust.is_some(),
+        };
+        let mut new = old.clone();
+        new.trusted = true;
+        let mut impact = pandamux_core::MutationImpact::default();
+        impact
+            .organization_ids
+            .insert(snapshot.repository.organization_id);
+        impact.project_ids.insert(params.project_id.clone());
+        impact.trust_summaries.insert(format!(
+            "Trust exact project configuration {}",
+            params.project_content_sha256
+        ));
+        let proposal = self
+            .persist_mutation_proposal(
+                context,
+                MutationProposalRequest {
+                    request_id: params.request_id,
+                    tool_name: "projectLayer.trust".to_string(),
+                    target: pandamux_core::MutationTarget::ProjectLayerTrust {
+                        project_id: params.project_id,
+                    },
+                    expected_revision: params.expected_revision,
+                    old_json: serde_json::to_value(old)
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?,
+                    new_json: serde_json::to_value(new)
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?,
+                    impact,
+                    created_at_ms: Self::now_ms(),
+                    ttl_ms: None,
+                },
+            )
+            .await?;
+        serde_json::to_value(ProjectLayerProposalResult {
+            proposal_id: proposal.id,
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_project_layer_revoke(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_authenticated_local_control(context)?;
+        let params = serde_json::from_value::<ProjectLayerRevokeParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        validate_request_id(&params.request_id)?;
+        let snapshot = self.load_project_layer_snapshot(&params.project_id).await?;
+        if snapshot.repository.revision != params.expected_revision {
+            return Err(revision_drift_rpc(
+                "project_repository",
+                params.expected_revision,
+                Some(snapshot.repository.revision),
+            ));
+        }
+        let trust = snapshot.trust.ok_or_else(|| {
+            RpcError::with_data(
+                -32004,
+                "The project layer has no active trust to revoke",
+                json!({ "reason": "project_trust_not_found" }),
+            )
+        })?;
+        let old = ProjectTrustMutationState {
+            project_id: params.project_id.clone(),
+            repository_id: snapshot.repository.id.clone(),
+            project_content_sha256: trust.project_content_sha256,
+            trusted: true,
+        };
+        let mut new = old.clone();
+        new.trusted = false;
+        let mut impact = pandamux_core::MutationImpact::default();
+        impact
+            .organization_ids
+            .insert(snapshot.repository.organization_id);
+        impact.project_ids.insert(params.project_id.clone());
+        impact
+            .trust_summaries
+            .insert("Revoke the active project configuration trust".to_string());
+        let proposal = self
+            .persist_mutation_proposal(
+                context,
+                MutationProposalRequest {
+                    request_id: params.request_id,
+                    tool_name: "projectLayer.revoke".to_string(),
+                    target: pandamux_core::MutationTarget::ProjectLayerTrust {
+                        project_id: params.project_id,
+                    },
+                    expected_revision: params.expected_revision,
+                    old_json: serde_json::to_value(old)
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?,
+                    new_json: serde_json::to_value(new)
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?,
+                    impact,
+                    created_at_ms: Self::now_ms(),
+                    ttl_ms: None,
+                },
+            )
+            .await?;
+        serde_json::to_value(ProjectLayerProposalResult {
+            proposal_id: proposal.id,
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn load_project_layer_snapshot(
+        &self,
+        project_id: &ProjectId,
+    ) -> Result<crate::configuration_service::ProjectLayerSnapshot, RpcError> {
+        let workspace_root = self.local_project_workspace(project_id)?;
+        let service = self.configuration.clone();
+        let project_id = project_id.clone();
+        tokio::task::spawn_blocking(move || {
+            service.inspect_project_layer(&project_id, &workspace_root, Self::now_ms())
+        })
+        .await
+        .map_err(|_| configuration_worker_error())?
+        .map_err(configuration_rpc_error)
+    }
+
+    async fn handle_personal_history(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_authenticated_local_control(context)?;
+        let params = if params.is_null() {
+            PersonalConfigHistoryParams::default()
+        } else {
+            serde_json::from_value::<PersonalConfigHistoryParams>(params)
+                .map_err(|error| RpcError::invalid_params(error.to_string()))?
+        };
+        let limit = params.limit.unwrap_or(50).clamp(1, 100) as usize;
+        let service = self.personal_repo.clone();
+        let cursor = params.before_source_commit_sha;
+        let (entries, has_more) = tokio::task::spawn_blocking(move || {
+            let mut entries = service.history(1000)?;
+            if let Some(cursor) = cursor {
+                if let Some(index) = entries
+                    .iter()
+                    .position(|entry| entry.source_commit_sha == cursor)
+                {
+                    entries.drain(..=index);
+                } else {
+                    entries.clear();
+                }
+            }
+            let has_more = entries.len() > limit;
+            entries.truncate(limit);
+            Ok::<_, crate::personal_repo::PersonalRepoError>((entries, has_more))
+        })
+        .await
+        .map_err(|_| configuration_worker_error())?
+        .map_err(personal_rpc_error)?;
+        let state = self
+            .store
+            .get_personal_repo_state()
+            .map_err(|error| RpcError::internal_error(error.to_string()))?
+            .ok_or_else(|| RpcError::internal_error("personal repository state unavailable"))?;
+        serde_json::to_value(PersonalConfigHistoryResult {
+            head_source_commit_sha: state.head_source_commit_sha,
+            revision: state.revision,
+            entries,
+            has_more,
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_personal_diff(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_authenticated_local_control(context)?;
+        let params = serde_json::from_value::<PersonalConfigDiffParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let service = self.personal_repo.clone();
+        let from = params.from_source_commit_sha;
+        let to = params.to_source_commit_sha;
+        let diff = tokio::task::spawn_blocking(move || service.diff(&from, &to))
+            .await
+            .map_err(|_| configuration_worker_error())?
+            .map_err(personal_rpc_error)?;
+        let file_diff = json!({
+            "added": diff.added,
+            "modified": diff.modified,
+            "deleted": diff.deleted,
+        });
+        let behavioral_diff = json!({
+            "summary": "Personal configuration files changed",
+            "requiresRecompile": true,
+        });
+        serde_json::to_value(PersonalConfigDiffResult {
+            file_diff,
+            behavioral_diff,
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_personal_revert(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_authenticated_local_control(context)?;
+        let params = serde_json::from_value::<PersonalConfigRevertParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        validate_request_id(&params.request_id)?;
+        let state = self
+            .store
+            .get_personal_repo_state()
+            .map_err(|error| RpcError::internal_error(error.to_string()))?
+            .ok_or_else(|| {
+                RpcError::with_data(
+                    -32004,
+                    "The personal configuration repository is not initialized",
+                    json!({ "reason": "personal_repo_uninitialized" }),
+                )
+            })?;
+        if state.revision != params.expected_revision
+            || state.head_source_commit_sha != params.expected_source_commit_sha
+        {
+            return Err(revision_drift_rpc(
+                "personal_configuration",
+                params.expected_revision,
+                Some(state.revision),
+            ));
+        }
+        if state.head_source_commit_sha == params.target_source_commit_sha {
+            return Err(RpcError::with_data(
+                -32602,
+                "The selected personal configuration revision is already active",
+                json!({
+                    "reason": "personal_revision_already_active",
+                    "targetSourceCommitSha": params.target_source_commit_sha,
+                    "retryable": false,
+                }),
+            ));
+        }
+        let service = self.personal_repo.clone();
+        let current = state.head_source_commit_sha.clone();
+        let target = params.target_source_commit_sha.clone();
+        tokio::task::spawn_blocking(move || service.diff(&current, &target))
+            .await
+            .map_err(|_| configuration_worker_error())?
+            .map_err(personal_rpc_error)?;
+        let old = PersonalMutationState {
+            head_source_commit_sha: state.head_source_commit_sha.clone(),
+            target_source_commit_sha: state.head_source_commit_sha.clone(),
+        };
+        let new = PersonalMutationState {
+            head_source_commit_sha: state.head_source_commit_sha,
+            target_source_commit_sha: params.target_source_commit_sha,
+        };
+        let mut impact = pandamux_core::MutationImpact::default();
+        impact
+            .validation_summaries
+            .insert("Create a forward-only personal configuration revert commit".to_string());
+        let proposal = self
+            .persist_mutation_proposal(
+                context,
+                MutationProposalRequest {
+                    request_id: params.request_id,
+                    tool_name: "personalConfig.revert".to_string(),
+                    target: pandamux_core::MutationTarget::PersonalConfiguration,
+                    expected_revision: params.expected_revision,
+                    old_json: serde_json::to_value(old)
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?,
+                    new_json: serde_json::to_value(new)
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?,
+                    impact,
+                    created_at_ms: Self::now_ms(),
+                    ttl_ms: None,
+                },
+            )
+            .await?;
+        serde_json::to_value(PersonalConfigRevertResult {
+            proposal_id: proposal.id,
         })
         .map_err(|error| RpcError::internal_error(error.to_string()))
     }
@@ -2087,17 +2964,29 @@ impl Router {
         }
     }
 
-    fn handle_settings_set(&self, params: Value) -> Result<Value, RpcError> {
+    async fn handle_settings_set(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
         let record = self
             .store
             .get_or_initialize_settings(Self::now_ms())
             .map_err(|e| RpcError::internal_error(e.to_string()))?;
         let request = serde_json::from_value::<SettingsSetParams>(params)
             .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        if record.revision != request.expected_revision {
+            return Err(revision_drift_rpc(
+                "user_settings",
+                request.expected_revision,
+                Some(record.revision),
+            ));
+        }
+        let current = record.settings;
         let mut updated = match (request.settings, request.key, request.value) {
             (Some(settings), None, None) => settings,
             (None, Some(key), Some(value)) => {
-                let mut settings = record.settings;
+                let mut settings = current.clone();
                 pandamux_core::settings_set(&mut settings, &key, value)
                     .map_err(RpcError::invalid_params)?;
                 settings
@@ -2110,6 +2999,88 @@ impl Router {
         };
         updated.normalize();
         self.canonicalize_failover_pools(&mut updated)?;
+        let reenabled = current
+            .trusted_configuration
+            .disabled_agent_ids
+            .difference(&updated.trusted_configuration.disabled_agent_ids)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let full_access_added = updated
+            .trusted_configuration
+            .full_access_agent_ids
+            .difference(&current.trusted_configuration.full_access_agent_ids)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if !reenabled.is_empty() || !full_access_added.is_empty() {
+            require_authenticated_local_control(context)?;
+            let request_id = request.request_id.as_deref().ok_or_else(|| {
+                RpcError::with_data(
+                    -32602,
+                    "Access widening requires requestId for durable confirmation",
+                    json!({ "reason": "request_id_required" }),
+                )
+            })?;
+            validate_request_id(request_id)?;
+            let mut allowed = current.clone();
+            allowed.trusted_configuration = updated.trusted_configuration.clone();
+            if allowed != updated {
+                return Err(RpcError::with_data(
+                    -32602,
+                    "Access widening must be submitted separately from other settings changes",
+                    json!({ "reason": "widening_must_be_separate" }),
+                ));
+            }
+            let mut impact = pandamux_core::MutationImpact::default();
+            impact.agent_ids.extend(reenabled.iter().cloned());
+            impact.agent_ids.extend(full_access_added.iter().cloned());
+            if !reenabled.is_empty() {
+                impact.access_summaries.insert(format!(
+                    "Re-enable {} trusted configuration agent(s)",
+                    reenabled.len()
+                ));
+            }
+            if !full_access_added.is_empty() {
+                impact.full_access_summaries.insert(format!(
+                    "Grant FullAccess to {} trusted configuration agent(s)",
+                    full_access_added.len()
+                ));
+            }
+            let proposal = self
+                .persist_mutation_proposal(
+                    context,
+                    MutationProposalRequest {
+                        request_id: request_id.to_string(),
+                        tool_name: "settings.set.trustedConfiguration".to_string(),
+                        target: pandamux_core::MutationTarget::Settings,
+                        expected_revision: record.revision,
+                        old_json: serde_json::to_value(
+                            pandamux_core::TrustedSettingsMutationState {
+                                trusted_configuration: current.trusted_configuration.clone(),
+                            },
+                        )
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?,
+                        new_json: serde_json::to_value(
+                            pandamux_core::TrustedSettingsMutationState {
+                                trusted_configuration: updated.trusted_configuration.clone(),
+                            },
+                        )
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?,
+                        impact,
+                        created_at_ms: Self::now_ms(),
+                        ttl_ms: None,
+                    },
+                )
+                .await?;
+            return Err(RpcError::with_data(
+                -32045,
+                "Access widening requires one local approval",
+                json!({
+                    "reason": "local_approval_required",
+                    "proposalId": proposal.id,
+                    "retryable": false,
+                }),
+            ));
+        }
         let revision = self
             .store
             .save_settings_with_organization_policies_cas(
@@ -3524,10 +4495,38 @@ impl Router {
         serde_json::to_value(tools).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
-    fn handle_mcp_call_tool(&self, params: Value) -> Result<Value, RpcError> {
+    async fn handle_mcp_call_tool(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
         let call_params: McpCallToolParams =
             serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
-        let result = self.mcp.call_tool(&call_params);
+        let result = self
+            .mcp
+            .call_tool_with_context(context, &self.mutation, &call_params);
+        let created = result.content.iter().any(|item| match item {
+            pandamux_protocol::McpContentItem::Text { text } => serde_json::from_str::<Value>(text)
+                .ok()
+                .and_then(|value| value.get("created").and_then(Value::as_bool))
+                .unwrap_or(false),
+            pandamux_protocol::McpContentItem::Resource { .. } => false,
+        });
+        if call_params.name == "propose_agent_access" && !result.is_error && created {
+            self.notifications
+                .lock()
+                .await
+                .push(pandamux_core::notification::NotificationInfo {
+                    id: format!("notif-{}", uuid::Uuid::new_v4().simple()),
+                    workspace_id: None,
+                    surface_id: None,
+                    title: "Configuration confirmation required".to_string(),
+                    body: "An MCP caller proposed a trusted agent access change".to_string(),
+                    source: pandamux_core::notification::NotificationSource::Generic,
+                    timestamp_ms: Self::now_ms(),
+                    read: false,
+                });
+        }
         serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
@@ -4549,6 +5548,204 @@ mod tests {
                 .and_then(|value| value.get("safeErrorReason"))
                 .and_then(Value::as_str),
             Some("instructions_remote_unavailable")
+        );
+    }
+
+    #[tokio::test]
+    async fn every_settings_widening_requires_one_local_confirmation() {
+        let root = tempfile::tempdir().expect("temporary mutation router root");
+        let store = Store::in_memory().expect("store");
+        let mut initial = store
+            .get_or_initialize_settings(1_000)
+            .expect("initial settings");
+        initial
+            .settings
+            .trusted_configuration
+            .disabled_agent_ids
+            .insert(AgentId::new("agent-reenable"));
+        initial.revision = store
+            .save_settings_cas(&initial.settings, initial.revision, 1_001)
+            .expect("seed disabled agent");
+        let router = Router::new(store.clone(), ServerRole::Hub, "env-local".to_string())
+            .with_data_dir(root.path().join("app"));
+        let local = RequestContext {
+            peer_role: PeerRole::LocalControl,
+            authenticated_environment_id: EnvironmentId::new("env-local"),
+            client_identity: crate::ClientIdentity {
+                description: "Desktop test".to_string(),
+                ..crate::ClientIdentity::default()
+            },
+            capability_scope: crate::CapabilityScope::Control,
+            connection_id: "desktop-mutation-test".to_string(),
+        };
+        let mcp = RequestContext {
+            peer_role: PeerRole::McpAdapter,
+            authenticated_environment_id: EnvironmentId::new("env-local"),
+            client_identity: crate::ClientIdentity::default(),
+            capability_scope: crate::CapabilityScope::Mcp,
+            connection_id: "mcp-direct-mutation-test".to_string(),
+        };
+        let mut widened = initial.settings.clone();
+        widened
+            .trusted_configuration
+            .disabled_agent_ids
+            .remove(&AgentId::new("agent-reenable"));
+        widened
+            .trusted_configuration
+            .full_access_agent_ids
+            .insert(AgentId::new("agent-full-access"));
+        let params = json!({
+            "expectedRevision": initial.revision,
+            "requestId": "settings-widening-test",
+            "settings": widened,
+        });
+
+        let denied_mcp = router
+            .handle_request_with_context(
+                &mcp,
+                RpcRequest::new(1, "settings.set", Some(params.clone())),
+            )
+            .await
+            .expect("MCP denial response");
+        assert_eq!(
+            denied_mcp
+                .error
+                .and_then(|error| error.data)
+                .and_then(|data| data.get("reason").cloned()),
+            Some(json!("capability_scope_denied"))
+        );
+
+        let proposal_required = router
+            .handle_request_with_context(&local, RpcRequest::new(2, "settings.set", Some(params)))
+            .await
+            .expect("proposal response");
+        let error = proposal_required.error.expect("local approval required");
+        assert_eq!(
+            error.data.as_ref().and_then(|data| data.get("reason")),
+            Some(&json!("local_approval_required"))
+        );
+        let proposal_id = error
+            .data
+            .as_ref()
+            .and_then(|data| data.get("proposalId"))
+            .and_then(Value::as_str)
+            .expect("proposal identity")
+            .to_string();
+        let unchanged = store
+            .get_or_initialize_settings(1_010)
+            .expect("unchanged settings");
+        assert_eq!(unchanged.revision, initial.revision);
+        assert!(
+            unchanged
+                .settings
+                .trusted_configuration
+                .disabled_agent_ids
+                .contains(&AgentId::new("agent-reenable"))
+        );
+        assert!(
+            unchanged
+                .settings
+                .trusted_configuration
+                .full_access_agent_ids
+                .is_empty()
+        );
+
+        let approved = router
+            .handle_request_with_context(
+                &local,
+                RpcRequest::new(
+                    3,
+                    "mutation.approveOnce",
+                    Some(json!({ "proposalId": proposal_id.clone() })),
+                ),
+            )
+            .await
+            .expect("approval response");
+        assert!(approved.is_success());
+        assert_eq!(
+            approved
+                .result
+                .as_ref()
+                .and_then(|value| value.pointer("/proposal/resolution")),
+            Some(&json!("approved_applied"))
+        );
+        let applied = store
+            .get_or_initialize_settings(1_020)
+            .expect("applied settings");
+        assert_eq!(
+            applied.revision,
+            initial.revision.checked_next().expect("next revision")
+        );
+        assert!(
+            !applied
+                .settings
+                .trusted_configuration
+                .disabled_agent_ids
+                .contains(&AgentId::new("agent-reenable"))
+        );
+        assert!(
+            applied
+                .settings
+                .trusted_configuration
+                .full_access_agent_ids
+                .contains(&AgentId::new("agent-full-access"))
+        );
+
+        let retry = router
+            .handle_request_with_context(
+                &local,
+                RpcRequest::new(
+                    4,
+                    "mutation.approveOnce",
+                    Some(json!({ "proposalId": proposal_id })),
+                ),
+            )
+            .await
+            .expect("approval retry response");
+        assert!(retry.is_success());
+        assert_eq!(
+            store
+                .get_or_initialize_settings(1_030)
+                .expect("settings after retry")
+                .revision,
+            applied.revision
+        );
+
+        let mut mixed = applied.settings;
+        mixed.ui.show_status_bar = !mixed.ui.show_status_bar;
+        mixed
+            .trusted_configuration
+            .full_access_agent_ids
+            .insert(AgentId::new("agent-mixed"));
+        let mixed = router
+            .handle_request_with_context(
+                &local,
+                RpcRequest::new(
+                    5,
+                    "settings.set",
+                    Some(json!({
+                        "expectedRevision": applied.revision,
+                        "requestId": "settings-mixed-test",
+                        "settings": mixed,
+                    })),
+                ),
+            )
+            .await
+            .expect("mixed widening response");
+        assert_eq!(
+            mixed
+                .error
+                .and_then(|error| error.data)
+                .and_then(|data| data.get("reason").cloned()),
+            Some(json!("widening_must_be_separate"))
+        );
+        assert_eq!(
+            store
+                .list_mutation_proposals(true, None, 100)
+                .expect("mutation list")
+                .0
+                .len(),
+            1
         );
     }
 

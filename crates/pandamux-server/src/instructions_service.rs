@@ -408,6 +408,88 @@ impl InstructionsService {
         Ok(Some((source, documents)))
     }
 
+    pub fn candidate_snapshot(
+        &self,
+        candidate_id: &InstructionCandidateId,
+    ) -> Result<
+        Option<(
+            InstructionsSourceRecord,
+            InstructionCandidateRecord,
+            Vec<SourceDocument>,
+        )>,
+        InstructionsServiceError,
+    > {
+        let Some(stored) = self.store.get_instruction_candidate(candidate_id)? else {
+            return Ok(None);
+        };
+        if !stored.record.activatable
+            || !matches!(
+                stored.record.state,
+                InstructionCandidateState::Discovered
+                    | InstructionCandidateState::AwaitingApproval
+                    | InstructionCandidateState::Approved
+            )
+        {
+            return Err(InstructionsServiceError {
+                reason: "instructions_candidate_not_activatable",
+                safe_message: "The instructions candidate is not eligible for activation"
+                    .to_string(),
+                retryable: false,
+                actual_revision: None,
+            });
+        }
+        let source = self
+            .store
+            .get_instruction_source(&stored.record.source_id)?
+            .ok_or_else(source_not_found)?;
+        let mirror = self.mirror_path(&source.canonical_remote_identity);
+        let owner = repository_owner(&mirror);
+        let _owner = owner.lock().expect("instructions mirror owner lock");
+        let (documents, issues) =
+            self.read_source_snapshot(&mirror, &stored.record.observed_source_commit_sha)?;
+        if !issues.is_empty() {
+            return Err(InstructionsServiceError {
+                reason: "instructions_candidate_changed",
+                safe_message: "The instructions candidate no longer passes integrity inspection"
+                    .to_string(),
+                retryable: false,
+                actual_revision: Some(source.revision),
+            });
+        }
+        Ok(Some((source, stored.record, documents)))
+    }
+
+    pub fn export_candidate_git_bundle(
+        &self,
+        candidate_id: &InstructionCandidateId,
+        expected_commit: &SourceCommitSha,
+    ) -> Result<(String, Vec<u8>), InstructionsServiceError> {
+        let (source, candidate, _) =
+            self.candidate_snapshot(candidate_id)?
+                .ok_or_else(|| InstructionsServiceError {
+                    reason: "instructions_candidate_not_found",
+                    safe_message: "The instructions candidate was not found".to_string(),
+                    retryable: false,
+                    actual_revision: None,
+                })?;
+        if &candidate.observed_source_commit_sha != expected_commit {
+            return Err(InstructionsServiceError {
+                reason: "instructions_candidate_changed",
+                safe_message: "The instructions candidate changed before materialization"
+                    .to_string(),
+                retryable: true,
+                actual_revision: Some(source.revision),
+            });
+        }
+        let mirror = self.mirror_path(&source.canonical_remote_identity);
+        let owner = repository_owner(&mirror);
+        let _owner = owner.lock().expect("instructions mirror owner lock");
+        let export_ref = candidate_refs(&source.id, expected_commit).commit;
+        self.pin_candidate_commit(&mirror, &export_ref, expected_commit)?;
+        let bytes = self.git.create_bundle_bytes(&mirror, &export_ref)?;
+        Ok((export_ref, bytes))
+    }
+
     pub fn export_active_git_bundle(
         &self,
         source_id: &InstructionSourceId,

@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Added
 
+- **Added durable trusted mutation review and configuration controls in version
+  0.60.83.** Server-stamped request context now binds canonical proposals to
+  their authenticated caller, tool, environment, exact prior revision, and
+  content digests before local notification. Duplicate requests replay one
+  proposal, conflicting identities are rejected, and expiry, disconnect,
+  rejection, revision drift, or failed audit prevents mutation. Local approval
+  applies one exact target with immutable audit evidence, while direct MCP
+  settings mutation remains disabled. The desktop now provides non-color-only
+  confirmation cards plus trusted source, candidate, project trust, diff,
+  history, and forward-only revert surfaces using safe redacted projections.
+
 - **Added verified bundle activation and durable node distribution in version
   0.60.82.** PandaMUX now materializes each compiled configuration as one
   content-addressed private object containing the canonical payload, exact

@@ -49,6 +49,8 @@ pub struct SettingsGetResult {
 #[serde(rename_all = "camelCase")]
 pub struct SettingsSetParams {
     pub expected_revision: ConfigurationRevision,
+    #[serde(default)]
+    pub request_id: Option<String>,
     /// Full updated settings object.
     #[serde(default)]
     pub settings: Option<UserSettings>,
@@ -251,6 +253,7 @@ mod tests {
     fn test_settings_rpc_serialization() {
         let set_params = SettingsSetParams {
             expected_revision: ConfigurationRevision::INITIAL,
+            request_id: None,
             settings: Some(UserSettings::default()),
             key: None,
             value: None,

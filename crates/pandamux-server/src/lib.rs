@@ -12,6 +12,7 @@ pub mod hark;
 pub mod instructions_service;
 mod managed_git;
 pub mod mcp_server;
+pub mod mutation_service;
 pub mod personal_repo;
 pub mod provider_resolver;
 pub mod proxy_connection;
@@ -54,6 +55,11 @@ pub use instructions_service::{
     InstructionsService, InstructionsServiceError, StoredCandidateInspection,
 };
 pub use mcp_server::McpServer;
+pub use mutation_service::{
+    DEFAULT_MUTATION_TTL_MS, MUTATION_SWEEP_INTERVAL, MutationProposalOutcome,
+    MutationProposalRequest, MutationService, MutationServiceError, MutationSweepService,
+    PersonalMutationState,
+};
 pub use personal_repo::{
     PersonalConfigDiff, PersonalEditRequest, PersonalEditResult, PersonalRepoError,
     PersonalRepoFailpoint, PersonalRepoService,

@@ -1,6 +1,9 @@
+use crate::mutation_service::{MutationProposalRequest, MutationService};
+use crate::request_context::RequestContext;
 use crate::store::Store;
 use pandamux_core::{
-    EnvironmentId, ProjectId, ProviderInstanceId, ScheduleRecord, ScheduleTarget, UserSettings,
+    AgentId, ConfigurationRevision, EnvironmentId, MutationImpact, MutationTarget, ProjectId,
+    ProviderInstanceId, ScheduleRecord, ScheduleTarget, UserSettings,
 };
 use pandamux_protocol::{McpCallToolParams, McpCallToolResult, McpContentItem, McpToolDefinition};
 use serde_json::json;
@@ -50,11 +53,48 @@ impl McpServer {
                     "additionalProperties": false
                 }),
             },
+            McpToolDefinition {
+                name: "propose_agent_access".to_string(),
+                description: "Propose a reviewed trusted-agent access change without applying it"
+                    .to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "requestId": { "type": "string", "minLength": 1, "maxLength": 256 },
+                        "agentId": { "type": "string", "minLength": 1 },
+                        "disabled": { "type": "boolean" },
+                        "fullAccess": { "type": "boolean" },
+                        "expectedRevision": { "type": "integer", "minimum": 1 }
+                    },
+                    "required": [
+                        "requestId", "agentId", "disabled", "fullAccess", "expectedRevision"
+                    ],
+                    "additionalProperties": false
+                }),
+            },
         ]
     }
 
     /// Execute an MCP tool.
     pub fn call_tool(&self, params: &McpCallToolParams) -> McpCallToolResult {
+        self.call_tool_impl(None, None, params)
+    }
+
+    pub fn call_tool_with_context(
+        &self,
+        context: &RequestContext,
+        mutations: &MutationService,
+        params: &McpCallToolParams,
+    ) -> McpCallToolResult {
+        self.call_tool_impl(Some(context), Some(mutations), params)
+    }
+
+    fn call_tool_impl(
+        &self,
+        context: Option<&RequestContext>,
+        mutations: Option<&MutationService>,
+        params: &McpCallToolParams,
+    ) -> McpCallToolResult {
         match params.name.as_str() {
             "read_settings" => match self.store.get_settings() {
                 Ok(settings) => McpCallToolResult {
@@ -188,6 +228,108 @@ impl McpServer {
                     },
                 }
             }
+            "propose_agent_access" => {
+                let Some((context, mutations)) = context.zip(mutations) else {
+                    return tool_error(
+                        "Agent access proposals require an authenticated MCP request context",
+                    );
+                };
+                let request = match serde_json::from_value::<AgentAccessProposalInput>(
+                    params.arguments.clone(),
+                ) {
+                    Ok(request) => request,
+                    Err(error) => {
+                        return tool_error(format!(
+                            "Agent access proposal fields are required and cannot be null: {error}"
+                        ));
+                    }
+                };
+                let record = match self.store.get_or_initialize_settings(now_ms()) {
+                    Ok(record) => record,
+                    Err(_) => return tool_error("Trusted settings are unavailable"),
+                };
+                if record.revision != request.expected_revision {
+                    return tool_error("Trusted settings changed before this proposal was created");
+                }
+                let mut next = record.settings.clone();
+                if request.disabled {
+                    next.trusted_configuration
+                        .disabled_agent_ids
+                        .insert(request.agent_id.clone());
+                } else {
+                    next.trusted_configuration
+                        .disabled_agent_ids
+                        .remove(&request.agent_id);
+                }
+                if request.full_access {
+                    next.trusted_configuration
+                        .full_access_agent_ids
+                        .insert(request.agent_id.clone());
+                } else {
+                    next.trusted_configuration
+                        .full_access_agent_ids
+                        .remove(&request.agent_id);
+                }
+                let mut impact = MutationImpact::default();
+                impact.agent_ids.insert(request.agent_id.clone());
+                impact.access_summaries.insert(format!(
+                    "Set agent {} disabled state to {}",
+                    request.agent_id, request.disabled
+                ));
+                impact.full_access_summaries.insert(format!(
+                    "Set agent {} FullAccess state to {}",
+                    request.agent_id, request.full_access
+                ));
+                let proposal = mutations.propose(
+                    context,
+                    MutationProposalRequest {
+                        request_id: request.request_id,
+                        tool_name: "mcp.propose_agent_access".to_string(),
+                        target: MutationTarget::Settings,
+                        expected_revision: request.expected_revision,
+                        old_json: match serde_json::to_value(
+                            pandamux_core::TrustedSettingsMutationState {
+                                trusted_configuration: record
+                                    .settings
+                                    .trusted_configuration
+                                    .clone(),
+                            },
+                        ) {
+                            Ok(value) => value,
+                            Err(_) => return tool_error("Trusted settings could not be projected"),
+                        },
+                        new_json: match serde_json::to_value(
+                            pandamux_core::TrustedSettingsMutationState {
+                                trusted_configuration: next.trusted_configuration,
+                            },
+                        ) {
+                            Ok(value) => value,
+                            Err(_) => return tool_error("Trusted settings could not be projected"),
+                        },
+                        impact,
+                        created_at_ms: now_ms(),
+                        ttl_ms: None,
+                    },
+                );
+                match proposal {
+                    Ok(outcome) => McpCallToolResult {
+                        content: vec![McpContentItem::Text {
+                            text: serde_json::to_string_pretty(&json!({
+                                "proposalId": outcome.proposal.id,
+                                "created": outcome.created,
+                                "resolution": outcome.proposal.resolution,
+                                "note": "No settings were changed. Authenticated local control must approve once."
+                            }))
+                            .unwrap_or_default(),
+                        }],
+                        is_error: false,
+                    },
+                    Err(error) => tool_error(format!(
+                        "Agent access proposal was not persisted: {}",
+                        error.safe_message
+                    )),
+                }
+            }
             unknown => McpCallToolResult {
                 content: vec![McpContentItem::Text {
                     text: format!("Unknown tool: {unknown}"),
@@ -196,6 +338,32 @@ impl McpServer {
             },
         }
     }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AgentAccessProposalInput {
+    request_id: String,
+    agent_id: AgentId,
+    disabled: bool,
+    full_access: bool,
+    expected_revision: ConfigurationRevision,
+}
+
+fn tool_error(message: impl Into<String>) -> McpCallToolResult {
+    McpCallToolResult {
+        content: vec![McpContentItem::Text {
+            text: message.into(),
+        }],
+        is_error: true,
+    }
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 fn settings_projection(settings: &UserSettings) -> serde_json::Value {
@@ -251,6 +419,8 @@ fn schedule_projection(schedule: &ScheduleRecord) -> serde_json::Value {
 mod tests {
     use std::collections::BTreeMap;
 
+    use crate::request_context::{CapabilityScope, ClientIdentity, PeerRole};
+    use crate::{DataPaths, PersonalRepoService};
     use pandamux_core::{
         Environment, EnvironmentId, EnvironmentStatus, ProviderEnvironmentOverride,
         ProviderInstanceConfig, ProviderInstanceId, ProviderKind, ScheduleApprovalPolicy,
@@ -421,5 +591,130 @@ mod tests {
         };
         assert!(text.contains("Rejected before routing or scoring"));
         assert!(!text.contains("codex-personal"));
+    }
+
+    #[test]
+    fn agent_access_tool_requires_non_null_fields_and_uses_server_context() {
+        let temp = tempfile::tempdir().expect("temporary MCP mutation fixture");
+        let paths = DataPaths::from_root(temp.path().join("app")).expect("data paths");
+        paths.ensure_private_roots().expect("private roots");
+        let store = Store::in_memory().expect("store");
+        let settings = store
+            .get_or_initialize_settings(1_000)
+            .expect("settings state");
+        let personal = PersonalRepoService::new(paths, store.clone());
+        let mutations = MutationService::new(store.clone(), personal.clone());
+        let server = McpServer::new(store.clone());
+        let context = RequestContext {
+            peer_role: PeerRole::McpAdapter,
+            authenticated_environment_id: EnvironmentId::new("env-authenticated"),
+            client_identity: ClientIdentity {
+                description: "Authenticated MCP test".to_string(),
+                ..ClientIdentity::default()
+            },
+            capability_scope: CapabilityScope::Mcp,
+            connection_id: "mcp-context-owned".to_string(),
+        };
+
+        let null_field = server.call_tool_with_context(
+            &context,
+            &mutations,
+            &McpCallToolParams {
+                name: "propose_agent_access".to_string(),
+                arguments: json!({
+                    "requestId": "mcp-null",
+                    "agentId": "agent-null",
+                    "disabled": null,
+                    "fullAccess": true,
+                    "expectedRevision": settings.revision,
+                }),
+            },
+        );
+        assert!(null_field.is_error);
+
+        let forged_context = server.call_tool_with_context(
+            &context,
+            &mutations,
+            &McpCallToolParams {
+                name: "propose_agent_access".to_string(),
+                arguments: json!({
+                    "requestId": "mcp-forged",
+                    "agentId": "agent-forged",
+                    "disabled": false,
+                    "fullAccess": true,
+                    "expectedRevision": settings.revision,
+                    "peerRole": "local_control",
+                    "environmentId": "env-forged",
+                }),
+            },
+        );
+        assert!(forged_context.is_error);
+
+        let without_context = server.call_tool(&McpCallToolParams {
+            name: "propose_agent_access".to_string(),
+            arguments: json!({
+                "requestId": "mcp-no-context",
+                "agentId": "agent-no-context",
+                "disabled": false,
+                "fullAccess": true,
+                "expectedRevision": settings.revision,
+            }),
+        });
+        assert!(without_context.is_error);
+
+        let proposed = server.call_tool_with_context(
+            &context,
+            &mutations,
+            &McpCallToolParams {
+                name: "propose_agent_access".to_string(),
+                arguments: json!({
+                    "requestId": "mcp-valid",
+                    "agentId": "agent-valid",
+                    "disabled": false,
+                    "fullAccess": true,
+                    "expectedRevision": settings.revision,
+                }),
+            },
+        );
+        assert!(!proposed.is_error);
+        let McpContentItem::Text { text } = &proposed.content[0] else {
+            panic!("expected proposal text")
+        };
+        let result: serde_json::Value = serde_json::from_str(text).expect("proposal result JSON");
+        assert_eq!(result["created"], true);
+        assert!(text.contains("No settings were changed"));
+        let proposal_id = pandamux_core::MutationProposalId::new(
+            result["proposalId"].as_str().expect("proposal identity"),
+        );
+        let proposal = store
+            .get_mutation_proposal(&proposal_id)
+            .expect("proposal query")
+            .expect("stored proposal");
+        assert_eq!(proposal.caller.peer_role, "mcp_adapter");
+        assert_eq!(proposal.environment_id.as_str(), "env-authenticated");
+        assert_eq!(
+            proposal.resolution,
+            pandamux_core::MutationResolution::Pending
+        );
+        let unchanged = store
+            .get_or_initialize_settings(1_100)
+            .expect("unchanged settings");
+        assert_eq!(unchanged.revision, settings.revision);
+        assert!(
+            unchanged
+                .settings
+                .trusted_configuration
+                .full_access_agent_ids
+                .is_empty()
+        );
+        assert_eq!(
+            store
+                .list_mutation_proposals(true, None, 100)
+                .expect("proposal list")
+                .0
+                .len(),
+            1
+        );
+        personal.shutdown();
     }
 }

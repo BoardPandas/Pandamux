@@ -7,15 +7,25 @@ use gpui_kit::component::{Theme as ComponentTheme, ThemeMode as ComponentThemeMo
 use gpui_kit::gpui::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use pandamux_client::projections::ThreadProjection;
-use pandamux_client::{UsageAction, UsageFilterChange, UsageLoadFailure, UsageViewState};
+use pandamux_client::{
+    MutationConfirmationProjection, UsageAction, UsageFilterChange, UsageLoadFailure,
+    UsageViewState,
+};
 use pandamux_core::{
-    AgentId, ApprovalDecision, EnvironmentId, Thread, ThreadEvent, ThreadId, ThreadStatus,
+    AgentId, ApprovalDecision, BundleSha, EnvironmentId, MutationProposalId, ProjectId,
+    SourceCommitSha, Thread, ThreadEvent, ThreadId, ThreadStatus,
 };
 use pandamux_protocol::{
     AttachmentImportPathParams, AttachmentImportResult, AttachmentPutChunkParams,
     AttachmentPutResult, CapacityQueryResult, EventEnvelope, GitCommitParams, GitCommitResult,
     GitCreatePrParams, GitCreatePrResult, GitPushParams, GitPushResult, GitStatusParams,
-    GitStatusResult, ProviderHealthParams, ProviderHealthResult, ProviderLoginLaunchParams,
+    GitStatusResult, InstructionsApproveParams, InstructionsDiffParams, InstructionsDiffResult,
+    InstructionsHistoryParams, InstructionsHistoryResult, InstructionsRevertParams,
+    InstructionsStatusResult, MutationListParams, MutationListResult, MutationResolveParams,
+    PersonalConfigHistoryParams, PersonalConfigHistoryResult, PersonalConfigRevertParams,
+    ProjectLayerDiffParams, ProjectLayerDiffResult, ProjectLayerRevokeParams,
+    ProjectLayerStatusParams, ProjectLayerStatusResult, ProjectLayerTrustParams,
+    ProviderHealthParams, ProviderHealthResult, ProviderLoginLaunchParams,
     ProviderLoginLaunchResult, ProviderLoginPreview, ProviderLoginPreviewParams,
     ProviderModelsParams, ProviderModelsResult, SettingsGetResult, SettingsSetParams,
     SettingsSetResult, TerminalAttachParams, TerminalAttachResult, TerminalCloseParams,
@@ -34,7 +44,7 @@ use crate::notification::{
 use crate::picker::PickerState;
 use crate::scratchpad::{ScratchpadState, render_scratchpad_window};
 use crate::server_bridge::{ServerBridgeHandle, ServerStatus, spawn_server_bridge};
-use crate::settings_view::{SettingsViewState, render_settings_view};
+use crate::settings_view::{SettingsCategory, SettingsViewState, render_settings_view};
 use crate::sidebar::{RailTab, render_rail, render_sidebar};
 use crate::surfaces_panel::{
     SurfaceTab, SurfacesPanelState, TerminalFocusTarget, render_surfaces_panel,
@@ -44,6 +54,7 @@ use crate::theme::{AccentColor, Radii, Spacing, Theme, Typography};
 use crate::timeline::{VirtualizedTimelineState, render_virtualized_timeline};
 use crate::titlebar::CustomTitlebar;
 use crate::tray::SystemTrayState;
+use crate::trusted_configuration_view::TrustedConfigurationIntent;
 use crate::usage_view::{UsageEditorTarget, UsageFilterIntent, render_usage_view};
 
 fn wall_clock_ms() -> u64 {
@@ -51,6 +62,10 @@ fn wall_clock_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+fn trusted_configuration_request_id(kind: &str) -> String {
+    format!("desktop-{kind}-{}", uuid::Uuid::new_v4().simple())
 }
 
 fn decode_rpc_result<T: serde::de::DeserializeOwned>(
@@ -110,6 +125,7 @@ pub struct AppView {
     pub usage_catalog: UsageCatalogResult,
     provider_models: ProviderModelsResult,
     usage_request_generation: u64,
+    trusted_configuration_request_generation: u64,
     usage_editor_target: Option<UsageEditorTarget>,
     usage_editor_previous_focus: Option<WeakFocusHandle>,
     usage_scroll_handle: ScrollHandle,
@@ -229,6 +245,7 @@ impl AppView {
             usage_catalog: UsageCatalogResult::default(),
             provider_models: ProviderModelsResult::default(),
             usage_request_generation: 0,
+            trusted_configuration_request_generation: 0,
             usage_editor_target: None,
             usage_editor_previous_focus: None,
             usage_scroll_handle,
@@ -1347,6 +1364,390 @@ impl AppView {
         }
     }
 
+    fn active_project_id(&self) -> Option<ProjectId> {
+        self.active_thread_id
+            .as_ref()
+            .and_then(|thread_id| self.thread_projections.get(thread_id))
+            .and_then(|projection| projection.thread.project_id.clone())
+    }
+
+    /// Loads the complete trusted configuration review projection. The base
+    /// requests are dispatched together, then exact candidate and project diffs
+    /// are requested only for the identities returned by the server.
+    pub fn load_trusted_configuration(&mut self, cx: &mut Context<Self>) {
+        self.trusted_configuration_request_generation = self
+            .trusted_configuration_request_generation
+            .wrapping_add(1);
+        let request_generation = self.trusted_configuration_request_generation;
+        self.settings_view.trusted_configuration.is_loading = true;
+        let Some(bridge) = &self.bridge else {
+            self.settings_view.trusted_configuration.is_loading = false;
+            self.settings_view.trusted_configuration.status_message =
+                Some("Server bridge is unavailable".to_string());
+            cx.notify();
+            return;
+        };
+
+        let request_sender = bridge.request_sender();
+        let project_id = self.active_project_id();
+        let status_rx = bridge.send_request("instructions.status", None);
+        let history_rx = bridge.send_request(
+            "instructions.history",
+            serde_json::to_value(InstructionsHistoryParams {
+                before_at_ms: None,
+                limit: Some(50),
+            })
+            .ok(),
+        );
+        let personal_rx = bridge.send_request(
+            "personalConfig.history",
+            serde_json::to_value(PersonalConfigHistoryParams {
+                before_source_commit_sha: None,
+                limit: Some(50),
+            })
+            .ok(),
+        );
+        let mutations_rx = bridge.send_request(
+            "mutation.list",
+            serde_json::to_value(MutationListParams {
+                include_terminal: true,
+                before_created_at_ms: None,
+                limit: Some(50),
+            })
+            .ok(),
+        );
+        let project_rx = project_id.as_ref().map(|project_id| {
+            bridge.send_request(
+                "projectLayer.status",
+                serde_json::to_value(ProjectLayerStatusParams {
+                    project_id: project_id.clone(),
+                })
+                .ok(),
+            )
+        });
+
+        cx.spawn(async move |this, cx| {
+            let status = decode_rpc_result::<InstructionsStatusResult>(status_rx.await);
+            let history = decode_rpc_result::<InstructionsHistoryResult>(history_rx.await);
+            let personal = decode_rpc_result::<PersonalConfigHistoryResult>(personal_rx.await);
+            let mutations = decode_rpc_result::<MutationListResult>(mutations_rx.await);
+            let project = match project_rx {
+                Some(rx) => decode_rpc_result::<ProjectLayerStatusResult>(rx.await).map(Some),
+                None => Ok(None),
+            };
+
+            let candidate_diff = match status
+                .as_ref()
+                .ok()
+                .and_then(|result| result.candidate.as_ref())
+            {
+                Some(candidate) => {
+                    let rx = crate::server_bridge::send_request_channel(
+                        &request_sender,
+                        "instructions.diff",
+                        serde_json::to_value(InstructionsDiffParams {
+                            candidate_id: candidate.id.clone(),
+                        })
+                        .ok(),
+                    );
+                    decode_rpc_result::<InstructionsDiffResult>(rx.await).map(Some)
+                }
+                None => Ok(None),
+            };
+            let project_diff = match project
+                .as_ref()
+                .ok()
+                .and_then(|result| result.as_ref())
+                .and_then(|result| result.project_content_sha256.as_ref())
+                .zip(project_id.as_ref())
+            {
+                Some((project_content_sha256, project_id)) => {
+                    let rx = crate::server_bridge::send_request_channel(
+                        &request_sender,
+                        "projectLayer.diff",
+                        serde_json::to_value(ProjectLayerDiffParams {
+                            project_id: project_id.clone(),
+                            project_content_sha256: project_content_sha256.clone(),
+                        })
+                        .ok(),
+                    );
+                    decode_rpc_result::<ProjectLayerDiffResult>(rx.await).map(Some)
+                }
+                None => Ok(None),
+            };
+
+            let mut failures = Vec::new();
+            if let Err(error) = &status {
+                failures.push(error.clone());
+            }
+            if let Err(error) = &history {
+                failures.push(error.clone());
+            }
+            if let Err(error) = &personal {
+                failures.push(error.clone());
+            }
+            if let Err(error) = &mutations {
+                failures.push(error.clone());
+            }
+            if let Err(error) = &project {
+                failures.push(error.clone());
+            }
+            if let Err(error) = &candidate_diff {
+                failures.push(error.clone());
+            }
+            if let Err(error) = &project_diff {
+                failures.push(error.clone());
+            }
+
+            let _ = this.update(cx, |app, cx| {
+                if app.trusted_configuration_request_generation != request_generation {
+                    return;
+                }
+                let projection = &mut app.settings_view.trusted_configuration;
+                match status {
+                    Ok(result) => {
+                        projection.source = result.source;
+                        projection.candidate = result.candidate;
+                    }
+                    Err(_) => {
+                        projection.source = None;
+                        projection.candidate = None;
+                    }
+                }
+                match history {
+                    Ok(result) => projection.configuration_history = result.entries,
+                    Err(_) => projection.configuration_history.clear(),
+                }
+                match personal {
+                    Ok(result) => {
+                        projection.personal_head_source_commit_sha =
+                            Some(result.head_source_commit_sha);
+                        projection.personal_revision = Some(result.revision);
+                        projection.personal_history = result.entries;
+                    }
+                    Err(_) => {
+                        projection.personal_head_source_commit_sha = None;
+                        projection.personal_revision = None;
+                        projection.personal_history.clear();
+                    }
+                }
+                match mutations {
+                    Ok(result) => {
+                        let now_ms = wall_clock_ms();
+                        projection.confirmations = result
+                            .proposals
+                            .iter()
+                            .map(|proposal| {
+                                MutationConfirmationProjection::from_proposal(proposal, now_ms)
+                            })
+                            .collect();
+                    }
+                    Err(_) => projection.confirmations.clear(),
+                }
+                match project {
+                    Ok(Some(result)) => {
+                        projection.repository = Some(result.repository);
+                        projection.project_content_sha256 = result.project_content_sha256;
+                        projection.project_trust = result.trust;
+                        projection.project_visible_but_inactive = result.visible_but_inactive;
+                    }
+                    Ok(None) | Err(_) => {
+                        projection.repository = None;
+                        projection.project_content_sha256 = None;
+                        projection.project_trust = None;
+                        projection.project_visible_but_inactive = false;
+                    }
+                }
+                match candidate_diff {
+                    Ok(result) => projection.candidate_diff = result,
+                    Err(_) => projection.candidate_diff = None,
+                }
+                match project_diff {
+                    Ok(result) => projection.project_diff = result,
+                    Err(_) => projection.project_diff = None,
+                }
+                projection.is_loading = false;
+                projection.status_message = if failures.is_empty() {
+                    Some("Trusted configuration status is current".to_string())
+                } else {
+                    Some(format!(
+                        "Trusted configuration loaded partially: {}",
+                        failures[0]
+                    ))
+                };
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Dispatches one explicit trusted configuration action. Every mutating
+    /// request carries the exact displayed identity and expected revision.
+    pub fn handle_trusted_configuration_intent(
+        &mut self,
+        intent: TrustedConfigurationIntent,
+        cx: &mut Context<Self>,
+    ) {
+        if intent == TrustedConfigurationIntent::Refresh {
+            self.load_trusted_configuration(cx);
+            return;
+        }
+        if self.settings_view.trusted_configuration.is_loading {
+            self.settings_view.trusted_configuration.status_message =
+                Some("Wait for the current trusted configuration refresh to finish".to_string());
+            cx.notify();
+            return;
+        }
+        let Some(bridge) = &self.bridge else {
+            self.settings_view.trusted_configuration.status_message =
+                Some("Server bridge is unavailable".to_string());
+            cx.notify();
+            return;
+        };
+
+        let projection = &self.settings_view.trusted_configuration;
+        let action = match intent {
+            TrustedConfigurationIntent::Refresh => unreachable!(),
+            TrustedConfigurationIntent::ApproveMutation(proposal_id) => Ok((
+                "mutation.approveOnce",
+                serde_json::to_value(MutationResolveParams {
+                    proposal_id: MutationProposalId::new(proposal_id),
+                }),
+                "Configuration proposal approved once".to_string(),
+            )),
+            TrustedConfigurationIntent::RejectMutation(proposal_id) => Ok((
+                "mutation.reject",
+                serde_json::to_value(MutationResolveParams {
+                    proposal_id: MutationProposalId::new(proposal_id),
+                }),
+                "Configuration proposal rejected".to_string(),
+            )),
+            TrustedConfigurationIntent::ApproveCandidate => {
+                match (
+                    self.active_project_id(),
+                    projection.source.as_ref(),
+                    projection.candidate.as_ref(),
+                ) {
+                    (Some(project_id), Some(source), Some(candidate)) => Ok((
+                        "instructions.approve",
+                        serde_json::to_value(InstructionsApproveParams {
+                            request_id: trusted_configuration_request_id("candidate-approval"),
+                            project_id,
+                            candidate_id: candidate.id.clone(),
+                            observed_source_commit_sha: candidate
+                                .observed_source_commit_sha
+                                .clone(),
+                            diff_digest: candidate.diff_digest.clone(),
+                            expected_revision: source.revision,
+                        }),
+                        "Exact instructions candidate activated".to_string(),
+                    )),
+                    _ => Err(
+                        "Candidate approval requires an active project and current source status"
+                            .to_string(),
+                    ),
+                }
+            }
+            TrustedConfigurationIntent::TrustProject => match (
+                self.active_project_id(),
+                projection.repository.as_ref(),
+                projection.project_content_sha256.as_ref(),
+            ) {
+                (Some(project_id), Some(repository), Some(project_content_sha256)) => Ok((
+                    "projectLayer.trust",
+                    serde_json::to_value(ProjectLayerTrustParams {
+                        request_id: trusted_configuration_request_id("project-trust"),
+                        project_id,
+                        project_content_sha256: project_content_sha256.clone(),
+                        expected_revision: repository.revision,
+                    }),
+                    "Exact project trust proposal created".to_string(),
+                )),
+                _ => Err("Current project content is unavailable for trust".to_string()),
+            },
+            TrustedConfigurationIntent::RevokeProject => {
+                match (self.active_project_id(), projection.repository.as_ref()) {
+                    (Some(project_id), Some(repository)) => Ok((
+                        "projectLayer.revoke",
+                        serde_json::to_value(ProjectLayerRevokeParams {
+                            request_id: trusted_configuration_request_id("project-revoke"),
+                            project_id,
+                            expected_revision: repository.revision,
+                        }),
+                        "Project trust revocation proposal created".to_string(),
+                    )),
+                    _ => Err("Current project trust is unavailable for revocation".to_string()),
+                }
+            }
+            TrustedConfigurationIntent::RevertPersonal(target) => match (
+                SourceCommitSha::parse(target),
+                projection.personal_head_source_commit_sha.as_ref(),
+                projection.personal_revision,
+            ) {
+                (Ok(target_source_commit_sha), Some(head), Some(revision)) => Ok((
+                    "personalConfig.revert",
+                    serde_json::to_value(PersonalConfigRevertParams {
+                        request_id: trusted_configuration_request_id("personal-revert"),
+                        target_source_commit_sha,
+                        expected_source_commit_sha: head.clone(),
+                        expected_revision: revision,
+                    }),
+                    "Personal configuration revert proposal created".to_string(),
+                )),
+                _ => Err("Current personal configuration identity is unavailable".to_string()),
+            },
+            TrustedConfigurationIntent::RevertBundle(bundle) => {
+                match (BundleSha::parse(bundle), projection.source.as_ref()) {
+                    (Ok(bundle_sha), Some(source)) => Ok((
+                        "instructions.revert",
+                        serde_json::to_value(InstructionsRevertParams {
+                            request_id: trusted_configuration_request_id("bundle-revert"),
+                            source_id: source.id.clone(),
+                            bundle_sha,
+                            expected_revision: source.revision,
+                        }),
+                        "Bundle reactivation proposal created".to_string(),
+                    )),
+                    _ => Err(
+                        "Current instructions source or bundle identity is unavailable".to_string(),
+                    ),
+                }
+            }
+        };
+
+        let (method, params, success_message) = match action {
+            Ok((method, Ok(params), success_message)) => (method, params, success_message),
+            Ok((_method, Err(error), _success_message)) => {
+                self.settings_view.trusted_configuration.status_message = Some(format!(
+                    "Could not encode trusted configuration action: {error}"
+                ));
+                cx.notify();
+                return;
+            }
+            Err(message) => {
+                self.settings_view.trusted_configuration.status_message = Some(message);
+                cx.notify();
+                return;
+            }
+        };
+        self.settings_view.trusted_configuration.is_loading = true;
+        let rx = bridge.send_request(method, Some(params));
+        cx.spawn(async move |this, cx| {
+            let result = decode_rpc_result::<serde_json::Value>(rx.await);
+            let _ = this.update(cx, |app, cx| {
+                app.settings_view.trusted_configuration.is_loading = false;
+                app.settings_view.trusted_configuration.status_message = Some(match result {
+                    Ok(_) => success_message,
+                    Err(message) => message,
+                });
+                app.load_trusted_configuration(cx);
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
     fn synchronize_picker(&mut self) {
         self.picker.synchronize(
             &self.settings_view.settings,
@@ -1663,6 +2064,10 @@ impl AppView {
             self.settings_view.is_saving = true;
             let params = SettingsSetParams {
                 expected_revision: self.settings_view.settings_revision,
+                request_id: Some(format!(
+                    "desktop-settings-{}",
+                    uuid::Uuid::new_v4().simple()
+                )),
                 settings: Some(self.settings_view.settings.clone()),
                 key: None,
                 value: None,
@@ -1691,6 +2096,8 @@ impl AppView {
                         app.settings_view.status_banner = Some((message, true));
                         if revision_drift {
                             app.load_settings(cx);
+                        } else {
+                            app.load_trusted_configuration(cx);
                         }
                     }
                     cx.notify();
@@ -1903,6 +2310,9 @@ impl AppView {
             },
             |this, _win, cx| {
                 this.cancel_provider_login(cx);
+            },
+            |this, intent, _win, cx| {
+                this.handle_trusted_configuration_intent(intent, cx);
             },
             |this, modifier, _win, cx| {
                 modifier(&mut this.settings_view.settings);
@@ -2307,6 +2717,9 @@ impl Render for AppView {
                             this.settings_view.set_category(cat);
                             this.settings_scroll_handle
                                 .set_offset(point(px(0.), px(0.)));
+                            if cat == SettingsCategory::TrustedConfiguration {
+                                this.load_trusted_configuration(cx);
+                            }
                             cx.notify();
                         },
                         cx,

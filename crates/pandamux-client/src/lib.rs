@@ -1,10 +1,14 @@
 pub mod client;
+pub mod configuration_projection;
 pub mod projections;
 pub mod token_queue;
 pub mod transport;
 pub mod usage;
 
 pub use client::PandamuxClient;
+pub use configuration_projection::{
+    MutationConfirmationProjection, SafeMutationDiff, TrustedConfigurationProjection,
+};
 pub use projections::{
     ChangedFileSummary, RunProjection, SubAgentProjection, SubAgentTreeNode, ThreadProjection,
     TimelineItem, WorkLogEntry, WorkLogStatus, format_duration,

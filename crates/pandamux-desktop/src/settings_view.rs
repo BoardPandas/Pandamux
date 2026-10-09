@@ -3,7 +3,7 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::gpui::*;
 use gpui_kit::prelude::FluentBuilder as _;
-use pandamux_client::{format_age, format_micro_usd};
+use pandamux_client::{TrustedConfigurationProjection, format_age, format_micro_usd};
 use pandamux_core::{
     AccessMode, ConfigurationRevision, EnvironmentId, FailoverPool, FailoverPoolId,
     FailoverPoolMember, ProviderInstanceId, RoutingCapabilityRequirements, SubscriptionKey,
@@ -14,6 +14,9 @@ use pandamux_protocol::{
 };
 
 use crate::theme::{AccentColor, Radii, Theme, Typography};
+use crate::trusted_configuration_view::{
+    TrustedConfigurationHandler, render_trusted_configuration,
+};
 
 /// Top-level categories in the Settings view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -22,6 +25,7 @@ pub enum SettingsCategory {
     Providers,
     Organizations,
     Environments,
+    TrustedConfiguration,
     Terminal,
     General,
     Advanced,
@@ -33,6 +37,7 @@ impl SettingsCategory {
             Self::Providers => "Providers & Tier Mapping",
             Self::Organizations => "Organizations & Policy",
             Self::Environments => "Remote Environments & Nodes",
+            Self::TrustedConfiguration => "Trusted Configuration",
             Self::Terminal => "Terminal Configuration",
             Self::General => "General & Appearance",
             Self::Advanced => "Advanced Engine & Diagnostics",
@@ -49,6 +54,9 @@ impl SettingsCategory {
             }
             Self::Environments => {
                 "Manage local and remote SSH environments, daemon versions, bootstrap states, and host connectivity."
+            }
+            Self::TrustedConfiguration => {
+                "Review immutable bundles, candidates, exact project trust, history, reverts, and durable confirmations."
             }
             Self::Terminal => {
                 "Configure scrollback history buffer, default shell family, and interaction options."
@@ -67,6 +75,7 @@ impl SettingsCategory {
             Self::Providers => "🔑",
             Self::Organizations => "🏢",
             Self::Environments => "🖥️",
+            Self::TrustedConfiguration => "🛡️",
             Self::Terminal => "📟",
             Self::General => "🎨",
             Self::Advanced => "⚙️",
@@ -82,6 +91,7 @@ pub struct SettingsViewState {
     pub settings_revision: ConfigurationRevision,
     pub health_reports: Vec<ProviderHealthReport>,
     pub environments: Vec<pandamux_core::Environment>,
+    pub trusted_configuration: TrustedConfigurationProjection,
     pub is_checking_health: bool,
     pub is_saving: bool,
     pub status_banner: Option<(String, bool)>, // (message, is_error)
@@ -97,6 +107,7 @@ impl Default for SettingsViewState {
             settings_revision: ConfigurationRevision::INITIAL,
             health_reports: Vec::new(),
             environments: vec![pandamux_core::Environment::local_default()],
+            trusted_configuration: TrustedConfigurationProjection::default(),
             is_checking_health: false,
             is_saving: false,
             status_banner: None,
@@ -397,6 +408,7 @@ pub fn render_settings_view<V: 'static>(
     + Copy,
     on_launch_login: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
     on_cancel_login: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
+    on_trusted_configuration: TrustedConfigurationHandler<V>,
     on_modify: impl Fn(
         &mut V,
         Box<dyn FnOnce(&mut UserSettings) + Send + 'static>,
@@ -407,6 +419,39 @@ pub fn render_settings_view<V: 'static>(
     + Copy,
     cx: &mut Context<V>,
 ) -> AnyElement {
+    let category_content = match state.active_category {
+        SettingsCategory::Providers => render_providers_tab(
+            state,
+            theme,
+            on_check_health,
+            on_preview_login,
+            on_modify,
+            cx,
+        )
+        .into_any_element(),
+        SettingsCategory::Organizations => {
+            render_organizations_tab(state, usage_catalog, theme, on_modify, cx).into_any_element()
+        }
+        SettingsCategory::Environments => {
+            render_environments_tab(state, theme, cx).into_any_element()
+        }
+        SettingsCategory::TrustedConfiguration => render_trusted_configuration(
+            &state.trusted_configuration,
+            theme,
+            on_trusted_configuration,
+            cx,
+        )
+        .into_any_element(),
+        SettingsCategory::Terminal => {
+            render_terminal_tab(state, theme, on_modify, cx).into_any_element()
+        }
+        SettingsCategory::General => {
+            render_general_tab(state, theme, on_modify, cx).into_any_element()
+        }
+        SettingsCategory::Advanced => {
+            render_advanced_tab(state, theme, server_status, on_modify, cx).into_any_element()
+        }
+    };
     div()
         .flex_1()
         .min_w_0()
@@ -527,34 +572,7 @@ pub fn render_settings_view<V: 'static>(
                         }
                     }
                 })
-                .child(match state.active_category {
-                    SettingsCategory::Providers => render_providers_tab(
-                        state,
-                        theme,
-                        on_check_health,
-                        on_preview_login,
-                        on_modify,
-                        cx,
-                    )
-                    .into_any_element(),
-                    SettingsCategory::Organizations => {
-                        render_organizations_tab(state, usage_catalog, theme, on_modify, cx)
-                            .into_any_element()
-                    }
-                    SettingsCategory::Environments => {
-                        render_environments_tab(state, theme, cx).into_any_element()
-                    }
-                    SettingsCategory::Terminal => {
-                        render_terminal_tab(state, theme, on_modify, cx).into_any_element()
-                    }
-                    SettingsCategory::General => {
-                        render_general_tab(state, theme, on_modify, cx).into_any_element()
-                    }
-                    SettingsCategory::Advanced => {
-                        render_advanced_tab(state, theme, server_status, on_modify, cx)
-                            .into_any_element()
-                    }
-                }),
+                .child(category_content),
         )
         .into_any_element()
 }

@@ -3,6 +3,7 @@ use crate::ids::{
     AgentId, EnvironmentId, MutationAuditId, MutationProposalId, OrganizationId, ProjectId,
     ScheduleId,
 };
+use crate::settings::TrustedConfigurationSettings;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -13,6 +14,15 @@ pub struct MutationCaller {
     pub client_id: String,
     pub peer_role: String,
     pub display_name: String,
+}
+
+/// The only settings payload allowed in a durable mutation proposal. This
+/// deliberately excludes provider paths, environment overrides, and arbitrary
+/// provider settings that may contain secrets.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TrustedSettingsMutationState {
+    pub trusted_configuration: TrustedConfigurationSettings,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

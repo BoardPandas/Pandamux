@@ -61,6 +61,7 @@ pub struct InstructionsDiffResult {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InstructionsApproveParams {
     pub request_id: String,
+    pub project_id: pandamux_core::ProjectId,
     pub candidate_id: InstructionCandidateId,
     pub observed_source_commit_sha: SourceCommitSha,
     pub diff_digest: ContentSha256,
@@ -118,6 +119,7 @@ pub struct InstructionsHistoryResult {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InstructionsRevertParams {
     pub request_id: String,
+    pub source_id: InstructionSourceId,
     pub bundle_sha: BundleSha,
     pub expected_revision: ConfigurationRevision,
 }
