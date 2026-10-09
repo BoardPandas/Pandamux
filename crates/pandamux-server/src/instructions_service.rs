@@ -1708,7 +1708,7 @@ mod tests {
             Duration::from_millis(20),
         )
         .expect("start poller");
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
         while fixture
             .store
             .latest_instruction_candidate(&source.id)

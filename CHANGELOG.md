@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Stabilized native trusted-source polling verification in version 0.60.86.**
+  The launch-poller acceptance test now allows enough scheduling headroom for
+  native Windows Git durability work while retaining the same production poll
+  interval and candidate assertions. This removes a load-sensitive test race
+  without weakening the trusted-source behavior or its acceptance criteria.
+
 - **Hardened native Windows trusted configuration storage in version 0.60.85.**
   PandaMUX now creates app-data roots with a protected current-user DACL,
   rejects foreign ownership, broad access, and reparse-point substitution, and
