@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Added
 
+- **Added strict Phase 5 authored schemas and safe diagnostics in version
+  0.60.70.** The pure orchestrator now parses all five authored v1 document
+  kinds through version-first, deny-unknown decoding; rejects unsafe YAML,
+  unconfined paths, invalid identities, unsupported minimum versions, and every
+  published size or structure bound; normalizes CRLF without rewriting source;
+  and emits bounded, stable diagnostics that cannot echo source bodies. A
+  generated Schemars catalog publishes the same enforced limits and round-trips
+  as JSON.
+
 - **Added canonical Phase 5 orchestration records in version 0.60.69.** Core now
   owns typed run, task, attempt, event, effect, edge, approval, budget, and
   blackboard identities; ordered replay state; provider-neutral compiled
