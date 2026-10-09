@@ -3,8 +3,8 @@ use crate::diagnostics::{
     RelativeConfigPath, issue,
 };
 use crate::policy::{
-    LayerGrant, TrustedBundleSettings, full_access_issue, validate_agent_override,
-    validate_grant_scope,
+    LayerGrant, TrustedBundleSettings, canonical_json_bytes, full_access_issue,
+    validate_agent_override, validate_grant_scope,
 };
 use crate::schema::v1::{
     AgentDocumentV1, AuthoredAccessMode, AuthoredOrchestrationMode, ClassRuleV1, DocumentKind,
@@ -17,7 +17,7 @@ use pandamux_core::{
     AccessMode, AgentAuthor, AgentBudget, AgentDefinition, AgentId, AgentProviderPolicy,
     AgentScope, AgentToolPolicy, BundleReference, BundleSourceManifest,
     COMPILED_BUNDLE_SCHEMA_VERSION, CompiledClassRule, CompiledInstructionBundleV1,
-    CompiledKnowledge, CompiledOrchestrationPolicy, CompiledPrompt, FailureFallback,
+    CompiledKnowledge, CompiledOrchestrationPolicy, CompiledPrompt, ContentSha256, FailureFallback,
     NoProviderFallback, OrchestrationMode, OrganizationId, OutputContract, ProjectId,
     PromptPurpose, ProviderKind, RateLimitFallback, ValueLayer, ValueOrigin,
 };
@@ -216,7 +216,7 @@ pub fn compile_instruction_bundle(
 }
 
 pub fn canonical_bundle_bytes(bundle: &CompiledInstructionBundleV1) -> Vec<u8> {
-    serde_json::to_vec(bundle).expect("compiled bundle contains only serializable values")
+    canonical_json_bytes(bundle)
 }
 
 pub fn verify_compiled_bundle(bundle: &CompiledInstructionBundleV1) -> Result<(), DiagnosticSet> {
@@ -243,7 +243,7 @@ pub fn verify_compiled_bundle(bundle: &CompiledInstructionBundleV1) -> Result<()
     Ok(())
 }
 
-pub fn source_layer_sha256(documents: &[SourceDocument]) -> String {
+pub fn source_layer_sha256(documents: &[SourceDocument]) -> ContentSha256 {
     let mut documents = documents.iter().collect::<Vec<_>>();
     documents.sort_by(|left, right| {
         left.logical_path()
@@ -255,7 +255,8 @@ pub fn source_layer_sha256(documents: &[SourceDocument]) -> String {
         hash_len_and_bytes(&mut hasher, document.logical_path().as_str().as_bytes());
         hash_len_and_bytes(&mut hasher, document.bytes());
     }
-    hex_digest(hasher.finalize().as_slice())
+    ContentSha256::parse(hex_digest(hasher.finalize().as_slice()))
+        .expect("SHA-256 output is a valid content identity")
 }
 
 fn validate_grants(
@@ -345,13 +346,8 @@ fn validate_grants(
     }
     let project_hash = grants
         .get(&ValueLayer::Project)
-        .map(|grant| grant.content_sha256.as_str());
-    if input
-        .source_manifest
-        .project_layer_content_sha256
-        .as_deref()
-        != project_hash
-    {
+        .map(|grant| grant.content_sha256.clone());
+    if input.source_manifest.project_layer_content_sha256.as_ref() != project_hash.as_ref() {
         issues.push(issue(
             ConfigurationIssueCode::BundleHashMismatch,
             RelativeConfigPath::invalid(),
@@ -1129,7 +1125,7 @@ fn unsigned_bundle_digest(bundle: &CompiledInstructionBundleV1) -> String {
     for agent in unsigned.agents.values_mut() {
         agent.bundle_sha.clear();
     }
-    let bytes = serde_json::to_vec(&unsigned).expect("compiled bundle is serializable");
+    let bytes = canonical_json_bytes(&unsigned);
     hex_digest(Sha256::digest(bytes).as_slice())
 }
 

@@ -1,4 +1,5 @@
 use crate::agent_def::AgentDefinition;
+use crate::configuration::{ConfigurationRevision, ContentSha256, SourceCommitSha};
 use crate::ids::{AgentId, OrganizationId, ProjectId};
 use crate::organization::TierMapping;
 use crate::run::OrchestrationMode;
@@ -11,12 +12,12 @@ pub const COMPILED_BUNDLE_SCHEMA_VERSION: u32 = 1;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BundleSourceManifest {
-    pub instructions_commit_sha: String,
+    pub instructions_commit_sha: SourceCommitSha,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub project_layer_content_sha256: Option<String>,
+    pub project_layer_content_sha256: Option<ContentSha256>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub personal_commit_sha: Option<String>,
-    pub settings_revision: String,
+    pub personal_commit_sha: Option<SourceCommitSha>,
+    pub settings_revision: ConfigurationRevision,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

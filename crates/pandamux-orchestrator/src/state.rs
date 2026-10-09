@@ -1,5 +1,6 @@
 use crate::dag::is_task_ready;
 use crate::diagnostics::SafeText;
+use crate::policy::{canonical_json_bytes, canonical_json_sha256};
 use crate::routing::{FallbackEligibility, fallback_eligibility};
 use pandamux_core::{
     Attempt, AttemptBoundary, AttemptStatus, BlackboardEntry, BudgetAmount, BudgetReservationState,
@@ -352,7 +353,7 @@ pub fn canonical_run_bytes(run: &Run) -> Vec<u8> {
 }
 
 pub fn canonical_blackboard_sha256(content: &Value) -> String {
-    sha256_hex(&serde_json::to_vec(&canonicalize_json(content)).expect("JSON is serializable"))
+    canonical_json_sha256(content)
 }
 
 fn validate_kind(
@@ -1272,28 +1273,6 @@ fn sha256_hex(bytes: &[u8]) -> String {
         write!(&mut output, "{byte:02x}").expect("writing to String cannot fail");
     }
     output
-}
-
-fn canonicalize_json(value: &Value) -> Value {
-    match value {
-        Value::Object(object) => {
-            let mut entries = object.iter().collect::<Vec<_>>();
-            entries.sort_by_key(|(key, _)| *key);
-            Value::Object(
-                entries
-                    .into_iter()
-                    .map(|(key, value)| (key.clone(), canonicalize_json(value)))
-                    .collect(),
-            )
-        }
-        Value::Array(values) => Value::Array(values.iter().map(canonicalize_json).collect()),
-        other => other.clone(),
-    }
-}
-
-fn canonical_json_bytes(value: &impl Serialize) -> Vec<u8> {
-    let value = serde_json::to_value(value).expect("canonical value is serializable");
-    serde_json::to_vec(&canonicalize_json(&value)).expect("canonical value is serializable")
 }
 
 fn is_sha256(value: &str) -> bool {

@@ -39,7 +39,7 @@ pub use model_output::{
 pub use policy::{
     ApprovalAction, ApprovalDecisionIdentity, ApprovalReconciliation, ApprovalSafetyClass,
     LayerGrant, TrustedBundleSettings, approval_identity, canonical_action_digest,
-    reconcile_approval,
+    canonical_json_bytes, canonical_json_sha256, canonicalize_json, reconcile_approval,
 };
 pub use routing::{
     FallbackEligibility, ProviderCandidateSnapshot, RoutingContext, RoutingFailure,

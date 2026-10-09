@@ -1223,6 +1223,8 @@ fn store_error_code(error: &StoreError) -> &str {
     match error {
         StoreError::Sql(_) => "scanner_store_sql_failed",
         StoreError::Json(_) => "scanner_store_json_failed",
+        StoreError::Io(_) => "scanner_store_io_failed",
+        StoreError::RevisionDrift { .. } => "scanner_store_revision_drift",
         StoreError::Data(message) => message
             .split_once(':')
             .map(|(code, _)| code)

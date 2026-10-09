@@ -68,11 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(runtime_dir.as_path())
             .join("data");
         std::fs::create_dir_all(&data_dir)?;
-        db_path = Some(data_dir.join(if role == ServerRole::Node {
-            "node.db"
-        } else {
-            "hub.db"
-        }));
+        db_path = Some(data_dir.join("pandamux.db"));
     }
 
     let pipe_path = default_pipe_path(&runtime_dir, role)?;

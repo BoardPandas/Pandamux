@@ -1,6 +1,6 @@
 use pandamux_core::{
-    BundleSourceManifest, ModelTarget, OrganizationId, ProjectId, ProviderInstanceId, TierMapping,
-    ValueLayer,
+    BundleSourceManifest, ConfigurationRevision, ModelTarget, OrganizationId, ProjectId,
+    ProviderInstanceId, SourceCommitSha, TierMapping, ValueLayer,
 };
 use pandamux_orchestrator::{
     CompileBundleInput, ConfigurationIssueCode, LayerGrant, LayeredSourceDocument, SourceDocument,
@@ -111,7 +111,7 @@ fn settings(with_tier: bool) -> TrustedBundleSettings {
         BTreeMap::new()
     };
     TrustedBundleSettings {
-        revision: "settings-7".to_string(),
+        revision: ConfigurationRevision::new(7).expect("revision"),
         tier_mapping: TierMapping { tiers },
     }
 }
@@ -155,10 +155,10 @@ fn compile_input(
         documents,
         grants,
         source_manifest: BundleSourceManifest {
-            instructions_commit_sha: "0123456789abcdef".to_string(),
+            instructions_commit_sha: SourceCommitSha::parse("0".repeat(40)).expect("commit"),
             project_layer_content_sha256: project_hash,
             personal_commit_sha: None,
-            settings_revision: "settings-7".to_string(),
+            settings_revision: ConfigurationRevision::new(7).expect("revision"),
         },
         project_id,
         organization_id,
@@ -372,7 +372,8 @@ fn rejects_untrusted_wrong_scope_hash_and_unmapped_tier() {
     assert_code(&wrong_scope, ConfigurationIssueCode::LayerScopeViolation);
 
     let mut wrong_hash = compile_input(instructions_documents(), project_documents(None));
-    wrong_hash.grants[0].content_sha256 = "0".repeat(64);
+    wrong_hash.grants[0].content_sha256 =
+        pandamux_core::ContentSha256::parse("0".repeat(64)).expect("content hash");
     assert_code(&wrong_hash, ConfigurationIssueCode::BundleHashMismatch);
 
     let mut unmapped = compile_input(instructions_documents(), project_documents(None));

@@ -1,3 +1,4 @@
+use crate::DataPaths;
 use crate::router::Router;
 use crate::runtime::RuntimeInfo;
 use crate::store::Store;
@@ -28,6 +29,7 @@ pub struct ServerConfig {
 pub struct Server {
     config: ServerConfig,
     store: Store,
+    data_paths: DataPaths,
     router: Arc<Router>,
     shutdown_tx: broadcast::Sender<()>,
     is_shutting_down: Arc<AtomicBool>,
@@ -38,22 +40,41 @@ pub struct Server {
 
 impl Server {
     pub fn new(config: ServerConfig) -> Result<Self, crate::store::StoreError> {
+        let data_root = if config
+            .runtime_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            == Some("run")
+        {
+            config
+                .runtime_dir
+                .parent()
+                .unwrap_or(config.runtime_dir.as_path())
+                .to_path_buf()
+        } else {
+            config.runtime_dir.clone()
+        };
+        let mut data_paths = DataPaths::from_root(data_root)?;
+        if let Some(path) = &config.db_path {
+            data_paths = data_paths.with_database_path(path)?;
+        }
+        data_paths.ensure_private_roots()?;
         let store = match &config.db_path {
-            Some(path) => Store::open(path)?,
+            Some(_) => Store::open_with_backups(data_paths.database(), data_paths.backups())?,
             None => Store::in_memory()?,
         };
 
-        let router = Arc::new(Router::new(
-            store.clone(),
-            config.role,
-            config.environment_id.clone(),
-        ));
+        let router = Arc::new(
+            Router::new(store.clone(), config.role, config.environment_id.clone())
+                .with_data_paths(data_paths.clone()),
+        );
 
         let (shutdown_tx, _) = broadcast::channel(1);
 
         Ok(Self {
             config,
             store,
+            data_paths,
             router,
             shutdown_tx,
             is_shutting_down: Arc::new(AtomicBool::new(false)),
@@ -65,6 +86,10 @@ impl Server {
 
     pub fn store(&self) -> &Store {
         &self.store
+    }
+
+    pub fn data_paths(&self) -> &DataPaths {
+        &self.data_paths
     }
 
     pub fn router(&self) -> &Arc<Router> {

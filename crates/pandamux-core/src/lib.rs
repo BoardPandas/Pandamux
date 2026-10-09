@@ -1,12 +1,14 @@
 pub mod agent_def;
 pub mod ast_diff;
 pub mod attachment;
+pub mod configuration;
 pub mod environment;
 pub mod event;
 pub mod home;
 pub mod i18n;
 pub mod ids;
 pub mod instruction_bundle;
+pub mod mutation;
 pub mod notification;
 pub mod organization;
 pub mod project;
@@ -37,6 +39,14 @@ pub use attachment::{
     format_attachments_summary, format_file_size, is_image_mime, validate_attachment_size,
     validate_total_attachments_size,
 };
+pub use configuration::{
+    ArchiveSha256, BundleActivationKind, BundleActivationRecord, BundleDistributionReceipt,
+    BundleDistributionState, BundleSha, ConfigurationAuditRecord, ConfigurationRevision,
+    ConfigurationUpdateSafety, ContentSha256, InstructionCandidateRecord,
+    InstructionCandidateState, InstructionsSourceRecord, InstructionsUpdatePolicy,
+    InvalidConfigurationIdentity, ProjectLayerTrustRecord, ProjectRepositoryRecord,
+    SourceCommitSha, TrackingRef,
+};
 pub use environment::{Environment, EnvironmentKind, EnvironmentStatus};
 pub use event::{
     ApprovalDecision, ApprovalKind, FileChangeKind, PlanStep, PlanStepStatus, ThreadEvent,
@@ -45,16 +55,22 @@ pub use event::{
 pub use home::{HomeLayout, HomePane};
 pub use i18n::{Locale, Localizer};
 pub use ids::{
-    AgentId, ApprovalId, BlackboardEntryId, BudgetReservationId, ContinuationId, DependencyEdgeId,
-    EnvironmentId, FailoverPoolId, NodeStoreId, OrchestrationEffectId, OrganizationId, PaneId,
-    PricingVersionId, ProjectId, ProviderInstanceId, RunAttemptId, RunEventId, RunId, RunTaskId,
-    ScheduleId, SshProfileId, SubscriptionKey, SurfaceId, ThreadId, TurnAttemptId, TurnId,
-    UsageObservationId, WindowId, WorkspaceId,
+    AgentId, ApprovalId, BlackboardEntryId, BudgetReservationId, BundleActivationId,
+    BundleTransferId, ConfigurationAuditId, ContinuationId, DependencyEdgeId, EnvironmentId,
+    FailoverPoolId, InstructionCandidateId, InstructionSourceId, MutationAuditId,
+    MutationProposalId, NodeStoreId, OrchestrationEffectId, OrganizationId, PaneId, PersonalEditId,
+    PricingVersionId, ProjectId, ProjectLayerTrustId, ProjectRepositoryId, ProviderInstanceId,
+    RunAttemptId, RunEventId, RunId, RunTaskId, ScheduleId, SshProfileId, SubscriptionKey,
+    SurfaceId, ThreadId, TurnAttemptId, TurnId, UsageObservationId, WindowId, WorkspaceId,
 };
 pub use instruction_bundle::{
     BundleReference, BundleSourceManifest, COMPILED_BUNDLE_SCHEMA_VERSION, CompiledClassRule,
     CompiledInstructionBundleV1, CompiledKnowledge, CompiledOrchestrationPolicy, CompiledPrompt,
     FailureFallback, NoProviderFallback, PromptPurpose, RateLimitFallback, ValueLayer, ValueOrigin,
+};
+pub use mutation::{
+    MutationAuditRecord, MutationCaller, MutationImpact, MutationProposal, MutationResolution,
+    MutationTarget,
 };
 pub use notification::{NewNotification, NotificationInfo, NotificationSource, Notifications};
 pub use organization::{

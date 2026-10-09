@@ -3,7 +3,7 @@ use rusqlite::{Connection, Result, Transaction, params};
 use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const SCHEMA_VERSION: i64 = 12;
+pub const SCHEMA_VERSION: i64 = 13;
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -501,7 +501,7 @@ pub fn apply_migrations(conn: &mut Connection) -> Result<()> {
     apply_migrations_to(conn, SCHEMA_VERSION)
 }
 
-fn apply_migrations_to(conn: &mut Connection, target_version: i64) -> Result<()> {
+pub(crate) fn apply_migrations_to(conn: &mut Connection, target_version: i64) -> Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS _migrations (
             version INTEGER PRIMARY KEY,
@@ -1489,6 +1489,222 @@ fn apply_migrations_to(conn: &mut Connection, target_version: i64) -> Result<()>
         tx.commit()?;
     }
 
+    if current < 13 && target_version >= 13 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(
+            "ALTER TABLE settings ADD COLUMN revision INTEGER NOT NULL
+                DEFAULT 0 CHECK(revision >= 0);
+            ALTER TABLE settings ADD COLUMN updated_at_ms INTEGER NOT NULL
+                DEFAULT 0 CHECK(updated_at_ms >= 0);
+            UPDATE settings SET revision = 1 WHERE key = 'user_settings';
+
+            CREATE TABLE project_repositories (
+                id TEXT PRIMARY KEY CHECK(id <> ''),
+                project_id TEXT NOT NULL CHECK(project_id <> ''),
+                organization_id TEXT NOT NULL CHECK(organization_id <> ''),
+                canonical_remote_identity TEXT NOT NULL CHECK(canonical_remote_identity <> ''),
+                canonical_root_identity TEXT NOT NULL CHECK(canonical_root_identity <> ''),
+                display_path TEXT NOT NULL,
+                revision INTEGER NOT NULL CHECK(revision > 0),
+                created_at_ms INTEGER NOT NULL CHECK(created_at_ms >= 0),
+                updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= created_at_ms),
+                UNIQUE(project_id, organization_id)
+            );
+
+            CREATE TABLE project_layer_trust (
+                id TEXT PRIMARY KEY CHECK(id <> ''),
+                organization_id TEXT NOT NULL CHECK(organization_id <> ''),
+                project_id TEXT NOT NULL CHECK(project_id <> ''),
+                repository_id TEXT NOT NULL REFERENCES project_repositories(id),
+                project_content_sha256 TEXT NOT NULL
+                    CHECK(length(project_content_sha256) = 64),
+                approved_by TEXT NOT NULL CHECK(approved_by <> ''),
+                approved_at_ms INTEGER NOT NULL CHECK(approved_at_ms >= 0),
+                revoked_at_ms INTEGER CHECK(revoked_at_ms >= approved_at_ms)
+            );
+            CREATE UNIQUE INDEX idx_project_layer_trust_active
+                ON project_layer_trust(
+                    organization_id, project_id, repository_id, project_content_sha256
+                ) WHERE revoked_at_ms IS NULL;
+
+            CREATE TABLE personal_repo_state (
+                singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+                head_source_commit_sha TEXT NOT NULL CHECK(
+                    length(head_source_commit_sha) IN (40, 64)
+                ),
+                revision INTEGER NOT NULL CHECK(revision > 0),
+                last_request_identity TEXT,
+                last_request_digest TEXT CHECK(
+                    last_request_digest IS NULL OR length(last_request_digest) = 64
+                ),
+                last_result_json TEXT,
+                updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0)
+            );
+
+            CREATE TABLE instruction_sources (
+                id TEXT PRIMARY KEY CHECK(id <> ''),
+                canonical_remote_identity TEXT NOT NULL UNIQUE
+                    CHECK(canonical_remote_identity <> ''),
+                tracking_kind TEXT NOT NULL CHECK(
+                    tracking_kind IN ('branch', 'tag', 'commit')
+                ),
+                tracking_value TEXT NOT NULL CHECK(tracking_value <> ''),
+                update_policy TEXT NOT NULL CHECK(
+                    update_policy IN ('approve_each', 'trust_branch')
+                ),
+                require_signed_commit INTEGER NOT NULL DEFAULT 0
+                    CHECK(require_signed_commit IN (0, 1)),
+                revision INTEGER NOT NULL CHECK(revision > 0),
+                last_checked_at_ms INTEGER CHECK(last_checked_at_ms >= 0),
+                last_error_reason TEXT,
+                active_source_commit_sha TEXT CHECK(
+                    active_source_commit_sha IS NULL OR
+                    length(active_source_commit_sha) IN (40, 64)
+                ),
+                active_bundle_sha TEXT CHECK(
+                    active_bundle_sha IS NULL OR length(active_bundle_sha) = 64
+                ),
+                created_at_ms INTEGER NOT NULL CHECK(created_at_ms >= 0),
+                updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= created_at_ms)
+            );
+            CREATE INDEX idx_instruction_sources_active
+                ON instruction_sources(active_bundle_sha, id);
+
+            CREATE TABLE instruction_candidates (
+                id TEXT PRIMARY KEY CHECK(id <> ''),
+                source_id TEXT NOT NULL REFERENCES instruction_sources(id) ON DELETE CASCADE,
+                observed_source_commit_sha TEXT NOT NULL CHECK(
+                    length(observed_source_commit_sha) IN (40, 64)
+                ),
+                observed_tag_object_sha TEXT CHECK(
+                    observed_tag_object_sha IS NULL OR
+                    length(observed_tag_object_sha) IN (40, 64)
+                ),
+                state TEXT NOT NULL CHECK(state IN (
+                    'discovered', 'inspecting', 'blocked', 'awaiting_approval',
+                    'approved', 'activated', 'superseded'
+                )),
+                safety TEXT NOT NULL CHECK(safety IN (
+                    'ordinary', 'access_widening', 'scheduled_agent_change',
+                    'history_rewrite', 'remote_identity_change', 'tracking_change'
+                )),
+                diff_digest TEXT NOT NULL CHECK(length(diff_digest) = 64),
+                activatable INTEGER NOT NULL CHECK(activatable IN (0, 1)),
+                inspection_json TEXT NOT NULL,
+                created_at_ms INTEGER NOT NULL CHECK(created_at_ms >= 0),
+                updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= created_at_ms),
+                UNIQUE(source_id, observed_source_commit_sha)
+            );
+            CREATE INDEX idx_instruction_candidates_unresolved
+                ON instruction_candidates(source_id, created_at_ms, id)
+                WHERE state IN ('discovered', 'inspecting', 'awaiting_approval');
+
+            CREATE TABLE configuration_audit (
+                id TEXT PRIMARY KEY CHECK(id <> ''),
+                kind TEXT NOT NULL CHECK(kind <> ''),
+                actor TEXT NOT NULL CHECK(actor <> ''),
+                source_id TEXT REFERENCES instruction_sources(id),
+                candidate_id TEXT REFERENCES instruction_candidates(id),
+                bundle_sha TEXT CHECK(bundle_sha IS NULL OR length(bundle_sha) = 64),
+                details_json TEXT NOT NULL,
+                created_at_ms INTEGER NOT NULL CHECK(created_at_ms >= 0)
+            );
+            CREATE INDEX idx_configuration_audit_created
+                ON configuration_audit(created_at_ms DESC, id);
+
+            CREATE TABLE bundle_objects (
+                bundle_sha TEXT PRIMARY KEY CHECK(length(bundle_sha) = 64),
+                source_manifest_json TEXT NOT NULL,
+                payload_sha256 TEXT NOT NULL CHECK(length(payload_sha256) = 64),
+                archive_sha256 TEXT CHECK(
+                    archive_sha256 IS NULL OR length(archive_sha256) = 64
+                ),
+                archive_bytes INTEGER CHECK(archive_bytes IS NULL OR archive_bytes >= 0),
+                compiler_version TEXT NOT NULL CHECK(compiler_version <> ''),
+                object_path TEXT NOT NULL CHECK(object_path <> ''),
+                verified_at_ms INTEGER NOT NULL CHECK(verified_at_ms >= 0)
+            );
+
+            CREATE TABLE bundle_activations (
+                id TEXT PRIMARY KEY CHECK(id <> ''),
+                bundle_sha TEXT NOT NULL REFERENCES bundle_objects(bundle_sha),
+                candidate_id TEXT REFERENCES instruction_candidates(id),
+                source_manifest_json TEXT NOT NULL,
+                kind TEXT NOT NULL CHECK(kind IN (
+                    'candidate_approval', 'trusted_branch', 'revert', 'recovery'
+                )),
+                actor TEXT NOT NULL CHECK(actor <> ''),
+                prior_bundle_sha TEXT REFERENCES bundle_objects(bundle_sha),
+                activated_at_ms INTEGER NOT NULL CHECK(activated_at_ms >= 0),
+                deactivated_at_ms INTEGER CHECK(deactivated_at_ms >= activated_at_ms)
+            );
+            CREATE UNIQUE INDEX idx_bundle_activations_current
+                ON bundle_activations((1)) WHERE deactivated_at_ms IS NULL;
+
+            CREATE TABLE bundle_distribution (
+                transfer_id TEXT PRIMARY KEY CHECK(transfer_id <> ''),
+                environment_id TEXT NOT NULL CHECK(environment_id <> ''),
+                bundle_sha TEXT NOT NULL REFERENCES bundle_objects(bundle_sha),
+                archive_sha256 TEXT NOT NULL CHECK(length(archive_sha256) = 64),
+                expected_prior_bundle_sha TEXT REFERENCES bundle_objects(bundle_sha),
+                state TEXT NOT NULL CHECK(state IN (
+                    'pending', 'uploading', 'active', 'rejected'
+                )),
+                receipt_json TEXT,
+                created_at_ms INTEGER NOT NULL CHECK(created_at_ms >= 0),
+                updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= created_at_ms),
+                UNIQUE(environment_id, bundle_sha)
+            );
+            CREATE INDEX idx_bundle_distribution_incomplete
+                ON bundle_distribution(state, created_at_ms, transfer_id)
+                WHERE state IN ('pending', 'uploading');
+
+            CREATE TABLE mutation_proposals (
+                id TEXT PRIMARY KEY CHECK(id <> ''),
+                request_id TEXT NOT NULL CHECK(request_id <> ''),
+                caller_identity TEXT NOT NULL CHECK(caller_identity <> ''),
+                caller_json TEXT NOT NULL,
+                tool_name TEXT NOT NULL CHECK(tool_name <> ''),
+                environment_id TEXT NOT NULL CHECK(environment_id <> ''),
+                target_json TEXT NOT NULL,
+                expected_revision INTEGER NOT NULL CHECK(expected_revision > 0),
+                old_json TEXT NOT NULL,
+                new_json TEXT NOT NULL,
+                old_digest TEXT NOT NULL CHECK(length(old_digest) = 64),
+                new_digest TEXT NOT NULL CHECK(length(new_digest) = 64),
+                impact_json TEXT NOT NULL,
+                resolution TEXT NOT NULL CHECK(resolution IN (
+                    'pending', 'approved_applied', 'rejected', 'expired',
+                    'cancelled_disconnected', 'superseded_revision'
+                )),
+                audit_id TEXT UNIQUE,
+                created_at_ms INTEGER NOT NULL CHECK(created_at_ms >= 0),
+                expires_at_ms INTEGER NOT NULL CHECK(expires_at_ms > created_at_ms),
+                resolved_at_ms INTEGER CHECK(resolved_at_ms >= created_at_ms),
+                UNIQUE(caller_identity, tool_name, request_id)
+            );
+            CREATE INDEX idx_mutation_proposals_pending_expiry
+                ON mutation_proposals(expires_at_ms, id)
+                WHERE resolution = 'pending';
+
+            CREATE TABLE mutation_audit (
+                id TEXT PRIMARY KEY CHECK(id <> ''),
+                proposal_id TEXT NOT NULL UNIQUE REFERENCES mutation_proposals(id),
+                target_json TEXT NOT NULL,
+                old_digest TEXT NOT NULL CHECK(length(old_digest) = 64),
+                new_digest TEXT NOT NULL CHECK(length(new_digest) = 64),
+                resolver_json TEXT NOT NULL,
+                applied_revision INTEGER NOT NULL CHECK(applied_revision > 0),
+                applied_at_ms INTEGER NOT NULL CHECK(applied_at_ms >= 0)
+            );",
+        )?;
+        tx.execute(
+            "INSERT INTO _migrations (version, applied_at_ms) VALUES (13, ?1)",
+            [now_ms() as i64],
+        )?;
+        tx.commit()?;
+    }
+
     Ok(())
 }
 
@@ -1821,6 +2037,79 @@ mod tests {
             .expect("insert managed component");
         }
         assert_eq!(migration_version(&conn), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn migration_thirteen_preserves_existing_rows_and_adds_trusted_configuration() {
+        let mut conn = Connection::open_in_memory().expect("open database");
+        apply_migrations_to(&mut conn, 12).expect("apply schema twelve");
+        let settings_json = r#"{"version":7,"fixture":"unchanged"}"#;
+        conn.execute(
+            "INSERT INTO settings (key, value_json) VALUES ('user_settings', ?1)",
+            [settings_json],
+        )
+        .expect("insert settings fixture");
+        let rows_before: i64 = conn
+            .query_row("SELECT COUNT(*) FROM settings", [], |row| row.get(0))
+            .expect("settings count before migration");
+
+        apply_migrations(&mut conn).expect("apply migration thirteen");
+
+        let (stored_json, revision, updated_at_ms): (String, i64, i64) = conn
+            .query_row(
+                "SELECT value_json, revision, updated_at_ms
+                   FROM settings WHERE key = 'user_settings'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("read migrated settings");
+        assert_eq!(stored_json, settings_json);
+        assert_eq!(revision, 1);
+        assert_eq!(updated_at_ms, 0);
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM settings", [], |row| row
+                .get::<_, i64>(0))
+                .expect("settings count after migration"),
+            rows_before
+        );
+        for table in [
+            "project_repositories",
+            "project_layer_trust",
+            "personal_repo_state",
+            "instruction_sources",
+            "instruction_candidates",
+            "configuration_audit",
+            "bundle_objects",
+            "bundle_activations",
+            "bundle_distribution",
+            "mutation_proposals",
+            "mutation_audit",
+        ] {
+            assert!(table_exists(&conn, table), "missing {table}");
+        }
+        assert_eq!(migration_version(&conn), 13);
+
+        apply_migrations(&mut conn).expect("repeat migration thirteen");
+        assert_eq!(migration_version(&conn), 13);
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM settings", [], |row| row
+                .get::<_, i64>(0))
+                .expect("settings count after reopen equivalent"),
+            rows_before
+        );
+    }
+
+    #[test]
+    fn migration_thirteen_failure_rolls_back_to_schema_twelve() {
+        let mut conn = Connection::open_in_memory().expect("open database");
+        apply_migrations_to(&mut conn, 12).expect("apply schema twelve");
+        conn.execute_batch("CREATE TABLE project_repositories (conflict INTEGER);")
+            .expect("create migration conflict");
+
+        assert!(apply_migrations(&mut conn).is_err());
+        assert_eq!(migration_version(&conn), 12);
+        assert!(!column_exists(&conn, "settings", "revision"));
+        assert!(!table_exists(&conn, "project_layer_trust"));
     }
 
     #[test]

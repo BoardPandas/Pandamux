@@ -1,5 +1,6 @@
 pub mod attachment;
 pub mod checkpoint;
+pub mod data_paths;
 pub mod driver_registry;
 pub mod environment_router;
 pub mod fs;
@@ -27,6 +28,7 @@ pub use checkpoint::{
     ChangedFileStat, CheckpointPhase, compute_changed_files, create_checkpoint, is_git_repository,
     prune_old_checkpoints, prune_thread_checkpoints, rollback_to_checkpoint,
 };
+pub use data_paths::DataPaths;
 pub use driver_registry::DriverRegistry;
 pub use environment_router::{
     EnvironmentRouter, EnvironmentTransport, EnvironmentTransportState, MockEnvironmentTransport,
@@ -45,7 +47,9 @@ pub use request_context::{
 pub use router::Router;
 pub use runtime::{RUNTIME_FILENAME, RuntimeInfo};
 pub use server::{Server, ServerConfig};
-pub use store::{ProviderExecutionAudit, Store, StoreError};
+pub use store::{
+    ProviderExecutionAudit, RevisionedSettings, Store, StoreError, StoredInstructionCandidate,
+};
 pub use terminal::TerminalServerManager;
 pub use thread_manager::ThreadManager;
 pub use usage_scanner::{

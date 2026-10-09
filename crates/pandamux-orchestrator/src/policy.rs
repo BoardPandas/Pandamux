@@ -3,9 +3,9 @@ use crate::diagnostics::{
     issue,
 };
 use pandamux_core::{
-    AccessMode, AgentDefinition, ApprovalId, ApprovalRequirement, OrchestrationMode,
-    OrganizationId, ProjectId, RunApprovalKind, RunApprovalStatus, RunId, RunTaskId, TierMapping,
-    ValueLayer,
+    AccessMode, AgentDefinition, ApprovalId, ApprovalRequirement, ConfigurationRevision,
+    ContentSha256, OrchestrationMode, OrganizationId, ProjectId, RunApprovalKind,
+    RunApprovalStatus, RunId, RunTaskId, TierMapping, ValueLayer,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 pub struct LayerGrant {
     pub layer: ValueLayer,
     pub trusted: bool,
-    pub content_sha256: String,
+    pub content_sha256: ContentSha256,
     pub organization_id: OrganizationId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<ProjectId>,
@@ -28,7 +28,7 @@ pub struct LayerGrant {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrustedBundleSettings {
-    pub revision: String,
+    pub revision: ConfigurationRevision,
     pub tier_mapping: TierMapping,
 }
 
@@ -199,8 +199,11 @@ pub fn approval_identity(action: &ApprovalAction) -> ApprovalDecisionIdentity {
 }
 
 pub fn canonical_action_digest(action: &Value) -> String {
-    let canonical = canonicalize_json(action);
-    let bytes = serde_json::to_vec(&canonical).expect("JSON values are serializable");
+    canonical_json_sha256(action)
+}
+
+pub fn canonical_json_sha256(value: &impl Serialize) -> String {
+    let bytes = canonical_json_bytes(value);
     let digest = Sha256::digest(bytes);
     let mut output = String::with_capacity(64);
     for byte in digest {
@@ -208,6 +211,11 @@ pub fn canonical_action_digest(action: &Value) -> String {
         write!(&mut output, "{byte:02x}").expect("writing to String cannot fail");
     }
     output
+}
+
+pub fn canonical_json_bytes(value: &impl Serialize) -> Vec<u8> {
+    let value = serde_json::to_value(value).expect("canonical value is serializable");
+    serde_json::to_vec(&canonicalize_json(&value)).expect("canonical value is serializable")
 }
 
 fn approval_matches_identity(
@@ -221,7 +229,7 @@ fn approval_matches_identity(
         && approval.action_digest == identity.action_digest
 }
 
-fn canonicalize_json(value: &Value) -> Value {
+pub fn canonicalize_json(value: &Value) -> Value {
     match value {
         Value::Object(object) => {
             let mut entries = object.iter().collect::<Vec<_>>();

@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Added
 
+- **Added the Phase 5B trusted-configuration foundation in version 0.60.78.**
+  Configuration identities now distinguish source commits, layer content,
+  compiled bundles, transfer archives, and monotonic settings revisions.
+  One injected private app-data graph owns configuration storage, schema 13
+  creates the durable source, candidate, trust, bundle, distribution, and
+  mutation tables only after verifying a private pre-migration database
+  backup, and settings updates now reject stale compare-and-swap writes across
+  RPC and desktop callers. Shared canonical JSON hashing and typed protocol
+  contracts keep later personal Git, mirror, activation, and proposal work on
+  one trust boundary without claiming those later checkpoints are complete.
+
 - **Recorded exact Phase 5A pure-domain acceptance in version 0.60.77.** The
   new acceptance record ties every commit-sized checkpoint to the complete
   local Section 12 matrix on exact 0.60.76, including the rejected 0.60.75

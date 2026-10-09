@@ -2,6 +2,7 @@ use crate::diagnostics::{
     ConfigurationIssue, ConfigurationIssueCode, ConfigurationStage, DiagnosticSet,
     RelativeConfigPath, issue,
 };
+use crate::policy::canonical_json_bytes;
 use pandamux_core::{
     AccessMode, AgentDefinition, AgentId, AgentScope, AgentTask, BudgetAmount, DependencyEdge,
     DependencyEdgeId, DependencyRequirement, OrchestrationMode, OrganizationId, OutputContract,
@@ -706,7 +707,7 @@ fn validate_approval_feasibility(
 fn validated_plan_digest(plan: &ValidatedPlan) -> String {
     let mut unsigned = plan.clone();
     unsigned.source_digest.clear();
-    let bytes = serde_json::to_vec(&unsigned).expect("validated plan is serializable");
+    let bytes = canonical_json_bytes(&unsigned);
     let digest = Sha256::digest(bytes);
     let mut output = String::with_capacity(64);
     for byte in digest {

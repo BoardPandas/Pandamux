@@ -41,11 +41,12 @@ use pandamux_protocol::{
 };
 
 use crate::attachment::AttachmentManager;
+use crate::data_paths::DataPaths;
 use crate::driver_registry::DriverRegistry;
 use crate::mcp_server::McpServer;
 use crate::provider_resolver::ProviderResolver;
 use crate::request_context::{CapabilityAuthority, PeerRole, RequestContext};
-use crate::store::Store;
+use crate::store::{Store, StoreError};
 use crate::terminal::TerminalServerManager;
 use crate::thread_manager::ThreadManager;
 use tokio::sync::Semaphore;
@@ -66,7 +67,7 @@ pub struct Router {
     remote_terminals: Arc<std::sync::Mutex<HashMap<String, pandamux_core::ids::EnvironmentId>>>,
     login_previews: Arc<std::sync::Mutex<HashMap<String, LoginPreviewRecord>>>,
     hark: Arc<crate::hark::HarkBridge>,
-    data_dir: PathBuf,
+    data_paths: DataPaths,
     role: ServerRole,
     environment_id: String,
     server_version: String,
@@ -78,35 +79,6 @@ struct LoginPreviewRecord {
     preview: pandamux_protocol::ProviderLoginPreview,
     environment: HashMap<String, String>,
     shell: Option<String>,
-}
-
-fn default_data_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("PANDAMUX_DATA_DIR") {
-        PathBuf::from(dir)
-    } else if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-        PathBuf::from(local_app_data).join("pandamux")
-    } else if let Ok(home) = std::env::var("HOME") {
-        PathBuf::from(home).join(".pandamux")
-    } else {
-        std::env::temp_dir().join("pandamux")
-    }
-}
-
-fn default_attachments_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("PANDAMUX_ATTACHMENTS_DIR") {
-        PathBuf::from(dir)
-    } else if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-        PathBuf::from(local_app_data)
-            .join("pandamux")
-            .join("attachments")
-    } else if let Ok(home) = std::env::var("HOME") {
-        PathBuf::from(home)
-            .join(".pandamux")
-            .join("data")
-            .join("attachments")
-    } else {
-        std::env::temp_dir().join("pandamux").join("attachments")
-    }
 }
 
 fn account_badge_label(label: Option<&str>, sub: Option<&str>) -> Option<String> {
@@ -486,11 +458,17 @@ fn provider_rpc_error_for_target(
 
 impl Router {
     pub fn new(store: Store, role: ServerRole, environment_id: String) -> Self {
-        let data_dir = default_data_dir();
+        let data_paths = DataPaths::default_for_current_user().unwrap_or_else(|_| {
+            DataPaths::from_root(
+                std::env::temp_dir().join(format!("pandamux-router-{}", std::process::id())),
+            )
+            .expect("temporary router data path is valid")
+        });
+        let data_dir = data_paths.root().to_path_buf();
         let drivers = Arc::new(DriverRegistry::default_local_at(data_dir.clone()));
         let mut router = Self::with_drivers(store, role, environment_id, drivers);
         router.default_drivers = true;
-        router.with_data_dir(data_dir)
+        router.with_data_paths(data_paths)
     }
 
     pub fn with_drivers(
@@ -499,7 +477,13 @@ impl Router {
         environment_id: String,
         drivers: Arc<DriverRegistry>,
     ) -> Self {
-        let data_dir = default_data_dir();
+        let data_paths = DataPaths::default_for_current_user().unwrap_or_else(|_| {
+            DataPaths::from_root(
+                std::env::temp_dir().join(format!("pandamux-router-{}", std::process::id())),
+            )
+            .expect("temporary router data path is valid")
+        });
+        let data_dir = data_paths.root().to_path_buf();
         let capability_authority = Arc::new(CapabilityAuthority::new(EnvironmentId::new(
             environment_id.clone(),
         )));
@@ -516,7 +500,7 @@ impl Router {
             environment_id.clone(),
             capability_authority.clone(),
         );
-        let attachments = AttachmentManager::new(default_attachments_dir());
+        let attachments = AttachmentManager::new(data_paths.attachments().to_path_buf());
         let terminal = TerminalServerManager::new();
         let environment_router = Arc::new(crate::environment_router::EnvironmentRouter::new(
             pandamux_core::ids::EnvironmentId::new(environment_id.clone()),
@@ -538,7 +522,7 @@ impl Router {
             remote_terminals: Arc::new(std::sync::Mutex::new(HashMap::new())),
             login_previews: Arc::new(std::sync::Mutex::new(HashMap::new())),
             hark: Arc::new(crate::hark::HarkBridge::default()),
-            data_dir,
+            data_paths,
             role,
             environment_id,
             server_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -556,6 +540,14 @@ impl Router {
     }
 
     pub fn with_data_dir(mut self, dir: PathBuf) -> Self {
+        let data_paths = DataPaths::from_root(dir)
+            .expect("injected router data directory must be a valid absolute path");
+        self = self.with_data_paths(data_paths);
+        self
+    }
+
+    pub fn with_data_paths(mut self, data_paths: DataPaths) -> Self {
+        let dir = data_paths.root().to_path_buf();
         if self.default_drivers {
             let drivers = Arc::new(DriverRegistry::default_local_at(dir.clone()));
             let provider_resolver = Arc::new(ProviderResolver::new(
@@ -575,7 +567,8 @@ impl Router {
         } else {
             self.provider_resolver.set_data_dir(dir.clone());
         }
-        self.data_dir = dir;
+        self.attachments = AttachmentManager::new(data_paths.attachments().to_path_buf());
+        self.data_paths = data_paths;
         self
     }
 
@@ -584,7 +577,11 @@ impl Router {
     }
 
     pub fn data_dir(&self) -> &std::path::Path {
-        &self.data_dir
+        self.data_paths.root()
+    }
+
+    pub fn data_paths(&self) -> &DataPaths {
+        &self.data_paths
     }
 
     pub async fn shutdown_antigravity_auth(&self) {
@@ -730,10 +727,12 @@ impl Router {
             return Ok(node_download);
         }
 
-        let archive =
-            pandamux_providers::antigravity::cache_bundle_archive(&self.data_dir, &params.manifest)
-                .await
-                .map_err(provider_rpc_error)?;
+        let archive = pandamux_providers::antigravity::cache_bundle_archive(
+            self.data_paths.root(),
+            &params.manifest,
+        )
+        .await
+        .map_err(provider_rpc_error)?;
         let prepare_request = RpcRequest::new(
             Self::now_ms() as i64,
             "antigravity.prepare_upload",
@@ -1497,23 +1496,25 @@ impl Router {
 
     fn handle_settings_get(&self, params: Value) -> Result<Value, RpcError> {
         let req_params: SettingsGetParams = serde_json::from_value(params).unwrap_or_default();
-        let settings = self
+        let record = self
             .store
-            .get_settings()
-            .map_err(|e| RpcError::internal_error(e.to_string()))?
-            .unwrap_or_default();
+            .get_or_initialize_settings(Self::now_ms())
+            .map_err(|e| RpcError::internal_error(e.to_string()))?;
+        let settings = record.settings;
 
         if let Some(key) = req_params.key {
             let val =
                 pandamux_core::settings_get(&settings, &key).map_err(RpcError::invalid_params)?;
             let res = SettingsGetResult {
                 settings,
+                revision: record.revision,
                 value: Some(val),
             };
             serde_json::to_value(res).map_err(|e| RpcError::internal_error(e.to_string()))
         } else {
             let res = SettingsGetResult {
                 settings,
+                revision: record.revision,
                 value: None,
             };
             serde_json::to_value(res).map_err(|e| RpcError::internal_error(e.to_string()))
@@ -1521,44 +1522,54 @@ impl Router {
     }
 
     fn handle_settings_set(&self, params: Value) -> Result<Value, RpcError> {
-        let mut current = self
+        let record = self
             .store
-            .get_settings()
-            .map_err(|e| RpcError::internal_error(e.to_string()))?
-            .unwrap_or_default();
-
-        // 1. Try parsing as SettingsSetParams { settings, key, value }
-        if let Ok(p) = serde_json::from_value::<SettingsSetParams>(params.clone()) {
-            if let Some(mut updated) = p.settings {
-                updated.normalize();
-                self.canonicalize_failover_pools(&mut updated)?;
-                self.store
-                    .save_settings_with_organization_policies(&updated, Self::now_ms())
-                    .map_err(|e| RpcError::internal_error(e.to_string()))?;
-                return Ok(json!({ "success": true }));
-            } else if let (Some(key), Some(value)) = (p.key, p.value) {
-                pandamux_core::settings_set(&mut current, &key, value)
+            .get_or_initialize_settings(Self::now_ms())
+            .map_err(|e| RpcError::internal_error(e.to_string()))?;
+        let request = serde_json::from_value::<SettingsSetParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let mut updated = match (request.settings, request.key, request.value) {
+            (Some(settings), None, None) => settings,
+            (None, Some(key), Some(value)) => {
+                let mut settings = record.settings;
+                pandamux_core::settings_set(&mut settings, &key, value)
                     .map_err(RpcError::invalid_params)?;
-                current.normalize();
-                self.canonicalize_failover_pools(&mut current)?;
-                self.store
-                    .save_settings_with_organization_policies(&current, Self::now_ms())
-                    .map_err(|e| RpcError::internal_error(e.to_string()))?;
-                return Ok(json!({ "success": true }));
+                settings
             }
-        }
-
-        // 2. Try parsing directly as UserSettings
-        if let Ok(mut settings) = serde_json::from_value::<UserSettings>(params) {
-            settings.normalize();
-            self.canonicalize_failover_pools(&mut settings)?;
-            self.store
-                .save_settings_with_organization_policies(&settings, Self::now_ms())
-                .map_err(|e| RpcError::internal_error(e.to_string()))?;
-            return Ok(json!({ "success": true }));
-        }
-
-        Err(RpcError::invalid_params("Invalid settings payload"))
+            _ => {
+                return Err(RpcError::invalid_params(
+                    "Provide either settings or one key and non-null value",
+                ));
+            }
+        };
+        updated.normalize();
+        self.canonicalize_failover_pools(&mut updated)?;
+        let revision = self
+            .store
+            .save_settings_with_organization_policies_cas(
+                &updated,
+                request.expected_revision,
+                Self::now_ms(),
+            )
+            .map_err(|error| match error {
+                StoreError::RevisionDrift { expected, actual } => RpcError::with_data(
+                    -32009,
+                    "Settings changed before this update could be applied",
+                    json!({
+                        "reason": "revision_drift",
+                        "resourceId": "user_settings",
+                        "expectedRevision": expected,
+                        "actualRevision": actual,
+                        "retryable": true,
+                    }),
+                ),
+                other => RpcError::internal_error(other.to_string()),
+            })?;
+        serde_json::to_value(pandamux_protocol::SettingsSetResult {
+            success: true,
+            revision,
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
     }
 
     fn canonicalize_failover_pools(&self, settings: &mut UserSettings) -> Result<(), RpcError> {
@@ -3338,7 +3349,7 @@ impl Router {
         } else {
             pandamux_providers::antigravity::resolve_antigravity_binary(
                 None,
-                &self.data_dir,
+                self.data_paths.root(),
                 &platform_arch,
             )
         };
@@ -3347,8 +3358,9 @@ impl Router {
             snapshot.auth,
             pandamux_providers::models::ProviderAuthStatus::Authenticated { .. }
         );
-        let free_disk = pandamux_providers::antigravity::get_available_disk_bytes(&self.data_dir)
-            .map_err(provider_rpc_error)?;
+        let free_disk =
+            pandamux_providers::antigravity::get_available_disk_bytes(self.data_paths.root())
+                .map_err(provider_rpc_error)?;
 
         let (active_processes, max_processes) =
             pandamux_providers::antigravity::antigravity_process_counts();
@@ -3384,7 +3396,7 @@ impl Router {
         let staged_archive = p.staged_archive_path.as_deref().map(PathBuf::from);
 
         let result = pandamux_providers::antigravity::install_managed_bundle(
-            &self.data_dir,
+            self.data_paths.root(),
             &p.manifest,
             staged_archive.as_deref(),
             p.force,
@@ -3410,7 +3422,7 @@ impl Router {
                 RpcError::invalid_params(format!("Invalid antigravity.prepare_upload params: {e}"))
             })?;
         let path = pandamux_providers::antigravity::prepare_bundle_upload(
-            &self.data_dir,
+            self.data_paths.root(),
             &params.manifest,
         )
         .map_err(provider_rpc_error)?;
@@ -3435,7 +3447,7 @@ impl Router {
                 RpcError::invalid_params(format!("Invalid antigravity.discard_upload params: {e}"))
             })?;
         pandamux_providers::antigravity::discard_bundle_upload(
-            &self.data_dir,
+            self.data_paths.root(),
             std::path::Path::new(&params.staged_archive_path),
         )
         .map_err(provider_rpc_error)?;
@@ -3461,7 +3473,7 @@ impl Router {
         let instance_id = resolved.config.id.clone();
         let started = self
             .antigravity_auth
-            .start(&resolved.config, &self.data_dir)
+            .start(&resolved.config, self.data_paths.root())
             .await
             .map_err(|error| provider_rpc_error_for_target(error, &instance_id, &environment_id))?;
 
@@ -4410,18 +4422,50 @@ mod tests {
             pandamux_core::SETTINGS_SCHEMA_VERSION
         );
         assert_eq!(get_val["settings"]["terminal"]["scrollbackLines"], 10_000);
+        let revision = get_val["revision"]
+            .as_u64()
+            .expect("settings revision is present");
 
         // 2. Update a specific key using config.set dotted path
         let set_req = RpcRequest::new(
             2,
             "config.set",
             Some(json!({
+                "expectedRevision": revision,
                 "key": "terminal.scrollbackLines",
                 "value": 25_000
             })),
         );
         let set_res = router.handle_request(set_req).await.unwrap();
         assert!(set_res.is_success());
+
+        let stale_set_req = RpcRequest::new(
+            20,
+            "settings.set",
+            Some(json!({
+                "expectedRevision": revision,
+                "key": "terminal.scrollbackLines",
+                "value": 30_000
+            })),
+        );
+        let stale_set_res = router.handle_request(stale_set_req).await.unwrap();
+        let stale_error = stale_set_res.error.expect("stale update must fail");
+        assert_eq!(
+            stale_error
+                .data
+                .as_ref()
+                .and_then(|data| data.get("reason"))
+                .and_then(Value::as_str),
+            Some("revision_drift")
+        );
+        assert_eq!(
+            stale_error
+                .data
+                .as_ref()
+                .and_then(|data| data.get("actualRevision"))
+                .and_then(Value::as_u64),
+            Some(revision + 1)
+        );
 
         // 3. Query the updated key via config.get
         let get_key_req = RpcRequest::new(

@@ -1336,6 +1336,7 @@ impl AppView {
                 {
                     let _ = this.update(cx, |app, cx| {
                         app.settings_view.settings = res.settings;
+                        app.settings_view.settings_revision = res.revision;
                         app.synchronize_picker();
                         app.sync_theme_from_settings(cx);
                         cx.notify();
@@ -1661,6 +1662,7 @@ impl AppView {
         if let Some(bridge) = &self.bridge {
             self.settings_view.is_saving = true;
             let params = SettingsSetParams {
+                expected_revision: self.settings_view.settings_revision,
                 settings: Some(self.settings_view.settings.clone()),
                 key: None,
                 value: None,
@@ -1670,6 +1672,10 @@ impl AppView {
                 let result = decode_rpc_result::<SettingsSetResult>(rx.await);
                 let _ = this.update(cx, |app, cx| {
                     if result.as_ref().is_ok_and(|result| result.success) {
+                        app.settings_view.settings_revision = result
+                            .as_ref()
+                            .expect("successful settings result")
+                            .revision;
                         app.settings_view.is_saving = false;
                         app.settings_view.status_banner =
                             Some(("Settings saved successfully".to_string(), false));
@@ -1680,7 +1686,12 @@ impl AppView {
                         let message = result
                             .err()
                             .unwrap_or_else(|| "Failed to save settings".to_string());
+                        let revision_drift =
+                            message.contains("changed before this update could be applied");
                         app.settings_view.status_banner = Some((message, true));
+                        if revision_drift {
+                            app.load_settings(cx);
+                        }
                     }
                     cx.notify();
                 });

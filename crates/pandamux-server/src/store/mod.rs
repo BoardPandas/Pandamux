@@ -1,9 +1,11 @@
 mod capacity_phase4d;
+mod configuration_phase5b;
 mod failover_phase4f;
 pub mod migrations;
 mod usage_phase4c;
 mod usage_query_phase4c;
 
+pub use configuration_phase5b::StoredInstructionCandidate;
 pub use usage_phase4c::{
     DEFAULT_USAGE_OUTBOX_MAX_AGE_MS, DEFAULT_USAGE_OUTBOX_MAX_BYTES, DEFAULT_USAGE_OUTBOX_MAX_ROWS,
     UsageHubIngestOutcome, UsageHubSyncState, UsageOutboxCompaction, UsageOutboxRetention,
@@ -11,9 +13,9 @@ pub use usage_phase4c::{
 
 use pandamux_core::{
     AgentId, AttachmentRecord, AttemptExecutionEvidence, CapacityConfidence, CapacityEvidenceScope,
-    CapacitySnapshot, ContinuationState, EnvironmentId, FailoverPool, NodeStoreId,
-    OrganizationPolicy, ProjectId, ProviderCapabilities, ProviderInstanceId, ProviderKind,
-    ScheduleId, ScheduleRecord, ScheduleTarget, SubscriptionKey, Thread, ThreadEvent,
+    CapacitySnapshot, ConfigurationRevision, ContinuationState, EnvironmentId, FailoverPool,
+    NodeStoreId, OrganizationPolicy, ProjectId, ProviderCapabilities, ProviderInstanceId,
+    ProviderKind, ScheduleId, ScheduleRecord, ScheduleTarget, SubscriptionKey, Thread, ThreadEvent,
     ThreadEventKind, ThreadId, ThreadOrigin, TokenCounts, Turn, TurnAttemptStatus, TurnId,
     TurnStatus, TurnUsage, TurnUsageComponent, UsageFactKind, UsageObservation, UsageObservationId,
     UsageProvider, UsageSourceKind, UsageSubscription, UsageUnknownField, UserSettings,
@@ -25,10 +27,12 @@ use pandamux_protocol::{
     UsageQueryItem, UsageQueryParams, UsageQueryResult, UsageScannerDiagnostic,
     UsageSourceCoverageState,
 };
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, DatabaseName, OptionalExtension, params};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 const MAX_RETAINED_SCANNER_QUARANTINES_PER_SOURCE: i64 = 4_096;
@@ -37,7 +41,12 @@ const MAX_RETAINED_SCANNER_QUARANTINES_PER_SOURCE: i64 = 4_096;
 pub enum StoreError {
     Sql(rusqlite::Error),
     Json(serde_json::Error),
+    Io(io::Error),
     Data(String),
+    RevisionDrift {
+        expected: ConfigurationRevision,
+        actual: Option<ConfigurationRevision>,
+    },
 }
 
 impl std::fmt::Display for StoreError {
@@ -45,7 +54,15 @@ impl std::fmt::Display for StoreError {
         match self {
             Self::Sql(err) => write!(f, "Store SQL error: {err}"),
             Self::Json(err) => write!(f, "Store JSON error: {err}"),
+            Self::Io(err) => write!(f, "Store I/O error: {err}"),
             Self::Data(err) => write!(f, "Store data error: {err}"),
+            Self::RevisionDrift { expected, actual } => write!(
+                f,
+                "Store revision drift: expected {expected}, actual {}",
+                actual
+                    .map(|revision| revision.to_string())
+                    .unwrap_or_else(|| "missing".to_string())
+            ),
         }
     }
 }
@@ -64,6 +81,12 @@ impl From<serde_json::Error> for StoreError {
     }
 }
 
+impl From<io::Error> for StoreError {
+    fn from(err: io::Error) -> Self {
+        Self::Io(err)
+    }
+}
+
 /// Durable evidence of the exact provider configuration selected for a turn.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProviderExecutionAudit {
@@ -77,6 +100,13 @@ pub struct ProviderExecutionAudit {
     pub capabilities: ProviderCapabilities,
     pub model: String,
     pub created_at_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RevisionedSettings {
+    pub settings: UserSettings,
+    pub revision: ConfigurationRevision,
+    pub updated_at_ms: u64,
 }
 
 /// Durable scanner position committed in the same transaction as accepted facts.
@@ -159,7 +189,18 @@ pub struct Store {
 impl Store {
     /// Open or create a persistent SQLite store at the given path.
     pub fn open(path: &Path) -> Result<Self, StoreError> {
+        let backups = path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("backups");
+        Self::open_with_backups(path, &backups)
+    }
+
+    /// Open a persistent store and back up any pre-v13 database before
+    /// migration changes it.
+    pub fn open_with_backups(path: &Path, backups: &Path) -> Result<Self, StoreError> {
         let mut conn = Connection::open(path)?;
+        Self::backup_before_v13(&conn, backups)?;
         Self::init_connection(&mut conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -183,6 +224,71 @@ impl Store {
         )?;
         migrations::apply_migrations(conn)?;
         Ok(())
+    }
+
+    fn backup_before_v13(conn: &Connection, backups: &Path) -> Result<Option<PathBuf>, StoreError> {
+        let has_migrations = conn.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_migrations'
+             )",
+            [],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !has_migrations {
+            return Ok(None);
+        }
+        let version = conn.query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM _migrations",
+            [],
+            |row| row.get::<_, i64>(0),
+        )?;
+        if version <= 0 || version >= 13 {
+            return Ok(None);
+        }
+
+        ensure_private_backup_directory(backups)?;
+        let timestamp = current_time_ms();
+        let final_path = backups.join(format!("pandamux.db.pre-v13.{timestamp}"));
+        let temporary = backups.join(format!(
+            ".pandamux.db.pre-v13.{timestamp}.{}.tmp",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let backup_result = (|| -> Result<(), StoreError> {
+            conn.backup(DatabaseName::Main, &temporary, None)?;
+            make_private_file(&temporary)?;
+            let verification = Connection::open(&temporary)?;
+            let integrity: String =
+                verification.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+            if integrity != "ok" {
+                return Err(StoreError::Data(
+                    "database_backup_failed: SQLite integrity check failed".to_string(),
+                ));
+            }
+            let backup_version = verification.query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM _migrations",
+                [],
+                |row| row.get::<_, i64>(0),
+            )?;
+            if backup_version != version {
+                return Err(StoreError::Data(
+                    "database_backup_failed: backup schema version changed".to_string(),
+                ));
+            }
+            drop(verification);
+            fs::OpenOptions::new()
+                .read(true)
+                .open(&temporary)?
+                .sync_all()?;
+            fs::rename(&temporary, &final_path)?;
+            make_private_file(&final_path)?;
+            sync_directory(backups)?;
+            Ok(())
+        })();
+        if backup_result.is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
+        backup_result?;
+        Ok(Some(final_path))
     }
 
     /// Flush and truncate the write-ahead log upon graceful shutdown.
@@ -899,6 +1005,21 @@ impl Store {
         settings: &UserSettings,
         updated_at_ms: u64,
     ) -> Result<(), StoreError> {
+        let expected_revision = self.get_or_initialize_settings(updated_at_ms)?.revision;
+        self.save_settings_with_organization_policies_cas(
+            settings,
+            expected_revision,
+            updated_at_ms,
+        )?;
+        Ok(())
+    }
+
+    pub fn save_settings_with_organization_policies_cas(
+        &self,
+        settings: &UserSettings,
+        expected_revision: ConfigurationRevision,
+        updated_at_ms: u64,
+    ) -> Result<ConfigurationRevision, StoreError> {
         let updated_at_ms = checked_i64(updated_at_ms, "organization policy updated_at_ms")?;
         let settings_json = serde_json::to_string(settings)?;
         let mut organization_ids = BTreeSet::new();
@@ -1156,11 +1277,36 @@ impl Store {
             }
         }
 
-        tx.execute(
-            "INSERT INTO settings (key, value_json) VALUES ('user_settings', ?1)
-             ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json",
-            [settings_json],
+        let settings_rows = tx.execute(
+            "UPDATE settings
+             SET value_json = ?1, revision = revision + 1, updated_at_ms = ?2
+             WHERE key = 'user_settings' AND revision = ?3",
+            params![
+                settings_json,
+                updated_at_ms,
+                checked_i64(expected_revision.get(), "expected settings revision")?,
+            ],
         )?;
+        if settings_rows > 1 {
+            return Err(StoreError::Data(
+                "settings CAS changed more than one row".to_string(),
+            ));
+        }
+        if settings_rows == 0 {
+            let actual = tx
+                .query_row(
+                    "SELECT revision FROM settings WHERE key = 'user_settings'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()?
+                .map(|revision| configuration_revision(revision, "settings.revision"))
+                .transpose()?;
+            return Err(StoreError::RevisionDrift {
+                expected: expected_revision,
+                actual,
+            });
+        }
         for pool in &settings.failover_pools {
             let revision = checked_i64(pool.revision, "failover pool revision")?;
             let pool_json = serde_json::to_string(pool)?;
@@ -1222,7 +1368,9 @@ impl Store {
             }
         }
         tx.commit()?;
-        Ok(())
+        expected_revision
+            .checked_next()
+            .map_err(|error| StoreError::Data(error.to_string()))
     }
 
     // Normalized usage
@@ -3040,37 +3188,123 @@ impl Store {
     // ── Settings ──────────────────────────────────────────────────────────
 
     pub fn get_settings(&self) -> Result<Option<UserSettings>, StoreError> {
-        let json: Option<String> = {
-            let conn = self.conn.lock().unwrap();
-            let mut stmt =
-                conn.prepare("SELECT value_json FROM settings WHERE key = 'user_settings'")?;
-            stmt.query_row([], |row| row.get(0)).optional()?
-        };
+        Ok(self.get_settings_record()?.map(|record| record.settings))
+    }
 
-        match json {
-            Some(j) => {
-                let mut settings: UserSettings = serde_json::from_str(&j)?;
-                let original = settings.clone();
-                settings.normalize();
-                if settings != original {
-                    self.save_settings(&settings)?;
-                }
-                Ok(Some(settings))
+    pub fn get_settings_record(&self) -> Result<Option<RevisionedSettings>, StoreError> {
+        for _ in 0..3 {
+            let row: Option<(String, i64, i64)> = {
+                let conn = self.conn.lock().unwrap();
+                conn.query_row(
+                    "SELECT value_json, revision, updated_at_ms
+                     FROM settings WHERE key = 'user_settings'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()?
+            };
+            let Some((json, revision, updated_at_ms)) = row else {
+                return Ok(None);
+            };
+            let revision = configuration_revision(revision, "settings.revision")?;
+            let updated_at_ms = checked_u64(updated_at_ms, "settings.updated_at_ms")?;
+            let mut settings: UserSettings = serde_json::from_str(&json)?;
+            let original = settings.clone();
+            settings.normalize();
+            if settings == original {
+                return Ok(Some(RevisionedSettings {
+                    settings,
+                    revision,
+                    updated_at_ms,
+                }));
             }
-            None => Ok(None),
+            match self.save_settings_cas(&settings, revision, current_time_ms()) {
+                Ok(next_revision) => {
+                    return Ok(Some(RevisionedSettings {
+                        settings,
+                        revision: next_revision,
+                        updated_at_ms: current_time_ms(),
+                    }));
+                }
+                Err(StoreError::RevisionDrift { .. }) => continue,
+                Err(error) => return Err(error),
+            }
         }
+        Err(StoreError::Data(
+            "settings normalization could not settle after revision drift".to_string(),
+        ))
+    }
+
+    pub fn get_or_initialize_settings(
+        &self,
+        updated_at_ms: u64,
+    ) -> Result<RevisionedSettings, StoreError> {
+        if let Some(record) = self.get_settings_record()? {
+            return Ok(record);
+        }
+        let settings = UserSettings::default();
+        let json = serde_json::to_string(&settings)?;
+        let updated_at_ms_i64 = checked_i64(updated_at_ms, "settings updated_at_ms")?;
+        {
+            let conn = self.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO settings (key, value_json, revision, updated_at_ms)
+                 VALUES ('user_settings', ?1, 1, ?2)
+                 ON CONFLICT(key) DO NOTHING",
+                params![json, updated_at_ms_i64],
+            )?;
+        }
+        self.get_settings_record()?.ok_or_else(|| {
+            StoreError::Data("settings row was not available after initialization".to_string())
+        })
+    }
+
+    pub fn save_settings_cas(
+        &self,
+        settings: &UserSettings,
+        expected_revision: ConfigurationRevision,
+        updated_at_ms: u64,
+    ) -> Result<ConfigurationRevision, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let json = serde_json::to_string(settings)?;
+        let rows = conn.execute(
+            "UPDATE settings
+             SET value_json = ?1, revision = revision + 1, updated_at_ms = ?2
+             WHERE key = 'user_settings' AND revision = ?3",
+            params![
+                json,
+                checked_i64(updated_at_ms, "settings updated_at_ms")?,
+                checked_i64(expected_revision.get(), "expected settings revision")?,
+            ],
+        )?;
+        if rows > 1 {
+            return Err(StoreError::Data(
+                "settings CAS changed more than one row".to_string(),
+            ));
+        }
+        if rows == 0 {
+            let actual = conn
+                .query_row(
+                    "SELECT revision FROM settings WHERE key = 'user_settings'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()?
+                .map(|revision| configuration_revision(revision, "settings.revision"))
+                .transpose()?;
+            return Err(StoreError::RevisionDrift {
+                expected: expected_revision,
+                actual,
+            });
+        }
+        expected_revision
+            .checked_next()
+            .map_err(|error| StoreError::Data(error.to_string()))
     }
 
     pub fn save_settings(&self, settings: &UserSettings) -> Result<(), StoreError> {
-        let conn = self.conn.lock().unwrap();
-        let json = serde_json::to_string(settings)?;
-
-        conn.execute(
-            "INSERT INTO settings (key, value_json) VALUES ('user_settings', ?1)
-             ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json;",
-            params![json],
-        )?;
-
+        let expected = self.get_or_initialize_settings(current_time_ms())?.revision;
+        self.save_settings_cas(settings, expected, current_time_ms())?;
         Ok(())
     }
 
@@ -4305,6 +4539,42 @@ fn current_time_ms() -> u64 {
         .as_millis() as u64
 }
 
+fn ensure_private_backup_directory(path: &Path) -> io::Result<()> {
+    fs::create_dir_all(path)?;
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "database backup path is not a private directory",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+fn make_private_file(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
+fn sync_directory(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    fs::File::open(path)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
 fn load_offline_capacity_environments(
     conn: &Connection,
     params: &CapacityQueryParams,
@@ -4361,6 +4631,11 @@ fn checked_u64(value: i64, field: &str) -> Result<u64, StoreError> {
         .map_err(|_| StoreError::Data(format!("{field} contains a negative value: {value}")))
 }
 
+fn configuration_revision(value: i64, field: &str) -> Result<ConfigurationRevision, StoreError> {
+    let value = checked_u64(value, field)?;
+    ConfigurationRevision::new(value).map_err(|error| StoreError::Data(error.to_string()))
+}
+
 fn checked_u32(value: i64, field: &str) -> Result<u32, StoreError> {
     u32::try_from(value)
         .map_err(|_| StoreError::Data(format!("{field} is outside the u32 range: {value}")))
@@ -4404,6 +4679,145 @@ mod tests {
             created_at_ms: 1000,
             updated_at_ms: 1000,
         }
+    }
+
+    #[test]
+    fn persistent_store_backs_up_and_verifies_schema_twelve_before_migration() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let database = temp.path().join("data/pandamux.db");
+        let backups = temp.path().join("data/backups");
+        fs::create_dir_all(database.parent().expect("database parent"))
+            .expect("create data directory");
+        {
+            let mut connection = Connection::open(&database).expect("open fixture database");
+            migrations::apply_migrations_to(&mut connection, 12).expect("schema twelve");
+            connection
+                .execute(
+                    "INSERT INTO settings (key, value_json)
+                     VALUES ('user_settings', '{\"version\":7}')",
+                    [],
+                )
+                .expect("settings fixture");
+        }
+
+        let store = Store::open_with_backups(&database, &backups).expect("open migrated store");
+        drop(store);
+        let backup_paths = fs::read_dir(&backups)
+            .expect("list backups")
+            .map(|entry| entry.expect("backup entry").path())
+            .collect::<Vec<_>>();
+        assert_eq!(backup_paths.len(), 1);
+        assert!(
+            backup_paths[0]
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("pandamux.db.pre-v13."))
+        );
+        let backup = Connection::open(&backup_paths[0]).expect("open independent backup");
+        assert_eq!(
+            backup
+                .query_row(
+                    "SELECT COALESCE(MAX(version), 0) FROM _migrations",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("backup schema"),
+            12
+        );
+        assert_eq!(
+            backup
+                .query_row(
+                    "SELECT value_json FROM settings WHERE key = 'user_settings'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .expect("backup settings"),
+            "{\"version\":7}"
+        );
+        drop(backup);
+
+        drop(Store::open_with_backups(&database, &backups).expect("reopen migrated store"));
+        assert_eq!(
+            fs::read_dir(&backups).expect("list backups again").count(),
+            1
+        );
+    }
+
+    #[test]
+    fn backup_failure_stops_before_schema_mutation() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let database = temp.path().join("pandamux.db");
+        let blocked_backups = temp.path().join("blocked-backups");
+        {
+            let mut connection = Connection::open(&database).expect("open fixture database");
+            migrations::apply_migrations_to(&mut connection, 12).expect("schema twelve");
+        }
+        fs::write(&blocked_backups, b"not a directory").expect("block backup directory");
+
+        assert!(Store::open_with_backups(&database, &blocked_backups).is_err());
+        let connection = Connection::open(&database).expect("reopen unchanged database");
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COALESCE(MAX(version), 0) FROM _migrations",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("schema version"),
+            12
+        );
+        let has_revision: bool = connection
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM pragma_table_info('settings') WHERE name = 'revision'
+                 )",
+                [],
+                |row| row.get(0),
+            )
+            .expect("revision column lookup");
+        assert!(!has_revision);
+    }
+
+    #[test]
+    fn settings_cas_rejects_stale_independent_connection() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let database = temp.path().join("pandamux.db");
+        let store_a = Store::open(&database).expect("open first store");
+        let store_b = Store::open(&database).expect("open second store");
+        let first = store_a
+            .get_or_initialize_settings(100)
+            .expect("initialize settings");
+        let stale = store_b
+            .get_settings_record()
+            .expect("read stale settings")
+            .expect("settings present");
+        assert_eq!(first.revision, stale.revision);
+
+        let mut settings_a = first.settings;
+        settings_a.ui.show_status_bar = !settings_a.ui.show_status_bar;
+        let next = store_a
+            .save_settings_cas(&settings_a, first.revision, 101)
+            .expect("first compare and swap");
+        assert_eq!(next.get(), first.revision.get() + 1);
+
+        let mut settings_b = stale.settings;
+        settings_b.ui.notifications_enabled = !settings_b.ui.notifications_enabled;
+        match store_b
+            .save_settings_cas(&settings_b, stale.revision, 102)
+            .expect_err("stale compare and swap must fail")
+        {
+            StoreError::RevisionDrift { expected, actual } => {
+                assert_eq!(expected, stale.revision);
+                assert_eq!(actual, Some(next));
+            }
+            error => panic!("unexpected error: {error}"),
+        }
+        let stored = store_a
+            .get_settings_record()
+            .expect("load winning settings")
+            .expect("settings present");
+        assert_eq!(stored.settings, settings_a);
+        assert_eq!(stored.revision, next);
     }
 
     #[test]

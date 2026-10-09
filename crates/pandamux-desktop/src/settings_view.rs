@@ -5,8 +5,9 @@ use gpui_kit::gpui::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use pandamux_client::{format_age, format_micro_usd};
 use pandamux_core::{
-    AccessMode, EnvironmentId, FailoverPool, FailoverPoolId, FailoverPoolMember,
-    ProviderInstanceId, RoutingCapabilityRequirements, SubscriptionKey, UserSettings,
+    AccessMode, ConfigurationRevision, EnvironmentId, FailoverPool, FailoverPoolId,
+    FailoverPoolMember, ProviderInstanceId, RoutingCapabilityRequirements, SubscriptionKey,
+    UserSettings,
 };
 use pandamux_protocol::{
     ProviderHealthReport, ProviderLoginPreview, RoutingProviderCatalogEntry, UsageCatalogResult,
@@ -78,6 +79,7 @@ impl SettingsCategory {
 pub struct SettingsViewState {
     pub active_category: SettingsCategory,
     pub settings: UserSettings,
+    pub settings_revision: ConfigurationRevision,
     pub health_reports: Vec<ProviderHealthReport>,
     pub environments: Vec<pandamux_core::Environment>,
     pub is_checking_health: bool,
@@ -92,6 +94,7 @@ impl Default for SettingsViewState {
         Self {
             active_category: SettingsCategory::Providers,
             settings: UserSettings::default(),
+            settings_revision: ConfigurationRevision::INITIAL,
             health_reports: Vec::new(),
             environments: vec![pandamux_core::Environment::local_default()],
             is_checking_health: false,

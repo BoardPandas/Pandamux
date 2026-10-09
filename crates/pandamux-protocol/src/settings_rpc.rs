@@ -1,6 +1,6 @@
-use pandamux_core::UserSettings;
 use pandamux_core::ids::{EnvironmentId, ProviderInstanceId};
 use pandamux_core::provider_config::{ProviderDisabledReason, ProviderKind};
+use pandamux_core::{ConfigurationRevision, UserSettings};
 use serde::{Deserialize, Serialize};
 
 use crate::provider_rpc::ProviderLoginGuidance;
@@ -39,14 +39,16 @@ pub struct SettingsGetParams {
 #[serde(rename_all = "camelCase")]
 pub struct SettingsGetResult {
     pub settings: UserSettings,
+    pub revision: ConfigurationRevision,
     #[serde(default)]
     pub value: Option<serde_json::Value>,
 }
 
 /// Parameters for updating user settings.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsSetParams {
+    pub expected_revision: ConfigurationRevision,
     /// Full updated settings object.
     #[serde(default)]
     pub settings: Option<UserSettings>,
@@ -59,10 +61,11 @@ pub struct SettingsSetParams {
 }
 
 /// Result returned from settings.set.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsSetResult {
     pub success: bool,
+    pub revision: ConfigurationRevision,
 }
 
 /// Parameters for checking provider health.
@@ -247,6 +250,7 @@ mod tests {
     #[test]
     fn test_settings_rpc_serialization() {
         let set_params = SettingsSetParams {
+            expected_revision: ConfigurationRevision::INITIAL,
             settings: Some(UserSettings::default()),
             key: None,
             value: None,
@@ -254,6 +258,12 @@ mod tests {
         let json = serde_json::to_string(&set_params).unwrap();
         let parsed: SettingsSetParams = serde_json::from_str(&json).unwrap();
         assert!(parsed.settings.is_some());
+        assert_eq!(parsed.expected_revision, ConfigurationRevision::INITIAL);
+
+        let missing_revision = serde_json::json!({
+            "settings": UserSettings::default()
+        });
+        assert!(serde_json::from_value::<SettingsSetParams>(missing_revision).is_err());
     }
 
     #[test]
