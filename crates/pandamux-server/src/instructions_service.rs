@@ -1408,7 +1408,7 @@ mod tests {
             .check_source(&source.id, source.revision, 10)
             .expect("first check");
         assert!(!first.unchanged);
-        assert!(first.fetched);
+        assert!(first.fetched, "first check outcome: {first:?}");
         let first_candidate = first.candidate.expect("candidate");
         assert_eq!(first_candidate.observed_source_commit_sha, remote.head());
         assert!(first_candidate.activatable);
@@ -1776,6 +1776,10 @@ mod tests {
 
     fn git(cwd: &Path, args: &[&str]) {
         let output = Command::new("git")
+            .arg("-c")
+            .arg("core.autocrlf=false")
+            .arg("-c")
+            .arg("core.safecrlf=false")
             .args(args)
             .current_dir(cwd)
             .env("GIT_CONFIG_NOSYSTEM", "1")
@@ -1791,6 +1795,10 @@ mod tests {
 
     fn git_output(cwd: &Path, args: &[&str]) -> String {
         let output = Command::new("git")
+            .arg("-c")
+            .arg("core.autocrlf=false")
+            .arg("-c")
+            .arg("core.safecrlf=false")
             .args(args)
             .current_dir(cwd)
             .env("GIT_CONFIG_NOSYSTEM", "1")

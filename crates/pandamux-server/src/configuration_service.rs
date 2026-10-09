@@ -904,6 +904,9 @@ fn reject_link_components(path: &Path) -> Result<(), ConfigurationServiceError> 
     let mut current = PathBuf::new();
     for component in path.components() {
         current.push(component.as_os_str());
+        if matches!(component, Component::Prefix(_)) {
+            continue;
+        }
         match fs::symlink_metadata(&current) {
             Ok(metadata) if is_link_or_reparse(&metadata) => {
                 return Err(repository_error(

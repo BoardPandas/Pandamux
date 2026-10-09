@@ -381,7 +381,8 @@ impl PersonalRepoService {
                 return Ok(head);
             }
             if directory_is_empty(self.paths.personal())? {
-                fs::remove_dir(self.paths.personal()).map_err(|_| managed_path_error())?;
+                fs::remove_dir(self.paths.personal())
+                    .map_err(|_| managed_path_error_at("empty personal root removal"))?;
             } else {
                 return Err(PersonalRepoError {
                     reason: "personal_repo_recovering",
@@ -424,7 +425,7 @@ impl PersonalRepoService {
         })?;
         fail_if(failpoint, PersonalRepoFailpoint::AfterRef)?;
         self.current_head(&git_dir)?;
-        sync_tree(&candidate)?;
+        sync_tree(&candidate, &git_dir.join("objects"))?;
         install_candidate(&candidate, self.paths.personal(), self.paths.recovery())?;
         fail_if(failpoint, PersonalRepoFailpoint::BeforeReconciliation)?;
         let installed_head = self.current_head(&self.git_dir())?;
@@ -1154,12 +1155,13 @@ fn install_candidate(
     recovery: &Path,
 ) -> Result<(), PersonalRepoError> {
     if destination.exists() && directory_is_empty(destination)? {
-        fs::remove_dir(destination).map_err(|_| managed_path_error())?;
+        fs::remove_dir(destination)
+            .map_err(|_| managed_path_error_at("candidate destination preparation"))?;
     }
     match fs::rename(candidate, destination) {
         Ok(()) => sync_directory(destination.parent().ok_or_else(managed_path_error)?),
         Err(_) if destination.exists() => move_owned_candidate_to_recovery(candidate, recovery),
-        Err(_) => Err(managed_path_error()),
+        Err(_) => Err(managed_path_error_at("candidate atomic installation")),
     }
 }
 
@@ -1167,13 +1169,15 @@ fn move_owned_candidate_to_recovery(
     candidate: &Path,
     recovery: &Path,
 ) -> Result<(), PersonalRepoError> {
-    create_private_directory(recovery)?;
+    create_private_directory(recovery)
+        .map_err(|_| managed_path_error_at("recovery root preparation"))?;
     let name = candidate
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(managed_path_error)?;
     let destination = recovery.join(format!("{name}-{}", uuid::Uuid::new_v4().simple()));
-    fs::rename(candidate, destination).map_err(|_| managed_path_error())?;
+    fs::rename(candidate, destination)
+        .map_err(|_| managed_path_error_at("owned candidate recovery move"))?;
     sync_directory(recovery)
 }
 
@@ -1210,21 +1214,44 @@ fn sync_directory(path: &Path) -> Result<(), PersonalRepoError> {
     Ok(())
 }
 
-fn sync_tree(path: &Path) -> Result<(), PersonalRepoError> {
-    let metadata = fs::symlink_metadata(path).map_err(|_| managed_path_error())?;
+fn sync_tree(path: &Path, _git_objects: &Path) -> Result<(), PersonalRepoError> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|_| managed_path_error_at("durability metadata inspection"))?;
     if metadata.file_type().is_symlink() {
         return Err(managed_path_error());
     }
     if metadata.is_file() {
+        #[cfg(windows)]
+        {
+            if metadata.permissions().readonly() && path.starts_with(_git_objects) {
+                // Git for Windows makes loose objects read-only after writing them.
+                // Managed Git commands flush every repository component before they
+                // exit, so reopening those objects for a second flush is unnecessary.
+                return Ok(());
+            }
+            return fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .and_then(|file| file.sync_all())
+                .map_err(|_| managed_path_error_at("durability file flush"));
+        }
+        #[cfg(not(windows))]
         return fs::File::open(path)
             .and_then(|file| file.sync_all())
-            .map_err(|_| managed_path_error());
+            .map_err(|_| managed_path_error_at("durability file flush"));
     }
     if !metadata.is_dir() {
         return Err(managed_path_error());
     }
-    for entry in fs::read_dir(path).map_err(|_| managed_path_error())? {
-        sync_tree(&entry.map_err(|_| managed_path_error())?.path())?;
+    for entry in
+        fs::read_dir(path).map_err(|_| managed_path_error_at("durability tree enumeration"))?
+    {
+        sync_tree(
+            &entry
+                .map_err(|_| managed_path_error_at("durability entry inspection"))?
+                .path(),
+            _git_objects,
+        )?;
     }
     sync_directory(path)
 }
@@ -1281,6 +1308,14 @@ fn managed_path_error() -> PersonalRepoError {
     PersonalRepoError {
         reason: "managed_path_unsafe",
         safe_message: "A managed personal repository path is unsafe".to_string(),
+        retryable: false,
+    }
+}
+
+fn managed_path_error_at(operation: &'static str) -> PersonalRepoError {
+    PersonalRepoError {
+        reason: "managed_path_unsafe",
+        safe_message: format!("A managed personal repository path is unsafe during {operation}"),
         retryable: false,
     }
 }
@@ -1474,16 +1509,44 @@ mod tests {
             PersonalRepoFailpoint::BeforeReconciliation,
         ] {
             let (_temp, service) = service();
-            assert!(
+            assert_eq!(
                 service
                     .ensure_initialized_with_failpoint(Some(failpoint))
-                    .is_err()
+                    .expect_err("initialization failpoint must interrupt")
+                    .reason,
+                "injected_personal_repo_failure",
+                "failpoint {failpoint:?} must be reached before recovery"
             );
             service
                 .ensure_initialized()
                 .expect("recover initialization");
             service.current_head_sha().expect("valid recovered head");
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_initialization_reaches_every_atomic_failpoint() {
+        let (_temp, service) = service();
+        for failpoint in [
+            PersonalRepoFailpoint::AfterDirectory,
+            PersonalRepoFailpoint::AfterObjects,
+            PersonalRepoFailpoint::AfterCommit,
+            PersonalRepoFailpoint::BeforeRef,
+            PersonalRepoFailpoint::AfterRef,
+            PersonalRepoFailpoint::BeforeReconciliation,
+        ] {
+            let error = service
+                .ensure_initialized_with_failpoint(Some(failpoint))
+                .expect_err("initialization failpoint must interrupt");
+            assert_eq!(
+                error.reason, "injected_personal_repo_failure",
+                "failpoint {failpoint:?} was not reached: {error:?}"
+            );
+        }
+        service
+            .ensure_initialized()
+            .expect("initialize after staged recovery");
     }
 
     #[test]

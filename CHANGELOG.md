@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Fixed
+
+- **Hardened native Windows trusted configuration storage in version 0.60.85.**
+  PandaMUX now creates app-data roots with a protected current-user DACL,
+  rejects foreign ownership, broad access, and reparse-point substitution, and
+  validates every existing managed Git path component before use. Managed Git
+  writes enable long Windows paths and full fsync durability, while atomic
+  personal-repository recovery accommodates read-only loose objects without
+  weakening byte verification. Windows drive-root discovery and exact Git
+  fixture bytes are now portable across native line-ending settings.
+
 ### Added
 
 - **Recorded Phase 5B trusted configuration evidence in version 0.60.84.**

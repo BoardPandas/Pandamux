@@ -1245,6 +1245,10 @@ pub(crate) mod tests {
 
     fn git(repository: &Path, arguments: &[&str]) -> String {
         let output = Command::new("git")
+            .arg("-c")
+            .arg("core.autocrlf=false")
+            .arg("-c")
+            .arg("core.safecrlf=false")
             .arg("-C")
             .arg(repository)
             .args(arguments)

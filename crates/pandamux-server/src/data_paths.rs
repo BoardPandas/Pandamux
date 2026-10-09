@@ -162,14 +162,21 @@ fn absolute_clean(path: PathBuf) -> io::Result<PathBuf> {
 }
 
 fn ensure_private_directory(path: &Path, owner_root: Option<&Path>) -> io::Result<()> {
-    if let Ok(metadata) = fs::symlink_metadata(path) {
-        reject_link_or_non_directory(path, &metadata)?;
-        validate_owner(path, &metadata, owner_root)?;
-    } else {
-        fs::create_dir_all(path)?;
-        let metadata = fs::symlink_metadata(path)?;
-        reject_link_or_non_directory(path, &metadata)?;
-        validate_owner(path, &metadata, owner_root)?;
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            reject_link_or_non_directory(path, &metadata)?;
+            validate_owner(path, &metadata, owner_root)?;
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            #[cfg(windows)]
+            crate::windows_security::create_private_directory(path)?;
+            #[cfg(not(windows))]
+            fs::create_dir_all(path)?;
+            let metadata = fs::symlink_metadata(path)?;
+            reject_link_or_non_directory(path, &metadata)?;
+            validate_owner(path, &metadata, owner_root)?;
+        }
+        Err(error) => return Err(error),
     }
     #[cfg(unix)]
     {
@@ -220,7 +227,11 @@ fn validate_owner(
         }
     }
     #[cfg(not(unix))]
-    let _ = (path, metadata, owner_root);
+    let _ = (metadata, owner_root);
+    #[cfg(windows)]
+    crate::windows_security::validate_private_directory(path)?;
+    #[cfg(not(any(unix, windows)))]
+    let _ = path;
     Ok(())
 }
 
@@ -240,6 +251,9 @@ mod tests {
             temp.path().join("app/bundle-staging")
         );
         paths.ensure_private_roots().expect("private roots");
+        paths
+            .ensure_private_roots()
+            .expect("private roots remain valid after reopen");
         assert!(paths.backups().is_dir());
         assert!(paths.recovery().is_dir());
         assert!(paths.owns(&paths.configuration_candidates().join("candidate")));
@@ -275,5 +289,40 @@ mod tests {
                 .with_database_path(temp.path().join("outside.db"))
                 .is_err()
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn root_rejects_junction_substitution() {
+        use std::os::windows::process::CommandExt;
+        use std::process::Command;
+
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let temp = tempfile::tempdir().expect("temporary root");
+        let target = temp.path().join("target");
+        fs::create_dir(&target).expect("junction target");
+        let linked = temp.path().join("linked");
+        let output = Command::new("cmd.exe")
+            .args(["/d", "/c", "mklink", "/J"])
+            .arg(&linked)
+            .arg(&target)
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .expect("create test junction");
+        assert!(
+            output.status.success(),
+            "junction creation failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let paths = DataPaths::from_root(&linked).expect("data paths");
+        assert_eq!(
+            paths
+                .ensure_private_roots()
+                .expect_err("junction must fail")
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        fs::remove_dir(&linked).expect("remove test junction");
     }
 }

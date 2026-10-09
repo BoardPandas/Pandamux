@@ -3,25 +3,35 @@
 use std::ffi::c_void;
 use std::io;
 use std::mem::size_of;
+use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 use std::ptr::null_mut;
 
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, HLOCAL, LocalFree};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, ERROR_ALREADY_EXISTS, ERROR_SUCCESS, HANDLE, HLOCAL, LocalFree,
+};
 use windows_sys::Win32::Security::Authorization::{
-    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
+    GetNamedSecurityInfoW, SDDL_REVISION_1, SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    GetTokenInformation, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
-    TokenUser,
+    ACCESS_ALLOWED_ACE, ACL, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, GetAce,
+    GetSecurityDescriptorControl, GetTokenInformation, OBJECT_INHERIT_ACE,
+    OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SE_DACL_PROTECTED, SECURITY_ATTRIBUTES,
+    TOKEN_QUERY, TOKEN_USER, TokenUser,
 };
+use windows_sys::Win32::Storage::FileSystem::{CreateDirectoryW, FILE_ALL_ACCESS};
 use windows_sys::Win32::System::Pipes::GetNamedPipeClientProcessId;
+use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
     QueryFullProcessImageNameW,
 };
 
 const MAX_PROCESS_IMAGE_CHARS: usize = 32_768;
+const LOCAL_SYSTEM_SID: &str = "S-1-5-18";
+const BUILTIN_ADMINISTRATORS_SID: &str = "S-1-5-32-544";
 
 pub struct ValidatedPipeClient {
     pub process_id: u32,
@@ -40,19 +50,10 @@ impl Drop for OwnedHandle {
     }
 }
 
-/// Owns a protected DACL granting pipe access only to the current user SID.
-pub struct UserOnlySecurity {
-    descriptor: PSECURITY_DESCRIPTOR,
-    attributes: SECURITY_ATTRIBUTES,
-}
+struct OwnedSecurityDescriptor(PSECURITY_DESCRIPTOR);
 
-impl UserOnlySecurity {
-    pub fn for_current_user() -> io::Result<Self> {
-        Self::for_sid(&current_user_sid()?)
-    }
-
-    fn for_sid(sid: &str) -> io::Result<Self> {
-        let sddl = format!("D:P(A;;GA;;;{sid})");
+impl OwnedSecurityDescriptor {
+    fn from_sddl(sddl: &str) -> io::Result<Self> {
         let wide = sddl.encode_utf16().chain([0]).collect::<Vec<_>>();
         let mut descriptor: PSECURITY_DESCRIPTOR = null_mut();
         let converted = unsafe {
@@ -66,6 +67,39 @@ impl UserOnlySecurity {
         if converted == 0 {
             return Err(io::Error::last_os_error());
         }
+        Ok(Self(descriptor))
+    }
+
+    fn into_raw(self) -> PSECURITY_DESCRIPTOR {
+        let descriptor = std::mem::ManuallyDrop::new(self);
+        descriptor.0
+    }
+}
+
+impl Drop for OwnedSecurityDescriptor {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                LocalFree(self.0 as HLOCAL);
+            }
+        }
+    }
+}
+
+/// Owns a protected DACL granting pipe access only to the current user SID.
+pub struct UserOnlySecurity {
+    descriptor: PSECURITY_DESCRIPTOR,
+    attributes: SECURITY_ATTRIBUTES,
+}
+
+impl UserOnlySecurity {
+    pub fn for_current_user() -> io::Result<Self> {
+        Self::for_sid(&current_user_sid()?)
+    }
+
+    fn for_sid(sid: &str) -> io::Result<Self> {
+        let sddl = format!("D:P(A;;GA;;;{sid})");
+        let descriptor = OwnedSecurityDescriptor::from_sddl(&sddl)?.into_raw();
         let attributes = SECURITY_ATTRIBUTES {
             nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
             lpSecurityDescriptor: descriptor,
@@ -80,6 +114,151 @@ impl UserOnlySecurity {
     pub fn as_mut_ptr(&mut self) -> *mut c_void {
         (&mut self.attributes as *mut SECURITY_ATTRIBUTES).cast()
     }
+}
+
+/// Creates one directory with a protected, inheritable DACL that grants access
+/// only to the current user. The caller validates the resulting object so an
+/// existing path or a creation race cannot bypass the ownership boundary.
+pub(crate) fn create_private_directory(path: &Path) -> io::Result<()> {
+    let sid = current_user_sid()?;
+    let descriptor = OwnedSecurityDescriptor::from_sddl(&format!("O:{sid}D:P(A;OICI;FA;;;{sid})"))?;
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: descriptor.0,
+        bInheritHandle: 0,
+    };
+    let wide = path
+        .as_os_str()
+        .encode_wide()
+        .chain([0])
+        .collect::<Vec<_>>();
+    if unsafe { CreateDirectoryW(wide.as_ptr(), &attributes) } == 0 {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(ERROR_ALREADY_EXISTS as i32) {
+            return Err(error);
+        }
+    }
+    validate_private_path(path, true)
+}
+
+/// Validates a fixed managed root. Existing roots may inherit access for the
+/// current user and Windows recovery principals. Newly created roots use the
+/// stricter protected descriptor above.
+pub(crate) fn validate_private_directory(path: &Path) -> io::Result<()> {
+    validate_private_path(path, false)
+}
+
+/// Validates a descendant of a managed root. Descendants may carry inherited
+/// entries, but every access-allow ACE and the owner must remain the current
+/// user or a Windows recovery principal.
+pub(crate) fn validate_private_descendant(path: &Path) -> io::Result<()> {
+    validate_private_path(path, false)
+}
+
+fn validate_private_path(path: &Path, require_protected: bool) -> io::Result<()> {
+    let wide = path
+        .as_os_str()
+        .encode_wide()
+        .chain([0])
+        .collect::<Vec<_>>();
+    let mut owner: PSID = null_mut();
+    let mut dacl: *mut ACL = null_mut();
+    let mut descriptor: PSECURITY_DESCRIPTOR = null_mut();
+    let status = unsafe {
+        GetNamedSecurityInfoW(
+            wide.as_ptr(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            &mut owner,
+            null_mut(),
+            &mut dacl,
+            null_mut(),
+            &mut descriptor,
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return Err(io::Error::from_raw_os_error(status as i32));
+    }
+    let descriptor = OwnedSecurityDescriptor(descriptor);
+    validate_private_security_descriptor(descriptor.0, owner, dacl, require_protected)
+}
+
+fn validate_private_security_descriptor(
+    descriptor: PSECURITY_DESCRIPTOR,
+    owner: PSID,
+    dacl: *mut ACL,
+    require_protected: bool,
+) -> io::Result<()> {
+    if descriptor.is_null() || owner.is_null() || dacl.is_null() {
+        return Err(private_path_error("missing owner or DACL"));
+    }
+    let current_sid = current_user_sid()?;
+    let owner_sid = sid_string(owner)?;
+    if !trusted_path_principal(&owner_sid, &current_sid) {
+        return Err(private_path_error(
+            "owner is not the current user or a Windows recovery principal",
+        ));
+    }
+
+    let mut control = 0u16;
+    let mut revision = 0u32;
+    if unsafe { GetSecurityDescriptorControl(descriptor, &mut control, &mut revision) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if require_protected && control & SE_DACL_PROTECTED == 0 {
+        return Err(private_path_error("DACL inherits from an unmanaged parent"));
+    }
+
+    let mut current_user_full_control = false;
+    let ace_count = unsafe { (*dacl).AceCount };
+    for index in 0..u32::from(ace_count) {
+        let mut raw_ace: *mut c_void = null_mut();
+        if unsafe { GetAce(dacl, index, &mut raw_ace) } == 0 || raw_ace.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let ace = unsafe { &*(raw_ace.cast::<ACCESS_ALLOWED_ACE>()) };
+        if u32::from(ace.Header.AceType) != ACCESS_ALLOWED_ACE_TYPE {
+            return Err(private_path_error("DACL contains an unsupported ACE"));
+        }
+        let ace_sid = (&ace.SidStart as *const u32).cast_mut().cast::<c_void>();
+        let ace_sid = sid_string(ace_sid)?;
+        if !trusted_path_principal(&ace_sid, &current_sid) {
+            return Err(private_path_error(
+                "DACL grants access to another principal",
+            ));
+        }
+        if ace_sid == current_sid && ace.Mask & FILE_ALL_ACCESS != FILE_ALL_ACCESS {
+            return Err(private_path_error(
+                "current user does not retain complete managed-path access",
+            ));
+        }
+        if require_protected
+            && u32::from(ace.Header.AceFlags) & (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE)
+                != (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE)
+        {
+            return Err(private_path_error(
+                "managed root DACL does not protect descendants",
+            ));
+        }
+        current_user_full_control |= ace_sid == current_sid;
+    }
+    if !current_user_full_control {
+        return Err(private_path_error("current user has no allow ACE"));
+    }
+    Ok(())
+}
+
+fn trusted_path_principal(candidate: &str, current_sid: &str) -> bool {
+    candidate == current_sid
+        || candidate == LOCAL_SYSTEM_SID
+        || candidate == BUILTIN_ADMINISTRATORS_SID
+}
+
+fn private_path_error(detail: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        format!("managed path is not private to the current user: {detail}"),
+    )
 }
 
 impl Drop for UserOnlySecurity {
@@ -121,8 +300,15 @@ pub fn current_user_sid() -> io::Result<String> {
         return Err(io::Error::last_os_error());
     }
     let token_user = unsafe { &*(buffer.as_ptr().cast::<TOKEN_USER>()) };
+    sid_string(token_user.User.Sid)
+}
+
+fn sid_string(sid: PSID) -> io::Result<String> {
+    if sid.is_null() {
+        return Err(private_path_error("security descriptor has no SID"));
+    }
     let mut sid_text = null_mut();
-    if unsafe { ConvertSidToStringSidW(token_user.User.Sid, &mut sid_text) } == 0 {
+    if unsafe { ConvertSidToStringSidW(sid, &mut sid_text) } == 0 {
         return Err(io::Error::last_os_error());
     }
     let sid = unsafe {
@@ -215,6 +401,76 @@ mod tests {
         validate_client_image(r"C:\Program Files\PandaMUX\pandamux.exe").expect("desktop image");
         validate_client_image(r"C:\Program Files\PandaMUX\PANDAMUX-CLI.EXE").expect("CLI image");
         assert!(validate_client_image(r"C:\Temp\unrelated.exe").is_err());
+    }
+
+    #[test]
+    fn private_directory_security_rejects_foreign_owner_and_broad_access() {
+        let sid = current_user_sid().expect("current user SID");
+        let safe = OwnedSecurityDescriptor::from_sddl(&format!("O:{sid}D:P(A;OICI;FA;;;{sid})"))
+            .expect("safe descriptor");
+        let (safe_owner, safe_dacl) = descriptor_owner_and_dacl(safe.0);
+        validate_private_security_descriptor(safe.0, safe_owner, safe_dacl, true)
+            .expect("safe descriptor validates");
+
+        let foreign_owner =
+            OwnedSecurityDescriptor::from_sddl(&format!("O:BUD:P(A;OICI;FA;;;{sid})"))
+                .expect("foreign-owner descriptor");
+        let (foreign_owner_sid, foreign_owner_dacl) = descriptor_owner_and_dacl(foreign_owner.0);
+        assert!(
+            validate_private_security_descriptor(
+                foreign_owner.0,
+                foreign_owner_sid,
+                foreign_owner_dacl,
+                true,
+            )
+            .is_err()
+        );
+
+        let broad = OwnedSecurityDescriptor::from_sddl(&format!(
+            "O:{sid}D:P(A;OICI;FA;;;{sid})(A;OICI;FR;;;WD)"
+        ))
+        .expect("broad descriptor");
+        let (broad_owner, broad_dacl) = descriptor_owner_and_dacl(broad.0);
+        assert!(
+            validate_private_security_descriptor(broad.0, broad_owner, broad_dacl, true,).is_err()
+        );
+    }
+
+    #[test]
+    fn private_directory_creation_applies_validated_security() {
+        let temp = tempfile::tempdir().expect("temporary parent");
+        let private = temp.path().join("private");
+        create_private_directory(&private).expect("create private directory");
+        validate_private_path(&private, true).expect("validate protected private directory");
+    }
+
+    fn descriptor_owner_and_dacl(descriptor: PSECURITY_DESCRIPTOR) -> (PSID, *mut ACL) {
+        use windows_sys::Win32::Security::{GetSecurityDescriptorDacl, GetSecurityDescriptorOwner};
+
+        let mut owner = null_mut();
+        let mut owner_defaulted = 0;
+        assert_ne!(
+            unsafe { GetSecurityDescriptorOwner(descriptor, &mut owner, &mut owner_defaulted) },
+            0,
+            "descriptor owner"
+        );
+        let mut dacl_present = 0;
+        let mut dacl = null_mut();
+        let mut dacl_defaulted = 0;
+        assert_ne!(
+            unsafe {
+                GetSecurityDescriptorDacl(
+                    descriptor,
+                    &mut dacl_present,
+                    &mut dacl,
+                    &mut dacl_defaulted,
+                )
+            },
+            0,
+            "descriptor DACL"
+        );
+        assert_ne!(dacl_present, 0, "descriptor has a DACL");
+        (owner, dacl)
     }
 
     #[tokio::test]

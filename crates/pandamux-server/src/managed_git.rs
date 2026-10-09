@@ -220,7 +220,7 @@ impl ManagedGitRunner {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn with_test_process(
         data_paths: DataPaths,
         program: PathBuf,
@@ -480,6 +480,7 @@ fn configure_process(
     let mut stdin = Vec::new();
     match command {
         ManagedGitCommand::InitBare { git_dir } => {
+            managed_git_config_args(process);
             process.arg("init").arg("--bare").arg(git_dir);
         }
         ManagedGitCommand::SymbolicRef {
@@ -726,7 +727,12 @@ fn git_dir_args(process: &mut Command, git_dir: &Path) {
     process
         .arg("--no-replace-objects")
         .arg("--git-dir")
-        .arg(git_dir)
+        .arg(git_dir);
+    managed_git_config_args(process);
+}
+
+fn managed_git_config_args(process: &mut Command) {
+    process
         .arg("-c")
         .arg("core.logAllRefUpdates=false")
         .arg("-c")
@@ -736,7 +742,13 @@ fn git_dir_args(process: &mut Command, git_dir: &Path) {
         .arg("-c")
         .arg("gc.auto=0")
         .arg("-c")
-        .arg("maintenance.auto=false");
+        .arg("maintenance.auto=false")
+        .arg("-c")
+        .arg("core.longpaths=true")
+        .arg("-c")
+        .arg("core.fsync=all")
+        .arg("-c")
+        .arg("core.fsyncMethod=fsync");
 }
 
 fn managed_path_is_safe(data_paths: &DataPaths, path: &Path) -> bool {
@@ -749,7 +761,14 @@ fn managed_path_is_safe(data_paths: &DataPaths, path: &Path) -> bool {
     let Ok(root_metadata) = std::fs::symlink_metadata(data_paths.root()) else {
         return false;
     };
-    if unsafe_directory_metadata(&root_metadata) {
+    if unsafe_directory_metadata(&root_metadata)
+        || !managed_owner_is_safe(
+            data_paths.root(),
+            &root_metadata,
+            data_paths.root(),
+            &root_metadata,
+        )
+    {
         return false;
     }
     let mut current = data_paths.root().to_path_buf();
@@ -758,7 +777,12 @@ fn managed_path_is_safe(data_paths: &DataPaths, path: &Path) -> bool {
         match std::fs::symlink_metadata(&current) {
             Ok(metadata)
                 if unsafe_directory_metadata(&metadata)
-                    || !same_managed_owner(&root_metadata, &metadata) =>
+                    || !managed_owner_is_safe(
+                        data_paths.root(),
+                        &root_metadata,
+                        &current,
+                        &metadata,
+                    ) =>
             {
                 return false;
             }
@@ -785,7 +809,7 @@ fn managed_file_path_is_safe(data_paths: &DataPaths, path: &Path) -> bool {
         Ok(metadata) => {
             if metadata.file_type().is_symlink()
                 || !metadata.is_file()
-                || !same_managed_owner(&root_metadata, &metadata)
+                || !managed_owner_is_safe(data_paths.root(), &root_metadata, path, &metadata)
             {
                 return false;
             }
@@ -803,15 +827,29 @@ fn managed_file_path_is_safe(data_paths: &DataPaths, path: &Path) -> bool {
     }
 }
 
-fn same_managed_owner(root: &std::fs::Metadata, candidate: &std::fs::Metadata) -> bool {
+fn managed_owner_is_safe(
+    _root_path: &Path,
+    root: &std::fs::Metadata,
+    _candidate_path: &Path,
+    candidate: &std::fs::Metadata,
+) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
         root.uid() == candidate.uid()
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
         let _ = (root, candidate);
+        if _root_path == _candidate_path {
+            crate::windows_security::validate_private_directory(_candidate_path).is_ok()
+        } else {
+            crate::windows_security::validate_private_descendant(_candidate_path).is_ok()
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (_root_path, root, _candidate_path, candidate);
         true
     }
 }
@@ -1111,6 +1149,25 @@ mod tests {
         assert!(!target.exists());
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_runner_initializes_an_inherited_private_path() {
+        let temp = tempfile::tempdir().expect("temporary root");
+        let paths = DataPaths::from_root(temp.path().join("app")).expect("paths");
+        paths.ensure_private_roots().expect("private roots");
+        let candidate = paths.root().join(".managed-git-windows-test");
+        std::fs::create_dir(&candidate).expect("candidate directory");
+        crate::windows_security::validate_private_descendant(&candidate)
+            .expect("candidate inherits a private DACL");
+        let git_dir = candidate.join("repository.git");
+        ManagedGitRunner::new(paths)
+            .run(ManagedGitCommand::InitBare {
+                git_dir: git_dir.clone(),
+            })
+            .expect("initialize managed bare repository");
+        assert!(git_dir.join("HEAD").is_file());
+    }
+
     #[test]
     fn runner_removes_environment_redirects_and_trace_sinks() {
         let mut process = Command::new("git");
@@ -1130,6 +1187,31 @@ mod tests {
         assert!(removed.contains("GIT_OBJECT_DIRECTORY"));
         assert!(removed.contains("GIT_COMMON_DIR"));
         assert!(removed.contains("GIT_TRACE2_EVENT"));
+    }
+
+    #[test]
+    fn managed_configuration_enforces_durability_and_long_paths() {
+        let mut process = Command::new("git");
+        managed_git_config_args(&mut process);
+        let arguments = process
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(
+            arguments
+                .windows(2)
+                .any(|pair| pair == ["-c", "core.longpaths=true"])
+        );
+        assert!(
+            arguments
+                .windows(2)
+                .any(|pair| pair == ["-c", "core.fsync=all"])
+        );
+        assert!(
+            arguments
+                .windows(2)
+                .any(|pair| pair == ["-c", "core.fsyncMethod=fsync"])
+        );
     }
 
     #[test]
