@@ -1,6 +1,8 @@
 # Phase 5A: Versioned Schemas, Deterministic Policy, DAG, and Run State
 
-Status: implementation-ready specification
+Status: **Implemented and locally accepted on exact version 0.60.76 commit
+`423594e3ad77497119aac09ba098a82bd499aa74`. See the
+[Phase 5A acceptance record](../docs/operations/PHASE5A_ACCEPTANCE.md).**
 
 Date: 2026-10-09
 

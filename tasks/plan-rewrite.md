@@ -2947,6 +2947,14 @@ Acceptance:
 
 Detailed implementation contract: [`2026-10-09-phase-5a-deterministic-orchestrator.md`](2026-10-09-phase-5a-deterministic-orchestrator.md).
 
+Status (2026-10-09): **Implemented and locally accepted as a pure-domain
+checkpoint on exact version 0.60.76 commit
+`423594e3ad77497119aac09ba098a82bd499aa74`.** The checkpoint chain, complete
+Section 12 command results, rejected 0.60.75 candidate, accepted repair, and
+absent runtime, native-platform, CI, and live evidence are recorded in the
+[Phase 5A acceptance record](../docs/operations/PHASE5A_ACCEPTANCE.md). This
+does not complete Phase 5, pass P4-C5, or close P4-C7.
+
 1. Version schemas for `orchestrator.yaml`, `agents/*.md`, knowledge references, prompts, routing rules, and compiled instruction bundles. Unknown schema versions fail closed; errors carry file, field, code, and safe explanation.
 2. Define pure domain records: `Run`, `AgentTask`, `Attempt`, `DependencyEdge`, `BlackboardEntry`, `BudgetReservation`, `ApprovalRequirement`, `CheckpointRef`, `RouteDecision`, and terminal run states. State transitions are explicit, total, replayable, and idempotent. Existing similarly named core records are adapted or migrated through one documented boundary, not left as a second run model.
 3. Implement two-step routing: task to PandaMUX agent, then agent to provider/model/environment/instance. Organization and capability filters are hard constraints; deterministic scores and tie-breakers are recorded. An LLM may classify or propose a DAG, but schema parse and policy reconciliation fail closed.

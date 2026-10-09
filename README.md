@@ -188,7 +188,7 @@ the R0 development gate:
   orchestrator crate. It does not add persistence, effect execution, provider
   dispatch, worktrees, run RPC, CLI commands, or desktop surfaces.
 
-See the [Phase 4 live acceptance record](docs/operations/PHASE4_ACCEPTANCE.md)
+See the [Phase 4 live acceptance record](docs/operations/PHASE4_ACCEPTANCE.md), the [Phase 5A pure-domain acceptance record](docs/operations/PHASE5A_ACCEPTANCE.md),
 and the completion criteria in [`tasks/plan-rewrite.md`](tasks/plan-rewrite.md).
 
 ## Product shape

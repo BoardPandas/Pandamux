@@ -41,15 +41,15 @@ The following files were used as evidence for this page:
 Phase 5A is a pure value-to-value engine. It accepts authored bytes, server-issued trust and policy snapshots, explicit identities, and timestamps; it returns validated records, events, and effects without reading files, observing clocks, opening a database, contacting a provider, or mutating external state. Its public API exposes parsing, compilation, plan validation, routing, command decision, event application, and replay as separate operations ([lib.rs:9-55](../../crates/pandamux-orchestrator/src/lib.rs#L9-L55)).
 
 ```mermaid
-flowchart LR
-    A[Authored bytes and trust grants] --> S[Strict V1 parse]
-    S --> B[Canonical bundle]
-    B --> D[Validated task DAG]
-    D --> R[Agent then provider route]
-    R --> C[Command decision]
-    C --> E[Canonical events]
-    E --> P[Replayable run and pending effects]
-    P -. Phase 5C .-> X[Persistence and effect interpreter]
+graph TD
+    A["Authored bytes and trust grants"] --> S["Strict V1 parse"]
+    S --> B["Canonical bundle"]
+    B --> D["Validated task DAG"]
+    D --> R["Agent then provider route"]
+    R --> C["Command decision"]
+    C --> E["Canonical events"]
+    E --> P["Replayable run and effects"]
+    P -.-> X["Future effect interpreter"]
 ```
 
 | Stage | Implemented contract |

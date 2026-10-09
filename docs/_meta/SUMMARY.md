@@ -90,8 +90,9 @@
 
 ## Phase 5A Pure-Orchestrator Update - 2026-10-09
 
-- **Mode:** incremental update from clean source baseline `1bc014fa` plus the
-  current 0.60.75 documentation and CI working tree on `codex/recovery-r0`
+- **Mode:** incremental update through clean deciding source `423594e3`,
+  version 0.60.76, plus the documentation-only 0.60.77 acceptance follow-up on
+  `codex/recovery-r0`
 - **Generated pages updated:** Overview, Getting Started, Architecture, Core
   Domain, Application Runtime, and Agent Orchestration
 - **Implementation coverage:** all canonical run and instruction-bundle records
@@ -106,14 +107,25 @@
   effect interpreter, provider dispatch, worktree owner, run RPC, CLI, desktop
   orchestration UI, or live-provider path. P4-C5 stays Partial and P4-C7 stays
   open.
-- **Documentation validation:** 16 pages, 98 ordered AUTOGEN sections, 1,513
+- **Documentation validation:** 16 pages, 98 ordered AUTOGEN sections, 1,515
   active local links, 1,389 line-range citations, all 154 current crate source
   files, and 19 Mermaid blocks pass with zero structural errors. `mmdc` remains
   unavailable, so renderer-level Mermaid validation was not performed.
-- **Code-gate status:** checkpoint commits through 0.60.74 passed their focused
-  gates. The complete Phase 5A Section 12 matrix is pending on the exact 0.60.75
-  commit and will be recorded separately without claiming CI or native-platform
-  execution.
+- **Code-gate status:** the first complete workspace run on exact 0.60.75
+  exposed approval-digest instability under Serde JSON workspace feature
+  unification. Exact 0.60.76 recursively canonicalizes nested objects and pins
+  the expected digest. Formatting, strict all-target Clippy, all 63 focused
+  orchestrator tests, 526 workspace tests with 2 intentional ignores, the
+  five-target boundary checker, all cargo-deny families, Rust 1.89 Linux
+  headless graph, repository wiring, and diff hygiene then passed.
+- **Follow-up verification:** version 0.60.77 passed formatting, focused locked
+  strict Clippy, all 63 locked orchestrator tests, the locked five-target
+  boundary checker, repository wiring, and diff hygiene. It changes no Phase
+  5A behavior.
+- **Evidence record:**
+  [Phase 5A Deterministic Orchestrator Acceptance](../operations/PHASE5A_ACCEPTANCE.md)
+  records every checkpoint, exact command result, rejected candidate, repair,
+  preservation boundary, and absent CI, native, runtime, and live evidence.
 
 ## Historical context
 

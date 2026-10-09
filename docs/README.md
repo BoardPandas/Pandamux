@@ -87,14 +87,18 @@ control listener.
 
 ## Acceptance records and current boundary
 
-Two manually maintained pages remain the detailed authority for the ongoing
-Phase 4 closeout:
+Three manually maintained pages separate the ongoing Phase 4 closeout from the
+completed pure-domain Phase 5A checkpoint:
 
 - [Usage Observability and Transcript Privacy](features/USAGE_OBSERVABILITY.md)
   defines the current data, privacy, UI, capacity, and failover contracts.
 - [Phase 4 Acceptance Record](operations/PHASE4_ACCEPTANCE.md) records exact
   commits, versions, artifact hashes, commands, results, failures, limitations,
   cleanup, and preserved evidence.
+- [Phase 5A Deterministic Orchestrator Acceptance](operations/PHASE5A_ACCEPTANCE.md)
+  records the exact pure-domain checkpoint chain, local command matrix,
+  rejected 0.60.75 candidate, accepted 0.60.76 repair, and absent runtime or
+  native evidence.
 
 The current recovery branch includes exact evidence for accounting,
 reconciliation, provider and model discovery, native Windows accessibility and
@@ -112,9 +116,10 @@ The following gates remain open:
   failover behavior;
 - final P4-C7 synchronization after the remaining P4-C5 row stabilizes.
 
-Phase 5A pure-domain work is proceeding under the explicit sequencing exception
-recorded in the active plan. Its versioned schemas, canonical bundle, DAG and
-routing policy, approvals, bounded model parsing, and replay state do not
+Phase 5A pure-domain work passed its exact local acceptance matrix under the
+explicit sequencing exception recorded in the active plan. Its versioned
+schemas, canonical bundle, DAG and routing policy, approvals, bounded model
+parsing, and replay state do not
 convert either open Phase 4 row into a pass. They also do not establish a
 database, effect interpreter, provider dispatch, worktree, RPC, CLI, desktop,
 or live-provider path. Phase 5 evidence remains separate from exact 0.60.64

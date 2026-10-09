@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Added
 
+- **Recorded exact Phase 5A pure-domain acceptance in version 0.60.77.** The
+  new acceptance record ties every commit-sized checkpoint to the complete
+  local Section 12 matrix on exact 0.60.76, including the rejected 0.60.75
+  workspace-feature candidate and its canonical approval-digest repair. It
+  preserves P4-C5 as Partial and P4-C7 as open, and makes no new behavior,
+  native-platform, CI, runtime, live-provider, push, deployment, signing,
+  packaging, publication, or release claim.
+
 - **Completed the Phase 5A CI and documentation checkpoint in version
   0.60.75.** The macOS job now explicitly tests the pure orchestrator, while
   compile-only all-target checks cover its musl x64 and arm64 graphs without

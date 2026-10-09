@@ -2,7 +2,7 @@ project:
   name: "PandaMUX"
   description: "Native chat-first desktop for supervising local and remote AI coding agents through a GPUI client, authenticated JSON-RPC Hub, provider drivers, durable SQLite state, and SSH-connected Linux nodes."
   repo_base_url: "https://github.com/BoardPandas/Pandamux/blob"
-  ref_commit_hash: "1bc014fa597638bad2020768e327f058f8f1ba67"
+  ref_commit_hash: "423594e3ad77497119aac09ba098a82bd499aa74"
   branch: "codex/recovery-r0"
   updated_at: "2026-10-09"
 
