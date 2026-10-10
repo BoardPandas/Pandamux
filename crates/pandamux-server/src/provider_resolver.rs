@@ -514,8 +514,8 @@ mod tests {
         assert_eq!(resolved.config.env_overrides["ACCOUNT"], "work");
         assert_eq!(resolved.config.settings["account"], "work");
         assert_eq!(
-            resolved.config.profile_dir,
-            "/data/pandamux/profiles/claude/claude-work"
+            PathBuf::from(&resolved.config.profile_dir),
+            PathBuf::from("/data/pandamux").join("profiles/claude/claude-work")
         );
     }
 

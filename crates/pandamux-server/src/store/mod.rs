@@ -306,6 +306,7 @@ impl Store {
             drop(verification);
             fs::OpenOptions::new()
                 .read(true)
+                .write(true)
                 .open(&temporary)?
                 .sync_all()?;
             fs::rename(&temporary, &final_path)?;

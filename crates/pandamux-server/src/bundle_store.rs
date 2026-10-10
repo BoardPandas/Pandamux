@@ -1330,12 +1330,7 @@ pub(crate) mod tests {
         let bundle_path = repository.join("source.bundle");
         git(
             repository,
-            &[
-                "bundle",
-                "create",
-                bundle_path.to_str().expect("bundle path"),
-                "refs/heads/main",
-            ],
+            &["bundle", "create", "source.bundle", "refs/heads/main"],
         );
         (
             SourceCommitSha::parse(commit.trim().to_string()).expect("commit identity"),

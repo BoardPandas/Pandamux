@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Made the native Phase 5C acceptance fixtures deterministic and portable in
+  version 0.60.109.** Local-provider tests now derive dispatch time from the
+  durable prepared record instead of resampling a rollback-prone wall clock;
+  the strict store clock checks remain unchanged. Windows fixtures create Git
+  bundles through repository-relative paths, pin checkout line endings, compare
+  native paths by component, and inject login-shell selection instead of
+  probing a live PowerShell under test load. Pre-v14 backup durability now
+  opens the temporary database with the write access Windows requires before
+  flushing it and atomically renaming the verified backup.
+
 - **Made the CRLF schema fixture host-independent in version 0.60.108.** The
   orchestrator test now canonicalizes its checked-out bytes before deliberately
   constructing CRLF, so Windows checkout conversion cannot turn the fixture

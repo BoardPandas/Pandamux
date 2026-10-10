@@ -483,6 +483,20 @@ mod tests {
             .arg("user.email")
             .arg("test@local")
             .output();
+        let _ = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .arg("config")
+            .arg("core.autocrlf")
+            .arg("false")
+            .output();
+        let _ = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .arg("config")
+            .arg("core.safecrlf")
+            .arg("false")
+            .output();
 
         std::fs::write(path.join("README.md"), "# Initial\n").expect("write readme");
         let _ = Command::new("git")

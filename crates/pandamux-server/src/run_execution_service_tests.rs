@@ -417,8 +417,9 @@ impl LocalProviderHarness {
         prepared: PreparedLocalProviderAttempt,
         failpoint: Option<OrchestrationExecutionFailpoint>,
     ) -> Result<LocalProviderDispatch, LocalProviderExecutionError> {
+        let dispatch_started_at_ms = prepared.dispatch.updated_at_ms.saturating_add(1);
         self.service
-            .dispatch_local_provider_attempt(prepared, now_ms(), failpoint)
+            .dispatch_local_provider_attempt(prepared, dispatch_started_at_ms, failpoint)
             .await
     }
 

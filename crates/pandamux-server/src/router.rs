@@ -91,6 +91,7 @@ pub struct Router {
     environment_router: Arc<crate::environment_router::EnvironmentRouter>,
     remote_terminals: Arc<std::sync::Mutex<HashMap<String, pandamux_core::ids::EnvironmentId>>>,
     login_previews: Arc<std::sync::Mutex<HashMap<String, LoginPreviewRecord>>>,
+    login_shell_resolver: fn() -> Result<Option<String>, RpcError>,
     hark: Arc<crate::hark::HarkBridge>,
     personal_repo: PersonalRepoService,
     instructions: InstructionsService,
@@ -752,6 +753,7 @@ impl Router {
             environment_router,
             remote_terminals: Arc::new(std::sync::Mutex::new(HashMap::new())),
             login_previews: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            login_shell_resolver: login_shell,
             hark: Arc::new(crate::hark::HarkBridge::default()),
             personal_repo,
             instructions,
@@ -3944,7 +3946,7 @@ impl Router {
         let record = LoginPreviewRecord {
             preview: preview.clone(),
             environment,
-            shell: login_shell()?,
+            shell: (self.login_shell_resolver)()?,
         };
         let mut previews = self
             .login_previews
@@ -5436,6 +5438,7 @@ impl Router {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[tokio::test]
     async fn bundle_upload_rpc_is_node_proxy_only_and_environment_bound() {
@@ -8012,7 +8015,28 @@ mod tests {
         assert!(prepare_res.is_success());
         let prepared: AntigravityPrepareUploadResult =
             serde_json::from_value(prepare_res.result.unwrap()).unwrap();
-        assert!(prepared.remote_path.contains("cache/antigravity/.upload-"));
+        let prepared_path = Path::new(&prepared.remote_path);
+        assert!(
+            prepared_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(".upload-"))
+        );
+        assert_eq!(
+            prepared_path
+                .parent()
+                .and_then(Path::file_name)
+                .and_then(|name| name.to_str()),
+            Some("antigravity")
+        );
+        assert_eq!(
+            prepared_path
+                .parent()
+                .and_then(Path::parent)
+                .and_then(Path::file_name)
+                .and_then(|name| name.to_str()),
+            Some("cache")
+        );
 
         let mut unpinned = manifest;
         unpinned.url = "https://example.invalid/not-the-pinned-runtime.zip".to_string();
@@ -8634,7 +8658,9 @@ Host worker-node
         ));
         let drivers = Arc::new(DriverRegistry::new());
         drivers.register(ProviderKind::Claude, driver.clone());
-        let router = Router::with_drivers(store, ServerRole::Hub, "env-login".to_string(), drivers);
+        let mut router =
+            Router::with_drivers(store, ServerRole::Hub, "env-login".to_string(), drivers);
+        router.login_shell_resolver = || Ok(None);
 
         let unreachable = router
             .handle_request(RpcRequest::new(
