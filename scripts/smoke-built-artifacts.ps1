@@ -30,8 +30,8 @@ Write-Host "Evaluating built artifacts (BP evaluate-built-artifacts-in-ci):"
 Write-Host "  Server: $serverBin"
 Write-Host "  CLI:    $cliBin"
 
-# Spawn pandamux-server --headless in background
-$serverProc = Start-Process -FilePath $serverBin -ArgumentList "--headless" -PassThru -NoNewWindow
+# The server is non-GUI by default; keep its fail-closed argument parser intact.
+$serverProc = Start-Process -FilePath $serverBin -PassThru -NoNewWindow
 Write-Host "Spawned server PID $($serverProc.Id)"
 
 try {

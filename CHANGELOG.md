@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Restored the built-artifact IPC smoke without reopening legacy arguments
+  in version 0.60.117.** The Windows evaluator now starts the already-headless
+  server with its supported default invocation instead of passing the obsolete
+  `--headless` flag. The production parser continues to reject that and every
+  other unknown argument.
+
 - **Accepted native Windows absolute-path prefixes without weakening link
   checks in version 0.60.116.** Attempt worktree ownership validation now
   carries drive, UNC, and verbatim prefixes into the rooted path before

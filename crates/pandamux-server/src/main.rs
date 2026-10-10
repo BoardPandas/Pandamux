@@ -666,6 +666,7 @@ mod argument_tests {
     #[test]
     fn invalid_or_incomplete_arguments_fail_closed() {
         for invalid in [
+            args(&["--headless"]),
             args(&["--versoin"]),
             args(&["--role", "worker"]),
             args(&["--runtime-dir"]),
