@@ -1566,7 +1566,21 @@ fn invalid_identity_error() -> AttemptWorktreeError {
     )
 }
 
+#[track_caller]
 fn managed_path_error() -> AttemptWorktreeError {
+    #[cfg(all(test, windows))]
+    {
+        let caller = std::panic::Location::caller();
+        return worktree_error(
+            "attempt_worktree_path_unsafe",
+            &format!(
+                "The attempt worktree path is outside the private managed root [test diagnostic at {}:{}]",
+                caller.file(),
+                caller.line()
+            ),
+        );
+    }
+    #[cfg(not(all(test, windows)))]
     worktree_error(
         "attempt_worktree_path_unsafe",
         "The attempt worktree path is outside the private managed root",

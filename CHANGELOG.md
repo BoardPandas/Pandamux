@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Made native Windows worktree ownership failures actionable in version
+  0.60.114.** Windows test builds now append the exact caller location when a
+  managed attempt path fails closed, while production keeps the existing safe
+  reason code and message unchanged. This isolates native path, reparse, and
+  ACL failures without relaxing any ownership check.
+
 - **Kept Phase 5C attempt worktrees private while Git materializes them in
   version 0.60.113.** PandaMUX now creates and validates the exact empty
   attempt leaf under its private app-data root before asking Git to populate
