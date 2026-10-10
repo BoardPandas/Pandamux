@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Restored target-specific Phase 5C verification in version 0.60.105.**
+  Windows process supervision now uses the handle-native null check required by
+  strict Rust 1.98 Clippy. The exact-pinned GPUI utility keeps its upstream
+  0.3.6 API while a documented local patch replaces one post-MSRV slice
+  conversion with its stable Rust 1.89 equivalent. Security-sensitive
+  repository and worktree fixtures now canonicalize only their temporary test
+  roots, allowing macOS runners to traverse the same fail-closed production
+  link checks without trusting the runner's symlinked temporary-directory
+  alias.
+
 - **Preserved the exact winning cancellation report for concurrent Phase 5C
   callers in version 0.60.103.** A cancellation request that joined an
   already-running cleanup previously reconstructed terminal state with generic

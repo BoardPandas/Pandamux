@@ -1065,6 +1065,7 @@ mod tests {
 
     struct Fixture {
         _temp: tempfile::TempDir,
+        root: PathBuf,
         repository: PathBuf,
         store: Store,
         service: ConfigurationService,
@@ -1075,10 +1076,11 @@ mod tests {
     impl Fixture {
         fn new() -> Self {
             let temp = tempfile::tempdir().expect("temporary configuration fixture");
-            let repository = temp.path().join("repository");
+            let root = fs::canonicalize(temp.path()).expect("canonical temporary fixture root");
+            let repository = root.join("repository");
             create_repository(&repository, "git@github.com:BoardPandas/Pandamux.git");
             write_project(&repository, "[]");
-            let paths = DataPaths::from_root(temp.path().join("app")).expect("paths");
+            let paths = DataPaths::from_root(root.join("app")).expect("paths");
             paths.ensure_private_roots().expect("private roots");
             let store = Store::in_memory().expect("store");
             let project_id = ProjectId::new("project-configuration-test");
@@ -1106,6 +1108,7 @@ mod tests {
             let service = ConfigurationService::new(store.clone(), instructions, personal);
             Self {
                 _temp: temp,
+                root,
                 repository,
                 store,
                 service,
@@ -1222,7 +1225,7 @@ mod tests {
             )
             .expect("trust initial");
 
-        let other = fixture._temp.path().join("same-name");
+        let other = fixture.root.join("same-name");
         create_repository(&other, "git@github.com:BoardPandas/Pandamux.git");
         write_project(&other, "[]");
         let changed = fixture
@@ -1304,7 +1307,7 @@ mod tests {
         let fixture = Fixture::new();
         let project_root = fixture.repository.join(".pandamux");
         fs::create_dir_all(project_root.join("agents")).expect("agents directory");
-        let outside = fixture._temp.path().join("outside.md");
+        let outside = fixture.root.join("outside.md");
         fs::write(&outside, b"outside secret").expect("outside file");
         symlink(&outside, project_root.join("agents/linked.md")).expect("symlink");
         let snapshot = fixture

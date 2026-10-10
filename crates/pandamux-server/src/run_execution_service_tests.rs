@@ -55,16 +55,17 @@ struct LocalProviderHarness {
 impl LocalProviderHarness {
     async fn new(primary_settings: Value) -> Self {
         let temp = tempfile::tempdir().expect("temporary local provider fixture");
-        let paths = DataPaths::from_root(temp.path().join("app-data")).expect("data paths");
+        let root = fs::canonicalize(temp.path()).expect("canonical temporary fixture root");
+        let paths = DataPaths::from_root(root.join("app-data")).expect("data paths");
         paths.ensure_private_roots().expect("private data roots");
         let store = Store::open(paths.database()).expect("fixture store");
         let bundle_store = BundleStore::new(paths.clone(), store.clone());
-        let bundle_input = materialization_fixture(temp.path());
+        let bundle_input = materialization_fixture(&root);
         let materialized = bundle_store
             .materialize(&bundle_input, now_ms())
             .expect("materialize exact bundle");
 
-        let repository = temp.path().join("repository");
+        let repository = root.join("repository");
         fs::create_dir(&repository).expect("repository directory");
         git(&repository, &["init", "-b", "main"]);
         git(&repository, &["config", "user.name", "PandaMUX Test"]);

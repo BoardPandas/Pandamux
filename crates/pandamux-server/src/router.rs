@@ -5514,7 +5514,9 @@ mod tests {
     #[tokio::test]
     async fn project_layer_rpc_is_local_exact_hash_and_origin_aware() {
         let root = tempfile::tempdir().expect("temporary project RPC root");
-        let repository = root.path().join("repository");
+        let root_path =
+            std::fs::canonicalize(root.path()).expect("canonical temporary project RPC root");
+        let repository = root_path.join("repository");
         std::fs::create_dir_all(repository.join(".git")).expect("git directory");
         std::fs::write(
             repository.join(".git/config"),
@@ -5571,7 +5573,7 @@ mod tests {
             })
             .expect("project thread");
         let router = Router::new(store, ServerRole::Hub, "env-local".to_string())
-            .with_data_dir(root.path().join("app"));
+            .with_data_dir(root_path.join("app"));
         let node = RequestContext::node_proxy(
             EnvironmentId::new("env-node"),
             crate::ClientIdentity::default(),

@@ -149,7 +149,7 @@ fn setup_windows_job_object(child: &Child) -> Result<isize, ProviderError> {
 
     unsafe {
         let job = CreateJobObjectW(std::ptr::null_mut(), std::ptr::null());
-        if job == std::ptr::null_mut() {
+        if job.is_null() {
             return Err(ProviderError::SupervisionError {
                 message: "CreateJobObjectW failed".to_string(),
             });

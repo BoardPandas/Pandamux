@@ -28,6 +28,7 @@ const ORGANIZATION_ID: &str = "organization-attempt-worktrees";
 
 struct Harness {
     _temp: tempfile::TempDir,
+    root: PathBuf,
     repository: PathBuf,
     baseline: String,
     paths: DataPaths,
@@ -38,7 +39,8 @@ struct Harness {
 impl Harness {
     fn new() -> Self {
         let temp = tempfile::tempdir().expect("temporary harness");
-        let repository = temp.path().join("repository");
+        let root = fs::canonicalize(temp.path()).expect("canonical temporary harness root");
+        let repository = root.join("repository");
         fs::create_dir(&repository).expect("repository directory");
         git(&repository, &["init", "-b", "main"]);
         git(&repository, &["config", "user.name", "PandaMUX Test"]);
@@ -55,7 +57,7 @@ impl Harness {
             "git-common-dir-sha256:{}",
             sha256_hex(common_dir.to_string_lossy().as_bytes())
         );
-        let paths = DataPaths::from_root(temp.path().join("app-data")).expect("data paths");
+        let paths = DataPaths::from_root(root.join("app-data")).expect("data paths");
         paths.ensure_private_roots().expect("private roots");
         let store = Store::open(paths.database()).expect("store");
         store
@@ -74,6 +76,7 @@ impl Harness {
         let service = AttemptWorktreeService::new(store.clone(), paths.clone());
         Self {
             _temp: temp,
+            root,
             repository,
             baseline,
             paths,
@@ -689,7 +692,7 @@ async fn wt_01_through_08_simultaneous_attempts_are_isolated_and_preserve_the_so
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn wt_04_simultaneous_attempts_for_different_repositories_keep_distinct_ownership() {
     let harness = Harness::new();
-    let second_repository = harness._temp.path().join("repository-two");
+    let second_repository = harness.root.join("repository-two");
     fs::create_dir(&second_repository).expect("second repository directory");
     git(&second_repository, &["init", "-b", "main"]);
     git(
@@ -1154,7 +1157,7 @@ async fn wt_12_symlinked_managed_component_and_escaping_baseline_link_are_reject
 
     let harness = Harness::new();
     let request = harness.add_run("managed-link", 90_000);
-    let outside = harness._temp.path().join("outside");
+    let outside = harness.root.join("outside");
     fs::create_dir(&outside).expect("outside directory");
     symlink(&outside, harness.paths.worktrees().join(REPOSITORY_ID)).expect("managed symlink");
     let error = harness

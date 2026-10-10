@@ -20,10 +20,11 @@ exclude = [
   "spikes/phase0-remote-bootstrap",
   "spikes/phase0-packaging",
   "spikes/phase0-acp-providers",
+  "vendor/gpui-pre-util",
 ]
 
 [workspace.package]
-version = "0.60.104"
+version = "0.60.105"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/BoardPandas/Pandamux"
@@ -46,3 +47,9 @@ url = "=2.5.8"
 uuid = { version = "=1.23.4", features = ["v4"] }
 windows-sys = "=0.61.2"
 zip = { version = "=4.6.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+[patch.crates-io]
+# gpui-pre-util 0.3.6 uses slice::as_array(), which is newer than our declared
+# Rust 1.89 MSRV. Keep the exact gpui-kit family pinned and carry the one-line
+# stable conversion locally until the upstream crate declares a compatible MSRV.
+gpui-pre-util = { path = "vendor/gpui-pre-util" }

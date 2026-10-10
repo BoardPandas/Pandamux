@@ -124,11 +124,12 @@ impl EnvironmentTransport for LoopbackNodeTransport {
 impl Harness {
     fn new(provider_settings: serde_json::Value) -> Self {
         let temp = tempfile::tempdir().expect("temporary remote execution fixture");
-        let paths = DataPaths::from_root(temp.path().join("app-data")).expect("data paths");
+        let root = fs::canonicalize(temp.path()).expect("canonical temporary fixture root");
+        let paths = DataPaths::from_root(root.join("app-data")).expect("data paths");
         paths.ensure_private_roots().expect("private roots");
         let store = Store::open(paths.database()).expect("node store");
         let bundle_store = BundleStore::new(paths.clone(), store.clone());
-        let input = materialization_fixture(&temp.path().join("bundle-fixture"));
+        let input = materialization_fixture(&root.join("bundle-fixture"));
         let compiled_bundle = input.bundle.clone();
         let materialized = bundle_store
             .materialize(&input, now_ms())
@@ -137,7 +138,7 @@ impl Harness {
             .save_settings(&settings(provider_settings))
             .expect("node provider settings");
 
-        let source = temp.path().join("source-repository");
+        let source = root.join("source-repository");
         fs::create_dir(&source).expect("source repository");
         git(&source, &["init", "-b", "main"]);
         git(&source, &["config", "user.name", "PandaMUX Test"]);
