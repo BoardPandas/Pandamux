@@ -2,24 +2,26 @@
 
 Date: 2026-10-10
 
-Status: **Implemented, locally verified, and accepted for the local/native
-scope; not accepted for production scope.** Exact version 0.60.119 commit
-`ce9c48f0a95c1847abe72c1b3f49398ab362425f` is the deciding local/native
-acceptance source. All eight jobs passed in exact
-[native run 38054202454](https://github.com/BoardPandas/Pandamux/actions/runs/38054202454),
-including the named Windows Job Object descendant and macOS process-group
-descendant tests. Together with the retained portable, native Windows
-path/reparse/worktree, and Unix process-group/worktree rows, that closes the
-binding automated local/native matrix. Version 0.60.120 is a documentation-only
-evidence reconciliation. A physical remote Linux node, live
-Codex/Claude/Antigravity, and the controlled external-effect row remain unrun.
+Status: **Implemented, locally verified, and accepted for the complete Phase 5C
+local/native and authorized physical/live scope; not accepted as a production
+release.** Exact version 0.60.119 commit
+`ce9c48f0a95c1847abe72c1b3f49398ab362425f` remains the deciding native
+platform source, and all eight jobs passed in exact
+[native run 38054202454](https://github.com/BoardPandas/Pandamux/actions/runs/38054202454).
+Exact version 0.60.121 commit
+`88cfdd1e244afd0c3c19b792c45042b09112c5de` is the deciding physical/live and
+response-loss recovery source. On a fresh Galahad root, the physical node,
+live Codex, Claude, and Antigravity success and cancellation rows, and the
+controlled one-effect response-loss row all pass. The controlled row retains
+one deduplicated recovery review and never dispatches a replacement provider.
 
 This record is the C-K documentation checkpoint. It does not close P4-C5 or
 P4-C7 and does not claim deployment, activation, packaging, signing,
 publication, release, health, or served-version evidence. The original
 implementation authorization prohibited push and CI; later user authorization
-permitted pushing this branch and manually dispatching and monitoring the
-native workflow only.
+permitted the already-recorded branch pushes, native workflow, and this
+disposable physical/live matrix. The current authorization still prohibits
+push, deployment, activation, packaging, signing, publication, and release.
 
 ## Deciding Source and Scope
 
@@ -29,6 +31,10 @@ native workflow only.
   [`tasks/2026-10-09-phase-5c-execution-owner.md`](../../tasks/2026-10-09-phase-5c-execution-owner.md)
 - Deciding local/native acceptance source: version 0.60.119, commit
   `ce9c48f0a95c1847abe72c1b3f49398ab362425f`
+- Deciding physical/live and response-loss recovery source: version 0.60.121,
+  commit `88cfdd1e244afd0c3c19b792c45042b09112c5de`
+- Latest exact native CI source: version 0.60.120, commit
+  `05362434f6b27dd5463792410bf711fc407514d3`
 - Schema: migration 14, with a verified pre-v14 schema-13 backup before a
   persistent store migrates
 - Runtime boundary: private server-owned execution APIs only. Public run RPC,
@@ -74,7 +80,9 @@ fallback and retry authority.
 | Artifact-smoke repair | 0.60.117 | `e53406bbd211e701f89a25d63a8cd672033a22d9` | Replaced the obsolete server `--headless` smoke invocation; all eight exact native-CI jobs pass |
 | Native-CI evidence reconciliation | 0.60.118 | `e00a507c247cdbf6e89db289e32c4d69a0a3c259` | Documentation and version metadata only; records exact target-CI success and retained native/live gaps |
 | Native descendant acceptance | 0.60.119 | `ce9c48f0a95c1847abe72c1b3f49398ab362425f` | Adds exact Windows Job Object and native Linux/macOS process-group descendant tests; all three pass on their native platforms |
-| Local/native acceptance reconciliation | 0.60.120 | This documentation commit | Documentation and version metadata only; records the now-complete automated local/native matrix and retains production-readiness gaps |
+| Local/native acceptance reconciliation | 0.60.120 | `05362434f6b27dd5463792410bf711fc407514d3` | Documentation and version metadata only; records the complete automated local/native matrix; all eight exact native-CI jobs pass |
+| Remote response-loss recovery repair | 0.60.121 | `88cfdd1e244afd0c3c19b792c45042b09112c5de` | A controlled physical response loss exposed a missing canonical tool boundary; recovery now restores the accepted attempt and boundary before creating one deduplicated review |
+| Physical/live acceptance reconciliation | 0.60.122 | This documentation commit | Documentation and version metadata only; records the exact Galahad, live-provider, controlled-effect, retained-debt, and cleanup evidence |
 
 Every checkpoint and each verification or native-CI repair was staged by
 explicit path, inspected, and committed before the final reconciliation. No
@@ -96,12 +104,12 @@ commit includes a protected bundle or the unrelated security-scan report.
 | AC-C10 artifact bounds and authority | Pass | `blackboard_dag` ART-01 through ART-12, SEC-01, and link-substitution test |
 | AC-C11 evidence-gated reviewer DAG | Pass | DAG-01 through DAG-06 three-task and failure-propagation tests |
 | AC-C12 bounded fallback | Pass | `run_execution_service_tests` EFX-01 through EFX-08 and typed cleanup-verification cases |
-| AC-C13 joined cancellation | Pass, portable and native | LIFE-01 through LIFE-09 plus exact Linux/macOS process-group and Windows Job Object descendant cleanup on version 0.60.119 |
+| AC-C13 joined cancellation | Pass, portable, native, and live | LIFE-01 through LIFE-09, exact Linux/macOS process-group and Windows Job Object descendant cleanup on version 0.60.119, and exact live provider cancellation on version 0.60.121 |
 | AC-C14 ownership and clock recovery | Pass, portable | REC-01 through REC-08 and CLK-01 through CLK-03 fixtures |
-| AC-C15 deduplicated human review | Pass, internal | REC-09 through REC-13 ambiguity, reattach, response-loss, deduplication, and audit tests; no public resolver exists |
-| AC-C16 authenticated remote execution | Pass, loopback only | REM-01 through REM-07 environment binding, replay, conflict, disconnect, status, and cancellation tests |
+| AC-C15 deduplicated human review | Pass, internal and controlled live | REC-09 through REC-13 plus exact 0.60.121 response loss after a real tool-side effect; recovery creates one pending review and replay deduplicates it; no public resolver exists |
+| AC-C16 authenticated remote execution | Pass, loopback and physical | REM-01 through REM-07 plus exact Galahad baseline, environment-bound Node execution, proxy reconnect, replay suppression, cancellation, and provider-turn evidence |
 | AC-C17 migration 14 safety | Pass | schema-13 preservation, independent verified backup, failure rollback, retry, constraints, and malformed-row rejection tests |
-| AC-C18 architecture and toolchains | Pass, local and target CI | pure-boundary fixtures, exact pins, Rust 1.89 Windows and headless graphs, locked all-target checks, dependency policy, and all eight exact native-CI jobs |
+| AC-C18 architecture and toolchains | Pass, local and target CI | pure-boundary fixtures, exact pins, Rust 1.89 Windows and headless graphs, locked all-target checks, dependency policy, and all eight exact 0.60.120 native-CI jobs |
 
 The named evidence resides in:
 
@@ -125,7 +133,7 @@ The named evidence resides in:
 | CRASH-04 worktree intent before Git | Pass | `crash_04_and_05_recover_from_durable_intent_without_duplicate_ownership` |
 | CRASH-05 Git completion before receipt | Pass | the same worktree test plus `checkpoint_intent_and_git_crashes_replay_once_and_changed_bytes_conflict` |
 | CRASH-06 dispatch marker before provider call | Pass | EFX-01 and the store before/after dispatch-marker failpoints |
-| CRASH-07 provider acceptance before outcome | Pass | EFX-03, response-loss suppression, and exact remote reattachment tests |
+| CRASH-07 provider acceptance before outcome | Pass, automated and controlled live | EFX-03, response-loss suppression, exact remote reattachment, `recovery_response_loss_after_tool_start_preserves_ambiguous_boundary`, and the one-effect Galahad crash row |
 | CRASH-08 outcome before acknowledgement | Pass | store before/after outcome and acknowledgement failpoints |
 | CRASH-09 artifact plus task settlement | Pass | `art_11_art_12_atomic_completion_replays_after_crash_and_rolls_back_on_failure` |
 | CRASH-10 cancel intent before interrupt | Pass | `life_04_05_and_crash_10_persist_intent_before_cooperative_drain` |
@@ -189,6 +197,25 @@ dependency policy, Rust 1.89 non-desktop product graph, Claude wiring,
 formatting, and diff hygiene. Exact post-commit verification and native CI are
 reported separately rather than inferred from this pre-commit run.
 
+Exact 0.60.120 commit
+`05362434f6b27dd5463792410bf711fc407514d3` then passed all eight jobs in
+[native run 38056999487](https://github.com/BoardPandas/Pandamux/actions/runs/38056999487).
+That is the latest pushed and CI-verified commit. Versions 0.60.121 and 0.60.122
+remain unpushed and therefore have no CI result.
+
+The first controlled external-effect run against 0.60.120 correctly suppressed
+replacement dispatch but exposed a real recovery defect: the Node receipt had
+advanced through a tool side effect while the canonical Hub attempt remained
+`safe_to_retry`, and replay attempted to reacquire a review-owned effect. Work
+stopped at that failed row. Exact 0.60.121 repair commit
+`88cfdd1e244afd0c3c19b792c45042b09112c5de` restores the exact accepted attempt
+and advances its canonical boundary before persisting ambiguity; later recovery
+reconstructs the same review directly from the durable ambiguous dispatch.
+The focused response-loss regression passed, the 334-test server suite passed,
+and the unchanged full workspace passed with two intentional real-shell tests
+ignored. Formatting, warning-denied workspace Clippy, the five-target boundary
+runner, Claude wiring, and diff hygiene also passed.
+
 The first full-workspace replay stopped during compilation when the disposable
 `/dev/shm` target reached its storage quota. After removing only task-owned
 build caches and disabling incremental/debug-info storage, one replay observed
@@ -219,10 +246,33 @@ failure.
 | `node scripts/check-claude-wiring.mjs` | Pass, exit 0 |
 | `git diff --check` | Pass, exit 0 |
 
+The version 0.60.122 documentation tree then passed the complete Section 11
+matrix with the same command set: every focused crate suite, the 334-test
+server suite, the five-target boundary runner and negative fixtures, the full
+locked workspace with two intentional real-shell tests ignored, all-target
+check, warning-denied Clippy, dependency policy, Rust 1.89 non-desktop product
+graph, Claude wiring, formatting, and diff hygiene. The dependency-policy gate
+reported only the repository's configured unmatched-license, duplicate, and
+yanked-transitive warnings.
+
+The 0.60.121 recovery repair was additionally verified with these exact focused
+and complete commands:
+
+| Command | Result |
+|---|---|
+| `cargo test -p pandamux-server remote_execution_tests::recovery_response_loss_after_tool_start_preserves_ambiguous_boundary -- --exact` | Pass, 1 passed / 0 failed |
+| `cargo test -p pandamux-server` | Pass, 334 passed / 0 failed |
+| `cargo test --workspace` | Pass, exit 0; two intentional real-shell tests ignored |
+| `cargo fmt --all --check` | Pass, exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | Pass, exit 0 |
+| `cargo run --locked -p pandamux-boundary-check --quiet` | Pass for all five declared target graphs, exit 0 |
+| `node scripts/check-claude-wiring.mjs` | Pass, exit 0 |
+| `git diff --check` | Pass, exit 0 |
+
 This establishes portable local verification, including controlled real local
 children and an authenticated loopback node. The native workflow establishes
-target-CI evidence separately; neither result is physical-remote,
-live-provider, deployment, or release evidence.
+target-CI evidence separately. Physical/live results are recorded below and do
+not establish deployment, activation, packaging, publication, or release.
 
 ## Native CI Repair History
 
@@ -244,6 +294,7 @@ live-provider, deployment, or release evidence.
 | [38040781118](https://github.com/BoardPandas/Pandamux/actions/runs/38040781118) | 0.60.117 `e53406b` | 8 pass / 0 fail | All exact native-CI jobs passed |
 | [38044556752](https://github.com/BoardPandas/Pandamux/actions/runs/38044556752) | 0.60.118 `e00a507` | 8 pass / 0 fail | Documentation reconciliation remained green on its exact committed head |
 | [38054202454](https://github.com/BoardPandas/Pandamux/actions/runs/38054202454) | 0.60.119 `ce9c48f` | 8 pass / 0 fail | Exact Windows Job Object and macOS process-group descendant tests passed; automated local/native acceptance closes |
+| [38056999487](https://github.com/BoardPandas/Pandamux/actions/runs/38056999487) | 0.60.120 `0536243` | 8 pass / 0 fail | Documentation reconciliation remained green on its exact committed head; latest pushed CI evidence |
 
 ## Native and Live Acceptance
 
@@ -254,26 +305,39 @@ live-provider, deployment, or release evidence.
 | Windows native automation | Pass | Exact 0.60.119 native CI passes workspace tests, release build, artifact smoke, rooted-path validation, junction substitution rejection, locked-worktree retention, replayable cleanup, and `lifecycle_supervised_windows_job_object_kills_its_descendant` |
 | macOS native automation | Pass | Exact 0.60.119 native CI passes the full `attempt_worktrees` integration suite, link-substitution rejection, locked-worktree retention, release build, and `lifecycle_supervised_unix_process_group_kills_its_descendant` |
 | Authenticated loopback node | Pass, portable | Private environment-bound RPC, disconnect, status, cancel, and replay tests passed inside `pandamux-server` |
-| Physical remote Linux node | Unrun | No exact physical-node baseline, lease, proxy reconnect, cancellation, or provider-turn evidence |
-| Live Codex | Unrun | No live provider was contacted |
-| Live Claude | Unrun | No live provider was contacted |
-| Live Antigravity | Unrun | No live provider was contacted |
-| Controlled external HTTP/file/command effect | Unrun | No disposable external service or repository was mutated |
-| Target-specific CI | Pass | All eight jobs passed for exact 0.60.119 commit `ce9c48f0a95c1847abe72c1b3f49398ab362425f` in [run 38054202454](https://github.com/BoardPandas/Pandamux/actions/runs/38054202454) |
+| Physical remote Linux node | Pass | Exact 0.60.121 server SHA-256 `e8e518764d8c4777da479a9856ef0eff8cc6b66383af7ae6747bb60f637d1cb8` ran on Galahad from a fresh private root with schema 14, baseline commit `89c3fb17488059339d544a284304709221703be5`, bundle `e64088a6ed3fdf4f5b0ed0f48f56e518799bd5eb23314ebd2b5858008b9906f5`, environment-bound Node records, proxy replay, cancellation, and exact provider-turn audit; final `SIGTERM` removed the socket and left no owned process |
+| Live Codex | Pass | Success turn `turn-orchestration-77ff6874e3ccabc557bae3c5d9545320` persisted native session/turn IDs and provider usage; cancellation turn `turn-orchestration-cb50f8c4f9e56b761f846f53affb30e0` stopped at `tool_side_effect_begun`; proxy reconnect, replay suppression, and acknowledgement passed |
+| Live Claude | Pass | Success turn `turn-orchestration-4e1d6af66f55cdbdad7526bc7745bf5b` persisted native IDs, component usage, and provider-reported cost; cancellation turn `turn-orchestration-8566b491fa774bfc3b7fd8362f911587` stopped at `tool_side_effect_begun`; proxy reconnect, replay suppression, and acknowledgement passed |
+| Live Antigravity | Pass | Success turn `turn-orchestration-d27594cc56598aa213babd37b35294b4` and cancellation turn `turn-orchestration-71171a8a7db0252a67b38c433186d591` passed exact routing, tool-boundary cancellation, proxy reconnect, replay suppression, and acknowledgement; usage remained explicitly unknown rather than being fabricated as zero |
+| Controlled external file/command effect | Pass | Exact Codex provider process group was terminated only after one 45-byte marker line existed. Recovery persisted dispatch `ambiguous`, boundary `tool_started`, effect `review_required`, run `paused`, reason `recovery_remote_attempt_ambiguous`, and one pending review; replay created no second review, provider, or marker |
+| Target-specific CI | Pass through 0.60.120 | All eight jobs passed for exact 0.60.120 commit `05362434f6b27dd5463792410bf711fc407514d3` in [run 38056999487](https://github.com/BoardPandas/Pandamux/actions/runs/38056999487); 0.60.121 and 0.60.122 are unpushed and have no CI result |
 
-The implemented/local, target-specific CI, and complete automated local/native
-classifications pass. The physical-remote, live-provider, and controlled
-external-effect rows remain explicitly unrun and prevent any production-ready
-or production-accepted claim.
+The implemented/local, native, physical-remote, live-provider, and controlled
+external-effect Phase 5C classifications pass. This completes the Phase 5C
+execution-runtime acceptance matrix. It does not establish product production
+acceptance or release: public Phase 5D surfaces do not exist, P4-C5 remains
+Partial, P4-C7 remains open, and no deployment or release action occurred.
 
 ## Retained Debt and Preservation
 
-No production run database, app-data execution root, external repository, or
-live provider was used, so this work created no real retained worktree or
-recovery-review debt. Tests intentionally exercise dirty, locked, foreign,
-ambiguous, and cleanup-pending records in test-owned temporary directories and
-prove they are retained while classified; the fixtures are removed only by
-their temporary-directory owners after assertions complete.
+The exact Galahad evidence root
+`/home/brandon/.pandamux/acceptance/phase5c-88cfdd1-0.60.121-live` is retained.
+Its controlled marker contains exactly one line and the Node database retains
+the seven acceptance queue rows with no owner or lease. The exact Node daemon
+was stopped cleanly after evidence collection, its socket is absent, and no
+provider or sleep descendant remains. No external repository was mutated.
+
+The Hub evidence root
+`tmp/phase5c-live-controlled-060121-r1` is also retained. Its database contains
+one paused run, one `ambiguous` dispatch at `tool_started`, one
+`review_required` effect, and one pending review. The effect and capacity lease
+remain owned as deliberate recovery-review debt; they were not misreported as
+released. The disposable fixture worktree and evidence databases remain for
+review.
+
+Automated tests separately exercise dirty, locked, foreign, ambiguous, and
+cleanup-pending records in test-owned temporary directories and prove they are
+retained while classified.
 
 The original checkout was not modified. Eleven root `.pandamux-*.bundle`
 files and `tasks/security-scan-2026-10-09.md` remain untracked, byte-identical,
@@ -284,14 +348,14 @@ or broad staging command was used.
 
 | Dimension | Status |
 |---|---|
-| Implementation | Complete for Phase 5C's private runtime, with final native acceptance coverage at exact 0.60.119 commit |
-| Portable local verification | Pass |
-| Native automation | Pass for the binding Windows, Linux, and macOS rows on exact committed evidence |
+| Implementation | Complete for Phase 5C's private runtime through exact 0.60.121 repair commit `88cfdd1e244afd0c3c19b792c45042b09112c5de` |
+| Portable local verification | Pass through exact 0.60.121 |
+| Native automation | Pass for the binding Windows, Linux, and macOS rows; latest exact target CI is 0.60.120 |
 | Complete local/native acceptance | Pass |
-| Physical remote/live acceptance | Not established |
-| Checkpoint commits | C-A through C-K, the native-CI repairs, and exact 0.60.119 native acceptance coverage are committed; the 0.60.120 reconciliation is this documentation commit |
-| Push | Checkpoint chain through exact 0.60.119 pushed; this documentation checkpoint is reported separately after commit |
-| CI | Exact 0.60.119 native run 38054202454 passed all eight jobs; this documentation checkpoint is reported separately |
+| Physical remote/live acceptance | Pass on exact 0.60.121 artifacts and retained Galahad/Hub evidence |
+| Checkpoint commits | C-A through C-K, native-CI repairs, local/native reconciliation, and the 0.60.121 response-loss repair are committed; the 0.60.122 reconciliation is this documentation checkpoint |
+| Push | Checkpoint chain through exact 0.60.120 pushed; 0.60.121 and this documentation checkpoint are not pushed |
+| CI | Exact 0.60.120 native run 38056999487 passed all eight jobs; 0.60.121 and this documentation checkpoint have no CI result |
 | Deployment | Not performed |
 | Activation | Not performed |
 | Packaging/signing/publication | Not performed |
@@ -319,12 +383,26 @@ or broad staging command was used.
   relaxed a runtime or acceptance requirement.
 - Windows and macOS automation moved from Partial to Pass only after exact
   retained tests named and proved their platform-specific descendant cleanup.
-  Physical-remote, live-provider, and controlled-external evidence remains
-  Unrun.
-- Later user authorization permitted branch push and manual CI dispatch and
-  monitoring only. Deployment, activation, packaging, signing, publication,
-  release, provider calls, and external-repository mutation remained
-  prohibited.
+  The later physical/live rows did not replace that native evidence.
+- The first controlled 0.60.120 response-loss run was rejected. Although it
+  suppressed replacement dispatch, the canonical Hub attempt failed to retain
+  the Node's tool-side-effect boundary and replay tried to reacquire the
+  review-owned effect. The contract and harness were not weakened; the separate
+  0.60.121 repair and regression closed both defects before the row was rerun.
+- The accepted controlled row leaves one pending human review plus its
+  review-owned effect and capacity leases. This retained ambiguity debt is the
+  specified safe outcome after a provider process is lost beyond the tool
+  boundary; it is not a graceful-settlement or lease-release claim.
+- Codex and Claude supplied provider-native usage evidence. Antigravity did not
+  expose trusted usage in this row, so its usage remains unknown rather than
+  being inferred as zero.
+- The temporary physical/live harness source was removed before commit. Its
+  exact built binary SHA-256 is retained with the evidence root; no harness
+  source or credential material entered a repository commit.
+- Later user authorization permitted the physical node and live-provider
+  matrix. No external repository was mutated. Current authorization continues
+  to prohibit push, deployment, activation, packaging, signing, publication,
+  release, repository administration, and pull requests.
 - Local 0.60.118 and 0.60.119 verification used task-owned `/dev/shm` targets
   because the repository filesystem had insufficient free space. Incremental
   compilation and debug-info storage were disabled after a disposable-cache

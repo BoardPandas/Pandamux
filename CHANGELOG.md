@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Changed
+
+- **Completed the Phase 5C physical/live acceptance record in version
+  0.60.122.** The maintained status now records the exact Galahad, live Codex,
+  Claude, and Antigravity success and cancellation rows plus the controlled
+  one-effect response-loss result from version 0.60.121. Implementation, local
+  verification, native CI, physical/live acceptance, retained review debt,
+  commit, push, deployment, activation, and release remain separately stated;
+  P4-C5 remains Partial and P4-C7 remains open.
+
 ### Fixed
 
 - **Preserved post-side-effect ambiguity across remote crash recovery in

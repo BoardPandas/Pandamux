@@ -1,13 +1,14 @@
 # Phase 5C: Execution Owner, Worktrees, Budgets, and Recovery
 
-Status: **Implemented, locally verified, and accepted for the local/native
-scope on exact version 0.60.119 commit
-`ce9c48f0a95c1847abe72c1b3f49398ab362425f`; not accepted for production
-scope.** The complete portable matrix, exact native Linux process-group and
-worktree rows, and all eight jobs of native run `38054202454` pass. That run
-includes the required Windows Job Object descendant and macOS process-group
-descendant tests. A physical remote Linux node, live providers, and the
-controlled external-effect row remain unrun. The checkpoint chain and evidence
+Status: **Implemented, locally verified, and accepted for the complete Phase 5C
+local/native and authorized physical/live scope; not accepted as a production
+release.** Exact 0.60.119 commit
+`ce9c48f0a95c1847abe72c1b3f49398ab362425f` closes the binding native rows, and
+all eight jobs of exact 0.60.120 native run `38056999487` pass. Exact 0.60.121
+commit `88cfdd1e244afd0c3c19b792c45042b09112c5de` closes the physical Galahad,
+live Codex/Claude/Antigravity success and cancellation, and controlled
+one-effect response-loss rows. The accepted crash produces one durable review
+and no replacement provider or effect. The checkpoint chain and evidence
 boundaries are recorded in
 [`docs/operations/PHASE5C_ACCEPTANCE.md`](../docs/operations/PHASE5C_ACCEPTANCE.md).
 
@@ -20,11 +21,11 @@ Planning baseline: `778a164b00a1b56c8a6f63310f7d647ac49650e8`
 Workspace version at baseline: `0.60.89`
 
 The original implementation authorization covered local source, test,
-documentation, migration, and commit work only. A later explicit authorization
-permitted pushing the recovery branch and manually dispatching and monitoring
-its native CI. Neither authorization permitted deployment, signing, packaging,
-release, GitHub repository creation or administrative changes, or a pull
-request.
+documentation, migration, and commit work only. Later explicit authorization
+permitted the recorded branch pushes, native CI, and disposable physical/live
+matrix. The current authorization prohibits further push, deployment, signing,
+packaging, release, GitHub repository creation or administrative changes, and a
+pull request.
 
 ## 1. Overview
 
@@ -1005,7 +1006,9 @@ unjoined owner.
 AC-C13's portable tests prove owner/join/quarantine logic; native process-death
 claims additionally require the mandatory native rows in Section 9.6. AC-C16 is
 satisfied functionally by the authenticated loopback-node matrix; it does not
-claim a physical remote host or live commercial provider was exercised.
+by itself claim a physical remote host or live commercial provider was
+exercised. Those separate rows are accepted only by the exact evidence recorded
+in `docs/operations/PHASE5C_ACCEPTANCE.md`.
 
 ## 9. Test plan
 

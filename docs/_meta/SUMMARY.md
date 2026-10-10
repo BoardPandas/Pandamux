@@ -336,6 +336,48 @@
   served-version check, pull request, external provider call, or
   external-repository mutation occurred
 
+## Phase 5C Physical/Live Acceptance Update - 2026-10-10
+
+- **Mode:** incremental update from exact documentation baseline
+  `05362434f6b27dd5463792410bf711fc407514d3` through exact 0.60.121 deciding
+  source `88cfdd1e244afd0c3c19b792c45042b09112c5de`, plus the documentation-only
+  0.60.122 working tree on `codex/recovery-r0`
+- **Phase A TOC drift:** retained 17 pages and 107 stable section IDs; no page,
+  AUTOGEN identifier, or source-map entry was added or removed
+- **Phase B change scope:** six committed paths changed after the prior
+  documentation baseline: workspace version metadata, changelog, the provider
+  mock, the remote-execution regression, and runtime recovery. Five existing
+  AUTOGEN sections across Agent Orchestration and Release and Packaging were
+  regenerated; manual acceptance, index, metadata, root-guide, task, and
+  roadmap records were reconciled separately
+- **Physical/live evidence:** exact 0.60.121 artifacts passed a fresh private
+  Galahad node, live Codex, Claude, and Antigravity success and tool-boundary
+  cancellation turns, proxy reconnect and acknowledgement, and a controlled
+  one-effect response-loss row. The controlled marker remained exactly one
+  line while durable replay reconstructed one pending review without provider
+  or effect redispatch
+- **Retained debt and cleanup:** the Galahad and Hub evidence roots remain for
+  review. The accepted ambiguous dispatch retains its review-owned effect and
+  capacity leases by design. The exact node daemon stopped cleanly, its socket
+  is absent, no owned descendant remains, and no external repository was
+  mutated
+- **Documentation validation:** 17 TOC pages, 107 ordered AUTOGEN sections,
+  1,766 active local links, 1,610 valid line-range citations, all 187 current
+  production Rust source files, and 22 Mermaid blocks pass with zero structural
+  errors. `mmdc` is unavailable, so renderer-level Mermaid validation was not
+  performed
+- **Code-gate status:** exact 0.60.121 passed its focused response-loss
+  regression, the 334-test server suite, full workspace, strict Clippy,
+  boundary, wiring, formatting, and diff gates. The documentation-only
+  0.60.122 tree passed the complete Section 11 matrix before commit, with only
+  two intentional real-shell tests ignored and configured dependency-policy
+  warnings emitted
+- **Remote status:** exact 0.60.120 is the latest pushed and CI-verified source;
+  all eight jobs passed. Versions 0.60.121 and 0.60.122 remain unpushed and have
+  no CI result. No deployment, activation, package, signature, publication,
+  release, served-version check, pull request, GitHub mutation, external
+  provider mutation, or external-repository mutation occurred
+
 ## Historical context
 
 The previous generated wiki described the removed Iced multiplexer architecture.

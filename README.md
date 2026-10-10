@@ -202,17 +202,16 @@ R0 development gate:
   outbox, attempt-owned worktrees and checkpoints, shared admission and budget
   enforcement, local and authenticated loopback-node provider execution,
   bounded typed artifacts and verification evidence, watchdogs, cancellation,
-  joined shutdown, and startup recovery. Exact 0.60.119 commit `ce9c48f` is the
-  deciding local/native acceptance source: the complete portable matrix, the
-  Linux process-group and real Git worktree rows, and all eight jobs of native
-  run `38054202454` pass. Windows CI proves rooted-path, junction-rejection,
-  locked-worktree, Job Object descendant cleanup, release-build, and IPC-smoke
-  rows; Apple Silicon CI proves symlink/worktree, locked-worktree,
-  process-group descendant cleanup, and release-build rows. Phase 5C is
-  therefore accepted for its automated local/native scope. A physical remote
-  node, live providers, and the controlled external-effect row remain unrun,
-  so production readiness is not established. Phase 5C has no public run RPC,
-  CLI, or desktop orchestration surface, and it does not close P4-C5 or P4-C7.
+  joined shutdown, and startup recovery. Exact 0.60.119 commit `ce9c48f` closes
+  the binding native Linux, Windows, and macOS rows; all eight jobs of exact
+  0.60.120 run `38056999487` also pass. Exact 0.60.121 commit `88cfdd1` closes
+  the physical Galahad, live Codex/Claude/Antigravity success and cancellation,
+  and controlled one-effect response-loss rows. Recovery preserves the exact
+  tool-side-effect boundary, creates one durable review, and never dispatches a
+  replacement provider or effect. The Phase 5C execution-runtime matrix is
+  complete, but production acceptance is not established: Phase 5C has no
+  public run RPC, CLI, or desktop orchestration surface, P4-C5 remains Partial,
+  P4-C7 remains open, and no deployment or release occurred.
 
 See the [Phase 4 live acceptance record](docs/operations/PHASE4_ACCEPTANCE.md),
 the [Phase 5A pure-domain acceptance record](docs/operations/PHASE5A_ACCEPTANCE.md),
@@ -324,7 +323,7 @@ The narrow R0 artifact harness is [`scripts/r0-node-artifacts.sh`](scripts/r0-no
 - [`docs/features/TRUSTED_CONFIGURATION.md`](docs/features/TRUSTED_CONFIGURATION.md): Phase 5B architecture and operations
 - [`docs/features/AGENT_ORCHESTRATION.md`](docs/features/AGENT_ORCHESTRATION.md): Phase 5A and Phase 5C orchestration architecture
 - [`docs/operations/PHASE5B_ACCEPTANCE.md`](docs/operations/PHASE5B_ACCEPTANCE.md): exact Phase 5B evidence and limitations
-- [`docs/operations/PHASE5C_ACCEPTANCE.md`](docs/operations/PHASE5C_ACCEPTANCE.md): exact Phase 5C checkpoints, local evidence, and native/live gaps
+- [`docs/operations/PHASE5C_ACCEPTANCE.md`](docs/operations/PHASE5C_ACCEPTANCE.md): exact Phase 5C checkpoints plus local, native, physical, live-provider, controlled-effect, and retained-debt evidence
 - [`tasks/plan-rewrite.md`](tasks/plan-rewrite.md): current implementation and acceptance contract
 - [`tasks/plan-repo.md`](tasks/plan-repo.md): historical rewrite record and retained UI specification
 

@@ -200,6 +200,12 @@ repository prepare, attempt prepare, dispatch, exact status, cancellation,
 ordered events, and acknowledgement. Both stores persist prepare and dispatch
 authority, and a lost response queries the same attempt receipt rather than
 starting a replacement ([orchestration_execution.rs:9-230](../../crates/pandamux-protocol/src/orchestration_execution.rs#L9-L230), [remote_execution.rs:101-851](../../crates/pandamux-server/src/remote_execution.rs#L101-L851)).
+When that exact receipt proves provider acceptance and a later boundary,
+recovery first restores the canonical `StartAttempt` identity and advances the
+boundary before recording a terminal or ambiguous outcome. A durable ambiguous
+dispatch is then reconstructed directly into the same deduplicated review on
+later recovery instead of reacquiring the review-owned effect
+([run_recovery.rs:572-587](../../crates/pandamux-server/src/run_recovery.rs#L572-L587), [run_recovery.rs:1076-1250](../../crates/pandamux-server/src/run_recovery.rs#L1076-L1250), [remote_execution_tests.rs:831-999](../../crates/pandamux-server/src/remote_execution_tests.rs#L831-L999)).
 
 Successful tasks publish canonical, content-hashed artifacts and required
 server-derived evidence in the same transition that advances readiness.
@@ -214,22 +220,25 @@ drain, supervised escalation, positive death verification, settlement,
 worktree cleanup, lease release, sender closure, and writer joins; failure at
 any boundary quarantines retained debt ([attempt_watchdog.rs:11-230](../../crates/pandamux-server/src/attempt_watchdog.rs#L11-L230)). Startup holds one incarnation lock, verifies nonterminal replay and owned resources, reclaims only exact expired local ownership, reattaches only an exact live attempt, and deduplicates ambiguous or unverifiable cases into human review ([run_recovery.rs:37-225](../../crates/pandamux-server/src/run_recovery.rs#L37-L225)).
 
-Phase 5C is an internal runtime checkpoint. Exact 0.60.119 passes the complete
-portable matrix, the native Linux process-group and real Git worktree rows, and
-all eight jobs of native run
+Phase 5C is an internal runtime checkpoint. Exact 0.60.119 passes the binding
+native Linux process-group and real Git worktree rows plus all eight jobs of
+native run
 [38054202454](https://github.com/BoardPandas/Pandamux/actions/runs/38054202454).
 That exact Windows job names the Job Object descendant test as passing, and the
 Apple Silicon job names the Unix process-group descendant test as passing; the
 retained integration exercises the production supervisor and positive death
 checks on both leader and descendant
 ([run_shutdown.rs:430-580](../../crates/pandamux-server/tests/run_shutdown.rs#L430-L580)).
-The automated local/native scope is therefore accepted. A physical remote
-node, live providers, and the controlled external-effect row remain unrun, so
-production acceptance is not established. Public run RPC, CLI, desktop
-orchestration surfaces, and the user-facing recovery-review resolver remain
-out of scope ([2026-10-09-phase-5c-execution-owner.md:1101-1134](../../tasks/2026-10-09-phase-5c-execution-owner.md#L1101-L1134), [2026-10-09-phase-5c-execution-owner.md:1212-1226](../../tasks/2026-10-09-phase-5c-execution-owner.md#L1212-L1226)).
+Exact 0.60.121 then passes the physical Galahad Node, live Codex, Claude, and
+Antigravity success and tool-boundary cancellation rows, plus one controlled
+response-loss file effect with durable ambiguity and no redispatch. The Phase
+5C execution-runtime matrix is therefore complete. Production acceptance is
+still not established: public run RPC, CLI, desktop orchestration surfaces,
+and the user-facing recovery-review resolver remain out of scope, while P4-C5
+and P4-C7 remain open
+([2026-10-09-phase-5c-execution-owner.md:1101-1134](../../tasks/2026-10-09-phase-5c-execution-owner.md#L1101-L1134), [2026-10-09-phase-5c-execution-owner.md:1212-1226](../../tasks/2026-10-09-phase-5c-execution-owner.md#L1212-L1226), [Phase 5C acceptance record](../operations/PHASE5C_ACCEPTANCE.md#native-and-live-acceptance)).
 
-Sources: [migrations.rs:1711-2084](../../crates/pandamux-server/src/store/migrations.rs#L1711-L2084), [orchestration_phase5c.rs:648-933](../../crates/pandamux-server/src/store/orchestration_phase5c.rs#L648-L933), [orchestration_phase5c.rs:4162-4353](../../crates/pandamux-server/src/store/orchestration_phase5c.rs#L4162-L4353), [attempt_worktree.rs:504-562](../../crates/pandamux-server/src/attempt_worktree.rs#L504-L562), [attempt_worktree.rs:1280-1402](../../crates/pandamux-server/src/attempt_worktree.rs#L1280-L1402), [attempt_worktree.rs:1885-1964](../../crates/pandamux-server/src/attempt_worktree.rs#L1885-L1964), [managed_git.rs:798-826](../../crates/pandamux-server/src/managed_git.rs#L798-L826), [execution_admission.rs:119-390](../../crates/pandamux-server/src/execution_admission.rs#L119-L390), [execution_budget.rs:37-126](../../crates/pandamux-server/src/execution_budget.rs#L37-L126), [run_execution_service.rs:253-330](../../crates/pandamux-server/src/run_execution_service.rs#L253-L330), [orchestration_execution.rs:9-230](../../crates/pandamux-protocol/src/orchestration_execution.rs#L9-L230), [remote_execution.rs:101-851](../../crates/pandamux-server/src/remote_execution.rs#L101-L851), [blackboard_store.rs:20-370](../../crates/pandamux-server/src/blackboard_store.rs#L20-L370), [attempt_watchdog.rs:11-230](../../crates/pandamux-server/src/attempt_watchdog.rs#L11-L230), [run_recovery.rs:37-225](../../crates/pandamux-server/src/run_recovery.rs#L37-L225), [run_shutdown.rs:430-580](../../crates/pandamux-server/tests/run_shutdown.rs#L430-L580)
+Sources: [migrations.rs:1711-2084](../../crates/pandamux-server/src/store/migrations.rs#L1711-L2084), [orchestration_phase5c.rs:648-933](../../crates/pandamux-server/src/store/orchestration_phase5c.rs#L648-L933), [orchestration_phase5c.rs:4162-4353](../../crates/pandamux-server/src/store/orchestration_phase5c.rs#L4162-L4353), [attempt_worktree.rs:504-562](../../crates/pandamux-server/src/attempt_worktree.rs#L504-L562), [attempt_worktree.rs:1280-1402](../../crates/pandamux-server/src/attempt_worktree.rs#L1280-L1402), [attempt_worktree.rs:1885-1964](../../crates/pandamux-server/src/attempt_worktree.rs#L1885-L1964), [managed_git.rs:798-826](../../crates/pandamux-server/src/managed_git.rs#L798-L826), [execution_admission.rs:119-390](../../crates/pandamux-server/src/execution_admission.rs#L119-L390), [execution_budget.rs:37-126](../../crates/pandamux-server/src/execution_budget.rs#L37-L126), [run_execution_service.rs:253-330](../../crates/pandamux-server/src/run_execution_service.rs#L253-L330), [orchestration_execution.rs:9-230](../../crates/pandamux-protocol/src/orchestration_execution.rs#L9-L230), [remote_execution.rs:101-851](../../crates/pandamux-server/src/remote_execution.rs#L101-L851), [remote_execution_tests.rs:831-999](../../crates/pandamux-server/src/remote_execution_tests.rs#L831-L999), [blackboard_store.rs:20-370](../../crates/pandamux-server/src/blackboard_store.rs#L20-L370), [attempt_watchdog.rs:11-230](../../crates/pandamux-server/src/attempt_watchdog.rs#L11-L230), [run_recovery.rs:37-225](../../crates/pandamux-server/src/run_recovery.rs#L37-L225), [run_recovery.rs:572-587](../../crates/pandamux-server/src/run_recovery.rs#L572-L587), [run_recovery.rs:1076-1250](../../crates/pandamux-server/src/run_recovery.rs#L1076-L1250), [run_shutdown.rs:430-580](../../crates/pandamux-server/tests/run_shutdown.rs#L430-L580)
 <!-- END:AUTOGEN pandamux_12_agent-orchestration_phase5c-foundation -->
 
 ---
@@ -376,10 +385,14 @@ completion checkpoint when possible ([thread_manager.rs:4121-4273](../../crates/
 - A new turn is rejected while its thread is already working or awaiting an approval, preventing concurrent execution against one thread state ([thread_manager.rs:1994-2012](../../crates/pandamux-server/src/thread_manager.rs#L1994-L2012)).
 - Attachments are resolved against the target thread and size-validated before provider dispatch ([thread_manager.rs:2043-2065](../../crates/pandamux-server/src/thread_manager.rs#L2043-L2065)).
 - Startup recovery keeps intake closed until verified replay completes; ambiguous dispatch, resource, or clock states become deduplicated reviews instead of replacement provider turns ([run_recovery.rs:181-225](../../crates/pandamux-server/src/run_recovery.rs#L181-L225)).
+- Remote outcome recovery restores provider acceptance and any later canonical
+  boundary before terminal or ambiguity settlement; replay of an already
+  ambiguous dispatch derives the same review from its durable reason and digest
+  without reattaching ownership ([run_recovery.rs:572-587](../../crates/pandamux-server/src/run_recovery.rs#L572-L587), [run_recovery.rs:1076-1250](../../crates/pandamux-server/src/run_recovery.rs#L1076-L1250)).
 
 The public protocol separates cancel, approval response, capacity continuation, and resume into distinct typed requests, which keeps recovery actions explicit and auditable ([thread_rpc.rs:80-156](../../crates/pandamux-protocol/src/thread_rpc.rs#L80-L156)).
 
-Sources: [thread_rpc.rs:80-156](../../crates/pandamux-protocol/src/thread_rpc.rs#L80-L156), [thread_manager.rs:1895-1927](../../crates/pandamux-server/src/thread_manager.rs#L1895-L1927), [thread_manager.rs:1994-2065](../../crates/pandamux-server/src/thread_manager.rs#L1994-L2065), [thread_manager.rs:4121-4297](../../crates/pandamux-server/src/thread_manager.rs#L4121-L4297), [attempt_watchdog.rs:141-230](../../crates/pandamux-server/src/attempt_watchdog.rs#L141-L230), [run_execution_service.rs:1271-1490](../../crates/pandamux-server/src/run_execution_service.rs#L1271-L1490), [run_recovery.rs:181-225](../../crates/pandamux-server/src/run_recovery.rs#L181-L225)
+Sources: [thread_rpc.rs:80-156](../../crates/pandamux-protocol/src/thread_rpc.rs#L80-L156), [thread_manager.rs:1895-1927](../../crates/pandamux-server/src/thread_manager.rs#L1895-L1927), [thread_manager.rs:1994-2065](../../crates/pandamux-server/src/thread_manager.rs#L1994-L2065), [thread_manager.rs:4121-4297](../../crates/pandamux-server/src/thread_manager.rs#L4121-L4297), [attempt_watchdog.rs:141-230](../../crates/pandamux-server/src/attempt_watchdog.rs#L141-L230), [run_execution_service.rs:1271-1490](../../crates/pandamux-server/src/run_execution_service.rs#L1271-L1490), [run_recovery.rs:181-225](../../crates/pandamux-server/src/run_recovery.rs#L181-L225), [run_recovery.rs:572-587](../../crates/pandamux-server/src/run_recovery.rs#L572-L587), [run_recovery.rs:1076-1250](../../crates/pandamux-server/src/run_recovery.rs#L1076-L1250)
 <!-- END:AUTOGEN pandamux_12_agent-orchestration_recovery -->
 
 ---

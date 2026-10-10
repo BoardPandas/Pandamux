@@ -2991,16 +2991,15 @@ Acceptance:
 Detailed implementation contract: [`2026-10-09-phase-5c-execution-owner.md`](2026-10-09-phase-5c-execution-owner.md).
 
 Status (2026-10-10): **Implemented, locally verified, and accepted for the
-local/native scope on exact version 0.60.119 commit
-`ce9c48f0a95c1847abe72c1b3f49398ab362425f`; not accepted for production
-scope.** The complete portable matrix, exact Linux process-group and worktree
-rows, and all eight jobs of native run `38054202454` pass. That run includes
-the required Windows Job Object descendant and macOS process-group descendant
-tests. A physical remote Linux node, live commercial providers, and the
-controlled external-effect row remain unrun. The exact checkpoint chain,
-failpoint matrix, retained-debt statement, and separate implementation,
-verification, native/live, CI, deployment, activation, and release statuses are
-recorded in the
+complete Phase 5C local/native and authorized physical/live scope; not accepted
+as a production release.** Exact 0.60.119 closes the binding native rows, and
+all eight jobs of exact 0.60.120 native run `38056999487` pass. Exact 0.60.121
+commit `88cfdd1e244afd0c3c19b792c45042b09112c5de` closes the physical Galahad,
+live Codex/Claude/Antigravity success and cancellation, and controlled
+one-effect response-loss rows. The controlled crash retains one deduplicated
+review and does not redispatch. The exact checkpoint chain, failpoint matrix,
+retained-debt statement, and separate implementation, verification,
+native/live, CI, deployment, activation, and release statuses are recorded in the
 [Phase 5C acceptance record](../docs/operations/PHASE5C_ACCEPTANCE.md). This
 does not pass P4-C5, close P4-C7, or expose the Phase 5D product surfaces.
 
