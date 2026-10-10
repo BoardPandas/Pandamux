@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Accepted native Windows absolute-path prefixes without weakening link
+  checks in version 0.60.116.** Attempt worktree ownership validation now
+  carries drive, UNC, and verbatim prefixes into the rooted path before
+  inspecting filesystem metadata, matching the maintained project-path
+  validator. Every queryable component still rejects links and reparse points.
+
 - **Kept the native Windows ownership diagnostic Clippy-clean in version
   0.60.115.** The test-only managed-path caller annotation now returns as the
   cfg branch expression, allowing the Windows CI workspace tests to reach the

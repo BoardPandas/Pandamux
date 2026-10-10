@@ -1374,6 +1374,9 @@ fn reject_link_components(path: &Path) -> Result<(), AttemptWorktreeError> {
     let mut current = PathBuf::new();
     for component in path.components() {
         current.push(component.as_os_str());
+        if matches!(component, Component::Prefix(_)) {
+            continue;
+        }
         match fs::symlink_metadata(&current) {
             Ok(metadata) if metadata.file_type().is_symlink() || is_reparse_point(&metadata) => {
                 return Err(unsafe_link_error());
@@ -1384,6 +1387,18 @@ fn reject_link_components(path: &Path) -> Result<(), AttemptWorktreeError> {
         }
     }
     Ok(())
+}
+
+#[cfg(all(test, windows))]
+#[test]
+fn windows_link_walk_skips_the_nonqueryable_absolute_prefix() {
+    let temp = tempfile::tempdir().expect("temporary directory");
+    let canonical = fs::canonicalize(temp.path()).expect("canonical temporary directory");
+    assert!(matches!(
+        canonical.components().next(),
+        Some(Component::Prefix(_))
+    ));
+    reject_link_components(&canonical).expect("queryable rooted components remain safe");
 }
 
 fn is_reparse_point(metadata: &fs::Metadata) -> bool {
