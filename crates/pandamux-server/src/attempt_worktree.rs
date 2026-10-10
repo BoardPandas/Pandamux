@@ -1234,10 +1234,10 @@ fn ensure_empty_managed_file(
         }
         Err(_) => return Err(managed_path_error()),
     }
-    let metadata = fs::symlink_metadata(path).map_err(|_| managed_path_error())?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
+        let metadata = fs::symlink_metadata(path).map_err(|_| managed_path_error())?;
         let root = fs::symlink_metadata(data_paths.root()).map_err(|_| managed_path_error())?;
         if metadata.uid() != root.uid() {
             return Err(managed_path_error());
@@ -1331,6 +1331,8 @@ fn validate_directory_metadata(
     }
     #[cfg(windows)]
     crate::windows_security::validate_private_descendant(path).map_err(|_| managed_path_error())?;
+    #[cfg(windows)]
+    let _ = data_paths;
     #[cfg(not(windows))]
     let _ = path;
     Ok(())

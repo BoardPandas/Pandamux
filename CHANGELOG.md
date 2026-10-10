@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Completed the target-portable Phase 5C CI repair in version 0.60.106.**
+  Windows-only paths now remain warning-free under strict Clippy, and the
+  exact-pinned GPUI 0.3.6 crate preserves its published API while local,
+  documented compatibility shims replace optimizer and string-boundary APIs
+  stabilized after Rust 1.89. The attempt-worktree case-collision fixture now
+  builds the hostile tree directly in Git's object database, so it exercises
+  the same fail-closed validation on both case-sensitive and case-insensitive
+  filesystems without asking the host filesystem to materialize an impossible
+  pair of names.
+
 - **Restored target-specific Phase 5C verification in version 0.60.105.**
   Windows process supervision now uses the handle-native null check required by
   strict Rust 1.98 Clippy. The exact-pinned GPUI utility keeps its upstream

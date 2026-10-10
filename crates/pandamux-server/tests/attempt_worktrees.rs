@@ -19,8 +19,9 @@ use pandamux_server::{
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 const PROJECT_ID: &str = "project-attempt-worktrees";
 const REPOSITORY_ID: &str = "repository-attempt-worktrees";
@@ -543,6 +544,34 @@ fn git(repository: &Path, args: &[&str]) -> Vec<u8> {
 
 fn git_text(repository: &Path, args: &[&str]) -> String {
     String::from_utf8(git(repository, args))
+        .expect("utf8 Git output")
+        .trim()
+        .to_string()
+}
+
+fn git_input_text(repository: &Path, args: &[&str], input: &[u8]) -> String {
+    let mut child = Command::new("git")
+        .current_dir(repository)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("run fixture Git with input");
+    child
+        .stdin
+        .take()
+        .expect("fixture Git stdin")
+        .write_all(input)
+        .expect("write fixture Git input");
+    let output = child.wait_with_output().expect("join fixture Git");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
         .expect("utf8 Git output")
         .trim()
         .to_string()
@@ -1191,26 +1220,59 @@ async fn wt_12_symlinked_managed_component_and_escaping_baseline_link_are_reject
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn wt_13_case_collisions_and_content_filters_fail_closed() {
     let harness = Harness::new();
-    fs::write(harness.repository.join("Case.txt"), b"upper\n").expect("upper file");
-    fs::write(harness.repository.join("case.txt"), b"lower\n").expect("lower file");
-    fs::create_dir(harness.repository.join("Directory")).expect("upper directory");
-    fs::create_dir(harness.repository.join("directory")).expect("lower directory");
-    fs::write(harness.repository.join("Directory/one.txt"), b"one\n").expect("upper child");
-    fs::write(harness.repository.join("directory/two.txt"), b"two\n").expect("lower child");
-    git(
+    // Build the hostile tree in Git's object database so a case-insensitive
+    // host never has to materialize two filesystem entries with the same name.
+    let upper_file = git_input_text(
+        &harness.repository,
+        &["hash-object", "-w", "--stdin"],
+        b"upper\n",
+    );
+    let lower_file = git_input_text(
+        &harness.repository,
+        &["hash-object", "-w", "--stdin"],
+        b"lower\n",
+    );
+    let upper_child = git_input_text(
+        &harness.repository,
+        &["hash-object", "-w", "--stdin"],
+        b"one\n",
+    );
+    let lower_child = git_input_text(
+        &harness.repository,
+        &["hash-object", "-w", "--stdin"],
+        b"two\n",
+    );
+    let upper_tree = git_input_text(
+        &harness.repository,
+        &["mktree"],
+        format!("100644 blob {upper_child}\tone.txt\n").as_bytes(),
+    );
+    let lower_tree = git_input_text(
+        &harness.repository,
+        &["mktree"],
+        format!("100644 blob {lower_child}\ttwo.txt\n").as_bytes(),
+    );
+    let collision_tree = git_input_text(
+        &harness.repository,
+        &["mktree"],
+        format!(
+            "100644 blob {upper_file}\tCase.txt\n040000 tree {upper_tree}\tDirectory\n100644 blob {lower_file}\tcase.txt\n040000 tree {lower_tree}\tdirectory\n"
+        )
+        .as_bytes(),
+    );
+    let collision_commit = git_text(
         &harness.repository,
         &[
-            "add",
-            "--",
-            "Case.txt",
-            "case.txt",
-            "Directory/one.txt",
-            "directory/two.txt",
+            "commit-tree",
+            collision_tree.as_str(),
+            "-p",
+            harness.baseline.as_str(),
+            "-m",
+            "case collision",
         ],
     );
-    git(&harness.repository, &["commit", "-m", "case collision"]);
     let mut request = harness.add_run("case-collision", 110_000);
-    request.baseline_commit = git_text(&harness.repository, &["rev-parse", "HEAD"]);
+    request.baseline_commit = collision_commit;
     let error = harness
         .service
         .create(request, None)

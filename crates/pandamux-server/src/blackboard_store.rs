@@ -926,6 +926,8 @@ fn ensure_private_cache_directory(path: &Path, owner_root: &Path) -> Result<(), 
         }
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
     }
+    #[cfg(not(unix))]
+    let _ = owner_root;
     Ok(())
 }
 

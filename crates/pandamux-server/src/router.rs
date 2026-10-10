@@ -190,7 +190,7 @@ fn render_login_command(program: &str, args: &[String]) -> String {
 fn login_shell() -> Result<Option<String>, RpcError> {
     #[cfg(windows)]
     {
-        return pandamux_term::shell::resolve_powershell()
+        pandamux_term::shell::resolve_powershell()
             .map(Some)
             .ok_or_else(|| {
                 RpcError::with_data(
@@ -201,7 +201,7 @@ fn login_shell() -> Result<Option<String>, RpcError> {
                         "retryable": true,
                     }),
                 )
-            });
+            })
     }
     #[cfg(not(windows))]
     {
