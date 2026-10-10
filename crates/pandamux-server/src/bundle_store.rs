@@ -557,7 +557,7 @@ impl BundleStore {
             let imported_ref = format!("refs/pandamux/verified/{}", expected_commit.as_str());
             self.git.run(ManagedGitCommand::Fetch {
                 git_dir: git_dir.clone(),
-                remote: bundle_path.to_string_lossy().into_owned(),
+                remote: crate::managed_git::git_process_path_string(&bundle_path),
                 source: advertised_ref.to_string(),
                 target: imported_ref.clone(),
             })?;

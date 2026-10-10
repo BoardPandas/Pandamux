@@ -1,5 +1,9 @@
 use crate::DataPaths;
 use pandamux_core::SecretsPolicy;
+use std::borrow::Cow;
+use std::ffi::OsStr;
+#[cfg(windows)]
+use std::ffi::OsString;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -501,7 +505,10 @@ fn configure_process(
     match command {
         ManagedGitCommand::InitBare { git_dir } => {
             managed_git_config_args(process);
-            process.arg("init").arg("--bare").arg(git_dir);
+            process
+                .arg("init")
+                .arg("--bare")
+                .arg(git_process_path(git_dir));
         }
         ManagedGitCommand::SymbolicRef {
             git_dir,
@@ -729,7 +736,7 @@ fn configure_process(
             process
                 .arg("bundle")
                 .arg("create")
-                .arg(output_path)
+                .arg(git_process_path(output_path))
                 .arg(revision);
         }
         ManagedGitCommand::VerifyBundle {
@@ -737,7 +744,10 @@ fn configure_process(
             bundle_path,
         } => {
             git_dir_args(process, git_dir);
-            process.arg("bundle").arg("verify").arg(bundle_path);
+            process
+                .arg("bundle")
+                .arg("verify")
+                .arg(git_process_path(bundle_path));
         }
         ManagedGitCommand::WorktreeAdd {
             git_dir,
@@ -757,16 +767,16 @@ fn configure_process(
                 .arg("add")
                 .arg("-b")
                 .arg(branch)
-                .arg(worktree_path)
+                .arg(git_process_path(worktree_path))
                 .arg(commit);
         }
         ManagedGitCommand::WorktreeHead { worktree_path } => {
-            process.arg("-C").arg(worktree_path);
+            process.arg("-C").arg(git_process_path(worktree_path));
             managed_git_config_args(process);
             process.arg("rev-parse").arg("--verify").arg("HEAD");
         }
         ManagedGitCommand::WorktreeBranch { worktree_path } => {
-            process.arg("-C").arg(worktree_path);
+            process.arg("-C").arg(git_process_path(worktree_path));
             managed_git_config_args(process);
             process
                 .arg("rev-parse")
@@ -774,7 +784,7 @@ fn configure_process(
                 .arg("HEAD");
         }
         ManagedGitCommand::WorktreeCommonDir { worktree_path } => {
-            process.arg("-C").arg(worktree_path);
+            process.arg("-C").arg(git_process_path(worktree_path));
             managed_git_config_args(process);
             process
                 .arg("rev-parse")
@@ -789,8 +799,30 @@ fn git_dir_args(process: &mut Command, git_dir: &Path) {
     process
         .arg("--no-replace-objects")
         .arg("--git-dir")
-        .arg(git_dir);
+        .arg(git_process_path(git_dir));
     managed_git_config_args(process);
+}
+
+fn git_process_path(path: &Path) -> Cow<'_, OsStr> {
+    #[cfg(windows)]
+    {
+        let original = path.as_os_str();
+        let text = original.to_string_lossy();
+        let compatible = pandamux_core::strip_windows_verbatim(&text);
+        if compatible.as_str() == text.as_ref() {
+            Cow::Borrowed(original)
+        } else {
+            Cow::Owned(OsString::from(compatible))
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        Cow::Borrowed(path.as_os_str())
+    }
+}
+
+pub(crate) fn git_process_path_string(path: &Path) -> String {
+    git_process_path(path).to_string_lossy().into_owned()
 }
 
 fn managed_git_config_args(process: &mut Command) {
@@ -1273,6 +1305,52 @@ mod tests {
             arguments
                 .windows(2)
                 .any(|pair| pair == ["-c", "core.fsyncMethod=fsync"])
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_git_arguments_remove_verbatim_drive_and_unc_prefixes() {
+        assert_eq!(
+            git_process_path(Path::new(r"\\?\C:\Users\runner\AppData\PandaMUX")).as_ref(),
+            OsStr::new(r"C:\Users\runner\AppData\PandaMUX")
+        );
+        assert_eq!(
+            git_process_path(Path::new(r"\\?\UNC\server\share\PandaMUX")).as_ref(),
+            OsStr::new(r"\\server\share\PandaMUX")
+        );
+
+        let mut process = Command::new("git");
+        configure_process(
+            &mut process,
+            &ManagedGitCommand::InitBare {
+                git_dir: PathBuf::from(r"\\?\C:\Users\runner\repository.git"),
+            },
+        )
+        .expect("configure Windows Git init");
+        let arguments = process
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            arguments.last().map(String::as_str),
+            Some(r"C:\Users\runner\repository.git")
+        );
+        assert!(
+            arguments
+                .iter()
+                .all(|argument| !argument.starts_with(r"\\?\"))
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn non_windows_git_arguments_preserve_literal_backslash_paths() {
+        let path = Path::new(r"\\?\literal-unix-name");
+        assert_eq!(git_process_path(path), path.as_os_str());
+        assert_eq!(
+            git_process_path_string(path),
+            r"\\?\literal-unix-name".to_string()
         );
     }
 

@@ -1014,11 +1014,12 @@ impl RunExecutionService {
         let receipt = dispatch.receipt.clone();
         match receipt.disposition {
             PreparedTurnDispatchDisposition::Accepted => {
-                self.store.mark_local_attempt_accepted(
+                let acceptance = self.store.mark_local_attempt_accepted(
                     &prepared.ownership,
                     &prepared.run_attempt_id,
                     dispatch_started_at_ms,
                 )?;
+                let accepted_at_ms = acceptance.attempt.updated_at_ms;
                 self.commit_owned_command(
                     &prepared.dispatch.run_id,
                     RunCommand::StartAttempt {
@@ -1026,7 +1027,7 @@ impl RunExecutionService {
                         thread_id: prepared.thread.id.clone(),
                         turn_attempt_id: prepared.turn_attempt.id.clone(),
                     },
-                    dispatch_started_at_ms,
+                    accepted_at_ms,
                     "provider-attempt-start",
                 )?;
                 let provider_owner = dispatch.owner.take().ok_or_else(|| {

@@ -1535,7 +1535,6 @@ impl Store {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let (current, lease) = load_owned_effect(&tx, ownership)?;
-        validate_effect_action_time(&current, &lease, accepted_at_ms)?;
         let attempts = load_attempt_dispatches(&tx, &current.run_id)?;
         let existing = attempts
             .into_iter()
@@ -1546,6 +1545,13 @@ impl Store {
                 "local attempt acceptance differs from its effect",
             ));
         }
+        // The provider writer starts before this acknowledgement returns and
+        // can durably record an immediate event first. Resolve that ordering
+        // inside this transaction so the acceptance clock cannot race a
+        // concurrent progress update, while retaining the lease-time check
+        // and the attempt compare-and-swap below.
+        let accepted_at_ms = accepted_at_ms.max(existing.updated_at_ms);
+        validate_effect_action_time(&current, &lease, accepted_at_ms)?;
         let accepted = match (current.delivery.state, existing.state) {
             (EffectDeliveryState::DispatchStarted, AttemptDispatchState::DispatchStarted) => {
                 update_effect_state(
@@ -11894,6 +11900,97 @@ mod tests {
         assert_eq!(retained.len(), 1);
         assert_eq!(retained[0].id.as_str(), "progress-provider-after-cancel");
         assert_eq!(retained[0].at_ms, 31_000);
+    }
+
+    #[test]
+    fn life_local_acceptance_uses_durable_progress_clock_and_preserves_lease_boundary() {
+        let store = store_with_repository();
+        let (run, events) = fixture_lifecycle(false);
+        let effects = store
+            .insert_orchestration_run(&run_record(run), &events)
+            .expect("insert acceptance race run");
+        let dispatch_effect = effects
+            .iter()
+            .find(|record| {
+                matches!(
+                    record.effect.kind,
+                    pandamux_core::OrchestrationEffectKind::DispatchTask { .. }
+                )
+            })
+            .expect("acceptance race dispatch effect")
+            .clone();
+        let mut runtime = runtime_records(dispatch_effect.effect.id.clone());
+        runtime.progress.clear();
+        runtime.recovery_reviews.clear();
+        store
+            .insert_orchestration_runtime_records(&runtime)
+            .expect("insert acceptance race runtime");
+
+        let claim = effect_claim(&dispatch_effect, "acceptance-race");
+        store
+            .claim_orchestration_effect(&claim, None)
+            .expect("claim acceptance race effect");
+        let ownership = effect_ownership(&claim);
+        store
+            .mark_orchestration_effect_prepared(&ownership, &"c".repeat(64), 31_000)
+            .expect("prepare acceptance race effect");
+        store
+            .mark_orchestration_effect_dispatch_started(
+                &EffectDispatchRequest {
+                    ownership: ownership.clone(),
+                    dispatch_started_at_ms: 32_000,
+                },
+                None,
+            )
+            .expect("start acceptance race dispatch");
+
+        let progress = AttemptProgressRecord {
+            id: AttemptProgressId::new("progress-before-local-acceptance"),
+            run_id: RunId::new("run-phase5c"),
+            task_id: RunTaskId::new("task-phase5c"),
+            attempt_id: RunAttemptId::new("run-attempt-phase5c"),
+            kind: AttemptProgressKind::ApprovalTransition,
+            payload_digest: "a".repeat(64),
+            at_ms: 33_000,
+            cumulative_stream_bytes: None,
+            terminal: false,
+        };
+        store
+            .record_provider_attempt_progress(&progress)
+            .expect("persist provider progress before acceptance");
+
+        let accepted = store
+            .mark_local_attempt_accepted(&ownership, &progress.attempt_id, 32_000)
+            .expect("accept with the durable provider clock");
+        assert!(accepted.accepted);
+        assert_eq!(accepted.attempt.state, AttemptDispatchState::Accepted);
+        assert_eq!(accepted.attempt.last_progress_at_ms, 33_000);
+        assert_eq!(accepted.attempt.updated_at_ms, 33_000);
+        assert_eq!(accepted.effect.updated_at_ms, 33_000);
+
+        let replay = store
+            .mark_local_attempt_accepted(&ownership, &progress.attempt_id, 32_000)
+            .expect("replay acceptance with its original sampled clock");
+        assert!(!replay.accepted);
+        assert_eq!(replay.attempt, accepted.attempt);
+        assert_eq!(replay.effect, accepted.effect);
+
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE orchestration_leases SET expires_at_ms = 33000 WHERE lease_id = ?1",
+                [ownership.lease_id.as_str()],
+            )
+            .expect("move lease to the exact acceptance boundary");
+        assert!(
+            store
+                .mark_local_attempt_accepted(&ownership, &progress.attempt_id, 32_000)
+                .expect_err("acceptance at the exclusive lease boundary must fail")
+                .to_string()
+                .contains("outside its active lease")
+        );
     }
 
     #[test]

@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Closed the remaining native Phase 5C CI failures in version 0.60.110.**
+  Immediate provider progress now supplies the monotonic durable clock for
+  local acceptance inside the existing lease-checked transaction, and replay
+  retains the exact accepted state without weakening compare-and-swap checks.
+  Managed Git still validates canonical app-data ownership paths, then removes
+  Windows verbatim drive or UNC prefixes only from subprocess arguments so Git
+  for Windows can initialize, verify, fetch, bundle, and materialize the owned
+  repositories and worktrees.
+
 - **Made the native Phase 5C acceptance fixtures deterministic and portable in
   version 0.60.109.** Local-provider tests now derive dispatch time from the
   durable prepared record instead of resampling a rollback-prone wall clock;

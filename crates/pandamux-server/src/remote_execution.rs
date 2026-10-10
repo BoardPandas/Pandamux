@@ -991,7 +991,7 @@ impl NodeExecutionService {
         self.managed_git
             .run(ManagedGitCommand::Fetch {
                 git_dir: repository_path.to_path_buf(),
-                remote: staged_path.to_string_lossy().to_string(),
+                remote: crate::managed_git::git_process_path_string(staged_path),
                 source: baseline_commit.to_string(),
                 target,
             })
