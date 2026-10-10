@@ -202,13 +202,18 @@ R0 development gate:
   outbox, attempt-owned worktrees and checkpoints, shared admission and budget
   enforcement, local and authenticated loopback-node provider execution,
   bounded typed artifacts and verification evidence, watchdogs, cancellation,
-  joined shutdown, and startup recovery. Exact 0.60.103 commit `d78a22c` is the
-  deciding runtime source and passes the complete portable matrix plus the
-  native Linux process-group and real Git worktree rows. Version 0.60.104 is a
-  documentation-only reconciliation. Windows and macOS native rows, a physical
-  remote node, live providers, and the controlled external-effect row remain
-  unrun. Phase 5C has no public run RPC, CLI, or desktop orchestration surface,
-  and it does not close P4-C5 or P4-C7.
+  joined shutdown, and startup recovery. Exact 0.60.117 commit `e53406b` is the
+  deciding native-CI source: the complete portable matrix, the native Linux
+  process-group and real Git worktree rows, and all eight jobs of native run
+  `38040781118` pass. Windows CI now proves the retained rooted-path,
+  junction-rejection, locked-worktree, real-child-death, release-build, and IPC
+  smoke rows; Apple Silicon CI proves the retained symlink/worktree,
+  locked-worktree, real-child-death, and release-build rows. The required
+  Windows Job Object descendant and macOS process-group descendant rows remain
+  unverified, so complete local/native acceptance is not established. A
+  physical remote node, live providers, and the controlled external-effect row
+  also remain unrun. Phase 5C has no public run RPC, CLI, or desktop
+  orchestration surface, and it does not close P4-C5 or P4-C7.
 
 See the [Phase 4 live acceptance record](docs/operations/PHASE4_ACCEPTANCE.md),
 the [Phase 5A pure-domain acceptance record](docs/operations/PHASE5A_ACCEPTANCE.md),

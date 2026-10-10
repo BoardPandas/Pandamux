@@ -32,6 +32,7 @@ The following files were used as evidence for this page:
 - [execution_admission.rs](../../crates/pandamux-server/src/execution_admission.rs)
 - [execution_budget.rs](../../crates/pandamux-server/src/execution_budget.rs)
 - [attempt_worktree.rs](../../crates/pandamux-server/src/attempt_worktree.rs)
+- [managed_git.rs:798-826](../../crates/pandamux-server/src/managed_git.rs#L798-L826)
 - [blackboard_store.rs:20-370](../../crates/pandamux-server/src/blackboard_store.rs#L20-L370)
 - [remote_execution.rs:101-851](../../crates/pandamux-server/src/remote_execution.rs#L101-L851)
 - [run_recovery.rs:37-225](../../crates/pandamux-server/src/run_recovery.rs#L37-L225)
@@ -80,7 +81,7 @@ The pure engine itself still performs no I/O. Phase 5C now persists and
 interprets its transitions in the server, but the event vocabulary, effect
 identity, readiness, retry boundary, artifact validation, and replay behavior
 remain pure. Public run RPC, CLI, and desktop orchestration behavior remain
-Phase 5D work ([2026-10-09-phase-5c-execution-owner.md:1209-1223](../../tasks/2026-10-09-phase-5c-execution-owner.md#L1209-L1223)).
+Phase 5D work ([2026-10-09-phase-5c-execution-owner.md:1212-1223](../../tasks/2026-10-09-phase-5c-execution-owner.md#L1212-L1223)).
 
 Sources: [lib.rs:9-55](../../crates/pandamux-orchestrator/src/lib.rs#L9-L55), [schema/mod.rs:16-215](../../crates/pandamux-orchestrator/src/schema/mod.rs#L16-L215), [bundle.rs:56-244](../../crates/pandamux-orchestrator/src/bundle.rs#L56-L244), [dag.rs:14-165](../../crates/pandamux-orchestrator/src/dag.rs#L14-L165), [routing.rs:52-118](../../crates/pandamux-orchestrator/src/routing.rs#L52-L118), [policy.rs:37-188](../../crates/pandamux-orchestrator/src/policy.rs#L37-L188), [model_output.rs:9-124](../../crates/pandamux-orchestrator/src/model_output.rs#L9-L124), [state.rs:55-356](../../crates/pandamux-orchestrator/src/state.rs#L55-L356)
 <!-- END:AUTOGEN pandamux_12_agent-orchestration_phase5a -->
@@ -120,12 +121,12 @@ durable and replay-safe
 Each execution attempt can now bind exactly one app-owned worktree. The service
 derives the path and full branch ref from canonical repository, run, task, and
 attempt identities; records the worktree lease and ambiguous ownership intent
-before Git; and then materializes only the requested commit. Repository hooks,
-global attributes, system configuration, submodule recursion, and custom
-content filters are disabled or rejected. Blocking filesystem and Git work run
-on a bounded blocking pool, and Windows child processes use
-`CREATE_NO_WINDOW`
-([attempt_worktree.rs](../../crates/pandamux-server/src/attempt_worktree.rs)).
+before Git; creates and validates the exact empty private leaf; and then
+materializes only the requested commit. Durable ownership paths stay canonical,
+while Windows verbatim drive or UNC prefixes are removed only from Git process
+arguments. The rooted link walk carries the prefix without querying it alone,
+then still rejects every queryable symlink or reparse component
+([attempt_worktree.rs:504-562](../../crates/pandamux-server/src/attempt_worktree.rs#L504-L562), [attempt_worktree.rs:1280-1402](../../crates/pandamux-server/src/attempt_worktree.rs#L1280-L1402), [attempt_worktree.rs:1885-1964](../../crates/pandamux-server/src/attempt_worktree.rs#L1885-L1964), [managed_git.rs:798-826](../../crates/pandamux-server/src/managed_git.rs#L798-L826)). Repository hooks, global attributes, system configuration, submodule recursion, and custom content filters are disabled or rejected. Blocking filesystem and Git work runs on a bounded blocking pool, and Windows child processes use `CREATE_NO_WINDOW`.
 
 Before, after, and recovery checkpoints use a private temporary index and a
 stable checkpoint ref, leaving both the user checkout and the attempt index
@@ -192,7 +193,7 @@ ledger, continuation, and `AttemptBoundary` as retry authority. Only a typed
 not-started result with verified cleanup can release capacity and budget for
 one bounded fallback; response loss, output, approval interaction, unresolved
 tools, or an external commit remain ambiguous or review-required
-([run_execution_service_tests.rs:440-869](../../crates/pandamux-server/src/run_execution_service_tests.rs#L440-L869)).
+([run_execution_service_tests.rs:440-869](../../crates/pandamux-server/src/run_execution_service_tests.rs#L440-L869)). Provider-owned progress sampled before a concurrent cancellation reuses the newer durable attempt clock inside the lease-checked transaction; the public store path continues to reject clock regression ([orchestration_phase5c.rs:4162-4353](../../crates/pandamux-server/src/store/orchestration_phase5c.rs#L4162-L4353)).
 
 Remote execution uses private, environment-bound protocol records for
 repository prepare, attempt prepare, dispatch, exact status, cancellation,
@@ -213,15 +214,18 @@ drain, supervised escalation, positive death verification, settlement,
 worktree cleanup, lease release, sender closure, and writer joins; failure at
 any boundary quarantines retained debt ([attempt_watchdog.rs:11-230](../../crates/pandamux-server/src/attempt_watchdog.rs#L11-L230)). Startup holds one incarnation lock, verifies nonterminal replay and owned resources, reclaims only exact expired local ownership, reattaches only an exact live attempt, and deduplicates ambiguous or unverifiable cases into human review ([run_recovery.rs:37-225](../../crates/pandamux-server/src/run_recovery.rs#L37-L225)).
 
-Phase 5C is an internal runtime checkpoint. Exact 0.60.103 passes the complete
-portable matrix plus the native Linux process-group and real Git worktree rows;
-version 0.60.104 is a documentation-only reconciliation.
-Windows and macOS native rows, a physical remote node, live providers, and the
-controlled external-effect row remain unrun. Public run RPC, CLI, desktop
+Phase 5C is an internal runtime checkpoint. Exact 0.60.117 passes the complete
+portable matrix, the native Linux process-group and real Git worktree rows, and
+all eight jobs of native run `38040781118`. Windows and Apple Silicon CI execute
+retained native worktree, link/reparse, lock, real-child, and release-build
+rows, but the required Windows Job Object descendant and macOS process-group
+descendant rows remain unverified. A physical remote node, live providers, and
+the controlled external-effect row remain unrun, so complete local/native and
+production acceptance are not established. Public run RPC, CLI, desktop
 orchestration surfaces, and the user-facing recovery-review resolver remain
-out of scope ([2026-10-09-phase-5c-execution-owner.md:1116-1134](../../tasks/2026-10-09-phase-5c-execution-owner.md#L1116-L1134), [2026-10-09-phase-5c-execution-owner.md:1209-1223](../../tasks/2026-10-09-phase-5c-execution-owner.md#L1209-L1223)).
+out of scope ([2026-10-09-phase-5c-execution-owner.md:1101-1134](../../tasks/2026-10-09-phase-5c-execution-owner.md#L1101-L1134), [2026-10-09-phase-5c-execution-owner.md:1212-1226](../../tasks/2026-10-09-phase-5c-execution-owner.md#L1212-L1226)).
 
-Sources: [migrations.rs:1711-2084](../../crates/pandamux-server/src/store/migrations.rs#L1711-L2084), [orchestration_phase5c.rs:648-933](../../crates/pandamux-server/src/store/orchestration_phase5c.rs#L648-L933), [attempt_worktree.rs:141-239](../../crates/pandamux-server/src/attempt_worktree.rs#L141-L239), [execution_admission.rs:119-390](../../crates/pandamux-server/src/execution_admission.rs#L119-L390), [execution_budget.rs:37-126](../../crates/pandamux-server/src/execution_budget.rs#L37-L126), [run_execution_service.rs:253-330](../../crates/pandamux-server/src/run_execution_service.rs#L253-L330), [orchestration_execution.rs:9-230](../../crates/pandamux-protocol/src/orchestration_execution.rs#L9-L230), [remote_execution.rs:101-851](../../crates/pandamux-server/src/remote_execution.rs#L101-L851), [blackboard_store.rs:20-370](../../crates/pandamux-server/src/blackboard_store.rs#L20-L370), [attempt_watchdog.rs:11-230](../../crates/pandamux-server/src/attempt_watchdog.rs#L11-L230), [run_recovery.rs:37-225](../../crates/pandamux-server/src/run_recovery.rs#L37-L225)
+Sources: [migrations.rs:1711-2084](../../crates/pandamux-server/src/store/migrations.rs#L1711-L2084), [orchestration_phase5c.rs:648-933](../../crates/pandamux-server/src/store/orchestration_phase5c.rs#L648-L933), [orchestration_phase5c.rs:4162-4353](../../crates/pandamux-server/src/store/orchestration_phase5c.rs#L4162-L4353), [attempt_worktree.rs:504-562](../../crates/pandamux-server/src/attempt_worktree.rs#L504-L562), [attempt_worktree.rs:1280-1402](../../crates/pandamux-server/src/attempt_worktree.rs#L1280-L1402), [attempt_worktree.rs:1885-1964](../../crates/pandamux-server/src/attempt_worktree.rs#L1885-L1964), [managed_git.rs:798-826](../../crates/pandamux-server/src/managed_git.rs#L798-L826), [execution_admission.rs:119-390](../../crates/pandamux-server/src/execution_admission.rs#L119-L390), [execution_budget.rs:37-126](../../crates/pandamux-server/src/execution_budget.rs#L37-L126), [run_execution_service.rs:253-330](../../crates/pandamux-server/src/run_execution_service.rs#L253-L330), [orchestration_execution.rs:9-230](../../crates/pandamux-protocol/src/orchestration_execution.rs#L9-L230), [remote_execution.rs:101-851](../../crates/pandamux-server/src/remote_execution.rs#L101-L851), [blackboard_store.rs:20-370](../../crates/pandamux-server/src/blackboard_store.rs#L20-L370), [attempt_watchdog.rs:11-230](../../crates/pandamux-server/src/attempt_watchdog.rs#L11-L230), [run_recovery.rs:37-225](../../crates/pandamux-server/src/run_recovery.rs#L37-L225)
 <!-- END:AUTOGEN pandamux_12_agent-orchestration_phase5c-foundation -->
 
 ---

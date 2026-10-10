@@ -1,12 +1,14 @@
 # Phase 5C: Execution Owner, Worktrees, Budgets, and Recovery
 
-Status: **Implemented and locally verified on exact version 0.60.103 commit
-`d78a22cb69711d411ee857add7aed09d654452b0`.** The complete portable matrix
-and exact native Linux process-group and worktree rows pass on that deciding
-source; version 0.60.104 is a documentation-only reconciliation. Required
-Windows and macOS native rows, a physical remote Linux node, live providers,
-and the controlled external-effect row remain unrun, so complete local/native
-and production acceptance are not claimed. The checkpoint chain and evidence
+Status: **Implemented, locally verified, and target-CI verified on exact version
+0.60.117 commit `e53406bbd211e701f89a25d63a8cd672033a22d9`; not accepted for
+the complete local/native or production scope.** The complete portable matrix,
+exact native Linux process-group and worktree rows, and all eight jobs of native
+run `38040781118` pass. Windows and Apple Silicon CI execute retained native
+worktree, link/reparse, lock, real-child, and release-build rows, but the
+required Windows Job Object descendant and macOS process-group descendant rows
+remain unverified. A physical remote Linux node, live providers, and the
+controlled external-effect row remain unrun. The checkpoint chain and evidence
 boundaries are recorded in
 [`docs/operations/PHASE5C_ACCEPTANCE.md`](../docs/operations/PHASE5C_ACCEPTANCE.md).
 
@@ -18,10 +20,12 @@ Planning baseline: `778a164b00a1b56c8a6f63310f7d647ac49650e8`
 
 Workspace version at baseline: `0.60.89`
 
-Implement this specification in a fresh session. It authorizes local source,
-test, documentation, migration, and commit work only. It does not authorize a
-push, deployment, signing, packaging, release, GitHub repository mutation, or
-pull request.
+The original implementation authorization covered local source, test,
+documentation, migration, and commit work only. A later explicit authorization
+permitted pushing the recovery branch and manually dispatching and monitoring
+its native CI. Neither authorization permitted deployment, signing, packaging,
+release, GitHub repository creation or administrative changes, or a pull
+request.
 
 ## 1. Overview
 
@@ -1221,7 +1225,10 @@ deleting the evidence that it was ambiguous.
   method and test harness; real human resolution remains intentionally
   unavailable until Phase 5D exposes it.
 - Closing P4-C5/P4-C7 or claiming provider exhaustion acceptance from mocks.
-- Push, CI, deployment, activation, signing, packaging, publication, or release.
+- Except for the later narrow authorization to push this recovery branch and
+  manually dispatch and monitor native CI: deployment, activation, signing,
+  packaging, publication, release, GitHub repository administration, or pull
+  requests.
 - Claiming Windows, macOS, remote-node, or live-provider evidence when it was
   not executed on that exact platform/provider.
 

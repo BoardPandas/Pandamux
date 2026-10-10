@@ -247,6 +247,52 @@
   publication, release, served-version check, GitHub write, pull request,
   external provider call, or external-repository mutation occurred.
 
+## Phase 5C Native-CI Evidence Update - 2026-10-10
+
+- **Mode:** incremental update from the corrected exact 0.60.103 baseline
+  `d78a22c0cffae2454373b8527b11c821da20d627` through exact 0.60.117 native-CI
+  source `e53406bbd211e701f89a25d63a8cd672033a22d9`, plus the
+  documentation-only 0.60.118 working tree on `codex/recovery-r0`
+- **Phase A TOC drift:** retained 17 pages and 107 stable section IDs; expanded
+  the Architecture, Agent Orchestration, and Release source maps without adding
+  a new page or section
+- **Phase B change scope:** 304 committed paths changed after the corrected
+  Phase 5C documentation baseline: 270 added exact-pinned vendored dependency
+  files and 34 modified workspace, runtime, test, workflow, or documentation
+  paths. The vendored dependency is build input, not a new PandaMUX service
+- **Generated pages updated:** Architecture, Agent Orchestration, and Release
+  and Packaging, covering eight existing AUTOGEN sections without changing
+  their IDs
+- **Maintained records updated:** root README and CLAUDE guide, task and roadmap
+  status, changelog, documentation index, TOC, generation metadata, this
+  summary, and the manual Phase 5C acceptance record
+- **Native-CI evidence:** every repair run from 0.60.104 through 0.60.116 is
+  retained with its exact failing stage. Exact 0.60.117 run
+  `38040781118` passed all eight jobs, including Windows and Apple Silicon
+  workspace tests and release builds, both Rust 1.89 graphs, pure-orchestrator
+  target graphs, dependency policy, and built-artifact IPC smoke
+- **Acceptance boundary:** Windows and macOS automation remains Partial because
+  no retained test proves Windows Job Object descendant cleanup or macOS
+  process-group descendant cleanup. Physical-remote, live-provider, and
+  controlled-external-effect rows remain Unrun. P4-C5 remains Partial and
+  P4-C7 remains open
+- **Documentation validation:** 17 TOC pages, 107 ordered AUTOGEN sections,
+  1,734 active local links including the documentation index, 1,595 valid
+  line-range citations, all 187 current
+  production Rust source files, and 22 Mermaid blocks pass with zero structural
+  errors. `mmdc` is unavailable, so renderer-level Mermaid validation was not
+  performed
+- **Code-gate status:** the documentation-only 0.60.118 tree passes the complete
+  Section 11 matrix. An initial full-workspace compile exhausted a disposable
+  build-cache quota; after task-owned cache cleanup, one managed-Git timeout
+  fixture produced a transient start failure, then passed 20 of 20 exact stress
+  replays before the unchanged full workspace command passed with two
+  intentional real-shell ignores
+- **Remote status:** repair commits through exact 0.60.117 were pushed and the
+  exact native workflow passed. No deployment, activation, package, signature,
+  publication, release, served-version check, pull request, external provider
+  call, or external-repository mutation occurred
+
 ## Historical context
 
 The previous generated wiki described the removed Iced multiplexer architecture.

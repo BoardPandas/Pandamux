@@ -15,6 +15,7 @@ The following files were used as evidence for this page:
 - [crates/pandamux-protocol/src/lib.rs:1-245](../../crates/pandamux-protocol/src/lib.rs#L1-L245)
 - [crates/pandamux-server/src/lib.rs:1-159](../../crates/pandamux-server/src/lib.rs#L1-L159)
 - [crates/pandamux-server/src/attempt_watchdog.rs:11-230](../../crates/pandamux-server/src/attempt_watchdog.rs#L11-L230)
+- [crates/pandamux-server/src/attempt_worktree.rs:1280-1402](../../crates/pandamux-server/src/attempt_worktree.rs#L1280-L1402)
 - [crates/pandamux-server/src/remote_execution.rs:101-851](../../crates/pandamux-server/src/remote_execution.rs#L101-L851)
 - [crates/pandamux-server/src/run_execution_service.rs:123-330](../../crates/pandamux-server/src/run_execution_service.rs#L123-L330)
 - [crates/pandamux-server/src/run_recovery.rs:37-225](../../crates/pandamux-server/src/run_recovery.rs#L37-L225)
@@ -210,6 +211,7 @@ The repository encodes its most important boundaries as build-time checks and na
 - `pandamux-protocol` contains wire contracts and cannot import implementation crates ([CLAUDE.md:241-241](../../CLAUDE.md#L241-L241)).
 - `pandamux-server` is the production composition owner for SSH remoting, PTYs, provider execution, persistence, and routing ([CLAUDE.md:242-245](../../CLAUDE.md#L242-L245), [CLAUDE.md:251-267](../../CLAUDE.md#L251-L267)).
 - `RunExecutionService` owns Phase 5C effect interpretation and explicit lifecycle joins, while `ThreadManager` remains the sole provider-session owner ([run_execution_service.rs:253-330](../../crates/pandamux-server/src/run_execution_service.rs#L253-L330), [thread_manager.rs:174-385](../../crates/pandamux-server/src/thread_manager.rs#L174-L385)).
+- Attempt worktree ownership is checked against the canonical app-data root, private descendant metadata, and every queryable path component; Windows drive, UNC, and verbatim prefixes are carried into the rooted path without treating the prefix alone as a filesystem object ([attempt_worktree.rs:1280-1402](../../crates/pandamux-server/src/attempt_worktree.rs#L1280-L1402)).
 - Desktop code holds rendering-oriented state and sends intents; it is not a durable-state writer ([CLAUDE.md:245-245](../../CLAUDE.md#L245-L245)).
 - Request identity and capability scope are assigned by the accepting server transport, not accepted from request JSON ([CLAUDE.md:257-263](../../CLAUDE.md#L257-L263)).
 - Full-access providers have host-user authority; the local boundary is per OS user and is not hostile same-user process isolation ([CLAUDE.md:265-267](../../CLAUDE.md#L265-L267)).
@@ -224,7 +226,7 @@ cargo run --locked -p pandamux-boundary-check --quiet
 
 The fixture test makes the guard falsifiable before the real locked graph is accepted ([CLAUDE.md:246-249](../../CLAUDE.md#L246-L249)).
 
-Sources: [CLAUDE.md:236-267](../../CLAUDE.md#L236-L267), [run_execution_service.rs:253-330](../../crates/pandamux-server/src/run_execution_service.rs#L253-L330), [thread_manager.rs:174-385](../../crates/pandamux-server/src/thread_manager.rs#L174-L385), [lib.rs:140-449](../../tools/pandamux-boundary-check/src/lib.rs#L140-L449), [lib.rs:451-698](../../tools/pandamux-boundary-check/src/lib.rs#L451-L698)
+Sources: [CLAUDE.md:236-267](../../CLAUDE.md#L236-L267), [run_execution_service.rs:253-330](../../crates/pandamux-server/src/run_execution_service.rs#L253-L330), [thread_manager.rs:174-385](../../crates/pandamux-server/src/thread_manager.rs#L174-L385), [attempt_worktree.rs:1280-1402](../../crates/pandamux-server/src/attempt_worktree.rs#L1280-L1402), [lib.rs:140-449](../../tools/pandamux-boundary-check/src/lib.rs#L140-L449), [lib.rs:451-698](../../tools/pandamux-boundary-check/src/lib.rs#L451-L698)
 <!-- END:AUTOGEN pandamux_03_architecture_invariants -->
 
 ---

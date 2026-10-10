@@ -2990,15 +2990,19 @@ Acceptance:
 
 Detailed implementation contract: [`2026-10-09-phase-5c-execution-owner.md`](2026-10-09-phase-5c-execution-owner.md).
 
-Status (2026-10-09): **Implemented and locally verified on exact version
-0.60.103 commit `d78a22cb69711d411ee857add7aed09d654452b0`.** The complete portable
-matrix and exact Linux process-group and worktree rows pass on that deciding
-source; version 0.60.104 is a documentation-only reconciliation. Windows and
-macOS native execution, a physical remote Linux node, live commercial
-providers, and the controlled external-effect row remain unrun. The exact
-checkpoint chain, failpoint matrix, retained-debt statement, and separate
-implementation, verification, native/live, CI, deployment, activation, and
-release statuses are recorded in the
+Status (2026-10-10): **Implemented, locally verified, and target-CI verified on
+exact version 0.60.117 commit
+`e53406bbd211e701f89a25d63a8cd672033a22d9`; not accepted for the complete
+local/native or production scope.** The complete portable matrix, exact Linux
+process-group and worktree rows, and all eight jobs of native run `38040781118`
+pass. Windows and Apple Silicon CI execute retained native worktree,
+link/reparse, lock, real-child, and release-build rows, but the required Windows
+Job Object descendant and macOS process-group descendant rows remain
+unverified. A physical remote Linux node, live commercial providers, and the
+controlled external-effect row remain unrun. The exact checkpoint chain,
+failpoint matrix, retained-debt statement, and separate implementation,
+verification, native/live, CI, deployment, activation, and release statuses are
+recorded in the
 [Phase 5C acceptance record](../docs/operations/PHASE5C_ACCEPTANCE.md). This
 does not pass P4-C5, close P4-C7, or expose the Phase 5D product surfaces.
 

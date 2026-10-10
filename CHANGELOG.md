@@ -154,6 +154,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Reconciled the Phase 5C native CI evidence without overstating native or
+  production acceptance in version 0.60.118.** Exact version 0.60.117 commit
+  `e53406b` passes all eight jobs in native run `38040781118`, including Windows
+  and Apple Silicon workspace tests, Windows and macOS release builds, both
+  Rust 1.89 graphs, both pure-orchestrator musl graphs, dependency policy, and
+  the built Windows server/CLI IPC smoke. The maintained record now includes
+  every failed repair run from 0.60.104 through 0.60.116 and the exact
+  0.60.105 through 0.60.117 repair chain. Native Windows and macOS automation
+  are recorded as partial because the required Windows Job Object descendant
+  and macOS process-group descendant rows still lack exact tests; physical
+  remote, live-provider, controlled-external-effect, deployment, activation,
+  packaging, signing, publication, and release evidence remain absent. P4-C5
+  remains Partial and P4-C7 remains open.
+
 - **Reconciled the final Phase 5C acceptance record in version 0.60.104.**
   Exact version 0.60.103 commit `d78a22c` preserves one winning cancellation
   report for every concurrent caller and passes the complete Section 11 matrix,

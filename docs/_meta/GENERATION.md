@@ -1,59 +1,51 @@
 # Generation Metadata
 
-- **Commit:** `d78a22cb69711d411ee857add7aed09d654452b0`
-- **Commit role:** exact deciding Phase 5C implementation repair and
-  Linux-native evidence source; the version 0.60.104 follow-up is documentation
-  and version metadata only
+- **Commit:** `e53406bbd211e701f89a25d63a8cd672033a22d9`
+- **Commit role:** exact deciding Phase 5C implementation and native-CI source;
+  the version 0.60.118 follow-up is documentation and version metadata only
 - **Documentation branch:** `codex/recovery-r0`
-- **Generated:** 2026-10-09T20:18:20-04:00
-- **Working tree:** final Phase 5C acceptance documentation follow-up for the
-  clean deciding source
-- **Mode:** incremental Phase 5C execution-runtime reconciliation
+- **Generated:** 2026-10-10T06:05:04-04:00
+- **Working tree:** Phase 5C native-CI evidence reconciliation plus the
+  protected untracked recovery bundles and unrelated security-scan report
+- **Mode:** incremental Phase 5C native-CI reconciliation
 - **Previous documentation baseline:**
-  `6fb9a8ff248b81a59d6ae2f7ee105ac8e8dbc5e4`
+  `d5b238188938ed1d20232bed967a4518fa7cee7f`
 - **Pages maintained:** 17
 - **Sections maintained:** 107
 - **Current Rust source coverage:** 187 of 187 crate source files
 
 ## Notes
 
-The maintained Agent Orchestration and Architecture pages now map the private
-Phase 5C server runtime: migration 14, verified replay, durable effect
-delivery, attempt-owned worktrees and checkpoints, shared admission, integer
-budgets, local and authenticated node execution, bounded artifacts and
-server-derived evidence, lifecycle ownership, joined shutdown, and startup
-recovery. The existing `pandamux_12_agent-orchestration_phase5c-foundation`
-identifier was retained while its section was brought through C-J and added to
-the TOC source map.
+The maintained Agent Orchestration, Architecture, and Release pages now map
+the native-CI repairs that followed the initial Phase 5C acceptance record:
+private attempt-worktree materialization, Git path normalization, rooted
+Windows path validation, durable local-acceptance progress, and the supported
+server artifact-smoke invocation. The existing stable Phase 5C AUTOGEN
+identifier and page set were retained; source maps were expanded only where
+the repaired implementation became relevant evidence.
 
 The root README and CLAUDE guide, task and roadmap status, changelog,
-documentation index, release boundary, generation metadata, summary,
-Architecture, Configuration, Agent Orchestration, and the Phase 5C acceptance
-record were reconciled together. The record maps AC-C01 through AC-C18 and
-CRASH-01 through CRASH-12 to retained evidence, records C-A through C-K, and
-separates portable/local and exact Linux evidence from every unrun native/live
-row.
+documentation index, TOC, generation metadata, summary, Architecture, Agent
+Orchestration, Release, and the manual Phase 5C acceptance record were
+reconciled together. The prior metadata's malformed long form of the 0.60.103
+hash was corrected to
+`d78a22c0cffae2454373b8527b11c821da20d627` after its unique short hash was
+verified. The record preserves AC-C01 through AC-C18 and CRASH-01 through
+CRASH-12 while adding the exact native-CI repair chain and run evidence.
 
 ## Validation Boundary
 
-The active wiki was checked for TOC and marker agreement, local-link targets,
+The active wiki is checked for TOC and marker agreement, local-link targets,
 line-range citations, current Rust source coverage, and static Mermaid rules.
-The exact validation totals are recorded in `_meta/SUMMARY.md`. A Mermaid
-renderer was not installed, so renderer-level diagram validation was not
-performed.
+The exact validation totals and current renderer availability are recorded in
+`_meta/SUMMARY.md`.
 
-Exact version 0.60.100 commit `79ce5a0d` initially passed the complete Phase 5C
-Section 11 matrix. A later replay exposed a load-dependent shutdown race; exact
-version 0.60.101 commit `0b59964d` repaired it and passed deterministic,
-30-iteration stress, complete server, boundary, and exact Linux native checks,
-including descendant process-group termination and all 11 real
-attempt-worktree cases. Exact post-commit replay of the 0.60.102 documentation
-checkpoint then exposed a concurrent cancellation-report join defect. Exact
-version 0.60.103 commit `d78a22c` preserves the cleanup owner's report for all
-waiters and passes its deterministic regression, 20 pressured 237-test server
-runs, the complete Section 11 matrix, and both explicit Linux native rows.
-Version 0.60.104 is the documentation-only final reconciliation and receives a
-complete post-commit matrix before completion.
-Windows and macOS native rows, a physical remote node, live providers, and the
-controlled external-effect row remain unrun. P4-C5 remains Partial and P4-C7
+Exact version 0.60.117 commit
+`e53406bbd211e701f89a25d63a8cd672033a22d9` passes all eight jobs in native
+[run 38040781118](https://github.com/BoardPandas/Pandamux/actions/runs/38040781118),
+including Windows and macOS workspace tests and release builds. Windows and
+macOS automation remain Partial for the binding Phase 5C native acceptance
+scope because no retained test exercises a Windows Job Object descendant or a
+macOS process-group descendant. The physical remote node, live providers, and
+controlled external-effect row remain Unrun. P4-C5 remains Partial and P4-C7
 remains open.

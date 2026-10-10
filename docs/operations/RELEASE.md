@@ -4,11 +4,12 @@
 
 The following files were used as evidence for this page:
 
-- [CLAUDE.md:133-535](../../CLAUDE.md#L133-L535)
+- [CLAUDE.md:133-543](../../CLAUDE.md#L133-L543)
 - [Cargo.toml:1-48](../../Cargo.toml#L1-L48)
 - [rust-toolchain.toml:1-4](../../rust-toolchain.toml#L1-L4)
-- [CHANGELOG.md:1-80](../../CHANGELOG.md#L1-L80)
-- [rust.yml:1-171](../../.github/workflows/rust.yml#L1-L171)
+- [CHANGELOG.md:1-165](../../CHANGELOG.md#L1-L165)
+- [rust.yml:1-216](../../.github/workflows/rust.yml#L1-L216)
+- [main.rs:666-687](../../crates/pandamux-server/src/main.rs#L666-L687)
 - [release.yml:1-179](../../.github/workflows/release.yml#L1-L179)
 - [winget.yml:1-39](../../.github/workflows/winget.yml#L1-L39)
 - [build-remote-musl.sh:1-38](../../scripts/build-remote-musl.sh#L1-L38)
@@ -27,27 +28,28 @@ The following files were used as evidence for this page:
 ## Version and Changelog
 
 The root workspace package version is the single version source inherited by
-all product and tooling crates. The final Phase 5C documentation reconciliation
-is `0.60.104`; its deciding implementation baseline is exact `0.60.103` commit
-`d78a22cb69711d411ee857add7aed09d654452b0`. The workspace declares Rust 1.89
+all product and tooling crates. The current Phase 5C evidence reconciliation is
+`0.60.118`; its deciding native-CI baseline is exact `0.60.117` commit
+`e53406bbd211e701f89a25d63a8cd672033a22d9`. The workspace declares Rust 1.89
 and edition 2024, while development evidence uses the separately pinned Rust
 1.98.1 toolchain ([Cargo.toml:1-30](../../Cargo.toml#L1-L30), [rust-toolchain.toml:1-4](../../rust-toolchain.toml#L1-L4)).
 
 | Artifact | Current source of identity |
 |---|---|
 | Rust crates and binaries | `[workspace.package] version` in root `Cargo.toml` ([Cargo.toml:25-30](../../Cargo.toml#L25-L30)) |
-| Human-readable change record | `CHANGELOG.md`, with current work under `Unreleased` ([CHANGELOG.md:1-80](../../CHANGELOG.md#L1-L80)) |
+| Human-readable change record | `CHANGELOG.md`, with current work under `Unreleased` ([CHANGELOG.md:1-165](../../CHANGELOG.md#L1-L165)) |
 | Release tag | No currently authorized tag procedure; the dormant workflow derives `v<workspace-version>` only as historical pipeline behavior ([release.yml:48-66](../../.github/workflows/release.yml#L48-L66)) |
 | Remote binary manifest | Checked-in placeholder is version `0.53.36`, not the current workspace version ([manifest.json:1-3](../../resources/remote-binaries/manifest.json#L1-L3), [Cargo.toml:25-26](../../Cargo.toml#L25-L26)) |
 
 Repository convention requires updating both `CHANGELOG.md` and the root
 version when preparing a commit, but a version bump or implementation commit
 does not grant release authorization. The current changelog identifies Phase
-5C as an internal execution-runtime checkpoint, separates portable and native
-evidence, and explicitly leaves P4-C5 and P4-C7 open
-([CHANGELOG.md:8-150](../../CHANGELOG.md#L8-L150)).
+5C as an internal execution-runtime checkpoint, records the native-CI repair
+chain, separates target-CI evidence from missing native/live rows, and
+explicitly leaves P4-C5 and P4-C7 open
+([CHANGELOG.md:8-165](../../CHANGELOG.md#L8-L165)).
 
-Sources: [Cargo.toml:1-30](../../Cargo.toml#L1-L30), [rust-toolchain.toml:1-4](../../rust-toolchain.toml#L1-L4), [CHANGELOG.md:1-150](../../CHANGELOG.md#L1-L150), [release.yml:48-66](../../.github/workflows/release.yml#L48-L66), [manifest.json:1-3](../../resources/remote-binaries/manifest.json#L1-L3)
+Sources: [Cargo.toml:1-30](../../Cargo.toml#L1-L30), [rust-toolchain.toml:1-4](../../rust-toolchain.toml#L1-L4), [CHANGELOG.md:1-165](../../CHANGELOG.md#L1-L165), [release.yml:48-66](../../.github/workflows/release.yml#L48-L66), [manifest.json:1-3](../../resources/remote-binaries/manifest.json#L1-L3)
 <!-- END:AUTOGEN pandamux_14_release_versioning -->
 
 ---
@@ -73,16 +75,21 @@ Sources: [CLAUDE.md:181-216](../../CLAUDE.md#L181-L216)
 |---|---|
 | Formatting and lint | Successful `rustfmt` and warning-denied workspace Clippy run |
 | Automated behavior | Successful workspace tests, plus relevant scoped crate tests when isolating failures ([CLAUDE.md:181-205](../../CLAUDE.md#L181-L205)) |
-| Architecture | Negative boundary fixtures pass, then the real locked target-resolved graph passes ([rust.yml:75-79](../../.github/workflows/rust.yml#L75-L79)) |
-| Dependency policy | Advisories, licenses, bans, and sources all pass ([rust.yml:81-85](../../.github/workflows/rust.yml#L81-L85)) |
+| Architecture | Negative boundary fixtures pass, then the real locked target-resolved graph passes ([rust.yml:90-94](../../.github/workflows/rust.yml#L90-L94)) |
+| Dependency policy | Advisories, licenses, bans, and sources all pass ([rust.yml:40-53](../../.github/workflows/rust.yml#L40-L53)) |
 | Repository wiring | Successful Claude wiring guard |
-| Minimum Rust | Windows product and Linux headless graphs compile at Rust 1.89 ([rust.yml:147-171](../../.github/workflows/rust.yml#L147-L171)) |
-| Built binaries | Server/CLI/desktop release builds, then the artifact smoke harness where applicable ([rust.yml:87-95](../../.github/workflows/rust.yml#L87-L95)) |
-| Native acceptance | The applicable acceptance matrix on exact committed artifacts. Phase 5C has exact Linux process-group and real-worktree evidence, but Windows and macOS native rows remain unrun; the complete Phase 4 exit matrix also remains open ([CLAUDE.md:518-535](../../CLAUDE.md#L518-L535), [Phase 5C acceptance record](PHASE5C_ACCEPTANCE.md#native-and-live-acceptance)) |
+| Minimum Rust | Windows product and Linux headless graphs compile at Rust 1.89 ([rust.yml:192-216](../../.github/workflows/rust.yml#L192-L216)) |
+| Built binaries | Server/CLI/desktop release builds, then the artifact smoke harness where applicable ([rust.yml:96-104](../../.github/workflows/rust.yml#L96-L104)) |
+| Native acceptance | The applicable acceptance matrix on exact committed artifacts. Phase 5C has exact Linux process-group/worktree evidence and partial Windows/macOS CI evidence, but the Windows Job Object and macOS process-group descendant rows remain unverified; the complete Phase 4 exit matrix also remains open ([Phase 5C acceptance record](PHASE5C_ACCEPTANCE.md#native-and-live-acceptance)) |
 
-`smoke-built-artifacts.ps1` locates built server and CLI binaries, starts the server headlessly, waits up to 15 seconds for a protocol handshake, then verifies hello, ping, and identify before force-stopping the background process ([smoke-built-artifacts.ps1:1-27](../../scripts/smoke-built-artifacts.ps1#L1-L27), [smoke-built-artifacts.ps1:29-93](../../scripts/smoke-built-artifacts.ps1#L29-L93)). That is IPC smoke evidence, not desktop packaging, deployment, or production acceptance.
+`smoke-built-artifacts.ps1` locates built server and CLI binaries, starts the
+non-GUI server with its supported default invocation, waits up to 15 seconds
+for a protocol handshake, then verifies hello, ping, and identify before
+force-stopping the background process. The production parser continues to
+reject the obsolete `--headless` argument
+([smoke-built-artifacts.ps1:1-93](../../scripts/smoke-built-artifacts.ps1#L1-L93), [main.rs:666-687](../../crates/pandamux-server/src/main.rs#L666-L687)). That is IPC smoke evidence, not desktop packaging, deployment, or production acceptance.
 
-Sources: [CLAUDE.md:181-216](../../CLAUDE.md#L181-L216), [rust.yml:69-95](../../.github/workflows/rust.yml#L69-L95), [rust.yml:147-171](../../.github/workflows/rust.yml#L147-L171), [CLAUDE.md:518-535](../../CLAUDE.md#L518-L535), [PHASE5C_ACCEPTANCE.md](PHASE5C_ACCEPTANCE.md), [smoke-built-artifacts.ps1:1-93](../../scripts/smoke-built-artifacts.ps1#L1-L93)
+Sources: [CLAUDE.md:181-216](../../CLAUDE.md#L181-L216), [rust.yml:40-53](../../.github/workflows/rust.yml#L40-L53), [rust.yml:55-104](../../.github/workflows/rust.yml#L55-L104), [rust.yml:192-216](../../.github/workflows/rust.yml#L192-L216), [PHASE5C_ACCEPTANCE.md](PHASE5C_ACCEPTANCE.md), [smoke-built-artifacts.ps1:1-93](../../scripts/smoke-built-artifacts.ps1#L1-L93), [main.rs:666-687](../../crates/pandamux-server/src/main.rs#L666-L687)
 <!-- END:AUTOGEN pandamux_14_release_gates -->
 
 ---
@@ -90,7 +97,7 @@ Sources: [CLAUDE.md:181-216](../../CLAUDE.md#L181-L216), [rust.yml:69-95](../../
 <!-- BEGIN:AUTOGEN pandamux_14_release_windows -->
 ## Windows Packaging
 
-There is no current supported Windows packaging procedure for the GPUI workspace. The repository guide explicitly says the checked-in release workflow contains historical packaging references and must not be used as evidence that the current workspace is releasable; final packaging, signing, publication, and updates belong to a later Phase 7 ([CLAUDE.md:518-535](../../CLAUDE.md#L518-L535)).
+There is no current supported Windows packaging procedure for the GPUI workspace. The repository guide explicitly says the checked-in release workflow contains historical packaging references and must not be used as evidence that the current workspace is releasable; final packaging, signing, publication, and updates belong to a later Phase 7 ([CLAUDE.md:522-543](../../CLAUDE.md#L522-L543)).
 
 The dormant workflow describes a prior design: build CLI and GUI binaries, sign executables with Azure Trusted Signing, package one NSIS installer with `cargo-packager`, sign the installer, and upload it ([release.yml:3-7](../../.github/workflows/release.yml#L3-L7), [release.yml:69-99](../../.github/workflows/release.yml#L69-L99), [release.yml:101-163](../../.github/workflows/release.yml#L101-L163)). It is not aligned with the active workspace because it still builds removed package `pandamux-app` with `iced-runtime`, while the workspace lists `pandamux-desktop` ([release.yml:68-73](../../.github/workflows/release.yml#L68-L73), [Cargo.toml:1-12](../../Cargo.toml#L1-L12)).
 
@@ -103,7 +110,7 @@ The dormant workflow describes a prior design: build CLI and GUI binaries, sign 
 
 No local packaging command should be inferred from this dormant file. Before Windows release work begins, the workflow must be replaced or reconciled with the GPUI desktop and then verified on exact native artifacts.
 
-Sources: [CLAUDE.md:518-535](../../CLAUDE.md#L518-L535), [Cargo.toml:1-14](../../Cargo.toml#L1-L14), [release.yml:3-7](../../.github/workflows/release.yml#L3-L7), [release.yml:31-37](../../.github/workflows/release.yml#L31-L37), [release.yml:68-163](../../.github/workflows/release.yml#L68-L163)
+Sources: [CLAUDE.md:522-543](../../CLAUDE.md#L522-L543), [Cargo.toml:1-14](../../Cargo.toml#L1-L14), [release.yml:3-7](../../.github/workflows/release.yml#L3-L7), [release.yml:31-37](../../.github/workflows/release.yml#L31-L37), [release.yml:68-163](../../.github/workflows/release.yml#L68-L163)
 <!-- END:AUTOGEN pandamux_14_release_windows -->
 
 ---
@@ -131,7 +138,7 @@ Sources: [CLAUDE.md:505-516](../../CLAUDE.md#L505-L516), [build-remote-musl.sh:1
 <!-- BEGIN:AUTOGEN pandamux_14_release_pipeline -->
 ## Tag and Publication Pipeline
 
-The only checked-in tag workflow is dormant and historical. A `v*` tag or manual dispatch enters the workflow, but the first substantive gate fails unless the repository variable `RELEASES_ENABLED` is explicitly set to `true` ([release.yml:9-16](../../.github/workflows/release.yml#L9-L16), [release.yml:24-37](../../.github/workflows/release.yml#L24-L37)). Current repository guidance says not to enable or rely on it for the GPUI rewrite ([CLAUDE.md:518-535](../../CLAUDE.md#L518-L535)).
+The only checked-in tag workflow is dormant and historical. A `v*` tag or manual dispatch enters the workflow, but the first substantive gate fails unless the repository variable `RELEASES_ENABLED` is explicitly set to `true` ([release.yml:9-16](../../.github/workflows/release.yml#L9-L16), [release.yml:24-37](../../.github/workflows/release.yml#L24-L37)). Current repository guidance says not to enable or rely on it for the GPUI rewrite ([CLAUDE.md:522-543](../../CLAUDE.md#L522-L543)).
 
 ```mermaid
 graph TD
@@ -147,7 +154,7 @@ For reference only, the dormant path resolves a tag, builds old package targets,
 
 No deployment occurs in either workflow. GitHub Release publication and winget metadata submission would be distribution events, while host installation/activation and served-version verification would remain separate evidence.
 
-Sources: [CLAUDE.md:518-535](../../CLAUDE.md#L518-L535), [release.yml:9-179](../../.github/workflows/release.yml#L9-L179), [winget.yml:1-39](../../.github/workflows/winget.yml#L1-L39)
+Sources: [CLAUDE.md:522-543](../../CLAUDE.md#L522-L543), [release.yml:9-179](../../.github/workflows/release.yml#L9-L179), [winget.yml:1-39](../../.github/workflows/winget.yml#L1-L39)
 <!-- END:AUTOGEN pandamux_14_release_pipeline -->
 
 ---
@@ -155,23 +162,23 @@ Sources: [CLAUDE.md:518-535](../../CLAUDE.md#L518-L535), [release.yml:9-179](../
 <!-- BEGIN:AUTOGEN pandamux_14_release_evidence -->
 ## Acceptance and Evidence Boundaries
 
-Release state must be reported as distinct facts. Implementation, local verification, commit, push, CI, packaging, signing, publication, installation, activation, health, served version, and live acceptance are not interchangeable; current guidance explicitly separates the first six and live acceptance ([CLAUDE.md:518-535](../../CLAUDE.md#L518-L535)).
+Release state must be reported as distinct facts. Implementation, local verification, commit, push, CI, packaging, signing, publication, installation, activation, health, served version, and live acceptance are not interchangeable; current guidance explicitly separates the first six and live acceptance ([CLAUDE.md:522-543](../../CLAUDE.md#L522-L543)).
 
 | Evidence statement | Minimum proof | Current repository status |
 |---|---|---|
-| Implemented | Source exists at a pinned commit | Phase 5C runtime exists at exact 0.60.103 commit `d78a22c`; the 0.60.104 follow-up is documentation only ([Phase 5C acceptance record](PHASE5C_ACCEPTANCE.md#checkpoint-chain)) |
-| Locally verified | Exact commands and exit results | Phase 5C's complete portable matrix passed on exact 0.60.103 deciding source; the documentation-only 0.60.104 tree receives its own post-commit replay ([Phase 5C acceptance record](PHASE5C_ACCEPTANCE.md#local-verification)) |
-| Native/live accepted | Exact platform and provider rows | Linux process-group and real-worktree rows pass; Windows, macOS, physical-remote, live-provider, and controlled external-effect rows are unrun ([Phase 5C acceptance record](PHASE5C_ACCEPTANCE.md#native-and-live-acceptance)) |
-| CI passed | Exact commit has successful required jobs | Not established by these documentation files |
-| Packaged and signed | Exact current-workspace artifacts plus signature verification | Not established; historical workflow is not valid evidence ([CLAUDE.md:518-535](../../CLAUDE.md#L518-L535)) |
+| Implemented | Source exists at a pinned commit | Phase 5C runtime and native repairs exist at exact 0.60.117 commit `e53406b`; 0.60.118 is documentation and version metadata only ([Phase 5C acceptance record](PHASE5C_ACCEPTANCE.md#checkpoint-chain)) |
+| Locally verified | Exact commands and exit results | The complete portable matrix and exact Linux rows pass; the final smoke repair also passes focused parser, architecture, MSRV, dependency-policy, formatting, and diff gates ([Phase 5C acceptance record](PHASE5C_ACCEPTANCE.md#local-verification)) |
+| Native/live accepted | Exact platform and provider rows | Linux process-group and real-worktree rows pass. Windows/macOS CI automation is partial; physical-remote, live-provider, and controlled external-effect rows remain unrun ([Phase 5C acceptance record](PHASE5C_ACCEPTANCE.md#native-and-live-acceptance)) |
+| CI passed | Exact commit has successful required jobs | All eight jobs passed for exact `e53406b` in [native run 38040781118](https://github.com/BoardPandas/Pandamux/actions/runs/38040781118); this is CI evidence, not deployment or full native/live acceptance |
+| Packaged and signed | Exact current-workspace artifacts plus signature verification | Not established; historical workflow is not valid evidence ([CLAUDE.md:522-543](../../CLAUDE.md#L522-L543)) |
 | Published | Exact release/tag and assets exist | Not established; release workflow is disabled ([release.yml:31-37](../../.github/workflows/release.yml#L31-L37)) |
 | Distributed through winget | Matching winget-pkgs update accepted | Not established; workflow job is disabled ([winget.yml:25-39](../../.github/workflows/winget.yml#L25-L39)) |
 | Remote artifact accepted | Both binaries have exact commit/version/size/hash and pass required lifecycle checks | Placeholder manifest cannot establish this ([manifest.json:1-29](../../resources/remote-binaries/manifest.json#L1-L29)) |
-| Production accepted or shipped | Entire acceptance matrix closed on exact artifacts | Not established; Phase 5C native/live rows remain open, and P4-C5 and final P4-C7 remain open even though R0.5 and P4-C6 passed ([CLAUDE.md:518-535](../../CLAUDE.md#L518-L535)) |
+| Production accepted or shipped | Entire acceptance matrix closed on exact artifacts | Not established; Phase 5C native/live rows remain open, and P4-C5 and final P4-C7 remain open even though R0.5 and P4-C6 passed ([Phase 5C acceptance record](PHASE5C_ACCEPTANCE.md#status-separation)) |
 
 The recommended interpretation is therefore conservative: source and test progress may be reported on their own merits, but PandaMUX must not currently be described as released, deployed, production-accepted, or shipped.
 
-Sources: [CLAUDE.md:181-216](../../CLAUDE.md#L181-L216), [CLAUDE.md:518-535](../../CLAUDE.md#L518-L535), [PHASE5C_ACCEPTANCE.md](PHASE5C_ACCEPTANCE.md), [release.yml:31-37](../../.github/workflows/release.yml#L31-L37), [winget.yml:25-39](../../.github/workflows/winget.yml#L25-L39), [manifest.json:1-29](../../resources/remote-binaries/manifest.json#L1-L29)
+Sources: [CLAUDE.md:181-216](../../CLAUDE.md#L181-L216), [CLAUDE.md:522-543](../../CLAUDE.md#L522-L543), [PHASE5C_ACCEPTANCE.md](PHASE5C_ACCEPTANCE.md), [release.yml:31-37](../../.github/workflows/release.yml#L31-L37), [winget.yml:25-39](../../.github/workflows/winget.yml#L25-L39), [manifest.json:1-29](../../resources/remote-binaries/manifest.json#L1-L29)
 <!-- END:AUTOGEN pandamux_14_release_evidence -->
 
 ---
