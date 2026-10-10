@@ -352,7 +352,7 @@ impl AttemptWorktreeService {
         ensure_path_absent(&index_path)?;
         let index_environment = vec![(
             OsString::from("GIT_INDEX_FILE"),
-            index_path.as_os_str().to_os_string(),
+            crate::managed_git::git_process_path(&index_path).into_owned(),
         )];
         let result = (|| {
             let mut read_tree = GitInvocation::new(
@@ -506,6 +506,13 @@ impl AttemptWorktreeService {
         context: &RepositoryContext,
         invocation: GitInvocation,
     ) -> Result<GitOutput, AttemptWorktreeError> {
+        let arguments = invocation
+            .args
+            .iter()
+            .map(|argument| crate::managed_git::git_process_path(Path::new(argument)).into_owned())
+            .collect::<Vec<_>>();
+        let global_config =
+            crate::managed_git::git_process_path(&context.empty_global_config).into_owned();
         let mut command = Command::new(&self.git_program);
         sanitize_git_environment(&mut command);
         command
@@ -513,15 +520,18 @@ impl AttemptWorktreeService {
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_ATTR_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", &context.empty_global_config)
+            .env("GIT_CONFIG_GLOBAL", global_config)
             .env("LC_ALL", "C")
             .env("LANG", "C")
             .arg("-c")
-            .arg(format!("core.hooksPath={}", context.hooks_dir.display()))
+            .arg(format!(
+                "core.hooksPath={}",
+                crate::managed_git::git_process_path_string(&context.hooks_dir)
+            ))
             .arg("-c")
             .arg(format!(
                 "core.attributesFile={}",
-                context.empty_attributes.display()
+                crate::managed_git::git_process_path_string(&context.empty_attributes)
             ))
             .arg("-c")
             .arg("submodule.recurse=false")
@@ -537,7 +547,7 @@ impl AttemptWorktreeService {
             .arg("gc.auto=0")
             .arg("-c")
             .arg("maintenance.auto=false")
-            .args(&invocation.args)
+            .args(arguments)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());

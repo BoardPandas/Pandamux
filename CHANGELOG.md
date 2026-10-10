@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Completed Windows Git path normalization for Phase 5C in version
+  0.60.112.** Attempt-worktree Git arguments, managed hook and attribute
+  paths, index paths, and remote execution fixtures now remove Windows
+  verbatim drive or UNC prefixes only at the subprocess boundary. Durable
+  ownership paths remain canonical and continue through the existing private
+  root, reparse-point, and ACL checks unchanged.
+
 - **Restored native Windows compilation for the Phase 5C path fixtures in
   version 0.60.111.** The Windows-only Managed Git assertions now bind their
   normalized `Cow<OsStr>` values as `&OsStr`, removing target-specific type

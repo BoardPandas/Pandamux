@@ -803,7 +803,7 @@ fn git_dir_args(process: &mut Command, git_dir: &Path) {
     managed_git_config_args(process);
 }
 
-fn git_process_path(path: &Path) -> Cow<'_, OsStr> {
+pub(crate) fn git_process_path(path: &Path) -> Cow<'_, OsStr> {
     #[cfg(windows)]
     {
         let original = path.as_os_str();

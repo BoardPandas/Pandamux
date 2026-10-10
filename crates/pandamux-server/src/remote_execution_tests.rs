@@ -1859,10 +1859,14 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 fn git(repository: &Path, args: &[&str]) -> Vec<u8> {
+    let process_args = args
+        .iter()
+        .map(|argument| crate::managed_git::git_process_path(Path::new(argument)).into_owned())
+        .collect::<Vec<_>>();
     let output = Command::new("git")
         .current_dir(repository)
         .env("GIT_TERMINAL_PROMPT", "0")
-        .args(args)
+        .args(process_args)
         .output()
         .expect("run fixture Git");
     assert!(
