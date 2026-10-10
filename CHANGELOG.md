@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Restored native Windows compilation for the Phase 5C path fixtures in
+  version 0.60.111.** The Windows-only Managed Git assertions now bind their
+  normalized `Cow<OsStr>` values as `&OsStr`, removing target-specific type
+  inference ambiguity without changing subprocess path normalization.
+
 - **Closed the remaining native Phase 5C CI failures in version 0.60.110.**
   Immediate provider progress now supplies the monotonic durable clock for
   local acceptance inside the existing lease-checked transaction, and replay

@@ -1311,14 +1311,11 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_git_arguments_remove_verbatim_drive_and_unc_prefixes() {
-        assert_eq!(
-            git_process_path(Path::new(r"\\?\C:\Users\runner\AppData\PandaMUX")).as_ref(),
-            OsStr::new(r"C:\Users\runner\AppData\PandaMUX")
-        );
-        assert_eq!(
-            git_process_path(Path::new(r"\\?\UNC\server\share\PandaMUX")).as_ref(),
-            OsStr::new(r"\\server\share\PandaMUX")
-        );
+        let drive_path: &OsStr =
+            &git_process_path(Path::new(r"\\?\C:\Users\runner\AppData\PandaMUX"));
+        assert_eq!(drive_path, OsStr::new(r"C:\Users\runner\AppData\PandaMUX"));
+        let unc_path: &OsStr = &git_process_path(Path::new(r"\\?\UNC\server\share\PandaMUX"));
+        assert_eq!(unc_path, OsStr::new(r"\\server\share\PandaMUX"));
 
         let mut process = Command::new("git");
         configure_process(
