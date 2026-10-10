@@ -896,11 +896,18 @@ async fn life_local_cancellation_verifies_cleanup_before_terminal_run_settlement
         .cancel_run(&harness.run_id, "life-local-cancel", now_ms())
         .await
         .expect("cancel local orchestration run");
+    let cancellation_run = harness.run();
+    let cancellation_runtime = harness
+        .store
+        .load_orchestration_runtime_records(&harness.run_id)
+        .expect("load cancellation diagnostics");
     assert_eq!(reports.len(), 1);
     assert_eq!(
         reports[0].cleanup_state,
         CleanupState::Verified,
-        "{reports:?}"
+        "reports={reports:?}; attempt={:?}; reviews={:?}",
+        cancellation_run.attempts.get(&prepared.run_attempt_id),
+        cancellation_runtime.recovery_reviews,
     );
     assert!(reports[0].death_verified);
     assert!(reports[0].writers_joined);
@@ -1046,20 +1053,25 @@ async fn life_unknown_cancellation_usage_retains_worktree_and_capacity_debt() {
         .await
         .expect("dispatch unknown-usage cancellation attempt");
 
-    let reports = harness
-        .service
-        .cancel_run(&harness.run_id, "life-local-cancel-unknown", now_ms())
-        .await
-        .expect("cancel unknown-usage orchestration run");
-    assert_eq!(reports.len(), 1);
-    assert_eq!(reports[0].cleanup_state, CleanupState::Quarantined);
-    assert_eq!(
-        reports[0].reason_code,
-        Some("attempt_cleanup_receipt_failed")
+    let first_service = harness.service.clone();
+    let second_service = harness.service.clone();
+    let first_attempt_id = prepared.run_attempt_id.clone();
+    let second_attempt_id = prepared.run_attempt_id.clone();
+    let cancellation_at_ms = now_ms();
+    let (first_report, second_report) = tokio::join!(
+        first_service.cancel_attempt(&first_attempt_id, cancellation_at_ms),
+        second_service.cancel_attempt(&second_attempt_id, cancellation_at_ms),
     );
-    assert!(reports[0].death_verified);
-    assert!(reports[0].writers_joined);
-    assert!(!reports[0].leases_released);
+    let report = first_report.expect("first concurrent cancellation caller");
+    assert_eq!(
+        report,
+        second_report.expect("second concurrent cancellation caller")
+    );
+    assert_eq!(report.cleanup_state, CleanupState::Quarantined);
+    assert_eq!(report.reason_code, Some("attempt_cleanup_receipt_failed"));
+    assert!(report.death_verified);
+    assert!(report.writers_joined);
+    assert!(!report.leases_released);
     assert_eq!(
         finish(&mut dispatch).await.status,
         AttemptDispatchState::Cancelled

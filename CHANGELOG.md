@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Preserved the exact winning cancellation report for concurrent Phase 5C
+  callers in version 0.60.103.** A cancellation request that joined an
+  already-running cleanup previously reconstructed terminal state with generic
+  flags and `attempt_cleanup_pending`, losing the owner-reported drain, process
+  death, writer join, lease, and quarantine reason. The attempt owner now
+  publishes one exact report to every in-process waiter, while durable state
+  remains the bounded recovery fallback. Deterministic concurrent-caller tests
+  and 20 pressured 237-test server runs cover both verified cleanup and
+  intentionally retained unknown-usage debt.
+
 - **Prevented shutdown cancellation from dropping provider terminal usage in
   version 0.60.101.** Provider events sampled immediately before a durable
   cancellation intent now clamp their owner-internal progress timestamp to the

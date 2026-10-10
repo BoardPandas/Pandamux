@@ -148,6 +148,7 @@ struct LocalAttemptControl {
     lease_renewal_join: Arc<Mutex<Option<JoinHandle<()>>>>,
     cancellation_tx: mpsc::UnboundedSender<BackgroundCancellationRequest>,
     cancellation_join: Arc<Mutex<Option<JoinHandle<()>>>>,
+    cancellation_report_tx: watch::Sender<Option<CancellationReport>>,
     cancellation_started: AtomicBool,
 }
 
@@ -1034,6 +1035,7 @@ impl RunExecutionService {
                 let (terminal_tx, terminal_rx) = watch::channel(None);
                 let (stop_tx, stop_rx) = watch::channel(false);
                 let (cancellation_tx, cancellation_rx) = mpsc::unbounded_channel();
+                let (cancellation_report_tx, _) = watch::channel(None);
                 let completion_join = Arc::new(Mutex::new(None));
                 let watchdog_join = Arc::new(Mutex::new(None));
                 let lease_renewal_join = Arc::new(Mutex::new(None));
@@ -1062,6 +1064,7 @@ impl RunExecutionService {
                     lease_renewal_join: lease_renewal_join.clone(),
                     cancellation_tx,
                     cancellation_join: cancellation_join.clone(),
+                    cancellation_report_tx,
                     cancellation_started: AtomicBool::new(false),
                 });
                 self.lifecycle
@@ -1116,15 +1119,20 @@ impl RunExecutionService {
                 let completion = tokio::spawn(async move {
                     let result = wait_terminal_signal(observer_control.terminal.clone()).await;
                     let _ = observer_control.stop_tx.send(true);
-                    let lifecycle_result = if observer_control
+                    let owns_cleanup = observer_control
                         .cancellation_started
                         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                        .is_ok()
-                    {
+                        .is_ok();
+                    let lifecycle_result = if owns_cleanup {
                         finalize_terminal_owner(&observer_control, now_ms()).await
                     } else {
                         wait_for_cleanup_terminal(&observer_control).await
                     };
+                    if owns_cleanup
+                        && let Ok(Some(report)) = completed_cancellation_report(&observer_control)
+                    {
+                        publish_cancellation_report(&observer_control, report);
+                    }
                     let cancellation_result = join_background_cancellation(&observer_control).await;
                     if cleanup_state_for(&observer_control).ok() == Some(CleanupState::Verified)
                         && let Some(lifecycle) = weak_lifecycle.upgrade()
@@ -2163,6 +2171,7 @@ async fn cancel_control_once(
     config: WatchdogConfig,
     at_ms: u64,
 ) -> Result<CancellationReport, String> {
+    let mut cancellation_report_rx = control.cancellation_report_tx.subscribe();
     let ownership_wait = async {
         loop {
             if control
@@ -2172,10 +2181,13 @@ async fn cancel_control_once(
             {
                 return Ok(None);
             }
-            if let Some(report) = completed_cancellation_report(control.as_ref())? {
+            if let Some(report) = cancellation_report_rx.borrow().clone() {
                 return Ok(Some(report));
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            cancellation_report_rx
+                .changed()
+                .await
+                .map_err(|_| "The cancellation report owner disappeared".to_string())?;
         }
     };
     match tokio::time::timeout(
@@ -2206,7 +2218,9 @@ async fn cancel_control_once(
                 .await
                 .is_ok()
             {
-                return completed_cancellation_report(control.as_ref())?.ok_or(error);
+                let report = completed_cancellation_report(control.as_ref())?.ok_or(error)?;
+                publish_cancellation_report(control.as_ref(), report.clone());
+                return Ok(report);
             }
             control.cancellation_started.store(false, Ordering::Release);
             return Err(error);
@@ -2215,7 +2229,12 @@ async fn cancel_control_once(
     if report.cleanup_state == CleanupState::Verified {
         settle_cancelled_run_if_ready(control.as_ref(), at_ms).await?;
     }
+    publish_cancellation_report(control.as_ref(), report.clone());
     Ok(report)
+}
+
+fn publish_cancellation_report(control: &LocalAttemptControl, report: CancellationReport) {
+    control.cancellation_report_tx.send_replace(Some(report));
 }
 
 fn completed_cancellation_report(
