@@ -20,12 +20,13 @@ exclude = [
   "spikes/phase0-remote-bootstrap",
   "spikes/phase0-packaging",
   "spikes/phase0-acp-providers",
+  "vendor/gpui-base",
   "vendor/gpui-pre",
   "vendor/gpui-pre-util",
 ]
 
 [workspace.package]
-version = "0.60.106"
+version = "0.60.107"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/BoardPandas/Pandamux"
@@ -50,6 +51,11 @@ windows-sys = "=0.61.2"
 zip = { version = "=4.6.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [patch.crates-io]
+# gpui-base 0.6.6 uses AtomicU64::try_update(), which is newer than our
+# declared Rust 1.89 MSRV. Keep the exact gpui-kit family pinned and use the
+# stable, behavior-equivalent fetch_update() operation locally until upstream
+# declares a compatible MSRV.
+gpui-base = { path = "vendor/gpui-base" }
 # gpui-pre 0.3.6 uses optimizer and string-boundary helpers stabilized after
 # Rust 1.89. Keep the exact gpui-kit family pinned and carry stable equivalents
 # locally until the upstream crate declares a compatible MSRV.

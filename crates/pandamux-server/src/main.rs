@@ -398,7 +398,10 @@ fn normalize_proxy_write(result: io::Result<()>) -> io::Result<()> {
 fn expected_proxy_close(kind: io::ErrorKind) -> bool {
     matches!(
         kind,
-        io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset | io::ErrorKind::UnexpectedEof
+        io::ErrorKind::BrokenPipe
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::NotConnected
+            | io::ErrorKind::UnexpectedEof
     )
 }
 
@@ -689,6 +692,27 @@ mod unix_tests {
     use std::os::unix::fs::{PermissionsExt, symlink};
 
     use super::*;
+
+    #[test]
+    fn proxy_close_classification_accepts_half_close_errors_only() {
+        for expected in [
+            io::ErrorKind::BrokenPipe,
+            io::ErrorKind::ConnectionReset,
+            io::ErrorKind::NotConnected,
+            io::ErrorKind::UnexpectedEof,
+        ] {
+            assert!(expected_proxy_close(expected), "rejected {expected:?}");
+        }
+
+        for unexpected in [
+            io::ErrorKind::ConnectionRefused,
+            io::ErrorKind::InvalidData,
+            io::ErrorKind::PermissionDenied,
+            io::ErrorKind::TimedOut,
+        ] {
+            assert!(!expected_proxy_close(unexpected), "accepted {unexpected:?}");
+        }
+    }
 
     #[test]
     fn unix_socket_parent_and_socket_are_private() {

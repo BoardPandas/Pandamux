@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Closed the remaining target-specific Phase 5C CI failures in version
+  0.60.107.** The exact-pinned `gpui-base` 0.6.6 crate now uses the stable
+  Rust 1.89 atomic update equivalent, dependency policy runs in a dedicated
+  Linux job because GitHub container actions cannot execute on Windows, and
+  the Unix proxy bridge treats macOS `NotConnected` during an already-complete
+  half-close as graceful while retaining fail-closed handling for unrelated
+  I/O errors.
+
 - **Completed the target-portable Phase 5C CI repair in version 0.60.106.**
   Windows-only paths now remain warning-free under strict Clippy, and the
   exact-pinned GPUI 0.3.6 crate preserves its published API while local,

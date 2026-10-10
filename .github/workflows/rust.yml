@@ -37,6 +37,21 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  dependency-policy:
+    name: Dependency policy
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # cargo-deny-action is a Docker action and GitHub only supports
+      # container actions on Linux runners.
+      - name: Check advisories and licenses
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          command-arguments: advisories licenses bans sources
+
   windows:
     name: Windows (MSVC)
     runs-on: windows-latest
@@ -77,12 +92,6 @@ jobs:
 
       - name: Check resolved crate boundaries
         run: cargo run --locked -p pandamux-boundary-check --quiet
-
-      - name: Check advisories and licenses
-        uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          command: check
-          command-arguments: advisories licenses bans sources
 
       - name: Test workspace
         run: cargo test --workspace

@@ -2714,8 +2714,6 @@ dependencies = [
 [[package]]
 name = "gpui-base"
 version = "0.6.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9e904ee0d351f4e85b967e26ae986d3aa195a8d9d35fcd18184a2c40989694e"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5442,7 +5440,7 @@ dependencies = [
 
 [[package]]
 name = "pandamux-boundary-check"
-version = "0.60.106"
+version = "0.60.107"
 dependencies = [
  "serde",
  "serde_json",
@@ -5450,7 +5448,7 @@ dependencies = [
 
 [[package]]
 name = "pandamux-cli"
-version = "0.60.106"
+version = "0.60.107"
 dependencies = [
  "pandamux-core",
  "pandamux-protocol",
@@ -5463,7 +5461,7 @@ dependencies = [
 
 [[package]]
 name = "pandamux-client"
-version = "0.60.106"
+version = "0.60.107"
 dependencies = [
  "pandamux-core",
  "pandamux-protocol",
@@ -5474,7 +5472,7 @@ dependencies = [
 
 [[package]]
 name = "pandamux-core"
-version = "0.60.106"
+version = "0.60.107"
 dependencies = [
  "serde",
  "serde_json",
@@ -5484,7 +5482,7 @@ dependencies = [
 
 [[package]]
 name = "pandamux-desktop"
-version = "0.60.106"
+version = "0.60.107"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -5502,7 +5500,7 @@ dependencies = [
 
 [[package]]
 name = "pandamux-orchestrator"
-version = "0.60.106"
+version = "0.60.107"
 dependencies = [
  "pandamux-core",
  "schemars",
@@ -5514,7 +5512,7 @@ dependencies = [
 
 [[package]]
 name = "pandamux-protocol"
-version = "0.60.106"
+version = "0.60.107"
 dependencies = [
  "pandamux-core",
  "serde",
@@ -5524,7 +5522,7 @@ dependencies = [
 
 [[package]]
 name = "pandamux-providers"
-version = "0.60.106"
+version = "0.60.107"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -5546,7 +5544,7 @@ dependencies = [
 
 [[package]]
 name = "pandamux-remote"
-version = "0.60.106"
+version = "0.60.107"
 dependencies = [
  "anyhow",
  "pandamux-core",
@@ -5562,7 +5560,7 @@ dependencies = [
 
 [[package]]
 name = "pandamux-server"
-version = "0.60.106"
+version = "0.60.107"
 dependencies = [
  "base64 0.22.1",
  "fs4",
@@ -5584,7 +5582,7 @@ dependencies = [
 
 [[package]]
 name = "pandamux-term"
-version = "0.60.106"
+version = "0.60.107"
 dependencies = [
  "alacritty_terminal",
  "portable-pty",
