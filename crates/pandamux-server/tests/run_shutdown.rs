@@ -427,9 +427,9 @@ async fn lifecycle_real_local_child_has_positive_death_evidence() {
     assert!(child.try_wait().expect("final child status").is_some());
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[tokio::test]
-async fn lifecycle_supervised_process_group_kills_its_descendant() {
+async fn lifecycle_supervised_unix_process_group_kills_its_descendant() {
     use pandamux_providers::{SupervisedChild, create_supervised_command};
     use std::path::Path;
     use tokio::io::{AsyncBufReadExt, BufReader};
@@ -453,15 +453,15 @@ async fn lifecycle_supervised_process_group_kills_its_descendant() {
         .expect("descendant pid announcement")
         .parse::<u32>()
         .expect("numeric descendant pid");
-    assert!(linux_process_is_running(group_leader));
-    assert!(linux_process_is_running(descendant));
+    assert!(unix_process_is_running(group_leader));
+    assert!(unix_process_is_running(descendant));
 
     supervised
         .kill()
         .await
         .expect("kill supervised process group");
-    tokio::time::timeout(Duration::from_secs(2), async {
-        while linux_process_is_running(group_leader) || linux_process_is_running(descendant) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while unix_process_is_running(group_leader) || unix_process_is_running(descendant) {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
@@ -470,11 +470,112 @@ async fn lifecycle_supervised_process_group_kills_its_descendant() {
 }
 
 #[cfg(target_os = "linux")]
-fn linux_process_is_running(pid: u32) -> bool {
+fn unix_process_is_running(pid: u32) -> bool {
     let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
         return false;
     };
     stat.rsplit_once(") ")
         .and_then(|(_, fields)| fields.chars().next())
         .is_some_and(|state| state != 'Z' && state != 'X')
+}
+
+#[cfg(target_os = "macos")]
+fn unix_process_is_running(pid: u32) -> bool {
+    const ESRCH: i32 = 3;
+
+    let pid = i32::try_from(pid).expect("process id fits pid_t");
+    // SAFETY: signal zero performs an existence check and does not mutate the process.
+    let result = unsafe { test_process_signal(pid, 0) };
+    result == 0 || std::io::Error::last_os_error().raw_os_error() != Some(ESRCH)
+}
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    #[link_name = "kill"]
+    fn test_process_signal(pid: i32, signal: i32) -> i32;
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn lifecycle_supervised_windows_job_object_kills_its_descendant() {
+    use pandamux_providers::{SupervisedChild, create_supervised_command};
+    use std::path::Path;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    const SCRIPT: &str = concat!(
+        "$null = [Console]::In.ReadLine(); ",
+        "$info = New-Object System.Diagnostics.ProcessStartInfo; ",
+        "$info.FileName = [System.IO.Path]::Combine($env:SystemRoot, ",
+        "'System32\\ping.exe'); ",
+        "$info.Arguments = '-n 30 127.0.0.1'; ",
+        "$info.UseShellExecute = $false; ",
+        "$info.CreateNoWindow = $true; ",
+        "$descendant = [System.Diagnostics.Process]::Start($info); ",
+        "[Console]::Out.WriteLine($descendant.Id); ",
+        "[Console]::Out.Flush(); ",
+        "$descendant.WaitForExit()"
+    );
+
+    let mut command = create_supervised_command(Path::new("powershell.exe"));
+    command.args([
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        SCRIPT,
+    ]);
+    let mut supervised = SupervisedChild::spawn(command).expect("spawn supervised Job Object");
+    let job_leader = supervised
+        .child_mut()
+        .and_then(|child| child.id())
+        .expect("supervised Job Object leader pid");
+    let mut stdin = supervised.take_stdin().expect("supervised stdin");
+    let stdout = supervised.take_stdout().expect("supervised stdout");
+    let mut lines = BufReader::new(stdout).lines();
+
+    stdin
+        .write_all(b"assigned\n")
+        .await
+        .expect("release assigned Job Object child");
+    stdin.shutdown().await.expect("close supervised stdin");
+    let descendant = tokio::time::timeout(Duration::from_secs(10), lines.next_line())
+        .await
+        .expect("descendant pid announcement timeout")
+        .expect("read descendant pid")
+        .expect("descendant pid announcement")
+        .parse::<u32>()
+        .expect("numeric descendant pid");
+    assert!(windows_process_is_running(job_leader));
+    assert!(windows_process_is_running(descendant));
+
+    supervised
+        .kill()
+        .await
+        .expect("terminate supervised Job Object");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while windows_process_is_running(job_leader) || windows_process_is_running(descendant) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("Job Object descendants did not reach a terminated state");
+}
+
+#[cfg(windows)]
+fn windows_process_is_running(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_TIMEOUT};
+    use windows_sys::Win32::Storage::FileSystem::SYNCHRONIZE;
+    use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject};
+
+    // SAFETY: the handle is requested with synchronization-only access, checked for null,
+    // observed without blocking, and closed exactly once before returning.
+    unsafe {
+        let process = OpenProcess(SYNCHRONIZE, 0, pid);
+        if process.is_null() {
+            return false;
+        }
+        let wait_status = WaitForSingleObject(process, 0);
+        let _ = CloseHandle(process);
+        wait_status == WAIT_TIMEOUT
+    }
 }

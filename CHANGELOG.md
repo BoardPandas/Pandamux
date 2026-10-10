@@ -154,6 +154,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Added exact native descendant-cleanup acceptance coverage in version
+  0.60.119.** The retained lifecycle integration now proves that terminating
+  the production supervisor kills a live descendant through a Windows Job
+  Object and through native Linux and macOS process groups. The Windows fixture
+  waits until the leader is assigned to its Job Object before it creates the
+  descendant, so the assertion measures inherited job ownership rather than a
+  process-start race.
+
 - **Reconciled the Phase 5C native CI evidence without overstating native or
   production acceptance in version 0.60.118.** Exact version 0.60.117 commit
   `e53406b` passes all eight jobs in native run `38040781118`, including Windows
