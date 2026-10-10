@@ -813,11 +813,19 @@ async fn crash_04_and_05_recover_from_durable_intent_without_duplicate_ownership
         .expect("intent exists");
     assert_eq!(intent.worktree.dirty_state, WorktreeDirtyState::Ambiguous);
     assert!(!Path::new(&intent.worktree.path).exists());
+    fs::create_dir_all(&intent.worktree.path).expect("private empty leaf after ownership intent");
+    assert!(
+        fs::read_dir(&intent.worktree.path)
+            .expect("read interrupted empty leaf")
+            .next()
+            .is_none()
+    );
     let recovered = reopened_service
         .create(before_git.clone(), None)
         .await
-        .expect("recover pre-Git crash");
+        .expect("recover private empty leaf before Git");
     assert!(recovered.recovered);
+    assert!(recovered.git_materialized);
     assert_eq!(
         recovered.record.worktree.dirty_state,
         WorktreeDirtyState::Clean
@@ -866,6 +874,47 @@ async fn crash_04_and_05_recover_from_durable_intent_without_duplicate_ownership
         .await
         .expect_err("changed identity replay");
     assert_eq!(conflict.reason_code, "attempt_worktree_replay_conflict");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn wt_14_interrupted_private_leaf_with_foreign_bytes_is_retained_and_rejected() {
+    let harness = Harness::new();
+    let request = harness.add_run("interrupted-foreign-leaf", 55_000);
+    harness
+        .service
+        .create(
+            request.clone(),
+            Some(AttemptWorktreeFailpoint::AfterOwnershipIntent),
+        )
+        .await
+        .expect_err("ownership intent failpoint");
+
+    let intent = harness
+        .store
+        .load_owned_attempt_worktree(&request.worktree_id)
+        .expect("load interrupted ownership")
+        .expect("interrupted ownership exists");
+    let path = Path::new(&intent.worktree.path);
+    fs::create_dir_all(path).expect("interrupted private leaf");
+    fs::write(path.join("foreign.txt"), b"preserve foreign bytes\n")
+        .expect("foreign interrupted bytes");
+
+    let error = harness
+        .service
+        .create(request, None)
+        .await
+        .expect_err("non-empty interrupted leaf must fail closed");
+    assert_eq!(error.reason_code, "attempt_worktree_path_foreign");
+    assert_eq!(
+        fs::read(path.join("foreign.txt")).expect("foreign bytes remain"),
+        b"preserve foreign bytes\n"
+    );
+    let retained = harness
+        .store
+        .load_owned_attempt_worktree(&intent.worktree.id)
+        .expect("reload interrupted ownership")
+        .expect("interrupted ownership remains");
+    assert_eq!(retained.worktree.dirty_state, WorktreeDirtyState::Ambiguous);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -1291,7 +1291,11 @@ fn ensure_managed_directory(
         match fs::symlink_metadata(&current) {
             Ok(metadata) => validate_directory_metadata(data_paths, &current, &metadata)?,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                match fs::create_dir(&current) {
+                #[cfg(windows)]
+                let created = crate::windows_security::create_private_directory(&current);
+                #[cfg(not(windows))]
+                let created = fs::create_dir(&current);
+                match created {
                     Ok(()) => {}
                     Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
                     Err(_) => return Err(managed_path_error()),
@@ -1307,6 +1311,24 @@ fn ensure_managed_directory(
             fs::set_permissions(&current, fs::Permissions::from_mode(0o700))
                 .map_err(|_| managed_path_error())?;
         }
+    }
+    Ok(())
+}
+
+fn ensure_empty_owned_tree_path(
+    data_paths: &DataPaths,
+    path: &Path,
+) -> Result<(), AttemptWorktreeError> {
+    ensure_managed_directory(data_paths, path)?;
+    validate_owned_tree_path(data_paths, path)?;
+    let mut entries = fs::read_dir(path).map_err(|_| managed_path_error())?;
+    if entries
+        .next()
+        .transpose()
+        .map_err(|_| managed_path_error())?
+        .is_some()
+    {
+        return Err(foreign_path_error());
     }
     Ok(())
 }
@@ -1853,6 +1875,7 @@ impl AttemptWorktreeService {
         }
         match (path_exists, reference) {
             (false, None) => {
+                ensure_empty_owned_tree_path(&self.data_paths, &identity.path)?;
                 self.run_git(
                     context,
                     GitInvocation::new(
@@ -1871,6 +1894,7 @@ impl AttemptWorktreeService {
                 Ok(true)
             }
             (false, Some(reference)) if reference.eq_ignore_ascii_case(baseline_commit) => {
+                ensure_empty_owned_tree_path(&self.data_paths, &identity.path)?;
                 self.run_git(
                     context,
                     GitInvocation::new(
@@ -1881,6 +1905,25 @@ impl AttemptWorktreeService {
                             OsString::from("--no-track"),
                             identity.path.as_os_str().to_os_string(),
                             OsString::from(&identity.branch_name),
+                        ],
+                    ),
+                )?;
+                Ok(true)
+            }
+            (true, None) if durable_state == WorktreeDirtyState::Ambiguous => {
+                ensure_empty_owned_tree_path(&self.data_paths, &identity.path)?;
+                self.run_git(
+                    context,
+                    GitInvocation::new(
+                        &context.root,
+                        [
+                            OsString::from("worktree"),
+                            OsString::from("add"),
+                            OsString::from("--no-track"),
+                            OsString::from("-b"),
+                            OsString::from(&identity.branch_name),
+                            identity.path.as_os_str().to_os_string(),
+                            OsString::from(baseline_commit),
                         ],
                     ),
                 )?;

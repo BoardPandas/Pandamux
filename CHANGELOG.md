@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Kept Phase 5C attempt worktrees private while Git materializes them in
+  version 0.60.113.** PandaMUX now creates and validates the exact empty
+  attempt leaf under its private app-data root before asking Git to populate
+  it, including a protected Windows DACL. A matching durable ambiguous intent
+  can recover that empty pre-Git state, while any non-empty, linked, reparse,
+  or foreign path remains retained and fails closed.
+
 - **Completed Windows Git path normalization for Phase 5C in version
   0.60.112.** Attempt-worktree Git arguments, managed hook and attribute
   paths, index paths, and remote execution fixtures now remove Windows
