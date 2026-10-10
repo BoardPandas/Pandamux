@@ -27,9 +27,9 @@ The following files were used as evidence for this page:
 ## Version and Changelog
 
 The root workspace package version is the single version source inherited by
-all product and tooling crates. The Phase 5C documentation checkpoint is
-`0.60.102`; its deciding implementation baseline is exact `0.60.101` commit
-`0b59964d46b44be67dc662d1d9483a9be00a5101`. The workspace declares Rust 1.89
+all product and tooling crates. The final Phase 5C documentation reconciliation
+is `0.60.104`; its deciding implementation baseline is exact `0.60.103` commit
+`d78a22cb69711d411ee857add7aed09d654452b0`. The workspace declares Rust 1.89
 and edition 2024, while development evidence uses the separately pinned Rust
 1.98.1 toolchain ([Cargo.toml:1-30](../../Cargo.toml#L1-L30), [rust-toolchain.toml:1-4](../../rust-toolchain.toml#L1-L4)).
 
@@ -159,8 +159,8 @@ Release state must be reported as distinct facts. Implementation, local verifica
 
 | Evidence statement | Minimum proof | Current repository status |
 |---|---|---|
-| Implemented | Source exists at a pinned commit | Phase 5C runtime exists at exact 0.60.101 commit `0b59964d`; the 0.60.102 follow-up is documentation only ([Phase 5C acceptance record](PHASE5C_ACCEPTANCE.md#checkpoint-chain)) |
-| Locally verified | Exact commands and exit results | Phase 5C's complete portable matrix passed on the 0.60.102 documentation-only tree rooted at the deciding implementation and is rerun on its exact commit ([Phase 5C acceptance record](PHASE5C_ACCEPTANCE.md#local-verification)) |
+| Implemented | Source exists at a pinned commit | Phase 5C runtime exists at exact 0.60.103 commit `d78a22c`; the 0.60.104 follow-up is documentation only ([Phase 5C acceptance record](PHASE5C_ACCEPTANCE.md#checkpoint-chain)) |
+| Locally verified | Exact commands and exit results | Phase 5C's complete portable matrix passed on exact 0.60.103 deciding source; the documentation-only 0.60.104 tree receives its own post-commit replay ([Phase 5C acceptance record](PHASE5C_ACCEPTANCE.md#local-verification)) |
 | Native/live accepted | Exact platform and provider rows | Linux process-group and real-worktree rows pass; Windows, macOS, physical-remote, live-provider, and controlled external-effect rows are unrun ([Phase 5C acceptance record](PHASE5C_ACCEPTANCE.md#native-and-live-acceptance)) |
 | CI passed | Exact commit has successful required jobs | Not established by these documentation files |
 | Packaged and signed | Exact current-workspace artifacts plus signature verification | Not established; historical workflow is not valid evidence ([CLAUDE.md:518-535](../../CLAUDE.md#L518-L535)) |

@@ -1,16 +1,16 @@
 # Generation Metadata
 
-- **Commit:** `0b59964d46b44be67dc662d1d9483a9be00a5101`
+- **Commit:** `d78a22cb69711d411ee857add7aed09d654452b0`
 - **Commit role:** exact deciding Phase 5C implementation repair and
-  Linux-native evidence source; the version 0.60.102 follow-up is documentation
+  Linux-native evidence source; the version 0.60.104 follow-up is documentation
   and version metadata only
 - **Documentation branch:** `codex/recovery-r0`
-- **Generated:** 2026-10-09T19:35:55-04:00
+- **Generated:** 2026-10-09T20:18:20-04:00
 - **Working tree:** final Phase 5C acceptance documentation follow-up for the
   clean deciding source
 - **Mode:** incremental Phase 5C execution-runtime reconciliation
 - **Previous documentation baseline:**
-  `778a164b00a1b56c8a6f63310f7d647ac49650e8`
+  `6fb9a8ff248b81a59d6ae2f7ee105ac8e8dbc5e4`
 - **Pages maintained:** 17
 - **Sections maintained:** 107
 - **Current Rust source coverage:** 187 of 187 crate source files
@@ -47,9 +47,13 @@ Section 11 matrix. A later replay exposed a load-dependent shutdown race; exact
 version 0.60.101 commit `0b59964d` repaired it and passed deterministic,
 30-iteration stress, complete server, boundary, and exact Linux native checks,
 including descendant process-group termination and all 11 real
-attempt-worktree cases. Version 0.60.102 is the documentation-only C-K
-reconciliation; its complete matrix passes before commit and is rerun on the
-exact documentation commit before completion.
+attempt-worktree cases. Exact post-commit replay of the 0.60.102 documentation
+checkpoint then exposed a concurrent cancellation-report join defect. Exact
+version 0.60.103 commit `d78a22c` preserves the cleanup owner's report for all
+waiters and passes its deterministic regression, 20 pressured 237-test server
+runs, the complete Section 11 matrix, and both explicit Linux native rows.
+Version 0.60.104 is the documentation-only final reconciliation and receives a
+complete post-commit matrix before completion.
 Windows and macOS native rows, a physical remote node, live providers, and the
 controlled external-effect row remain unrun. P4-C5 remains Partial and P4-C7
 remains open.

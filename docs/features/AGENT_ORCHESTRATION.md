@@ -213,9 +213,9 @@ drain, supervised escalation, positive death verification, settlement,
 worktree cleanup, lease release, sender closure, and writer joins; failure at
 any boundary quarantines retained debt ([attempt_watchdog.rs:11-230](../../crates/pandamux-server/src/attempt_watchdog.rs#L11-L230)). Startup holds one incarnation lock, verifies nonterminal replay and owned resources, reclaims only exact expired local ownership, reattaches only an exact live attempt, and deduplicates ambiguous or unverifiable cases into human review ([run_recovery.rs:37-225](../../crates/pandamux-server/src/run_recovery.rs#L37-L225)).
 
-Phase 5C is an internal runtime checkpoint. Exact 0.60.101 passes the native
-Linux process-group and real Git worktree rows; its documentation-only 0.60.102
-follow-up tree passes the complete portable matrix.
+Phase 5C is an internal runtime checkpoint. Exact 0.60.103 passes the complete
+portable matrix plus the native Linux process-group and real Git worktree rows;
+version 0.60.104 is a documentation-only reconciliation.
 Windows and macOS native rows, a physical remote node, live providers, and the
 controlled external-effect row remain unrun. Public run RPC, CLI, desktop
 orchestration surfaces, and the user-facing recovery-review resolver remain

@@ -202,13 +202,13 @@ R0 development gate:
   outbox, attempt-owned worktrees and checkpoints, shared admission and budget
   enforcement, local and authenticated loopback-node provider execution,
   bounded typed artifacts and verification evidence, watchdogs, cancellation,
-  joined shutdown, and startup recovery. Exact 0.60.101 commit `0b59964` is the
-  deciding runtime source and passes the native Linux process-group and real
-  Git worktree rows; the complete portable matrix passes on its
-  documentation-only 0.60.102 follow-up tree. Windows and macOS native rows, a
-  physical remote node, live providers, and the controlled external-effect row
-  remain unrun. Phase 5C has no public run RPC, CLI, or desktop orchestration
-  surface, and it does not close P4-C5 or P4-C7.
+  joined shutdown, and startup recovery. Exact 0.60.103 commit `d78a22c` is the
+  deciding runtime source and passes the complete portable matrix plus the
+  native Linux process-group and real Git worktree rows. Version 0.60.104 is a
+  documentation-only reconciliation. Windows and macOS native rows, a physical
+  remote node, live providers, and the controlled external-effect row remain
+  unrun. Phase 5C has no public run RPC, CLI, or desktop orchestration surface,
+  and it does not close P4-C5 or P4-C7.
 
 See the [Phase 4 live acceptance record](docs/operations/PHASE4_ACCEPTANCE.md),
 the [Phase 5A pure-domain acceptance record](docs/operations/PHASE5A_ACCEPTANCE.md),

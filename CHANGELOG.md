@@ -59,6 +59,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Reconciled the final Phase 5C acceptance record in version 0.60.104.**
+  Exact version 0.60.103 commit `d78a22c` preserves one winning cancellation
+  report for every concurrent caller and passes the complete Section 11 matrix,
+  20 pressured server-unit-suite repetitions, and the explicit native Linux
+  process-group and real-worktree rows. The maintained guides now distinguish
+  that deciding runtime repair from the documentation-only reconciliation and
+  continue to record Windows, macOS, physical-remote, live-provider,
+  controlled external-effect, and CI rows as unrun. This checkpoint changes no
+  runtime behavior, keeps P4-C5 Partial and P4-C7 open, and does not push,
+  deploy, activate, package, sign, publish, or release.
+
 - **Documented the exact Phase 5C execution-runtime acceptance boundary in
   version 0.60.102.** The maintained architecture, orchestration, operations,
   task, roadmap, and repository guides now map checkpoints C-A through C-K,

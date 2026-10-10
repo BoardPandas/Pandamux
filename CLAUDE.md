@@ -110,14 +110,14 @@ unexercised, so this is not production or release evidence and does not close
 P4-C5 or P4-C7.
 
 Phase 5C now implements the private server-owned execution runtime on exact
-0.60.101 commit `0b59964d46b44be67dc662d1d9483a9be00a5101`. Migration 14,
+0.60.103 commit `d78a22cb69711d411ee857add7aed09d654452b0`. Migration 14,
 replay-verified runs, the effect outbox, attempt-owned worktrees, shared
 admission, integer budgets, local and authenticated node execution, typed
 artifacts, verification evidence, watchdogs, cancellation, joined shutdown,
-and startup recovery pass the complete portable matrix on the
-documentation-only 0.60.102 follow-up tree. Exact 0.60.101 Linux tests pass
-real process-group descendant cleanup and concurrent Git worktree isolation.
-Windows and macOS native rows, a physical remote node, live providers, and the
+and startup recovery pass the complete portable matrix. Exact 0.60.103 Linux
+tests pass real process-group descendant cleanup and concurrent Git worktree
+isolation; version 0.60.104 is a documentation-only reconciliation. Windows
+and macOS native rows, a physical remote node, live providers, and the
 controlled external-effect row remain unrun. Phase 5C adds no public run RPC,
 CLI, or desktop orchestration surface and does not close P4-C5 or P4-C7.
 

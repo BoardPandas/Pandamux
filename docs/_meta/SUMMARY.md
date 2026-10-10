@@ -204,8 +204,8 @@
 ## Phase 5C Execution-Runtime Update - 2026-10-09
 
 - **Mode:** incremental update from Phase 5B documentation baseline
-  `778a164b` through exact deciding implementation repair `0b59964d`, version
-  0.60.101, plus the documentation-only 0.60.102 C-K working tree on
+  `778a164b` through exact deciding implementation repair `d78a22c`, version
+  0.60.103, plus the documentation-only 0.60.104 final C-K working tree on
   `codex/recovery-r0`
 - **Generated pages updated:** Architecture, Configuration, Agent
   Orchestration, and Release and Packaging; the existing stable Phase 5C
@@ -219,13 +219,14 @@
   watchdogs, cancellation, joined shutdown, and startup recovery
 - **Acceptance mapping:** AC-C01 through AC-C18 and CRASH-01 through CRASH-12
   each name retained evidence; the checkpoint table records C-A through C-J
-  plus the C-J verification repair with exact hashes and versions while C-K is
-  the self-referential documentation commit
-- **Evidence boundary:** the complete portable matrix passes on the 0.60.102
-  documentation-only tree, and exact 0.60.101 Linux process-group and
-  real-worktree rows pass. Windows and macOS native rows, a physical remote
-  node, live providers, the controlled external-effect row, and target-specific
-  CI remain unrun. P4-C5 remains Partial and P4-C7 remains open.
+  plus both verification repairs with exact hashes and versions while the final
+  C-K reconciliation is the self-referential documentation commit
+- **Evidence boundary:** the complete portable matrix and exact Linux
+  process-group and real-worktree rows pass on the 0.60.103 deciding source.
+  Version 0.60.104 is documentation only. Windows and macOS native rows, a
+  physical remote node, live providers, the controlled external-effect row,
+  and target-specific CI remain unrun. P4-C5 remains Partial and P4-C7 remains
+  open.
 - **Documentation validation:** 17 TOC pages, 107 ordered AUTOGEN sections,
   1,736 active local links, 1,582 valid line-range citations, all 187 current
   Rust source files, and 22 Mermaid blocks pass with zero structural errors.
@@ -236,9 +237,12 @@
   matrix; a later replay exposed a load-dependent shutdown race. Exact 0.60.101
   repair `0b59964d` passed its deterministic regression, 30 of 30 shutdown
   stress iterations, the complete server and boundary gates, and exact Linux
-  descendant-cleanup and 11-case real-worktree rows. The complete matrix passes
-  on the v0.60.102 documentation tree before commit and is rerun at the exact
-  documentation commit before completion.
+  descendant-cleanup and 11-case real-worktree rows. Exact 0.60.102
+  post-commit replay then exposed a concurrent cancellation-report join defect.
+  Exact 0.60.103 repair `d78a22c` passed its deterministic two-caller regression,
+  20 pressured 237-test server runs, the complete Section 11 matrix, and both
+  explicit Linux native rows. The documentation-only 0.60.104 reconciliation
+  is rerun at its exact commit before completion.
 - **Remote status:** no push, CI, deployment, activation, package, signature,
   publication, release, served-version check, GitHub write, pull request,
   external provider call, or external-repository mutation occurred.

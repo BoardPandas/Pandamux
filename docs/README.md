@@ -5,6 +5,8 @@ workspace. Read the root [`Cargo.toml`](../Cargo.toml) for the version;
 documentation does not duplicate it.
 
 > **Latest Updates (October 2026):**
+> - **v0.60.104:** Final Phase 5C acceptance reconciliation.
+> - **v0.60.103:** Concurrent cancellation-report join repair.
 > - **v0.60.102:** Phase 5C maintained documentation and exact acceptance record.
 > - **v0.60.101:** Provider-progress and shutdown-cancellation clock-race repair.
 > - **v0.60.100:** Supervised watchdog, cancellation, shutdown, and crash recovery.
@@ -151,9 +153,9 @@ storage, hidden-Git-child, atomic-recovery, keyboard, and UI Automation checks.
 No external Git/SFTP transfer or production activation was exercised. Phase 5
 evidence remains separate from exact 0.60.64 Phase 4 runtime evidence and the
 retained Galahad databases. Phase 5C now adds the internal durable execution
-owner through exact 0.60.101. The complete portable matrix passes on the
-documentation-only 0.60.102 follow-up tree, while exact 0.60.101 Linux
-process-group and worktree rows pass. Windows and macOS native execution, a
+owner through exact 0.60.103. The complete portable matrix and exact Linux
+process-group and worktree rows pass on that deciding source; version 0.60.104
+is a documentation-only reconciliation. Windows and macOS native execution, a
 physical remote node, live providers, and the controlled external-effect row
 remain unrun. This generated-wiki refresh remains an interim P4-C7
 synchronization; it does not claim that Phase 4 is complete or that PandaMUX is

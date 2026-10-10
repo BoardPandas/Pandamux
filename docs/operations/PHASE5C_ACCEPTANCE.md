@@ -3,13 +3,13 @@
 Date: 2026-10-09
 
 Status: **Implemented and locally verified; not accepted for the complete
-local/native or production scope.** Exact version 0.60.101 commit
-`0b59964d46b44be67dc662d1d9483a9be00a5101` is the deciding implementation
-source. The complete portable matrix passes on its documentation-only 0.60.102
-follow-up tree, and the exact 0.60.101 Linux process-group and real Git
-worktree rows pass. Windows and macOS native rows, a physical remote Linux node,
-live Codex/Claude/Antigravity, and the controlled external-effect row remain
-unrun.
+local/native or production scope.** Exact version 0.60.103 commit
+`d78a22cb69711d411ee857add7aed09d654452b0` is the deciding implementation
+source and passes the complete portable matrix plus the exact Linux
+process-group and real Git worktree rows. Version 0.60.104 is a
+documentation-only reconciliation. Windows and macOS native rows, a physical
+remote Linux node, live Codex/Claude/Antigravity, and the controlled
+external-effect row remain unrun.
 
 This record is the C-K documentation checkpoint. It does not close P4-C5 or
 P4-C7 and does not claim push, CI, deployment, activation, packaging, signing,
@@ -21,8 +21,8 @@ publication, release, health, or served-version evidence.
 - Branch: `codex/recovery-r0`
 - Binding contract:
   [`tasks/2026-10-09-phase-5c-execution-owner.md`](../../tasks/2026-10-09-phase-5c-execution-owner.md)
-- Deciding implementation: version 0.60.101, commit
-  `0b59964d46b44be67dc662d1d9483a9be00a5101`
+- Deciding implementation: version 0.60.103, commit
+  `d78a22cb69711d411ee857add7aed09d654452b0`
 - Schema: migration 14, with a verified pre-v14 schema-13 backup before a
   persistent store migrates
 - Runtime boundary: private server-owned execution APIs only. Public run RPC,
@@ -50,11 +50,13 @@ fallback and retry authority.
 | C-I blackboard and evidence | 0.60.99 | `afa878b51181a77b7c10b8418f212aa47bc14db8` | Committed and focused verification passed |
 | C-J lifecycle and recovery | 0.60.100 | `79ce5a0db9a8de01a9044738cd4eeacc65c40726` | Committed; initial complete portable matrix and exact Linux native rows passed; a later matrix replay exposed the shutdown race below |
 | C-J verification repair | 0.60.101 | `0b59964d46b44be67dc662d1d9483a9be00a5101` | Committed; provider progress now survives a concurrent cancellation clock advance without weakening strict store callers |
-| C-K documentation and acceptance | 0.60.102 | This documentation commit | Complete matrix passes before commit and is rerun on the exact commit; the final handoff records that non-self-referential result |
+| C-K documentation and acceptance | 0.60.102 | `6fb9a8ff248b81a59d6ae2f7ee105ac8e8dbc5e4` | Committed; its pre-commit matrix passed, while exact post-commit replay exposed the concurrent cancellation-report join defect below |
+| C-K verification repair | 0.60.103 | `d78a22cb69711d411ee857add7aed09d654452b0` | Committed; every in-process waiter now receives the winning owner's exact cancellation report; deterministic concurrency, pressured stress, the complete matrix, and exact Linux rows pass |
+| C-K final acceptance reconciliation | 0.60.104 | This documentation commit | Documentation and version metadata only; records the exact 0.60.103 deciding source and retained acceptance gaps |
 
-Every checkpoint and the C-J verification repair were staged by explicit path,
-inspected, and committed before C-K resumed. No commit includes a protected
-bundle or the unrelated security-scan report.
+Every checkpoint and both verification repairs were staged by explicit path,
+inspected, and committed before the final reconciliation. No commit includes a
+protected bundle or the unrelated security-scan report.
 
 ## Acceptance Criteria and Retained Evidence
 
@@ -121,13 +123,20 @@ clock after the provider writer loaded it, causing valid approval progress and
 the following terminal usage receipt to be dropped. Exact repair commit
 `0b59964d46b44be67dc662d1d9483a9be00a5101` adds an owner-internal atomic clamp
 while retaining strict regression rejection for ordinary store callers. Its
-deterministic regression passed, the original shutdown case passed 30 of 30
-stress iterations, all 237 server unit tests and every server integration suite
-passed, and the boundary checker, server all-target check, strict Clippy,
-wiring guard, diff check, and exact Linux native rows passed. The complete
-Section 11 matrix passes on the 0.60.102 C-K working tree before commit and is
-rerun after the documentation commit so the final handoff can report the exact
-immutable result.
+deterministic regression and 30 shutdown stress iterations passed.
+
+The exact 0.60.102 documentation commit replay then exposed a second concurrent
+join defect: a cancellation waiter that did not own cleanup reconstructed a
+generic report from durable state and could lose the winning owner's lifecycle
+flags and precise quarantine reason. Exact 0.60.103 repair commit
+`d78a22cb69711d411ee857add7aed09d654452b0` publishes the owner's report to all
+in-process waiters while retaining bounded durable-state observation as the
+crash/restart fallback. Its deterministic two-caller regression passes, as do
+20 pressured 237-test server-unit-suite repetitions (4,740 tests), the complete
+Section 11 matrix, and the explicit exact Linux native rows. The
+documentation-only 0.60.104 reconciliation receives the same complete matrix
+after commit so the final handoff can report its immutable result without
+making this file self-referential.
 
 | Command | Result |
 |---|---|
@@ -145,7 +154,7 @@ immutable result.
 | `cargo test --locked --workspace` | Pass, exit 0; two intentional real-shell tests ignored |
 | `cargo check --locked --workspace --all-targets` | Pass, exit 0 |
 | `cargo clippy --locked --workspace --all-targets -- -D warnings` | Pass, exit 0 |
-| `cargo deny check advisories licenses bans sources --hide-inclusion-graph` | Pass, exit 0; only configured duplicate and yanked-transitive warnings |
+| `cargo deny check advisories licenses bans sources --hide-inclusion-graph` | Pass, exit 0; only configured unmatched-license, duplicate, and yanked-transitive warnings |
 | `cargo +1.89.0 check --locked --workspace --all-targets --exclude pandamux-desktop` | Pass, exit 0 |
 | `node scripts/check-claude-wiring.mjs` | Pass, exit 0 |
 | `git diff --check` | Pass, exit 0 |
@@ -158,8 +167,8 @@ macOS, physical-remote, live-provider, CI, deployment, or release evidence.
 
 | Row | Status | Exact evidence or gap |
 |---|---|---|
-| Linux process-group descendant cleanup | Pass | On exact 0.60.101 repair commit, `cargo test --locked -p pandamux-server --test run_shutdown lifecycle_supervised_process_group_kills_its_descendant -- --exact`: 1 passed |
-| Linux real concurrent Git worktrees and ownership checks | Pass | On exact 0.60.101 repair commit, `cargo test --locked -p pandamux-server --test attempt_worktrees`: 11 passed |
+| Linux process-group descendant cleanup | Pass | On exact 0.60.103 repair commit, `cargo test --locked -p pandamux-server --test run_shutdown lifecycle_supervised_process_group_kills_its_descendant -- --exact`: 1 passed |
+| Linux real concurrent Git worktrees and ownership checks | Pass | On exact 0.60.103 repair commit, `cargo test --locked -p pandamux-server --test attempt_worktrees`: 11 passed |
 | Windows native | Unrun | No exact Phase 5C no-console, NTFS, junction/reparse, locked-file, Job Object, or restart evidence |
 | macOS native | Unrun | No exact process-group, ownership/link, or real-worktree evidence |
 | Authenticated loopback node | Pass, portable | Private environment-bound RPC, disconnect, status, cancel, and replay tests passed inside `pandamux-server` |
@@ -192,11 +201,11 @@ or broad staging command was used.
 
 | Dimension | Status |
 |---|---|
-| Implementation | Complete for Phase 5C's private runtime at exact 0.60.101 repair commit |
+| Implementation | Complete for Phase 5C's private runtime at exact 0.60.103 repair commit |
 | Portable local verification | Pass |
 | Complete local/native acceptance | Not established; Windows and macOS rows unrun |
 | Physical remote/live acceptance | Not established |
-| Checkpoint commits | C-A through C-J and the verification repair committed; C-K is this documentation commit |
+| Checkpoint commits | C-A through C-J, both verification repairs, and the initial C-K documentation committed; final C-K reconciliation is this documentation commit |
 | Push | Not performed |
 | CI | Not run |
 | Deployment | Not performed |
@@ -214,6 +223,10 @@ or broad staging command was used.
   shutdown race. The 0.60.101 repair is a separate commit: only the
   `ThreadManager` owner-internal provider-progress path clamps to the newer
   durable clock, while the public store path continues to reject regressions.
+- Exact 0.60.102 post-commit replay exposed a concurrent cancellation-report
+  join defect, so final C-K reconciliation paused again. The 0.60.103 repair is
+  a separate commit: the cleanup owner publishes one exact report to every
+  in-process waiter, while durable state remains the bounded recovery fallback.
 - `fs4` is a direct server dependency using the already workspace-pinned
   version; Phase 5C introduced no new third-party version.
 - Missing Windows, macOS, physical-remote, live-provider, controlled-external,

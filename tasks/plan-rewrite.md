@@ -2991,12 +2991,12 @@ Acceptance:
 Detailed implementation contract: [`2026-10-09-phase-5c-execution-owner.md`](2026-10-09-phase-5c-execution-owner.md).
 
 Status (2026-10-09): **Implemented and locally verified on exact version
-0.60.101 commit `0b59964d46b44be67dc662d1d9483a9be00a5101`.** The complete portable
-matrix passes on the documentation-only 0.60.102 follow-up tree, and exact
-0.60.101 Linux process-group and worktree rows pass. Windows and macOS native
-execution, a physical remote Linux node, live commercial providers, and the
-controlled external-effect row remain unrun. The exact checkpoint chain,
-failpoint matrix, retained-debt statement, and separate
+0.60.103 commit `d78a22cb69711d411ee857add7aed09d654452b0`.** The complete portable
+matrix and exact Linux process-group and worktree rows pass on that deciding
+source; version 0.60.104 is a documentation-only reconciliation. Windows and
+macOS native execution, a physical remote Linux node, live commercial
+providers, and the controlled external-effect row remain unrun. The exact
+checkpoint chain, failpoint matrix, retained-debt statement, and separate
 implementation, verification, native/live, CI, deployment, activation, and
 release statuses are recorded in the
 [Phase 5C acceptance record](../docs/operations/PHASE5C_ACCEPTANCE.md). This
