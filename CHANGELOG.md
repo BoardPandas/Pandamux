@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Preserved post-side-effect ambiguity across remote crash recovery in
+  version 0.60.121.** When a Node receipt proves that a response-lost provider
+  attempt started a tool before its stream vanished, Hub recovery now restores
+  the exact accepted attempt identity and advances the canonical
+  `tool_side_effect_begun` boundary before pausing for review. Replaying that
+  durable ambiguous outcome reconstructs and deduplicates the original review
+  without reacquiring the review-owned effect or starting another provider.
+
 - **Restored the built-artifact IPC smoke without reopening legacy arguments
   in version 0.60.117.** The Windows evaluator now starts the already-headless
   server with its supported default invocation instead of passing the obsolete

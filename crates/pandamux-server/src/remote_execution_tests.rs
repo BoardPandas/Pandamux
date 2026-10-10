@@ -828,6 +828,178 @@ async fn rec_10_and_11_startup_recovery_reattaches_exact_response_loss() {
 }
 
 #[tokio::test]
+async fn recovery_response_loss_after_tool_start_preserves_ambiguous_boundary() {
+    let node = Harness::new(json!({
+        "eventScript": "tool_then_close_stream:write"
+    }));
+    let node_environment = EnvironmentId::new(ENVIRONMENT_ID);
+    let transport = Arc::new(LoopbackNodeTransport::new(
+        Arc::new(node.router()),
+        node.context.clone(),
+    ));
+    let environment_router = Arc::new(EnvironmentRouter::new(EnvironmentId::new("hub-local")));
+    environment_router
+        .register_transport(node_environment.clone(), transport.clone(), None)
+        .await;
+    let (hub_store, hub_service, ownership, base_identity, dispatch_at_ms) =
+        hub_execution(&node, environment_router.clone(), "recovery-ambiguous-tool").await;
+
+    let repository_identity = OrchestrationExecutionIdentity {
+        idempotency_key: "recovery-ambiguous-tool-repository".to_string(),
+        ..base_identity.clone()
+    };
+    hub_service
+        .prepare_remote_repository(
+            &ownership,
+            &node_environment,
+            node.repository_params(repository_identity, true),
+            dispatch_at_ms,
+        )
+        .await
+        .expect("prepare ambiguous recovery repository");
+    let prepare_identity = OrchestrationExecutionIdentity {
+        idempotency_key: "recovery-ambiguous-tool-prepare".to_string(),
+        ..base_identity.clone()
+    };
+    let prepared = hub_service
+        .prepare_remote_provider_attempt(
+            &ownership,
+            &node_environment,
+            node.attempt_params(
+                prepare_identity,
+                "unresolved tool result after response loss",
+            ),
+        )
+        .await
+        .expect("prepare ambiguous recovery attempt");
+    let mut dispatch_identity = base_identity.clone();
+    let dispatch_key =
+        remote_dispatch_identity(&dispatch_identity, &prepared.receipt.receipt_sha256)
+            .expect("stable ambiguous dispatch identity");
+    dispatch_identity.idempotency_key = dispatch_key.clone();
+
+    transport.drop_next_response();
+    let error = hub_service
+        .dispatch_remote_provider_attempt(
+            &ownership,
+            &node_environment,
+            OrchestrationAttemptDispatchParams {
+                identity: dispatch_identity,
+                prepare_receipt_sha256: prepared.receipt.receipt_sha256,
+                dispatch_identity: dispatch_key,
+            },
+            dispatch_at_ms,
+            None,
+        )
+        .await
+        .expect_err("transport loses the response after the provider starts the tool");
+    assert_reason(&error, "loopback_response_lost");
+    assert_eq!(node.driver.session_start_count(), 1);
+
+    let node_receipt = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        let mut poll = 0_u32;
+        loop {
+            let mut status_identity = base_identity.clone();
+            status_identity.idempotency_key = format!("recovery-ambiguous-tool-status-{poll}");
+            let status = node
+                .service
+                .attempt_status(
+                    &node.context,
+                    OrchestrationAttemptStatusParams {
+                        identity: status_identity,
+                    },
+                )
+                .await
+                .expect("poll ambiguous node status");
+            if status.receipt.state == OrchestrationNodeAttemptState::Ambiguous {
+                break status.receipt;
+            }
+            poll += 1;
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("node persists the ambiguous tool boundary");
+    assert_eq!(node_receipt.boundary, AttemptBoundary::ToolSideEffectBegun);
+
+    let recovery = RunRecoveryService::new(hub_store.clone())
+        .with_environment_router(environment_router.clone());
+    let report = recovery
+        .recover_nonterminal_runs(
+            ServerIncarnationId::new("hub-ambiguous-tool-recovery"),
+            dispatch_at_ms + 1,
+        )
+        .await
+        .expect("recover ambiguous remote tool attempt");
+    assert!(report.intake_open);
+    assert_eq!(report.reviews_created, 1);
+    assert!(report.actions.iter().any(|action| {
+        action.attempt_id.as_ref() == Some(&base_identity.attempt_id)
+            && action.disposition == RecoveryDisposition::ReviewRequired
+            && action.reason_code.as_deref() == Some("recovery_remote_attempt_ambiguous")
+    }));
+    assert_eq!(node.driver.session_start_count(), 1);
+
+    let dispatch = hub_store
+        .get_attempt_dispatch(&base_identity.attempt_id)
+        .expect("load ambiguous dispatch")
+        .expect("ambiguous dispatch exists");
+    assert_eq!(dispatch.state, AttemptDispatchState::Ambiguous);
+    assert_eq!(dispatch.last_boundary, AttemptBoundary::ToolSideEffectBegun);
+    let effect = hub_store
+        .get_orchestration_effect(&base_identity.effect_id)
+        .expect("load ambiguous effect")
+        .expect("ambiguous effect exists");
+    assert_eq!(
+        effect.delivery.state,
+        pandamux_core::EffectDeliveryState::ReviewRequired
+    );
+    let run = hub_store
+        .load_verified_orchestration_run(&base_identity.run_id)
+        .expect("load ambiguous run")
+        .expect("ambiguous run exists");
+    let attempt = run
+        .run
+        .attempts
+        .get(&base_identity.attempt_id)
+        .expect("canonical ambiguous attempt");
+    assert_eq!(run.run.status, pandamux_core::RunStatus::Paused);
+    assert_eq!(attempt.status, AttemptStatus::Running);
+    assert_eq!(attempt.boundary, AttemptBoundary::ToolSideEffectBegun);
+    assert!(attempt.ambiguous_effect);
+    assert_eq!(
+        attempt.ambiguity_reason.as_deref(),
+        Some("recovery_remote_attempt_ambiguous")
+    );
+    assert_eq!(attempt.thread_id.as_ref(), Some(&node_receipt.thread_id));
+    assert_eq!(
+        attempt.turn_attempt_id.as_ref(),
+        Some(&node_receipt.turn_attempt_id)
+    );
+
+    let replay = recovery
+        .recover_nonterminal_runs(
+            ServerIncarnationId::new("hub-ambiguous-tool-recovery-replay"),
+            dispatch_at_ms + 2,
+        )
+        .await
+        .expect("replay ambiguous remote recovery");
+    assert_eq!(replay.reviews_created, 0);
+    assert_eq!(replay.reviews_deduplicated, 1);
+    assert_eq!(hub_store.list_pending_recovery_reviews().unwrap().len(), 1);
+    let replayed = hub_store
+        .load_verified_orchestration_run(&base_identity.run_id)
+        .expect("load replayed ambiguous run")
+        .expect("replayed ambiguous run exists");
+    assert_eq!(
+        replayed.run.attempts[&base_identity.attempt_id].boundary,
+        AttemptBoundary::ToolSideEffectBegun
+    );
+    assert_eq!(node.driver.session_start_count(), 1);
+    environment_router.shutdown_all().await;
+}
+
+#[tokio::test]
 async fn crash_pre_marker_recovery_pauses_once_without_starting_provider() {
     let node = Harness::new(json!({}));
     let node_environment = EnvironmentId::new(ENVIRONMENT_ID);

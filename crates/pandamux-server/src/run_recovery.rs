@@ -13,9 +13,9 @@ use crate::store::{
 use crate::thread_manager::ThreadManager;
 use fs4::FileExt;
 use pandamux_core::{
-    AttemptFailure, AttemptProgressId, AttemptProgressKind, AttemptProgressRecord, AttemptStatus,
-    BundleSha, CleanupState, ContentSha256, EffectDeliveryState, EffectReceipt, FailureClass,
-    LeaseResourceKind, OrchestrationEffectId, RecoveryReview, RecoveryReviewId,
+    AttemptBoundary, AttemptFailure, AttemptProgressId, AttemptProgressKind, AttemptProgressRecord,
+    AttemptStatus, BundleSha, CleanupState, ContentSha256, EffectDeliveryState, EffectReceipt,
+    FailureClass, LeaseResourceKind, OrchestrationEffectId, RecoveryReview, RecoveryReviewId,
     RecoveryReviewStatus, RunAttemptId, RunCommand, RunEventId, RunId, RunStatus, RunTaskId,
     ServerIncarnationId,
 };
@@ -569,12 +569,28 @@ impl RunRecoveryService {
                 ));
                 continue;
             }
+            if dispatch.state == AttemptDispatchState::Ambiguous {
+                issues.push(RecoveryIssue::new(
+                    &run.id,
+                    &dispatch.task_id,
+                    &dispatch.attempt_id,
+                    Some(&dispatch.effect_id),
+                    dispatch
+                        .ambiguity_reason
+                        .as_deref()
+                        .unwrap_or("recovery_attempt_already_ambiguous"),
+                    &[dispatch
+                        .outcome_digest
+                        .as_deref()
+                        .unwrap_or(dispatch.turn_attempt_id.as_str())],
+                ));
+                continue;
+            }
             if !matches!(
                 dispatch.state,
                 AttemptDispatchState::DispatchStarted
                     | AttemptDispatchState::Accepted
                     | AttemptDispatchState::CancelRequested
-                    | AttemptDispatchState::Ambiguous
             ) {
                 continue;
             }
@@ -1057,17 +1073,51 @@ impl RunRecoveryService {
                 .ok_or("recovery_remote_outcome_store_failed")?
                 .updated_at_ms,
         );
-        if dispatch.state == AttemptDispatchState::DispatchStarted
-            && matches!(
-                receipt.state,
-                OrchestrationNodeAttemptState::Accepted
-                    | OrchestrationNodeAttemptState::Terminal
-                    | OrchestrationNodeAttemptState::Cancelled
-            )
-        {
+        let provider_acceptance_proven = matches!(
+            receipt.state,
+            OrchestrationNodeAttemptState::Accepted
+                | OrchestrationNodeAttemptState::Terminal
+                | OrchestrationNodeAttemptState::Cancelled
+        ) || receipt.state
+            == OrchestrationNodeAttemptState::Ambiguous
+            && receipt.boundary > AttemptBoundary::SafeToRetry;
+        if dispatch.state == AttemptDispatchState::DispatchStarted && provider_acceptance_proven {
             self.store
                 .mark_local_attempt_accepted(ownership, &dispatch.attempt_id, recorded_at_ms)
                 .map_err(|_| "recovery_remote_outcome_store_failed")?;
+        }
+        if provider_acceptance_proven {
+            let current = self
+                .store
+                .load_verified_orchestration_run(&run.id)
+                .map_err(|_| "recovery_remote_outcome_store_failed")?
+                .ok_or("recovery_remote_outcome_store_failed")?;
+            match current.run.attempts.get(&dispatch.attempt_id) {
+                Some(attempt) if attempt.status == AttemptStatus::DispatchRequested => {
+                    commit_recovery_command(
+                        &self.store,
+                        &run.id,
+                        RunCommand::StartAttempt {
+                            attempt_id: dispatch.attempt_id.clone(),
+                            thread_id: receipt.thread_id.clone(),
+                            turn_attempt_id: receipt.turn_attempt_id.clone(),
+                        },
+                        recorded_at_ms,
+                        "remote-start",
+                    )
+                    .map_err(|_| "recovery_remote_outcome_store_failed")?;
+                }
+                Some(attempt)
+                    if attempt.status == AttemptStatus::Running
+                        || matches!(
+                            attempt.status,
+                            AttemptStatus::Succeeded
+                                | AttemptStatus::Failed
+                                | AttemptStatus::Cancelled
+                                | AttemptStatus::Interrupted
+                        ) => {}
+                _ => return Err("recovery_remote_outcome_store_failed"),
+            }
         }
         let current_dispatch = self
             .store
@@ -1196,7 +1246,7 @@ impl RunRecoveryService {
                 &dispatch.attempt_id,
                 Some(&dispatch.effect_id),
                 "recovery_remote_attempt_ambiguous",
-                &[receipt.receipt_sha256.as_str()],
+                &[outcome_digest.as_str()],
             )));
         }
 

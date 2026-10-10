@@ -377,6 +377,26 @@ impl ProviderSession for MockProviderSession {
             });
         }
 
+        if script.starts_with("tool_then_close_stream:") {
+            let tool_name = script
+                .trim_start_matches("tool_then_close_stream:")
+                .trim()
+                .to_string();
+            let tx = self.tx.take().expect("mock event sender is available");
+            return Box::pin(async move {
+                let _ = crate::forward_provider_event(
+                    &tx,
+                    ProviderEvent::ToolCallStarted {
+                        id: "crash-call-1".to_string(),
+                        name: tool_name,
+                        input: serde_json::json!({ "fixture": "stream closes after tool start" }),
+                    },
+                )
+                .await;
+                Ok(())
+            });
+        }
+
         let tx = self
             .tx
             .as_ref()
