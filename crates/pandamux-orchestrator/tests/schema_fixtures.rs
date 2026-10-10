@@ -70,15 +70,22 @@ fn parses_all_five_authored_document_kinds() {
 
 #[test]
 fn normalizes_crlf_before_frontmatter_and_body_parsing() {
-    let crlf = String::from_utf8(include_bytes!("fixtures/schema/prompt.md").to_vec())
-        .expect("fixture is utf8")
-        .replace('\n', "\r\n");
+    let checked_out = String::from_utf8(include_bytes!("fixtures/schema/prompt.md").to_vec())
+        .expect("fixture is utf8");
+    let canonical_lf = checked_out.replace("\r\n", "\n");
+    let crlf = canonical_lf.replace('\n', "\r\n");
     let parsed = parse_source_document(&source("prompts/intake.md", crlf)).expect("CRLF parses");
     let ParsedDocumentV1::Prompt { body, .. } = parsed else {
         panic!("expected prompt")
     };
     assert!(!body.contains('\r'));
     assert!(body.starts_with("Classify the request"));
+
+    let malformed = canonical_lf.replace('\n', "\r\r\n");
+    assert_code(
+        parse_source_document(&source("prompts/intake.md", malformed)),
+        ConfigurationIssueCode::FrontmatterMissing,
+    );
 }
 
 #[test]

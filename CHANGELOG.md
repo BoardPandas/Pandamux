@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Made the CRLF schema fixture host-independent in version 0.60.108.** The
+  orchestrator test now canonicalizes its checked-out bytes before deliberately
+  constructing CRLF, so Windows checkout conversion cannot turn the fixture
+  into malformed doubled-carriage-return input. A retained negative assertion
+  confirms that genuinely malformed doubled-CR line endings still fail closed.
+
 - **Closed the remaining target-specific Phase 5C CI failures in version
   0.60.107.** The exact-pinned `gpui-base` 0.6.6 crate now uses the stable
   Rust 1.89 atomic update equivalent, dependency policy runs in a dedicated
