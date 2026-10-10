@@ -293,6 +293,49 @@
   publication, release, served-version check, pull request, external provider
   call, or external-repository mutation occurred
 
+## Phase 5C Local/Native Acceptance Update - 2026-10-10
+
+- **Mode:** incremental update from documentation baseline
+  `e00a507c247cdbf6e89db289e32c4d69a0a3c259` through exact 0.60.119
+  local/native acceptance source
+  `ce9c48f0a95c1847abe72c1b3f49398ab362425f`, plus the documentation-only
+  0.60.120 working tree on `codex/recovery-r0`
+- **Phase A TOC drift:** retained 17 pages, 107 stable section IDs, and the
+  existing Agent Orchestration source map because `run_shutdown.rs` was already
+  declared
+- **Phase B change scope:** four committed paths changed after the prior
+  documentation baseline: workspace version metadata, changelog, and the
+  retained lifecycle integration test
+- **Generated pages updated:** Agent Orchestration and Release and Packaging;
+  Trusted Configuration received three missing source-header citations already
+  declared in its TOC map. No page or AUTOGEN identifier was added or removed
+- **Maintained records updated:** root README and CLAUDE guide, task and roadmap
+  status, changelog, documentation index, TOC, generation metadata, this
+  summary, and the manual Phase 5C acceptance record
+- **Native evidence:** exact version 0.60.119 native run
+  [38054202454](https://github.com/BoardPandas/Pandamux/actions/runs/38054202454)
+  passed all eight jobs. Its Windows log names
+  `lifecycle_supervised_windows_job_object_kills_its_descendant` as passing;
+  its Apple Silicon log names
+  `lifecycle_supervised_unix_process_group_kills_its_descendant` as passing
+- **Acceptance boundary:** the binding automated local/native matrix now
+  passes. Physical-remote, live-provider, and controlled-external-effect rows
+  remain Unrun; P4-C5 remains Partial and P4-C7 remains open
+- **Documentation validation:** 17 TOC pages, 107 ordered AUTOGEN sections,
+  1,755 active local links including the documentation index, 1,600 valid
+  line-range citations, all 187 production Rust source files, and 22 Mermaid
+  blocks pass with zero structural errors. `mmdc` is unavailable, so
+  renderer-level Mermaid validation was not performed
+- **Code-gate status:** exact 0.60.119 passes the focused Linux descendant and
+  complete lifecycle integration, provider suites, locked all-target check,
+  strict Clippy, boundary fixtures and runner, formatting, and diff hygiene.
+  The documentation-only 0.60.120 tree passes the complete Section 11 matrix
+  before commit, with only the two intentional real-shell tests ignored
+- **Remote status:** exact 0.60.119 was pushed and its native workflow passed.
+  No deployment, activation, package, signature, publication, release,
+  served-version check, pull request, external provider call, or
+  external-repository mutation occurred
+
 ## Historical context
 
 The previous generated wiki described the removed Iced multiplexer architecture.

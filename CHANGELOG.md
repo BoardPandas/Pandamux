@@ -154,6 +154,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Reconciled Phase 5C local/native acceptance after exact descendant-cleanup
+  proof in version 0.60.120.** Exact version 0.60.119 commit `ce9c48f` passes
+  the Linux process-group descendant fixture locally and both the Windows Job
+  Object descendant and macOS process-group descendant fixtures in all-green
+  eight-job native run `38054202454`. Together with the retained portable,
+  Windows path/reparse/worktree, and Unix worktree rows, this closes the
+  checkpoint's automated local/native scope without implying production
+  readiness. Physical remote Linux, live Codex/Claude/Antigravity, and the
+  controlled external-effect row remain unrun. P4-C5 remains Partial and
+  P4-C7 remains open.
+
 - **Added exact native descendant-cleanup acceptance coverage in version
   0.60.119.** The retained lifecycle integration now proves that terminating
   the production supervisor kills a live descendant through a Windows Job

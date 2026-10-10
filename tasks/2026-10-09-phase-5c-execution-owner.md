@@ -1,13 +1,12 @@
 # Phase 5C: Execution Owner, Worktrees, Budgets, and Recovery
 
-Status: **Implemented, locally verified, and target-CI verified on exact version
-0.60.117 commit `e53406bbd211e701f89a25d63a8cd672033a22d9`; not accepted for
-the complete local/native or production scope.** The complete portable matrix,
-exact native Linux process-group and worktree rows, and all eight jobs of native
-run `38040781118` pass. Windows and Apple Silicon CI execute retained native
-worktree, link/reparse, lock, real-child, and release-build rows, but the
-required Windows Job Object descendant and macOS process-group descendant rows
-remain unverified. A physical remote Linux node, live providers, and the
+Status: **Implemented, locally verified, and accepted for the local/native
+scope on exact version 0.60.119 commit
+`ce9c48f0a95c1847abe72c1b3f49398ab362425f`; not accepted for production
+scope.** The complete portable matrix, exact native Linux process-group and
+worktree rows, and all eight jobs of native run `38054202454` pass. That run
+includes the required Windows Job Object descendant and macOS process-group
+descendant tests. A physical remote Linux node, live providers, and the
 controlled external-effect row remain unrun. The checkpoint chain and evidence
 boundaries are recorded in
 [`docs/operations/PHASE5C_ACCEPTANCE.md`](../docs/operations/PHASE5C_ACCEPTANCE.md).

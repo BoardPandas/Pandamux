@@ -109,21 +109,21 @@ External Git and SFTP distribution, CI, and production activation remain
 unexercised, so this is not production or release evidence and does not close
 P4-C5 or P4-C7.
 
-Phase 5C now implements the private server-owned execution runtime on exact
-0.60.117 commit `e53406bbd211e701f89a25d63a8cd672033a22d9`. Migration 14,
+Phase 5C now implements the private server-owned execution runtime and is
+accepted for its automated local/native scope on exact 0.60.119 commit
+`ce9c48f0a95c1847abe72c1b3f49398ab362425f`. Migration 14,
 replay-verified runs, the effect outbox, attempt-owned worktrees, shared
 admission, integer budgets, local and authenticated node execution, typed
 artifacts, verification evidence, watchdogs, cancellation, joined shutdown,
 and startup recovery pass the complete portable matrix. Exact native Linux
 tests pass process-group descendant cleanup and concurrent Git worktree
-isolation. Native run `38040781118` passes all eight target jobs, including the
-retained Windows rooted-path, junction, locked-worktree, real-child-death, and
-IPC-smoke tests and the Apple Silicon worktree and real-child tests. The
-required Windows Job Object descendant and macOS process-group descendant rows
-remain unverified, so complete local/native acceptance is not established. A
-physical remote node, live providers, and the controlled external-effect row
-also remain unrun. Phase 5C adds no public run RPC, CLI, or desktop
-orchestration surface and does not close P4-C5 or P4-C7.
+isolation. Native run `38054202454` passes all eight target jobs, including the
+retained Windows rooted-path, junction, locked-worktree, Job Object descendant,
+and IPC-smoke tests and the Apple Silicon worktree and process-group descendant
+tests. A physical remote node, live providers, and the controlled
+external-effect row remain unrun, so production readiness is not established.
+Phase 5C adds no public run RPC, CLI, or desktop orchestration surface and does
+not close P4-C5 or P4-C7.
 
 Exact 0.60.38 commit `d328ad8` supersedes the preceding source-candidate note:
 its complete local gate, native build, host smoke, remote lifecycle, and
@@ -529,14 +529,13 @@ provider-capacity row and final post-P4-C5 documentation archive remain open.
 Phase 5B has complete evidence for its authorized local and required native
 Windows scope. It has no external Git/SFTP or production-distribution evidence;
 those absent claims do not reopen its authorized acceptance scope.
-Phase 5C is implemented and locally verified, with exact native Linux process
-and worktree evidence plus one all-green eight-job Windows, Apple Silicon,
-Linux, musl, MSRV, and dependency-policy CI run. Windows and macOS automation
-remain partial against the binding native matrix because the Windows Job Object
-descendant and macOS process-group descendant rows are not independently
-tested. Physical-remote, live-provider, and controlled external-effect rows
-remain unrun, so complete local/native or production acceptance is not
-established.
+Phase 5C is implemented, locally verified, and accepted for its automated
+local/native scope, with exact Linux process-group and worktree evidence plus
+one all-green eight-job Windows, Apple Silicon, Linux, musl, MSRV, and
+dependency-policy CI run. The exact Windows Job Object and macOS process-group
+descendant tests now close the remaining binding native rows. Physical-remote,
+live-provider, and controlled external-effect rows remain unrun, so production
+acceptance is not established.
 `.github/workflows/release.yml` still contains historical packaging references
 and must not be used as evidence that the current workspace is releasable.
 Phase 7 owns the final Windows packaging, signing, publication, and update

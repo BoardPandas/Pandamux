@@ -5,11 +5,11 @@ workspace. Read the root [`Cargo.toml`](../Cargo.toml) for the version;
 documentation does not duplicate it.
 
 > **Latest Updates (October 2026):**
+> - **v0.60.120:** Phase 5C local/native acceptance reconciliation.
+> - **v0.60.119:** Exact Windows Job Object and Unix process-group descendant cleanup coverage.
 > - **v0.60.118:** Phase 5C native-CI evidence reconciliation.
 > - **v0.60.117:** Supported built-server IPC smoke invocation.
 > - **v0.60.116:** Rooted Windows worktree-path validation repair.
-> - **v0.60.115:** Clippy-clean native ownership diagnostics.
-> - **v0.60.114:** Native Windows worktree rejection diagnostics.
 
 ## Authority order
 
@@ -118,8 +118,8 @@ execution-runtime evidence:
 - [Phase 5C Execution Runtime Acceptance](operations/PHASE5C_ACCEPTANCE.md)
   maps AC-C01 through AC-C18 and CRASH-01 through CRASH-12 to retained tests,
   records C-A through C-K and the native-repair chain, and separates portable,
-  native Linux, and target-CI evidence from partial Windows/macOS automation and
-  unrun physical-remote and live-provider rows.
+  native Linux, Windows, macOS, and target-CI evidence from unrun
+  physical-remote and live-provider rows.
 
 The current recovery branch includes exact evidence for accounting,
 reconciliation, provider and model discovery, native Windows accessibility and
@@ -150,17 +150,16 @@ node-distribution contracts, mutation review, and desktop controls. Exact
 storage, hidden-Git-child, atomic-recovery, keyboard, and UI Automation checks.
 No external Git/SFTP transfer or production activation was exercised. Phase 5
 evidence remains separate from exact 0.60.64 Phase 4 runtime evidence and the
-  retained Galahad databases. Phase 5C now adds the internal durable execution
-  owner through exact 0.60.117. The complete portable matrix, exact Linux
-  process-group and worktree rows, and all eight jobs of native run
-  `38040781118` pass on that deciding source. Windows and Apple Silicon CI
-  execute retained native worktree, link/reparse, lock, real-child, and
-  release-build rows, but the required Windows Job Object descendant and macOS
-  process-group descendant rows remain unverified. A physical remote node, live
-  providers, and the controlled external-effect row remain unrun. This
-  generated-wiki refresh remains an interim P4-C7 synchronization; it does not
-  claim that Phase 4 is complete or that PandaMUX is released, deployed,
-  activated, signed, published, or served.
+retained Galahad databases. Phase 5C now adds the internal durable execution
+owner and is accepted for its automated local/native scope on exact 0.60.119.
+The complete portable matrix, exact Linux process-group and worktree rows, and
+all eight jobs of native run `38054202454` pass on that deciding source.
+Windows CI includes exact Job Object descendant cleanup; Apple Silicon CI
+includes exact process-group descendant cleanup. A physical remote node, live
+providers, and the controlled external-effect row remain unrun. This
+generated-wiki refresh remains an interim P4-C7 synchronization; it does not
+claim that Phase 4 is complete or that PandaMUX is production-ready, released,
+deployed, activated, signed, published, or served.
 
 ## Security boundary
 

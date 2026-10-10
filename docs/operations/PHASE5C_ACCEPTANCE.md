@@ -2,17 +2,17 @@
 
 Date: 2026-10-10
 
-Status: **Implemented, locally verified, and target-CI verified; not accepted
-for the complete local/native or production scope.** Exact version 0.60.117
-commit `e53406bbd211e701f89a25d63a8cd672033a22d9` is the deciding implementation
-and native-CI source. All eight jobs passed in exact
-[native run 38040781118](https://github.com/BoardPandas/Pandamux/actions/runs/38040781118),
-including native Windows and macOS workspace tests and release builds. Those
-platform rows remain Partial because the retained suite does not exercise a
-Windows Job Object descendant or a macOS process-group descendant. Version
-0.60.118 is a documentation-only evidence reconciliation. A physical remote
-Linux node, live Codex/Claude/Antigravity, and the controlled external-effect
-row remain unrun.
+Status: **Implemented, locally verified, and accepted for the local/native
+scope; not accepted for production scope.** Exact version 0.60.119 commit
+`ce9c48f0a95c1847abe72c1b3f49398ab362425f` is the deciding local/native
+acceptance source. All eight jobs passed in exact
+[native run 38054202454](https://github.com/BoardPandas/Pandamux/actions/runs/38054202454),
+including the named Windows Job Object descendant and macOS process-group
+descendant tests. Together with the retained portable, native Windows
+path/reparse/worktree, and Unix process-group/worktree rows, that closes the
+binding automated local/native matrix. Version 0.60.120 is a documentation-only
+evidence reconciliation. A physical remote Linux node, live
+Codex/Claude/Antigravity, and the controlled external-effect row remain unrun.
 
 This record is the C-K documentation checkpoint. It does not close P4-C5 or
 P4-C7 and does not claim deployment, activation, packaging, signing,
@@ -27,8 +27,8 @@ native workflow only.
 - Branch: `codex/recovery-r0`
 - Binding contract:
   [`tasks/2026-10-09-phase-5c-execution-owner.md`](../../tasks/2026-10-09-phase-5c-execution-owner.md)
-- Deciding implementation and native-CI source: version 0.60.117, commit
-  `e53406bbd211e701f89a25d63a8cd672033a22d9`
+- Deciding local/native acceptance source: version 0.60.119, commit
+  `ce9c48f0a95c1847abe72c1b3f49398ab362425f`
 - Schema: migration 14, with a verified pre-v14 schema-13 backup before a
   persistent store migrates
 - Runtime boundary: private server-owned execution APIs only. Public run RPC,
@@ -72,7 +72,9 @@ fallback and retry authority.
 | Windows lint repair | 0.60.115 | `9493bfcbbf639e46833f521cf984c1a94321082c` | Kept the native diagnostic path strict-Clippy clean |
 | Windows prefix repair | 0.60.116 | `086e9bcec1140c75925f99e9a0a7f9f3fe2bc502` | Stopped querying metadata for the non-queryable absolute Windows prefix while retaining rooted-path validation |
 | Artifact-smoke repair | 0.60.117 | `e53406bbd211e701f89a25d63a8cd672033a22d9` | Replaced the obsolete server `--headless` smoke invocation; all eight exact native-CI jobs pass |
-| Native-CI evidence reconciliation | 0.60.118 | This documentation commit | Documentation and version metadata only; records exact target-CI success and retained native/live gaps |
+| Native-CI evidence reconciliation | 0.60.118 | `e00a507c247cdbf6e89db289e32c4d69a0a3c259` | Documentation and version metadata only; records exact target-CI success and retained native/live gaps |
+| Native descendant acceptance | 0.60.119 | `ce9c48f0a95c1847abe72c1b3f49398ab362425f` | Adds exact Windows Job Object and native Linux/macOS process-group descendant tests; all three pass on their native platforms |
+| Local/native acceptance reconciliation | 0.60.120 | This documentation commit | Documentation and version metadata only; records the now-complete automated local/native matrix and retains production-readiness gaps |
 
 Every checkpoint and each verification or native-CI repair was staged by
 explicit path, inspected, and committed before the final reconciliation. No
@@ -94,7 +96,7 @@ commit includes a protected bundle or the unrelated security-scan report.
 | AC-C10 artifact bounds and authority | Pass | `blackboard_dag` ART-01 through ART-12, SEC-01, and link-substitution test |
 | AC-C11 evidence-gated reviewer DAG | Pass | DAG-01 through DAG-06 three-task and failure-propagation tests |
 | AC-C12 bounded fallback | Pass | `run_execution_service_tests` EFX-01 through EFX-08 and typed cleanup-verification cases |
-| AC-C13 joined cancellation | Pass, portable and Linux; native partial | LIFE-01 through LIFE-09, exact Linux descendant cleanup, and real-child evidence on Windows and macOS; no Windows Job Object descendant or macOS process-group descendant test exists |
+| AC-C13 joined cancellation | Pass, portable and native | LIFE-01 through LIFE-09 plus exact Linux/macOS process-group and Windows Job Object descendant cleanup on version 0.60.119 |
 | AC-C14 ownership and clock recovery | Pass, portable | REC-01 through REC-08 and CLK-01 through CLK-03 fixtures |
 | AC-C15 deduplicated human review | Pass, internal | REC-09 through REC-13 ambiguity, reattach, response-loss, deduplication, and audit tests; no public resolver exists |
 | AC-C16 authenticated remote execution | Pass, loopback only | REM-01 through REM-07 environment binding, replay, conflict, disconnect, status, and cancellation tests |
@@ -161,9 +163,31 @@ pushed, and rerun without weakening the persistence, ownership, admission,
 budget, recovery, cleanup, or acceptance contract. Exact 0.60.117 commit
 `e53406bbd211e701f89a25d63a8cd672033a22d9` passes focused local parser,
 architecture, MSRV, dependency-policy, formatting, and diff gates and the full
-workspace matrix on Windows and macOS in native CI. This documentation-only
+workspace matrix on Windows and macOS in native CI. The documentation-only
 0.60.118 reconciliation passed the complete local Section 11 matrix before
-commit.
+commit and all eight target jobs after commit.
+
+Exact 0.60.119 commit
+`ce9c48f0a95c1847abe72c1b3f49398ab362425f` adds only retained native
+descendant-cleanup tests. Its exact Linux process-group case passes locally;
+the complete ten-case `run_shutdown` integration, provider suites, locked
+all-target check, strict Clippy, boundary fixtures and runner, formatting, and
+diff hygiene also pass. Native run
+[38054202454](https://github.com/BoardPandas/Pandamux/actions/runs/38054202454)
+then passes all eight jobs and names both
+`lifecycle_supervised_windows_job_object_kills_its_descendant` and
+`lifecycle_supervised_unix_process_group_kills_its_descendant` as passing on
+Windows and macOS respectively. This is the exact committed evidence that
+closes the automated local/native matrix; it does not exercise the separate
+production-readiness rows.
+
+The documentation-only 0.60.120 working tree then passed the complete Section
+11 matrix before commit: every focused crate suite, the five-target boundary
+runner and its negative fixtures, the full locked workspace with two
+intentional real-shell ignores, all-target check, warning-denied Clippy,
+dependency policy, Rust 1.89 non-desktop product graph, Claude wiring,
+formatting, and diff hygiene. Exact post-commit verification and native CI are
+reported separately rather than inferred from this pre-commit run.
 
 The first full-workspace replay stopped during compilation when the disposable
 `/dev/shm` target reached its storage quota. After removing only task-owned
@@ -218,26 +242,29 @@ live-provider, deployment, or release evidence.
 | [38038014667](https://github.com/BoardPandas/Pandamux/actions/runs/38038014667) | 0.60.115 `9493bfc` | 7 pass / 1 fail | Windows workspace tests failed |
 | [38038855449](https://github.com/BoardPandas/Pandamux/actions/runs/38038855449) | 0.60.116 `086e9bc` | 7 pass / 1 fail | Windows artifact evaluator used the obsolete `--headless` argument |
 | [38040781118](https://github.com/BoardPandas/Pandamux/actions/runs/38040781118) | 0.60.117 `e53406b` | 8 pass / 0 fail | All exact native-CI jobs passed |
+| [38044556752](https://github.com/BoardPandas/Pandamux/actions/runs/38044556752) | 0.60.118 `e00a507` | 8 pass / 0 fail | Documentation reconciliation remained green on its exact committed head |
+| [38054202454](https://github.com/BoardPandas/Pandamux/actions/runs/38054202454) | 0.60.119 `ce9c48f` | 8 pass / 0 fail | Exact Windows Job Object and macOS process-group descendant tests passed; automated local/native acceptance closes |
 
 ## Native and Live Acceptance
 
 | Row | Status | Exact evidence or gap |
 |---|---|---|
-| Linux process-group descendant cleanup | Pass | On exact 0.60.103 repair commit, `cargo test --locked -p pandamux-server --test run_shutdown lifecycle_supervised_process_group_kills_its_descendant -- --exact`: 1 passed |
+| Linux process-group descendant cleanup | Pass | On exact 0.60.119 commit, `cargo test --locked -p pandamux-server --test run_shutdown lifecycle_supervised_unix_process_group_kills_its_descendant -- --exact`: 1 passed |
 | Linux real concurrent Git worktrees and ownership checks | Pass | On exact 0.60.103 repair commit, `cargo test --locked -p pandamux-server --test attempt_worktrees`: 11 passed |
-| Windows native automation | Partial | Exact 0.60.117 native CI passes workspace tests, release build, artifact smoke, rooted-path validation, junction substitution rejection, locked-worktree retention, replayable cleanup, and a real local child with positive death evidence. No Windows Job Object descendant test exists, so descendant cleanup is unverified |
-| macOS native automation | Partial | Exact 0.60.117 native CI passes the full `attempt_worktrees` integration suite, link-substitution rejection, locked-worktree retention, a real local child with positive death evidence, and release build. No macOS process-group descendant test exists, so descendant cleanup is unverified |
+| Windows native automation | Pass | Exact 0.60.119 native CI passes workspace tests, release build, artifact smoke, rooted-path validation, junction substitution rejection, locked-worktree retention, replayable cleanup, and `lifecycle_supervised_windows_job_object_kills_its_descendant` |
+| macOS native automation | Pass | Exact 0.60.119 native CI passes the full `attempt_worktrees` integration suite, link-substitution rejection, locked-worktree retention, release build, and `lifecycle_supervised_unix_process_group_kills_its_descendant` |
 | Authenticated loopback node | Pass, portable | Private environment-bound RPC, disconnect, status, cancel, and replay tests passed inside `pandamux-server` |
 | Physical remote Linux node | Unrun | No exact physical-node baseline, lease, proxy reconnect, cancellation, or provider-turn evidence |
 | Live Codex | Unrun | No live provider was contacted |
 | Live Claude | Unrun | No live provider was contacted |
 | Live Antigravity | Unrun | No live provider was contacted |
 | Controlled external HTTP/file/command effect | Unrun | No disposable external service or repository was mutated |
-| Target-specific CI | Pass | All eight jobs passed for exact 0.60.117 commit `e53406bbd211e701f89a25d63a8cd672033a22d9` in [run 38040781118](https://github.com/BoardPandas/Pandamux/actions/runs/38040781118) |
+| Target-specific CI | Pass | All eight jobs passed for exact 0.60.119 commit `ce9c48f0a95c1847abe72c1b3f49398ab362425f` in [run 38054202454](https://github.com/BoardPandas/Pandamux/actions/runs/38054202454) |
 
-The implemented/local and target-specific CI classifications pass. The
-specification's complete local/native classification does not pass because
-the required Windows and macOS descendant-cleanup evidence is absent.
+The implemented/local, target-specific CI, and complete automated local/native
+classifications pass. The physical-remote, live-provider, and controlled
+external-effect rows remain explicitly unrun and prevent any production-ready
+or production-accepted claim.
 
 ## Retained Debt and Preservation
 
@@ -257,14 +284,14 @@ or broad staging command was used.
 
 | Dimension | Status |
 |---|---|
-| Implementation | Complete for Phase 5C's private runtime at exact 0.60.117 repair commit |
+| Implementation | Complete for Phase 5C's private runtime, with final native acceptance coverage at exact 0.60.119 commit |
 | Portable local verification | Pass |
-| Native automation | Partial on Windows and macOS; exact target CI is green, but platform-specific descendant-cleanup rows are absent |
-| Complete local/native acceptance | Not established |
+| Native automation | Pass for the binding Windows, Linux, and macOS rows on exact committed evidence |
+| Complete local/native acceptance | Pass |
 | Physical remote/live acceptance | Not established |
-| Checkpoint commits | C-A through C-K and the native-CI repairs through exact 0.60.117 are committed; the 0.60.118 evidence reconciliation is this documentation commit |
-| Push | Repair chain through exact 0.60.117 pushed; this documentation checkpoint is reported separately after commit |
-| CI | Exact 0.60.117 native run 38040781118 passed all eight jobs; this documentation checkpoint is reported separately |
+| Checkpoint commits | C-A through C-K, the native-CI repairs, and exact 0.60.119 native acceptance coverage are committed; the 0.60.120 reconciliation is this documentation commit |
+| Push | Checkpoint chain through exact 0.60.119 pushed; this documentation checkpoint is reported separately after commit |
+| CI | Exact 0.60.119 native run 38054202454 passed all eight jobs; this documentation checkpoint is reported separately |
 | Deployment | Not performed |
 | Activation | Not performed |
 | Packaging/signing/publication | Not performed |
@@ -290,19 +317,19 @@ or broad staging command was used.
   validation, lint cleanliness, the monotonic local-acceptance clock, private
   worktree materialization, and the supported server smoke invocation; none
   relaxed a runtime or acceptance requirement.
-- Windows and macOS automation is recorded as Partial rather than inferred as
-  complete from green native jobs because their platform-specific descendant
-  cleanup rows are absent. Physical-remote, live-provider, and
-  controlled-external evidence remains Unrun.
+- Windows and macOS automation moved from Partial to Pass only after exact
+  retained tests named and proved their platform-specific descendant cleanup.
+  Physical-remote, live-provider, and controlled-external evidence remains
+  Unrun.
 - Later user authorization permitted branch push and manual CI dispatch and
   monitoring only. Deployment, activation, packaging, signing, publication,
   release, provider calls, and external-repository mutation remained
   prohibited.
-- Local 0.60.118 verification used task-owned `/dev/shm` targets because the
-  repository filesystem had insufficient free space. Incremental compilation
-  and debug-info storage were disabled after a disposable-cache quota failure;
-  the locked dependency graph, test commands, warning policy, and assertions
-  were unchanged.
+- Local 0.60.118 and 0.60.119 verification used task-owned `/dev/shm` targets
+  because the repository filesystem had insufficient free space. Incremental
+  compilation and debug-info storage were disabled after a disposable-cache
+  quota failure; the locked dependency graph, test commands, warning policy,
+  and assertions were unchanged.
 - The internal recovery-review resolution method is tested and audited, but a
   human-facing resolver is intentionally unavailable until Phase 5D.
 - Migration 14 has no destructive down migration. Rollback requires stopping
