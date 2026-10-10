@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Fixed
 
+- **Kept the native Windows ownership diagnostic Clippy-clean in version
+  0.60.115.** The test-only managed-path caller annotation now returns as the
+  cfg branch expression, allowing the Windows CI workspace tests to reach the
+  ownership failure without changing production behavior or validation.
+
 - **Made native Windows worktree ownership failures actionable in version
   0.60.114.** Windows test builds now append the exact caller location when a
   managed attempt path fails closed, while production keeps the existing safe
