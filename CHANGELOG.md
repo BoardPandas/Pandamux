@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Changed
 
+- **`/add-lesson` and `/add-practice` publish through Roundtable (0.53.45).** Both skills now
+  check for a duplicate with Roundtable's `kb_search` and publish with `kb_propose`, instead of
+  committing straight to the public LL-G and BP repositories with `gh`. Roundtable refuses
+  credentials, email addresses, IPs and duplicate slugs before anything is published, and each
+  skill now has a step to remove client names and internal hostnames, which no scan can
+  recognise. `gh` is used only to create a new LL-G shelf or BP concern, through the bundled
+  `.claude/scripts/kb-commit.mjs`. Without Roundtable connected, the skills stop and say how to
+  set it up rather than falling back to `gh`. No application code changes.
 - **Cleared ground for Phase 1 GPUI rewrite (Step 1).** Extracted SSH pool, authentication, known hosts, and SFTP into new `pandamux-remote` crate. Reshaped `pandamux-term` with `grid` and `pty` feature flags, decoupling it from `russh`. Trimmed `pandamux-core` to retain domain types (`ids`, `project`, `project_registry`, `ssh`, `notification`, `i18n`, `home`, `settings`), and pruned multiplexer files (`split_tree`, `state`, `surface_content`, `keymap`, `sidebar`, old `agent`, `config`). Removed obsolete crates `pandamux-ui` and `pandamux-app`, retired resource folders, and legacy terminal spikes. Guarded `release.yml` with `RELEASES_ENABLED` check, disabled `winget.yml`, and updated CI workflows and crate boundaries.
 - **AI agents and contributors now have a faster, more reliable documentation path.**
   `AGENTS.md` defines the reading order and authority hierarchy, current behavior is
