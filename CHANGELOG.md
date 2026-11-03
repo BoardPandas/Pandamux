@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Changed
 
+- **`/dependency-audit` now audits GitHub Actions (0.53.46).** A new step checks every action the workflows use against its latest release (SHA pins are resolved to their real tag, and each action is checked against GitHub's advisory database, for an archived repo, and for a deprecated Node runtime), every `runs-on` label against GitHub's current runner images and their retirement dates, the tool versions workflows install against current releases and the repo's own pins, container images, and whether Dependabot covers `github-actions`. Self-hosted runners are listed for a manual version check. Synced from claude-code-bootstrap.
 - **`/add-lesson` and `/add-practice` publish through Roundtable (0.53.45).** Both skills now
   check for a duplicate with Roundtable's `kb_search` and publish with `kb_propose`, instead of
   committing straight to the public LL-G and BP repositories with `gh`. Roundtable refuses
