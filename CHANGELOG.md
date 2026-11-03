@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+
+- **Claude offers to clean up merged worktrees and branches after a push (0.54.0).** After a push moves `origin/master`, a new hook lists local branches already merged into it and the clean worktrees on them, then has Claude ask once before removing anything. It never deletes on its own, leaves locked worktrees, the session's own worktree and worktrees with uncommitted changes alone, and stays silent for dry runs, rejected pushes and pushes of other branches. The shared commit-hook helper gains the argv walk the hook reuses; commit behaviour is unchanged. No application code changes.
+
 ### Changed
 
 - **`/dependency-audit` now audits GitHub Actions (0.53.46).** A new step checks every action the workflows use against its latest release (SHA pins are resolved to their real tag, and each action is checked against GitHub's advisory database, for an archived repo, and for a deprecated Node runtime), every `runs-on` label against GitHub's current runner images and their retirement dates, the tool versions workflows install against current releases and the repo's own pins, container images, and whether Dependabot covers `github-actions`. Self-hosted runners are listed for a manual version check. Synced from claude-code-bootstrap.
