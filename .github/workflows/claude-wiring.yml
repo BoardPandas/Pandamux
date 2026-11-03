@@ -14,6 +14,7 @@ on:
       - ".claude/**"
       - "CLAUDE.md"
       - "scripts/check-claude-wiring.mjs"
+      - "scripts/post-push-cleanup.test.mjs"
       - ".github/workflows/claude-wiring.yml"
   push:
     branches: ["master", "main"]
@@ -21,6 +22,7 @@ on:
       - ".claude/**"
       - "CLAUDE.md"
       - "scripts/check-claude-wiring.mjs"
+      - "scripts/post-push-cleanup.test.mjs"
       - ".github/workflows/claude-wiring.yml"
   workflow_dispatch:
 
@@ -42,3 +44,8 @@ jobs:
 
       - name: Claude wiring guard
         run: node scripts/check-claude-wiring.mjs
+
+      # The post-push cleanup hook is advisory and must stay silent unless the default
+      # branch really moved. Throwaway repos, node --test plus bash, nothing else.
+      - name: Post-push cleanup hook tests
+        run: node --test scripts/post-push-cleanup.test.mjs
