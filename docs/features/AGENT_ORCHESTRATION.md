@@ -4,130 +4,395 @@
 
 The following files were used as evidence for this page:
 
-- [agent.rs:1-194](../../crates/pandamux-core/src/agent.rs#L1-L194)
-- [backend.rs:640-739](../../crates/pandamux-app/src/backend.rs#L640-L739)
-- [backend.rs:744-824](../../crates/pandamux-app/src/backend.rs#L744-L824)
-- [backend.rs:826-841](../../crates/pandamux-app/src/backend.rs#L826-L841)
-- [backend.rs:884-923](../../crates/pandamux-app/src/backend.rs#L884-L923)
-- [backend.rs:925-937](../../crates/pandamux-app/src/backend.rs#L925-L937)
-- [Cargo.toml:61-68](../../crates/pandamux-app/Cargo.toml#L61-L68)
-- [CHANGELOG.md:222-226](../../CHANGELOG.md#L222-L226)
-- [README.md:1-153](../../resources/pandamux-orchestrator/README.md#L1-L153)
+- [thread.rs:1-235](../../crates/pandamux-core/src/thread.rs#L1-L235)
+- [event.rs:1-196](../../crates/pandamux-core/src/event.rs#L1-L196)
+- [agent_def.rs:1-154](../../crates/pandamux-core/src/agent_def.rs#L1-L154)
+- [run.rs:1-1139](../../crates/pandamux-core/src/run.rs#L1-L1139)
+- [instruction_bundle.rs:1-165](../../crates/pandamux-core/src/instruction_bundle.rs#L1-L165)
+- [lib.rs:1-55](../../crates/pandamux-orchestrator/src/lib.rs#L1-L55)
+- [schema/mod.rs:1-1022](../../crates/pandamux-orchestrator/src/schema/mod.rs#L1-L1022)
+- [schema/v1.rs:1-308](../../crates/pandamux-orchestrator/src/schema/v1.rs#L1-L308)
+- [diagnostics.rs:1-446](../../crates/pandamux-orchestrator/src/diagnostics.rs#L1-L446)
+- [bundle.rs:1-1157](../../crates/pandamux-orchestrator/src/bundle.rs#L1-L1157)
+- [dag.rs:1-742](../../crates/pandamux-orchestrator/src/dag.rs#L1-L742)
+- [policy.rs:1-402](../../crates/pandamux-orchestrator/src/policy.rs#L1-L402)
+- [routing.rs:1-371](../../crates/pandamux-orchestrator/src/routing.rs#L1-L371)
+- [model_output.rs:1-327](../../crates/pandamux-orchestrator/src/model_output.rs#L1-L327)
+- [state.rs:1-2462](../../crates/pandamux-orchestrator/src/state.rs#L1-L2462)
+- [orchestration_execution.rs:1-230](../../crates/pandamux-protocol/src/orchestration_execution.rs#L1-L230)
+- [thread_rpc.rs:1-156](../../crates/pandamux-protocol/src/thread_rpc.rs#L1-L156)
+- [subagent_rpc.rs:1-47](../../crates/pandamux-protocol/src/subagent_rpc.rs#L1-L47)
+- [attachment_rpc.rs:1-69](../../crates/pandamux-protocol/src/attachment_rpc.rs#L1-L69)
+- [checkpoint_rpc.rs:1-37](../../crates/pandamux-protocol/src/checkpoint_rpc.rs#L1-L37)
+- [traits.rs:1-72](../../crates/pandamux-providers/src/traits.rs#L1-L72)
+- [models.rs:93-292](../../crates/pandamux-providers/src/models.rs#L93-L292)
+- [thread_manager.rs:107-4447](../../crates/pandamux-server/src/thread_manager.rs#L107-L4447)
+- [attempt_watchdog.rs:11-230](../../crates/pandamux-server/src/attempt_watchdog.rs#L11-L230)
+- [run_execution_service.rs](../../crates/pandamux-server/src/run_execution_service.rs)
+- [execution_admission.rs](../../crates/pandamux-server/src/execution_admission.rs)
+- [execution_budget.rs](../../crates/pandamux-server/src/execution_budget.rs)
+- [attempt_worktree.rs](../../crates/pandamux-server/src/attempt_worktree.rs)
+- [managed_git.rs:798-826](../../crates/pandamux-server/src/managed_git.rs#L798-L826)
+- [blackboard_store.rs:20-370](../../crates/pandamux-server/src/blackboard_store.rs#L20-L370)
+- [remote_execution.rs:101-851](../../crates/pandamux-server/src/remote_execution.rs#L101-L851)
+- [run_recovery.rs:37-225](../../crates/pandamux-server/src/run_recovery.rs#L37-L225)
+- [orchestration_phase5c.rs](../../crates/pandamux-server/src/store/orchestration_phase5c.rs)
+- [attempt_worktrees.rs](../../crates/pandamux-server/tests/attempt_worktrees.rs)
+- [execution_admission.rs](../../crates/pandamux-server/tests/execution_admission.rs)
+- [blackboard_dag.rs](../../crates/pandamux-server/tests/blackboard_dag.rs)
+- [run_recovery.rs](../../crates/pandamux-server/tests/run_recovery.rs)
+- [run_shutdown.rs](../../crates/pandamux-server/tests/run_shutdown.rs)
 
 </details>
 
 # Agent Orchestration
 
-> **Related Pages**: [CLI Reference](../api/CLI_REFERENCE.md), [Named Pipe Control Plane](NAMED_PIPE_IPC.md)
+> **Related Pages**: [Core Domain](../core/CORE_DOMAIN.md), [Application Runtime](../core/APP_RUNTIME.md), [Provider Routing and Capacity](PROVIDER_ROUTING.md)
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_12_agent-orchestration_overview -->
-## Overview
+<!-- BEGIN:AUTOGEN pandamux_12_agent-orchestration_phase5a -->
+## Phase 5A Pure Orchestration Engine
 
-An *agent* in PandaMUX is a terminal surface running a specific command (typically `claude ...`) instead of a plain workspace shell; the backend tracks its identity, placement, and status in an in-process registry so the CLI (`agent status`/`agent list`) and the bundled pandamux-orchestrator plugin can coordinate work across panes (agent.rs:1-8).
+Phase 5A is a pure value-to-value engine. It accepts authored bytes, server-issued trust and policy snapshots, explicit identities, and timestamps; it returns validated records, events, and effects without reading files, observing clocks, opening a database, contacting a provider, or mutating external state. Its public API exposes parsing, compilation, plan validation, routing, command decision, event application, and replay as separate operations ([lib.rs:9-55](../../crates/pandamux-orchestrator/src/lib.rs#L9-L55)).
 
-Agents run as ordinary, fully visible terminal surfaces: spawning an agent creates (or splits) a pane the same way any other terminal surface is created, then starts a PTY in it with the agent's command, so the user can watch and type into any agent mid-flight (agent.rs:3-8). The pandamux-orchestrator plugin builds on top of this primitive to decompose a large task into dependency-aware waves of parallel Claude Code agents, each confined to a strict file zone, coordinated through a JSON state file in a temp directory rather than a daemon (README.md:7, README.md:42, README.md:103). There is no MCP integration anywhere in this path: Claude Code talks to PandaMUX exclusively through the `pandamux` CLI over the named pipe, and the orchestrator's hooks and scripts are themselves just CLI callers (README.md:76, README.md:101).
-
-Sources: [agent.rs:1-8](../../crates/pandamux-core/src/agent.rs#L1-L8), [README.md:1-103](../../resources/pandamux-orchestrator/README.md#L1-L103)
-<!-- END:AUTOGEN pandamux_12_agent-orchestration_overview -->
-
----
-
-<!-- BEGIN:AUTOGEN pandamux_12_agent-orchestration_model -->
-## Agent State Model
-
-`pandamux-core::agent` defines the registry and status enum that the backend threads through the single-writer dispatcher; it has zero Iced dependency, matching the crate-isolation invariant.
-
-`AgentInfo` carries the agent's identity, spawn command, working directory, and its placement in the split tree (workspace/pane/surface ids), plus a three-state `AgentStatus` (agent.rs:36-55):
-
-```rust
-// crates/pandamux-core/src/agent.rs:36-55
-pub enum AgentStatus {
-    Starting,
-    Running,
-    Exited,
-}
-
-pub struct AgentInfo {
-    pub id: String,
-    pub label: String,
-    pub command: String,
-    pub cwd: Option<String>,
-    pub workspace_id: WorkspaceId,
-    pub pane_id: PaneId,
-    pub surface_id: SurfaceId,
-    pub status: AgentStatus,
-}
+```mermaid
+graph TD
+    A["Authored bytes and trust grants"] --> S["Strict V1 parse"]
+    S --> B["Canonical bundle"]
+    B --> D["Validated task DAG"]
+    D --> R["Agent then provider route"]
+    R --> C["Command decision"]
+    C --> E["Canonical events"]
+    E --> P["Replayable run and effects"]
+    P --> X["Server effect interpreter"]
 ```
 
-`AgentRegistry` holds the live set of agents in a `Vec<AgentInfo>` plus a monotonic sequence counter that mints ids as `agent-1`, `agent-2`, ... (agent.rs:57-73). It exposes lookup by id (`get`) and by surface (`by_surface`), an in-place `set_status`, and `prune_missing`, which drops any registry entry whose surface is no longer present among the live surface ids and returns the removed agents so callers can react to surfaces that disappeared out from under an agent (agent.rs:79-127). A `SpawnStrategy` enum (`Distribute` / `Stack` / `Split`, default `Distribute`) controls how a batch spawn distributes new agents across panes, parsed from the CLI's `--strategy` string with an unrecognized value falling back to `Distribute` (agent.rs:14-34).
+| Stage | Implemented contract |
+|---|---|
+| Authored schemas | Confined logical paths and published file, aggregate, depth, item, and scalar bounds precede strict V1 decoding ([schema/mod.rs:16-30](../../crates/pandamux-orchestrator/src/schema/mod.rs#L16-L30), [schema/mod.rs:153-215](../../crates/pandamux-orchestrator/src/schema/mod.rs#L153-L215)). Every orchestrator, project, agent, knowledge, and prompt record carries an exact version and kind; unknown fields are denied ([schema/v1.rs:5-38](../../crates/pandamux-orchestrator/src/schema/v1.rs#L5-L38), [schema/v1.rs:187-298](../../crates/pandamux-orchestrator/src/schema/v1.rs#L187-L298)). |
+| Bundle compilation | Trusted layer grants are supplied separately from repository content. Sources are stably ordered, references resolve before merge, value origins remain visible, and the canonical payload digest binds every compiled agent ([policy.rs:15-33](../../crates/pandamux-orchestrator/src/policy.rs#L15-L33), [bundle.rs:56-125](../../crates/pandamux-orchestrator/src/bundle.rs#L56-L125), [bundle.rs:185-244](../../crates/pandamux-orchestrator/src/bundle.rs#L185-L244)). |
+| DAG validation | Task and edge caps, identities, cycles, project and organization policy, typed contracts, checked budgets, and capability feasibility are evaluated in a fixed order before a `ValidatedPlan` exists ([dag.rs:14-100](../../crates/pandamux-orchestrator/src/dag.rs#L14-L100), [dag.rs:100-165](../../crates/pandamux-orchestrator/src/dag.rs#L100-L165)). |
+| Routing and approvals | Task-to-agent filters and stable tie-breaks compose the existing provider selector; recorded routes are reused. Auto and Approve-first share one revision- and action-digest-bound reconciler, and only ordinary explicitly permitted work can bypass a pending approval ([routing.rs:52-118](../../crates/pandamux-orchestrator/src/routing.rs#L52-L118), [policy.rs:37-100](../../crates/pandamux-orchestrator/src/policy.rs#L37-L100), [policy.rs:100-188](../../crates/pandamux-orchestrator/src/policy.rs#L100-L188)). |
+| Model proposals | One JSON object is bounded to 1 MiB and structural limits. Invalid content gets at most one parse-only retry; timeout or transport failures do not consume that retry path and never dispatch ([model_output.rs:9-29](../../crates/pandamux-orchestrator/src/model_output.rs#L9-L29), [model_output.rs:74-124](../../crates/pandamux-orchestrator/src/model_output.rs#L74-L124)). |
+| Run state | `decide` rejects illegal commands, `apply` enforces exact sequencing and canonical identity receipts, and `replay` rebuilds state while deterministic effect identifiers prevent duplicate work ([state.rs:55-204](../../crates/pandamux-orchestrator/src/state.rs#L55-L204), [state.rs:206-320](../../crates/pandamux-orchestrator/src/state.rs#L206-L320), [state.rs:322-356](../../crates/pandamux-orchestrator/src/state.rs#L322-L356)). |
+
+The pure engine itself still performs no I/O. Phase 5C now persists and
+interprets its transitions in the server, but the event vocabulary, effect
+identity, readiness, retry boundary, artifact validation, and replay behavior
+remain pure. Public run RPC, CLI, and desktop orchestration behavior remain
+Phase 5D work ([2026-10-09-phase-5c-execution-owner.md:1212-1223](../../tasks/2026-10-09-phase-5c-execution-owner.md#L1212-L1223)).
+
+Sources: [lib.rs:9-55](../../crates/pandamux-orchestrator/src/lib.rs#L9-L55), [schema/mod.rs:16-215](../../crates/pandamux-orchestrator/src/schema/mod.rs#L16-L215), [bundle.rs:56-244](../../crates/pandamux-orchestrator/src/bundle.rs#L56-L244), [dag.rs:14-165](../../crates/pandamux-orchestrator/src/dag.rs#L14-L165), [routing.rs:52-118](../../crates/pandamux-orchestrator/src/routing.rs#L52-L118), [policy.rs:37-188](../../crates/pandamux-orchestrator/src/policy.rs#L37-L188), [model_output.rs:9-124](../../crates/pandamux-orchestrator/src/model_output.rs#L9-L124), [state.rs:55-356](../../crates/pandamux-orchestrator/src/state.rs#L55-L356)
+<!-- END:AUTOGEN pandamux_12_agent-orchestration_phase5a -->
+
+---
+
+<!-- BEGIN:AUTOGEN pandamux_12_agent-orchestration_phase5c-foundation -->
+## Phase 5C Durable Execution Runtime
+
+Phase 5C checkpoints C-A through C-J connect the pure run model to one private,
+server-owned execution runtime. Migration 14 stores canonical
+snapshots, immutable events, derived effects, queue and lease records,
+attempt-owned worktrees, budgets, artifacts, progress, recovery reviews, and
+node receipts. Verified loads replay the event log and compare its canonical
+bytes and derived effects with the stored rows before returning state
+([migrations.rs:1711-2084](../../crates/pandamux-server/src/store/migrations.rs#L1711-L2084), [orchestration_phase5c.rs:648-933](../../crates/pandamux-server/src/store/orchestration_phase5c.rs#L648-L933)).
+
+```mermaid
+graph TD
+    P["Pure run transition"] --> S["Verified SQLite commit"]
+    S --> E["Durable effect claim"]
+    E --> A["Shared admission"]
+    A --> W["Owned worktree"]
+    W --> T["ThreadManager session"]
+    T --> R["Durable result"]
+    R --> B["Budget reconciliation"]
+    R --> X["Typed artifacts"]
+    R --> C["Cleanup or review"]
+```
+
+`RunExecutionService` is the single adapter for canonical transitions and the
+effect outbox. It broadcasts only post-commit identity and digest notices;
+claims, preparation, dispatch markers, outcomes, and acknowledgements remain
+durable and replay-safe
+([run_execution_service.rs:253-330](../../crates/pandamux-server/src/run_execution_service.rs#L253-L330), [orchestration_phase5c.rs:648-933](../../crates/pandamux-server/src/store/orchestration_phase5c.rs#L648-L933)).
+
+Each execution attempt can now bind exactly one app-owned worktree. The service
+derives the path and full branch ref from canonical repository, run, task, and
+attempt identities; records the worktree lease and ambiguous ownership intent
+before Git; creates and validates the exact empty private leaf; and then
+materializes only the requested commit. Durable ownership paths stay canonical,
+while Windows verbatim drive or UNC prefixes are removed only from Git process
+arguments. The rooted link walk carries the prefix without querying it alone,
+then still rejects every queryable symlink or reparse component
+([attempt_worktree.rs:504-562](../../crates/pandamux-server/src/attempt_worktree.rs#L504-L562), [attempt_worktree.rs:1280-1402](../../crates/pandamux-server/src/attempt_worktree.rs#L1280-L1402), [attempt_worktree.rs:1885-1964](../../crates/pandamux-server/src/attempt_worktree.rs#L1885-L1964), [managed_git.rs:798-826](../../crates/pandamux-server/src/managed_git.rs#L798-L826)). Repository hooks, global attributes, system configuration, submodule recursion, and custom content filters are disabled or rejected. Blocking filesystem and Git work runs on a bounded blocking pool, and Windows child processes use `CREATE_NO_WINDOW`.
+
+Before, after, and recovery checkpoints use a private temporary index and a
+stable checkpoint ref, leaving both the user checkout and the attempt index
+unchanged. Crash recovery distinguishes durable intent from Git completion and
+rejects changed-byte identity reuse. Cleanup is automatic only for a terminal,
+review-free attempt with verified process-death and retained-evidence digests,
+complete checkpoint receipts, and a clean unlocked tree; removal uses ordinary
+non-forced `git worktree remove`. Dirty, locked, foreign, or ambiguous trees are
+retained
+([attempt_worktrees.rs](../../crates/pandamux-server/tests/attempt_worktrees.rs)).
+
+`ExecutionAdmissionService` is now the one durable admission path for manual
+and orchestrated starts. An immediate SQLite transaction orders eligible work,
+checks run, agent, provider, environment, organization, and global limits, and
+creates an owner, TTL, and compare-and-swap capacity lease. Orchestrated claims
+also reserve the exact attempt budget and UTC daily-ledger amount and append
+`BudgetReserved` plus `DispatchRequested` before commit. Separate SQLite
+connections cannot overclaim the same capacity
+([execution_admission.rs:101-391](../../crates/pandamux-server/src/execution_admission.rs#L101-L391), [orchestration_phase5c.rs:3040-4140](../../crates/pandamux-server/src/store/orchestration_phase5c.rs#L3040-L4140)).
+
+Queue selection preserves `(enqueued_at, run, task, attempt)` order within each
+class while bypassing a resource-blocked head. Global and per-environment caps
+of at least two retain one interactive slot; at cap one, an orchestrated item
+wins after at most four consecutive interactive claims. Cap decreases leave
+active owners intact and block new claims until capacity drains. Expired claims
+can be requeued only by exact owner and lease identity with bounded backoff
+([execution_admission.rs:217-401](../../crates/pandamux-server/src/execution_admission.rs#L217-L401), [execution_admission.rs:531-1165](../../crates/pandamux-server/tests/execution_admission.rs#L531-L1165)).
+
+`ExecutionBudgetService` plans the exact attempt reservation without mutating
+state; the shared admission transaction then repeats the authoritative task,
+run, compiled-agent, and organization UTC-day checks before it creates a
+dispatch effect. With no trusted smaller estimate, the plan reserves the
+task's remaining ceiling, and retries can reserve only the unreconciled
+remainder. The UTC ledger date is fixed at claim even when reconciliation
+crosses midnight
+([execution_budget.rs](../../crates/pandamux-server/src/execution_budget.rs),
+[orchestration_phase5c.rs](../../crates/pandamux-server/src/store/orchestration_phase5c.rs)).
+
+One-time supplemental grants require connected local control and an approved,
+unexpired action digest bound to the exact grant identity, run, task, attempt,
+dimension, amount, policy revision, and expiry. Reconciliation reads only the
+exact settled turn-attempt and its durable managed-turn facts. Provider-reported
+micro-USD wins; otherwise effective-dated integer pricing supplies an
+API-equivalent estimate. Unknown cost remains reserved and incomplete, while
+representable actual overage is retained and pauses further dispatch.
+Conservation compares run, reservation, agent, and UTC-day totals, but a
+balanced result is explicitly source-unverified rather than a replacement for
+usage facts. Grant, reconciliation, and pre-dispatch release transactions have
+before/after-commit recovery fixtures.
+
+`ThreadManager` remains the sole provider-session owner. Every new manual
+session now commits an interactive admission before
+`ProviderResolver::acquire_execution`; start failures, losing session races,
+cancellation, terminal failure, and shutdown release the exact claim. A
+successful reusable session keeps its existing process-lifetime claim. For an
+orchestrated attempt, `RunExecutionService` writes the dispatch marker first,
+then asks `ThreadManager` to dispatch the already persisted thread and turn and
+retains explicit completion, cancellation, watchdog, renewal, and observer
+join handles ([thread_manager.rs:174-385](../../crates/pandamux-server/src/thread_manager.rs#L174-L385), [run_execution_service.rs:939-1125](../../crates/pandamux-server/src/run_execution_service.rs#L939-L1125)).
+
+The local path derives instructions and tool policy from the run-pinned
+immutable bundle and preserves the existing Phase 4 provider event loop, tool
+ledger, continuation, and `AttemptBoundary` as retry authority. Only a typed
+not-started result with verified cleanup can release capacity and budget for
+one bounded fallback; response loss, output, approval interaction, unresolved
+tools, or an external commit remain ambiguous or review-required
+([run_execution_service_tests.rs:440-869](../../crates/pandamux-server/src/run_execution_service_tests.rs#L440-L869)). Provider-owned progress sampled before a concurrent cancellation reuses the newer durable attempt clock inside the lease-checked transaction; the public store path continues to reject clock regression ([orchestration_phase5c.rs:4162-4353](../../crates/pandamux-server/src/store/orchestration_phase5c.rs#L4162-L4353)).
+
+Remote execution uses private, environment-bound protocol records for
+repository prepare, attempt prepare, dispatch, exact status, cancellation,
+ordered events, and acknowledgement. Both stores persist prepare and dispatch
+authority, and a lost response queries the same attempt receipt rather than
+starting a replacement ([orchestration_execution.rs:9-230](../../crates/pandamux-protocol/src/orchestration_execution.rs#L9-L230), [remote_execution.rs:101-851](../../crates/pandamux-server/src/remote_execution.rs#L101-L851)).
+When that exact receipt proves provider acceptance and a later boundary,
+recovery first restores the canonical `StartAttempt` identity and advances the
+boundary before recording a terminal or ambiguous outcome. A durable ambiguous
+dispatch is then reconstructed directly into the same deduplicated review on
+later recovery instead of reacquiring the review-owned effect
+([run_recovery.rs:572-587](../../crates/pandamux-server/src/run_recovery.rs#L572-L587), [run_recovery.rs:1076-1250](../../crates/pandamux-server/src/run_recovery.rs#L1076-L1250), [remote_execution_tests.rs:831-999](../../crates/pandamux-server/src/remote_execution_tests.rs#L831-L999)).
+
+Successful tasks publish canonical, content-hashed artifacts and required
+server-derived evidence in the same transition that advances readiness.
+Per-task, per-run, byte, depth, container, string, version, producer, consumer,
+schema, and aggregate bounds are enforced before settlement; the app-owned
+cache is verified derived data and artifact text never changes access, tools,
+routing, budget, or approval authority ([run.rs:15-21](../../crates/pandamux-core/src/run.rs#L15-L21), [blackboard_store.rs:20-370](../../crates/pandamux-server/src/blackboard_store.rs#L20-L370), [state.rs:1621-1889](../../crates/pandamux-orchestrator/src/state.rs#L1621-L1889)).
+
+Meaningful progress can extend the stall deadline but never the absolute run
+deadline. Cancellation persists intent before interrupt, then performs bounded
+drain, supervised escalation, positive death verification, settlement,
+worktree cleanup, lease release, sender closure, and writer joins; failure at
+any boundary quarantines retained debt ([attempt_watchdog.rs:11-230](../../crates/pandamux-server/src/attempt_watchdog.rs#L11-L230)). Startup holds one incarnation lock, verifies nonterminal replay and owned resources, reclaims only exact expired local ownership, reattaches only an exact live attempt, and deduplicates ambiguous or unverifiable cases into human review ([run_recovery.rs:37-225](../../crates/pandamux-server/src/run_recovery.rs#L37-L225)).
+
+Phase 5C is an internal runtime checkpoint. Exact 0.60.119 passes the binding
+native Linux process-group and real Git worktree rows plus all eight jobs of
+native run
+[38054202454](https://github.com/BoardPandas/Pandamux/actions/runs/38054202454).
+That exact Windows job names the Job Object descendant test as passing, and the
+Apple Silicon job names the Unix process-group descendant test as passing; the
+retained integration exercises the production supervisor and positive death
+checks on both leader and descendant
+([run_shutdown.rs:430-580](../../crates/pandamux-server/tests/run_shutdown.rs#L430-L580)).
+Exact 0.60.121 then passes the physical Galahad Node, live Codex, Claude, and
+Antigravity success and tool-boundary cancellation rows, plus one controlled
+response-loss file effect with durable ambiguity and no redispatch. The Phase
+5C execution-runtime matrix is therefore complete. Production acceptance is
+still not established: public run RPC, CLI, desktop orchestration surfaces,
+and the user-facing recovery-review resolver remain out of scope, while P4-C5
+and P4-C7 remain open
+([2026-10-09-phase-5c-execution-owner.md:1101-1134](../../tasks/2026-10-09-phase-5c-execution-owner.md#L1101-L1134), [2026-10-09-phase-5c-execution-owner.md:1212-1226](../../tasks/2026-10-09-phase-5c-execution-owner.md#L1212-L1226), [Phase 5C acceptance record](../operations/PHASE5C_ACCEPTANCE.md#native-and-live-acceptance)).
+
+Sources: [migrations.rs:1711-2084](../../crates/pandamux-server/src/store/migrations.rs#L1711-L2084), [orchestration_phase5c.rs:648-933](../../crates/pandamux-server/src/store/orchestration_phase5c.rs#L648-L933), [orchestration_phase5c.rs:4162-4353](../../crates/pandamux-server/src/store/orchestration_phase5c.rs#L4162-L4353), [attempt_worktree.rs:504-562](../../crates/pandamux-server/src/attempt_worktree.rs#L504-L562), [attempt_worktree.rs:1280-1402](../../crates/pandamux-server/src/attempt_worktree.rs#L1280-L1402), [attempt_worktree.rs:1885-1964](../../crates/pandamux-server/src/attempt_worktree.rs#L1885-L1964), [managed_git.rs:798-826](../../crates/pandamux-server/src/managed_git.rs#L798-L826), [execution_admission.rs:119-390](../../crates/pandamux-server/src/execution_admission.rs#L119-L390), [execution_budget.rs:37-126](../../crates/pandamux-server/src/execution_budget.rs#L37-L126), [run_execution_service.rs:253-330](../../crates/pandamux-server/src/run_execution_service.rs#L253-L330), [orchestration_execution.rs:9-230](../../crates/pandamux-protocol/src/orchestration_execution.rs#L9-L230), [remote_execution.rs:101-851](../../crates/pandamux-server/src/remote_execution.rs#L101-L851), [remote_execution_tests.rs:831-999](../../crates/pandamux-server/src/remote_execution_tests.rs#L831-L999), [blackboard_store.rs:20-370](../../crates/pandamux-server/src/blackboard_store.rs#L20-L370), [attempt_watchdog.rs:11-230](../../crates/pandamux-server/src/attempt_watchdog.rs#L11-L230), [run_recovery.rs:37-225](../../crates/pandamux-server/src/run_recovery.rs#L37-L225), [run_recovery.rs:572-587](../../crates/pandamux-server/src/run_recovery.rs#L572-L587), [run_recovery.rs:1076-1250](../../crates/pandamux-server/src/run_recovery.rs#L1076-L1250), [run_shutdown.rs:430-580](../../crates/pandamux-server/tests/run_shutdown.rs#L430-L580)
+<!-- END:AUTOGEN pandamux_12_agent-orchestration_phase5c-foundation -->
+
+---
+
+<!-- BEGIN:AUTOGEN pandamux_12_agent-orchestration_threads -->
+## Thread and Turn Lifecycle
+
+A thread binds one environment, exact provider instance, model, access ceiling, workspace, and optional agent identity to a durable conversation. It may be manual, orchestrator-created, or schedule-created, and it records timestamps and a high-level status independently from individual turns ([thread.rs:6-35](../../crates/pandamux-core/src/thread.rs#L6-L35), [thread.rs:99-126](../../crates/pandamux-core/src/thread.rs#L99-L126)).
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Starting
-    Starting --> Running : ptys.is_running() true
-    Running --> Exited : ptys.is_running() false
-    Starting --> Exited : agent.kill
-    Running --> Exited : agent.kill
-    Exited --> [*]
+    [*] --> Requested
+    Requested --> Running : dispatch
+    Running --> AwaitingApproval : approval request
+    AwaitingApproval --> Running : approval response
+    Running --> Completed : success
+    Running --> Failed : provider failure
+    Running --> Interrupted : cancellation
+    Running --> InterruptedForCapacity : unsafe exhaustion
+    Completed --> [*]
+    Failed --> [*]
+    Interrupted --> [*]
+    InterruptedForCapacity --> [*]
 ```
 
-Status is not pushed by the PTY layer; it is recomputed lazily. `refresh_agent_status` polls `PtySessionManager::is_running()` for every registered agent's surface on each `agent.status`/`agent.list` call and writes `Running` or `Exited` back into the registry (backend.rs:884-907), so `Starting` only ever appears in the brief window between `AgentInfo` construction and the first status refresh (agent.rs:812-822).
+`ThreadCreateParams` makes project, environment, provider instance, model, effort, access, agent, cwd, and worktree explicit optional inputs ([thread_rpc.rs:8-32](../../crates/pandamux-protocol/src/thread_rpc.rs#L8-L32)). Creation validates organization policy when a project is present, resolves an allowed exact provider instance, constructs an idle thread, and saves it before returning ([thread_manager.rs:928-1035](../../crates/pandamux-server/src/thread_manager.rs#L928-L1035)).
 
-Sources: [agent.rs:1-194](../../crates/pandamux-core/src/agent.rs#L1-L194), [backend.rs:884-907](../../crates/pandamux-app/src/backend.rs#L884-L907)
-<!-- END:AUTOGEN pandamux_12_agent-orchestration_model -->
-
----
-
-<!-- BEGIN:AUTOGEN pandamux_12_agent-orchestration_methods -->
-## Agent Pipe Methods
-
-`dispatch_agents` in `pandamux-app::backend` handles the `agent.*` JSON-RPC methods, all routed through the single shared dispatcher (`handle_line`) so a CLI-driven spawn and a UI-driven spawn are indistinguishable at the state layer (backend.rs:640-739).
-
-| Method | Purpose |
+| Turn state | Meaning |
 |---|---|
-| `agent.spawn` | Creates one agent surface. Requires `cmd` (or the legacy `command` alias); `label` defaults to `"agent"`; placement is `InPane(pane or paneId)`, i.e. a new tab in the given pane or, if omitted, wherever `SurfaceIntent::Create` lands it ([backend.rs:648-660](../../crates/pandamux-app/src/backend.rs#L648-L660)) |
-| `agent.spawn_batch` | Spawns several agents at once from a `strategy` (`distribute`/`stack`/`split`, default `distribute`) plus an `agents`/`json` array of `{cmd, label, cwd}` specs; `distribute` round-robins across the panes that exist at call time, `stack` puts every agent in the focused pane, `split` opens one new split per agent ([backend.rs:662-705](../../crates/pandamux-app/src/backend.rs#L662-L705)) |
-| `agent.status` | Refreshes status for every tracked agent, then returns the single requested `id`'s `AgentInfo`, erroring with a JSON-RPC `-32000` if the id is unknown ([backend.rs:707-714](../../crates/pandamux-app/src/backend.rs#L707-L714)) |
-| `agent.list` | Refreshes status for every tracked agent and returns the full list, mapped through `agent_json` so each entry carries both `id` and the `agentId` alias the orchestrator's scripts read ([backend.rs:716-721](../../crates/pandamux-app/src/backend.rs#L716-L721)) |
-| `agent.kill` | Removes the agent from the registry, kills its PTY if one is running, and closes its surface (bypassing the "keep last surface open" guard) ([backend.rs:723-737](../../crates/pandamux-app/src/backend.rs#L723-L737)) |
+| `Requested` | Durable turn exists but execution has not started |
+| `Running` | Provider execution is active |
+| `AwaitingApproval` | Provider is paused on a user decision |
+| `Completed` / `Failed` | Terminal outcome |
+| `Interrupted` | User or recovery path stopped execution |
+| `InterruptedForCapacity` | Provider capacity stopped an attempt after safe retry was no longer possible |
 
-`spawn_agent` is the shared implementation behind both `agent.spawn` and `agent.spawn_batch`: it creates the surface (or a new split pane) via the same `AppIntent` path any other surface mutation uses, tags it with the terminal session type for the rail/type grouping, mints the agent id *before* spawning the PTY so the child process can carry `PANDAMUX_AGENT_ID`, starts the PTY with `pandamux_env()`-injected environment, and finally registers the `AgentInfo` (backend.rs:744-824). That environment always includes `PANDAMUX=1`, `PANDAMUX_SURFACE_ID`, and `PANDAMUX_PIPE`, plus `PANDAMUX_AGENT_ID` when spawning an agent, so the orchestrator's `on-agent-stop`/`on-tool-use` hooks can key per-agent state on it (backend.rs:826-841). Every returned agent object is built by `agent_json`, which always emits both `id` and an `agentId` alias for orchestrator-script compatibility (backend.rs:925-937).
+The state set is defined by `TurnStatus`, while each turn also preserves input, route identity, sequence, usage, and before/after checkpoints ([thread.rs:128-179](../../crates/pandamux-core/src/thread.rs#L128-L179)).
 
-Sources: [backend.rs:640-739](../../crates/pandamux-app/src/backend.rs#L640-L739), [backend.rs:744-841](../../crates/pandamux-app/src/backend.rs#L744-L841), [backend.rs:925-937](../../crates/pandamux-app/src/backend.rs#L925-L937)
-<!-- END:AUTOGEN pandamux_12_agent-orchestration_methods -->
-
----
-
-<!-- BEGIN:AUTOGEN pandamux_12_agent-orchestration_context -->
-## Plugin Installation and Startup Behavior
-
-PandaMUX bundles `resources/pandamux-orchestrator/` with the installed application, but it does not install or enable the plugin in Claude Code and does not write to `~/.claude` during startup. The previous startup integration was removed in v0.35.6, and the changelog records manual use as the supported behavior ([CHANGELOG.md:222-226](../../CHANGELOG.md#L222-L226)).
-
-Install the bundled plugin from Claude Code with `/plugin install pandamux-orchestrator`, then invoke `/pandamux:orchestrate` ([README.md:44-55](../../resources/pandamux-orchestrator/README.md#L44-L55)). The NSIS package includes the plugin source under `resources/pandamux-orchestrator`, alongside themes, sounds, icons, and shell integration ([Cargo.toml:61-68](../../crates/pandamux-app/Cargo.toml#L61-L68)). This separation keeps application startup from mutating a user's Claude Code configuration while still shipping the integration for explicit opt-in.
-
-Sources: [CHANGELOG.md:222-226](../../CHANGELOG.md#L222-L226), [Cargo.toml:61-68](../../crates/pandamux-app/Cargo.toml#L61-L68), [README.md:44-55](../../resources/pandamux-orchestrator/README.md#L44-L55)
-<!-- END:AUTOGEN pandamux_12_agent-orchestration_context -->
+Sources: [thread.rs:6-179](../../crates/pandamux-core/src/thread.rs#L6-L179), [thread_rpc.rs:8-32](../../crates/pandamux-protocol/src/thread_rpc.rs#L8-L32), [thread_manager.rs:928-1035](../../crates/pandamux-server/src/thread_manager.rs#L928-L1035)
+<!-- END:AUTOGEN pandamux_12_agent-orchestration_threads -->
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_12_agent-orchestration_plugin -->
-## Orchestrator Plugin
+<!-- BEGIN:AUTOGEN pandamux_12_agent-orchestration_sessions -->
+## Provider Sessions
 
-`resources/pandamux-orchestrator/` is a bundled Claude Code plugin that decomposes a large task into dependency-aware waves of parallel Claude Code agents, each confined to a strict file zone, followed by an automated reviewer pass (README.md:1-7). It talks to PandaMUX only through the CLI and the named pipe (the `agent.*` methods above plus `layout.grid`, `notification.raise`, and `sidebar.*`); there is no direct code coupling to the app, and it degrades gracefully to Claude Code's native Agent tool when PandaMUX is not running (README.md:63-82).
+Provider drivers expose side-effect-free probe and model-list operations separately from `start_session`. Starting a session requires the resolved instance configuration plus a `SessionSpec` carrying cwd, model, effort, access, injected instructions, tool policy, and an optional native resume token ([traits.rs:15-42](../../crates/pandamux-providers/src/traits.rs#L15-L42), [models.rs:99-109](../../crates/pandamux-providers/src/models.rs#L99-L109)).
 
-The plugin has three coordination layers, all reading and writing a single JSON state file in `/tmp/pandamux-orch-{id}/` rather than running a daemon (README.md:95-103):
+| Session operation | Contract |
+|---|---|
+| `send_turn` | Send prompt and attachments to the active provider session ([traits.rs:44-48](../../crates/pandamux-providers/src/traits.rs#L44-L48)) |
+| `events` / `take_event_receiver` | Stream provider events, with an optional receiver handoff for lock-free ingestion ([traits.rs:49-55](../../crates/pandamux-providers/src/traits.rs#L49-L55)) |
+| `respond_approval` | Return an approval decision for a specific pending request ([traits.rs:57-62](../../crates/pandamux-providers/src/traits.rs#L57-L62)) |
+| `interrupt` | Stop the active turn without killing the reusable session ([traits.rs:64-65](../../crates/pandamux-providers/src/traits.rs#L64-L65)) |
+| `resume_token` | Expose provider-native continuation identity when supported ([traits.rs:67-68](../../crates/pandamux-providers/src/traits.rs#L67-L68)) |
+| `shutdown` | Gracefully end the session and child processes ([traits.rs:70-71](../../crates/pandamux-providers/src/traits.rs#L70-L71)) |
 
-| Layer | Role | Key components |
+`ThreadManager` keeps active sessions keyed by thread together with their provider instance, generation, event-writer lock, process permit, and mutable provider session ([thread_manager.rs:107-115](../../crates/pandamux-server/src/thread_manager.rs#L107-L115)). Reuse is guarded by the requested route and resume behavior; replacement shuts down the prior session before a new generation becomes active ([thread_manager.rs:812-927](../../crates/pandamux-server/src/thread_manager.rs#L812-L927)).
+
+Sources: [traits.rs:15-72](../../crates/pandamux-providers/src/traits.rs#L15-L72), [models.rs:99-109](../../crates/pandamux-providers/src/models.rs#L99-L109), [thread_manager.rs:107-151](../../crates/pandamux-server/src/thread_manager.rs#L107-L151), [thread_manager.rs:812-927](../../crates/pandamux-server/src/thread_manager.rs#L812-L927)
+<!-- END:AUTOGEN pandamux_12_agent-orchestration_sessions -->
+
+---
+
+<!-- BEGIN:AUTOGEN pandamux_12_agent-orchestration_streaming -->
+## Streaming Events
+
+Provider sessions stream a provider-specific event vocabulary that the server projects into monotonic thread events. Provider events cover output deltas, reasoning, tool calls, approvals, subagents, completion, errors, rate limits, capacity exhaustion, and notices ([models.rs:183-238](../../crates/pandamux-providers/src/models.rs#L183-L238)).
+
+```mermaid
+sequenceDiagram
+    participant Driver
+    participant Manager
+    participant Store
+    participant Client
+
+    Driver->>Manager: Provider event
+    Manager->>Store: Append sequenced event
+    Store-->>Manager: Durable sequence
+    Manager-->>Client: Event envelope
+    Client->>Client: Update projection
+```
+
+Before forwarding visible output or side-effect-bearing activity, `forward_provider_event` emits the corresponding attempt-boundary advance; it also promotes qualifying rate-limit evidence to a capacity-exhausted event before forwarding the original event ([models.rs:240-291](../../crates/pandamux-providers/src/models.rs#L240-L291)). This ordering lets the durable attempt state become unsafe-to-retry before downstream consumers observe output or tool activity.
+
+Thread events are append-only and sequence-numbered. Their domain vocabulary includes requested/started/completed turns, assistant and reasoning text, commands, files, approvals, usage, plans, capacity interruption, notices, errors, settled changes, and subagent lifecycle events ([event.rs:5-130](../../crates/pandamux-core/src/event.rs#L5-L130)).
+
+Sources: [event.rs:5-130](../../crates/pandamux-core/src/event.rs#L5-L130), [models.rs:183-291](../../crates/pandamux-providers/src/models.rs#L183-L291)
+<!-- END:AUTOGEN pandamux_12_agent-orchestration_streaming -->
+
+---
+
+<!-- BEGIN:AUTOGEN pandamux_12_agent-orchestration_tools -->
+## Tools and Approvals
+
+Tool events have explicit pending, executing, success, failed, and cancelled states; approval requests separately classify command execution, file edit, network access, generic tool calls, and full-access escalation ([event.rs:132-167](../../crates/pandamux-core/src/event.rs#L132-L167)). Provider event forwarding marks tool activity as `ToolSideEffectBegun` and approval interaction as `ExternallyCommitted` before those events are delivered ([models.rs:240-259](../../crates/pandamux-providers/src/models.rs#L240-L259)).
+
+| Control | Durable identity | Safety effect |
 |---|---|---|
-| Skills | Codebase analysis, task decomposition, plan presentation, review | `skills/orchestrate/SKILL.md` (main flow), `skills/reviewer/SKILL.md` (post-run review), `skills/pandamux-detect/SKILL.md` (fallback-mode detection) (README.md:113-121) |
-| Hooks | Event-driven reactivity | `PostToolUse` (activity tracking), `SubagentStop` (wave transitions), `SessionStart` (crash recovery), `Stop` (active-run warning) (README.md:100, README.md:122-123) |
-| Scripts | PandaMUX operations | `spawn-agents.sh` (launches a wave via the `pandamux` CLI), `update-dashboard.sh`, `orchestration-state.sh`, `check-status.sh`, `collect-results.sh`, `detect-pandamux.sh`, `on-tool-use.sh`, `on-agent-stop.sh`, `on-stop.sh`, `on-session-start.sh`, `cleanup.sh` (README.md:101, README.md:126-138) |
+| Tool start/result | Provider item id plus turn attempt | Prevents treating side effects as safe pre-output work |
+| Approval request | Request id | Allows an exact user decision to be returned to the active session |
+| Approval response | Thread id, request id, decision | Detects replay and conflicts using a payload digest and delivery record ([thread_manager.rs:2763-2844](../../crates/pandamux-server/src/thread_manager.rs#L2763-L2844)) |
+| Access ceiling | `AccessMode` | Orders permissions from read-only through full host-user access ([thread.rs:37-80](../../crates/pandamux-core/src/thread.rs#L37-L80)) |
 
-Up to 5 agents run in parallel per wave, each with an explicit allowed/excluded file list to prevent cross-agent conflicts, and each wave's agents receive the previous wave's results for context continuity; an optional `--worktree` flag isolates each agent in its own git worktree (README.md:85-93). The manifest lives at `.claude-plugin/plugin.json`, the slash command entry point is `commands/orchestrate.md` (`/pandamux:orchestrate`), and the per-wave worker prompt template is `agents/pandamux-worker.md` (README.md:109-125).
+The approval handler refuses delivery when no matching active session or awaiting turn exists, except when it can identify and safely return the already-recorded result of an identical replay ([thread_manager.rs:2771-2844](../../crates/pandamux-server/src/thread_manager.rs#L2771-L2844)). Provider tool policy is an explicit allowed/disallowed list passed at session creation rather than inferred from UI state ([models.rs:148-153](../../crates/pandamux-providers/src/models.rs#L148-L153)).
 
-Sources: [README.md:1-153](../../resources/pandamux-orchestrator/README.md#L1-L153)
-<!-- END:AUTOGEN pandamux_12_agent-orchestration_plugin -->
+Sources: [event.rs:132-167](../../crates/pandamux-core/src/event.rs#L132-L167), [models.rs:148-153](../../crates/pandamux-providers/src/models.rs#L148-L153), [models.rs:240-259](../../crates/pandamux-providers/src/models.rs#L240-L259), [thread.rs:37-80](../../crates/pandamux-core/src/thread.rs#L37-L80), [thread_manager.rs:2763-2844](../../crates/pandamux-server/src/thread_manager.rs#L2763-L2844)
+<!-- END:AUTOGEN pandamux_12_agent-orchestration_tools -->
+
+---
+
+<!-- BEGIN:AUTOGEN pandamux_12_agent-orchestration_subagents -->
+## Subagents and Definitions
+
+Agent definitions are portable domain records containing identity, scope, author, version, description, system prompt, tool allow/deny lists, and an optional turn cap. Scopes distinguish team, project, personal, and built-in definitions; authored changes record whether they widen access and move through proposed, approved, applied, rejected, or reverted status ([agent_def.rs:4-61](../../crates/pandamux-core/src/agent_def.rs#L4-L61)).
+
+Subagents are represented in the thread event stream rather than as an independent UI-only registry. Spawn events carry stable subagent and parent identities, title, type, model, and effort; activity, usage, and finished events carry progress and terminal outcome data ([event.rs:102-129](../../crates/pandamux-core/src/event.rs#L102-L129)).
+
+| `subagent.tree` projection field | Purpose |
+|---|---|
+| `sub_agent_id` | Stable lane identity |
+| `parent_sub_agent_id` / `parent_item_id` | Reconstruct nested execution |
+| `title`, `agent_type`, `model`, `effort` | Present the configured worker |
+| `status`, `activity_preview` | Show current progress |
+| `tokens`, `tool_calls`, `elapsed_ms`, `summary` | Report accumulated and terminal facts |
+
+The RPC projection defines those fields and returns a bounded list for one parent thread ([subagent_rpc.rs:1-47](../../crates/pandamux-protocol/src/subagent_rpc.rs#L1-L47)). Agent memory is likewise a domain record with project or agent-wide scope, optional embeddings, timestamps, source run, and tombstone state ([agent_def.rs:63-86](../../crates/pandamux-core/src/agent_def.rs#L63-L86)).
+
+Sources: [agent_def.rs:4-86](../../crates/pandamux-core/src/agent_def.rs#L4-L86), [event.rs:102-129](../../crates/pandamux-core/src/event.rs#L102-L129), [subagent_rpc.rs:1-47](../../crates/pandamux-protocol/src/subagent_rpc.rs#L1-L47)
+<!-- END:AUTOGEN pandamux_12_agent-orchestration_subagents -->
+
+---
+
+<!-- BEGIN:AUTOGEN pandamux_12_agent-orchestration_recovery -->
+## Cancellation and Recovery
+
+Manual-thread cancellation removes the active session generation, serializes
+event writing, interrupts and shuts down the provider, resets the thread to
+idle, and marks any requested, running, or awaiting turn as interrupted with a
+completion checkpoint when possible ([thread_manager.rs:4121-4273](../../crates/pandamux-server/src/thread_manager.rs#L4121-L4273)). Phase 5C orchestration cancellation adds durable run intent, bounded lifecycle phases, explicit task joins, worktree cleanup ownership, capacity and budget reconciliation, and quarantine when death or cleanup cannot be proved ([attempt_watchdog.rs:141-230](../../crates/pandamux-server/src/attempt_watchdog.rs#L141-L230), [run_execution_service.rs:1271-1490](../../crates/pandamux-server/src/run_execution_service.rs#L1271-L1490)).
+
+- `thread.get` reloads the thread together with turns, attempts, and continuations, so recovery surfaces can reconstruct more than the transcript ([thread_manager.rs:1895-1927](../../crates/pandamux-server/src/thread_manager.rs#L1895-L1927)).
+- `thread.resume` returns the persisted provider-native resume token for a known thread without starting a turn ([thread_manager.rs:4276-4297](../../crates/pandamux-server/src/thread_manager.rs#L4276-L4297)).
+- A new turn is rejected while its thread is already working or awaiting an approval, preventing concurrent execution against one thread state ([thread_manager.rs:1994-2012](../../crates/pandamux-server/src/thread_manager.rs#L1994-L2012)).
+- Attachments are resolved against the target thread and size-validated before provider dispatch ([thread_manager.rs:2043-2065](../../crates/pandamux-server/src/thread_manager.rs#L2043-L2065)).
+- Startup recovery keeps intake closed until verified replay completes; ambiguous dispatch, resource, or clock states become deduplicated reviews instead of replacement provider turns ([run_recovery.rs:181-225](../../crates/pandamux-server/src/run_recovery.rs#L181-L225)).
+- Remote outcome recovery restores provider acceptance and any later canonical
+  boundary before terminal or ambiguity settlement; replay of an already
+  ambiguous dispatch derives the same review from its durable reason and digest
+  without reattaching ownership ([run_recovery.rs:572-587](../../crates/pandamux-server/src/run_recovery.rs#L572-L587), [run_recovery.rs:1076-1250](../../crates/pandamux-server/src/run_recovery.rs#L1076-L1250)).
+
+The public protocol separates cancel, approval response, capacity continuation, and resume into distinct typed requests, which keeps recovery actions explicit and auditable ([thread_rpc.rs:80-156](../../crates/pandamux-protocol/src/thread_rpc.rs#L80-L156)).
+
+Sources: [thread_rpc.rs:80-156](../../crates/pandamux-protocol/src/thread_rpc.rs#L80-L156), [thread_manager.rs:1895-1927](../../crates/pandamux-server/src/thread_manager.rs#L1895-L1927), [thread_manager.rs:1994-2065](../../crates/pandamux-server/src/thread_manager.rs#L1994-L2065), [thread_manager.rs:4121-4297](../../crates/pandamux-server/src/thread_manager.rs#L4121-L4297), [attempt_watchdog.rs:141-230](../../crates/pandamux-server/src/attempt_watchdog.rs#L141-L230), [run_execution_service.rs:1271-1490](../../crates/pandamux-server/src/run_execution_service.rs#L1271-L1490), [run_recovery.rs:181-225](../../crates/pandamux-server/src/run_recovery.rs#L181-L225), [run_recovery.rs:572-587](../../crates/pandamux-server/src/run_recovery.rs#L572-L587), [run_recovery.rs:1076-1250](../../crates/pandamux-server/src/run_recovery.rs#L1076-L1250)
+<!-- END:AUTOGEN pandamux_12_agent-orchestration_recovery -->
 
 ---

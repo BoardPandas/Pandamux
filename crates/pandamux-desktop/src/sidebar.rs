@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
-use gpui_kit::base::StyledExt as _;
+use gpui_kit::base::{Selectable as _, StyledExt as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::gpui::*;
 use pandamux_client::projections::ThreadProjection;
-use pandamux_core::{ThreadId, ThreadOrigin, ThreadStatus, TurnStatus};
+use pandamux_core::{ProviderInstanceConfig, ThreadId, ThreadOrigin, ThreadStatus, TurnStatus};
 
 use crate::settings_view::SettingsCategory;
 use crate::theme::{Radii, Spacing, Theme, Typography};
@@ -15,6 +15,7 @@ pub enum RailTab {
     #[default]
     Threads,
     Agents,
+    Usage,
     Terminal,
     Settings,
 }
@@ -126,7 +127,14 @@ pub fn render_rail<V: 'static>(
                 .child(
                     Button::new("rail-tab-threads")
                         .ghost()
-                        .label("💬")
+                        .label(if active_tab == RailTab::Threads {
+                            "● 💬"
+                        } else {
+                            "💬"
+                        })
+                        .selected(active_tab == RailTab::Threads)
+                        .accessibility_label("Threads")
+                        .tooltip("Threads")
                         .on_click(cx.listener(move |this, _event, window, cx| {
                             on_select_tab(this, RailTab::Threads, window, cx);
                         })),
@@ -144,9 +152,41 @@ pub fn render_rail<V: 'static>(
                 .child(
                     Button::new("rail-tab-agents")
                         .ghost()
-                        .label("🤖")
+                        .label(if active_tab == RailTab::Agents {
+                            "● 🤖"
+                        } else {
+                            "🤖"
+                        })
+                        .selected(active_tab == RailTab::Agents)
+                        .accessibility_label("Agents")
+                        .tooltip("Agents")
                         .on_click(cx.listener(move |this, _event, window, cx| {
                             on_select_tab(this, RailTab::Agents, window, cx);
+                        })),
+                ),
+        )
+        // Usage tab
+        .child(
+            div()
+                .rounded(Radii::RAIL_BUTTON)
+                .bg(if active_tab == RailTab::Usage {
+                    rgba(0xffffff1a)
+                } else {
+                    rgba(0x00000000)
+                })
+                .child(
+                    Button::new("rail-tab-usage")
+                        .ghost()
+                        .label(if active_tab == RailTab::Usage {
+                            "● ◫"
+                        } else {
+                            "◫"
+                        })
+                        .selected(active_tab == RailTab::Usage)
+                        .accessibility_label("Usage and capacity")
+                        .tooltip("Usage and capacity")
+                        .on_click(cx.listener(move |this, _event, window, cx| {
+                            on_select_tab(this, RailTab::Usage, window, cx);
                         })),
                 ),
         )
@@ -162,7 +202,14 @@ pub fn render_rail<V: 'static>(
                 .child(
                     Button::new("rail-tab-terminal")
                         .ghost()
-                        .label("📟")
+                        .label(if active_tab == RailTab::Terminal {
+                            "● 📟"
+                        } else {
+                            "📟"
+                        })
+                        .selected(active_tab == RailTab::Terminal)
+                        .accessibility_label("Terminal")
+                        .tooltip("Terminal")
                         .on_click(cx.listener(move |this, _event, window, cx| {
                             on_select_tab(this, RailTab::Terminal, window, cx);
                         })),
@@ -181,7 +228,14 @@ pub fn render_rail<V: 'static>(
                 .child(
                     Button::new("rail-tab-settings")
                         .ghost()
-                        .label("⚙️")
+                        .label(if active_tab == RailTab::Settings {
+                            "● ⚙️"
+                        } else {
+                            "⚙️"
+                        })
+                        .selected(active_tab == RailTab::Settings)
+                        .accessibility_label("Settings")
+                        .tooltip("Settings")
                         .on_click(cx.listener(move |this, _event, window, cx| {
                             on_select_tab(this, RailTab::Settings, window, cx);
                         })),
@@ -196,6 +250,7 @@ pub fn render_sidebar<V: 'static>(
     thread_order: &[ThreadId],
     thread_projections: &HashMap<ThreadId, ThreadProjection>,
     active_thread_id: Option<&ThreadId>,
+    provider_instances: &[ProviderInstanceConfig],
     theme: &Theme,
     on_new_thread: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
     on_select_thread: impl Fn(&mut V, ThreadId, &mut Window, &mut Context<V>) + 'static + Copy,
@@ -218,6 +273,7 @@ pub fn render_sidebar<V: 'static>(
                 thread_order,
                 thread_projections,
                 active_thread_id,
+                provider_instances,
                 theme,
                 on_new_thread,
                 on_select_thread,
@@ -225,6 +281,7 @@ pub fn render_sidebar<V: 'static>(
             )
             .into_any_element(),
             RailTab::Agents => render_agents_sidebar(theme, on_assign_agent, cx).into_any_element(),
+            RailTab::Usage => render_usage_sidebar(theme).into_any_element(),
             RailTab::Terminal => render_terminal_sidebar(theme).into_any_element(),
             RailTab::Settings => render_settings_sidebar(
                 active_settings_category,
@@ -462,10 +519,12 @@ fn render_origin_chip(origin: &ThreadOrigin, theme: &Theme) -> Option<AnyElement
 }
 
 /// Renders the Threads navigation sidebar.
+#[allow(clippy::too_many_arguments)]
 fn render_threads_sidebar<V: 'static>(
     thread_order: &[ThreadId],
     thread_projections: &HashMap<ThreadId, ThreadProjection>,
     active_thread_id: Option<&ThreadId>,
+    provider_instances: &[ProviderInstanceConfig],
     theme: &Theme,
     on_new_thread: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
     on_select_thread: impl Fn(&mut V, ThreadId, &mut Window, &mut Context<V>) + 'static + Copy,
@@ -621,6 +680,11 @@ fn render_threads_sidebar<V: 'static>(
                             };
 
                             let status_marker = render_status_marker(proj, now_ms, theme);
+                            let provider_name = provider_instances
+                                .iter()
+                                .find(|provider| provider.id == proj.thread.provider_instance_id)
+                                .map(|provider| provider.display_name.clone())
+                                .unwrap_or_else(|| "Unnamed provider instance".to_string());
                             let agent_chip =
                                 proj.thread.agent.as_ref().map(|agent_ref| {
                                     render_agent_chip(agent_ref.agent_id.as_str())
@@ -706,9 +770,7 @@ fn render_threads_sidebar<V: 'static>(
                                                             .text_color(theme.chrome.text_t3)
                                                             .child(format!(
                                                                 "{} · {} turns",
-                                                                proj.thread
-                                                                    .provider_instance_id
-                                                                    .as_str(),
+                                                                provider_name,
                                                                 proj.turns.len()
                                                             )),
                                                     ),
@@ -908,6 +970,72 @@ fn render_agents_sidebar<V: 'static>(
         )
 }
 
+/// Renders the Usage navigation summary. Filters and editable details stay in
+/// the main workspace so the sidebar remains usable at 200 percent scaling.
+fn render_usage_sidebar(theme: &Theme) -> impl IntoElement {
+    div()
+        .size_full()
+        .v_flex()
+        .child(
+            div()
+                .p_3()
+                .border_b_1()
+                .border_color(rgba(0xffffff0a))
+                .text_size(Typography::TITLE_SIZE)
+                .font_weight(FontWeight::BOLD)
+                .child("Usage"),
+        )
+        .child(
+            div()
+                .v_flex()
+                .gap_3()
+                .p_3()
+                .child(sidebar_usage_item(
+                    "Overview",
+                    "Tokens and defensible spend evidence",
+                    theme,
+                ))
+                .child(sidebar_usage_item(
+                    "Capacity",
+                    "Freshness, confidence, reset, and limits",
+                    theme,
+                ))
+                .child(sidebar_usage_item(
+                    "Source coverage",
+                    "Complete, partial, stale, or unavailable",
+                    theme,
+                ))
+                .child(sidebar_usage_item(
+                    "Subscriptions",
+                    "Named quota boundaries and instances",
+                    theme,
+                )),
+        )
+}
+
+fn sidebar_usage_item(title: &str, description: &str, theme: &Theme) -> AnyElement {
+    div()
+        .v_flex()
+        .gap_1()
+        .p_2()
+        .rounded(Radii::ROW)
+        .bg(theme.chrome.panel2)
+        .child(
+            div()
+                .font_weight(FontWeight::BOLD)
+                .text_size(Typography::BODY_SIZE)
+                .text_color(theme.chrome.text_t1)
+                .child(title.to_string()),
+        )
+        .child(
+            div()
+                .text_size(Typography::META_SIZE)
+                .text_color(theme.chrome.text_t3)
+                .child(description.to_string()),
+        )
+        .into_any_element()
+}
+
 /// Renders the Terminal multiplexer navigation sidebar stub.
 fn render_terminal_sidebar(theme: &Theme) -> impl IntoElement {
     div()
@@ -986,7 +1114,13 @@ fn render_settings_sidebar<V: 'static>(
 ) -> impl IntoElement {
     let sections = [
         (SettingsCategory::Providers, "🔑", "Providers & Tiers"),
+        (SettingsCategory::Organizations, "🏢", "Organizations"),
         (SettingsCategory::Environments, "🖥️", "Environments"),
+        (
+            SettingsCategory::TrustedConfiguration,
+            "🛡️",
+            "Trusted Configuration",
+        ),
         (SettingsCategory::Terminal, "📟", "Terminal"),
         (SettingsCategory::General, "🎨", "General & UI"),
         (SettingsCategory::Advanced, "⚙️", "Advanced Engine"),
@@ -1037,7 +1171,13 @@ fn render_settings_sidebar<V: 'static>(
                         .child(
                             Button::new(format!("settings-tab-{}", cat.title()))
                                 .ghost()
-                                .label(title)
+                                .label(if is_active {
+                                    format!("{title} (Active)")
+                                } else {
+                                    title.to_string()
+                                })
+                                .accessibility_label(title)
+                                .selected(is_active)
                                 .on_click(cx.listener(move |this, _event, window, cx| {
                                     on_select_category(this, cat, window, cx);
                                 })),
@@ -1097,6 +1237,8 @@ mod tests {
         proj.turns.push(Turn {
             id: TurnId::new("turn-1"),
             thread_id: ThreadId::new("t1"),
+            environment_id: EnvironmentId::new("env-local"),
+            provider_instance_id: ProviderInstanceId::new("claude-main"),
             seq: 1,
             input: TurnInput {
                 text: "test".to_string(),

@@ -5,8 +5,10 @@ on:
     paths:
       - "Cargo.toml"
       - "Cargo.lock"
+      - "rust-toolchain.toml"
       - "deny.toml"
       - "crates/**"
+      - "tools/**"
       - "scripts/**"
       - ".github/workflows/rust.yml"
   push:
@@ -14,8 +16,10 @@ on:
     paths:
       - "Cargo.toml"
       - "Cargo.lock"
+      - "rust-toolchain.toml"
       - "deny.toml"
       - "crates/**"
+      - "tools/**"
       - "scripts/**"
       - ".github/workflows/rust.yml"
   workflow_dispatch:
@@ -33,6 +37,21 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  dependency-policy:
+    name: Dependency policy
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # cargo-deny-action is a Docker action and GitHub only supports
+      # container actions on Linux runners.
+      - name: Check advisories and licenses
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          command-arguments: advisories licenses bans sources
+
   windows:
     name: Windows (MSVC)
     runs-on: windows-latest
@@ -49,8 +68,8 @@ jobs:
       - name: Claude wiring guard (rule scoping + hook matchers)
         run: node scripts/check-claude-wiring.mjs
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install pinned development Rust
+        uses: dtolnay/rust-toolchain@1.98.1
         with:
           components: rustfmt, clippy
 
@@ -68,15 +87,11 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Check crate boundaries
-        shell: pwsh
-        run: .\scripts\check-rust-boundaries.ps1
+      - name: Test resolved-graph boundary fixtures
+        run: cargo test --locked -p pandamux-boundary-check
 
-      - name: Check advisories and licenses
-        uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          command: check
-          command-arguments: advisories licenses
+      - name: Check resolved crate boundaries
+        run: cargo run --locked -p pandamux-boundary-check --quiet
 
       - name: Test workspace
         run: cargo test --workspace
@@ -95,8 +110,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install pinned development Rust
+        uses: dtolnay/rust-toolchain@1.98.1
 
       - name: Install sccache
         uses: mozilla-actions/sccache-action@v0.0.9
@@ -109,6 +124,9 @@ jobs:
       - name: Test server, CLI, client, and desktop
         run: cargo test -p pandamux-core -p pandamux-protocol -p pandamux-client -p pandamux-server -p pandamux-cli -p pandamux-desktop
 
+      - name: Test pure orchestrator
+        run: cargo test --locked -p pandamux-orchestrator
+
       - name: Build workspace binaries
         run: cargo build --release -p pandamux-cli -p pandamux-server -p pandamux-desktop
 
@@ -119,8 +137,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install pinned development Rust
+        uses: dtolnay/rust-toolchain@1.98.1
         with:
           targets: x86_64-unknown-linux-musl
 
@@ -138,3 +156,61 @@ jobs:
       - name: Build musl server and CLI
         run: cargo build --release --target x86_64-unknown-linux-musl -p pandamux-server -p pandamux-cli
 
+  orchestrator-musl:
+    name: Pure orchestrator (musl ${{ matrix.arch }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            target: x86_64-unknown-linux-musl
+          - arch: arm64
+            target: aarch64-unknown-linux-musl
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install pinned development Rust
+        uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-all-crates: true
+          key: orchestrator-${{ matrix.target }}
+
+      - name: Check orchestrator library and test targets
+        run: cargo check --locked --target ${{ matrix.target }} -p pandamux-orchestrator --all-targets
+
+  msrv-windows:
+    name: Rust 1.89 MSRV (Windows product graph)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install declared MSRV
+        uses: dtolnay/rust-toolchain@1.89.0
+
+      - name: Check all Windows targets at MSRV
+        run: cargo +1.89.0 check --locked --workspace --all-targets
+
+  msrv-headless-linux:
+    name: Rust 1.89 MSRV (Linux headless graph)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install declared MSRV
+        uses: dtolnay/rust-toolchain@1.89.0
+
+      - name: Check server and CLI graph at MSRV
+        run: cargo +1.89.0 check --locked --workspace --all-targets --exclude pandamux-desktop

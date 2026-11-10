@@ -1,11 +1,35 @@
+use crate::DataPaths;
+use crate::attempt_watchdog::DEFAULT_SHUTDOWN_TIMEOUT_MS;
 use crate::router::Router;
+use crate::run_execution_service::ShutdownReport;
+use crate::run_recovery::{RecoveryReport, RunRecoveryError, ServerIncarnationLock};
 use crate::runtime::RuntimeInfo;
 use crate::store::Store;
-use pandamux_protocol::{RpcRequest, ServerRole};
+use pandamux_core::EnvironmentId;
+use pandamux_protocol::{RpcError, RpcRequest, ServerRole};
+use pandamux_remote::{ProxyTunnel, SshConfig, SshConnectionPool, open_exec_proxy_tunnel};
+use serde_json::Value;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::broadcast;
+
+use crate::InstructionsPollingService;
+use crate::ProxyEnvironmentTransport;
+use crate::request_context::{CapabilityAuthority, ClientIdentity};
+use crate::usage_scanner::{UsageScannerRuntimeConfig, UsageScannerService};
+use crate::usage_sync::{UsageHubSyncService, UsageSyncRuntimeConfig};
+use crate::{MutationService, MutationSweepService};
+
+fn current_time_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
 
 pub struct ServerConfig {
     pub role: ServerRole,
@@ -17,32 +41,66 @@ pub struct ServerConfig {
 pub struct Server {
     config: ServerConfig,
     store: Store,
+    data_paths: DataPaths,
     router: Arc<Router>,
     shutdown_tx: broadcast::Sender<()>,
     is_shutting_down: Arc<AtomicBool>,
+    remote_event_cursors: Mutex<HashMap<EnvironmentId, Arc<AtomicU64>>>,
+    usage_scanner: Mutex<Option<UsageScannerService>>,
+    usage_sync: Mutex<Option<UsageHubSyncService>>,
+    instructions_polling: Mutex<Option<InstructionsPollingService>>,
+    mutation_sweep: Mutex<Option<MutationSweepService>>,
+    incarnation_lock: ServerIncarnationLock,
 }
 
 impl Server {
     pub fn new(config: ServerConfig) -> Result<Self, crate::store::StoreError> {
+        let data_root = if config
+            .runtime_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            == Some("run")
+        {
+            config
+                .runtime_dir
+                .parent()
+                .unwrap_or(config.runtime_dir.as_path())
+                .to_path_buf()
+        } else {
+            config.runtime_dir.clone()
+        };
+        let mut data_paths = DataPaths::from_root(data_root)?;
+        if let Some(path) = &config.db_path {
+            data_paths = data_paths.with_database_path(path)?;
+        }
+        data_paths.ensure_private_roots()?;
+        let incarnation_lock = ServerIncarnationLock::acquire(&data_paths)?;
         let store = match &config.db_path {
-            Some(path) => Store::open(path)?,
+            Some(_) => Store::open_with_backups(data_paths.database(), data_paths.backups())?,
             None => Store::in_memory()?,
         };
 
-        let router = Arc::new(Router::new(
-            store.clone(),
-            config.role,
-            config.environment_id.clone(),
-        ));
+        let router = Arc::new(
+            Router::new(store.clone(), config.role, config.environment_id.clone())
+                .with_data_paths(data_paths.clone()),
+        );
+        router.run_execution().close_intake();
 
         let (shutdown_tx, _) = broadcast::channel(1);
 
         Ok(Self {
             config,
             store,
+            data_paths,
             router,
             shutdown_tx,
             is_shutting_down: Arc::new(AtomicBool::new(false)),
+            remote_event_cursors: Mutex::new(HashMap::new()),
+            usage_scanner: Mutex::new(None),
+            usage_sync: Mutex::new(None),
+            instructions_polling: Mutex::new(None),
+            mutation_sweep: Mutex::new(None),
+            incarnation_lock,
         })
     }
 
@@ -50,19 +108,356 @@ impl Server {
         &self.store
     }
 
+    pub fn data_paths(&self) -> &DataPaths {
+        &self.data_paths
+    }
+
     pub fn router(&self) -> &Arc<Router> {
         &self.router
+    }
+
+    pub fn environment_id(&self) -> &str {
+        &self.config.environment_id
+    }
+
+    pub fn incarnation_id(&self) -> &pandamux_core::ServerIncarnationId {
+        self.incarnation_lock.owner()
+    }
+
+    pub async fn recover_orchestration(&self) -> Result<RecoveryReport, RunRecoveryError> {
+        self.router
+            .run_execution()
+            .recover_nonterminal_runs(self.incarnation_id().clone(), current_time_ms())
+            .await
+    }
+
+    pub async fn shutdown_orchestration(&self) -> ShutdownReport {
+        self.router
+            .run_execution()
+            .shutdown(std::time::Duration::from_millis(
+                DEFAULT_SHUTDOWN_TIMEOUT_MS,
+            ))
+            .await
+    }
+
+    pub async fn initialize_personal_repository(
+        &self,
+    ) -> Result<pandamux_core::SourceCommitSha, crate::PersonalRepoError> {
+        let service = self.router.personal_repo().clone();
+        tokio::task::spawn_blocking(move || service.ensure_initialized())
+            .await
+            .map_err(|_| crate::PersonalRepoError {
+                reason: "personal_repo_worker_join_failed",
+                safe_message: "The personal repository worker did not join cleanly".to_string(),
+                retryable: true,
+            })?
+    }
+
+    pub fn start_instructions_polling(&self) -> std::io::Result<()> {
+        if self.config.role != ServerRole::Hub {
+            return Ok(());
+        }
+        let mut polling = self
+            .instructions_polling
+            .lock()
+            .expect("instructions polling service lock");
+        if polling.is_none() {
+            *polling = Some(InstructionsPollingService::start(
+                self.router.instructions().clone(),
+            )?);
+        }
+        Ok(())
+    }
+
+    pub fn start_mutation_sweep(&self) -> std::io::Result<()> {
+        if self.config.role != ServerRole::Hub {
+            return Ok(());
+        }
+        let mut sweep = self
+            .mutation_sweep
+            .lock()
+            .expect("mutation sweep service lock");
+        if sweep.is_none() {
+            *sweep = Some(MutationSweepService::start(
+                self.router.mutation_service().clone(),
+            )?);
+        }
+        Ok(())
+    }
+
+    pub fn runtime_dir(&self) -> &std::path::Path {
+        &self.config.runtime_dir
+    }
+
+    pub fn capability_authority(&self) -> &Arc<CapabilityAuthority> {
+        self.router.capability_authority()
+    }
+
+    pub async fn connect_remote_environment(
+        &self,
+        environment_id: EnvironmentId,
+        pool: &SshConnectionPool,
+        config: &SshConfig,
+        proxy_command: &str,
+    ) -> Result<Arc<ProxyEnvironmentTransport>, RpcError> {
+        let tunnel = open_exec_proxy_tunnel(pool, config, proxy_command)
+            .await
+            .map_err(|error| {
+                let _ = self.store.record_usage_sync_failure(
+                    &environment_id,
+                    true,
+                    "usage_sync_unreachable",
+                );
+                RpcError::with_data(
+                    -32010,
+                    format!(
+                        "Environment '{}' is unreachable: {error}",
+                        environment_id.as_str()
+                    ),
+                    serde_json::json!({
+                        "environmentId": environment_id,
+                        "state": "unreachable",
+                        "remoteCode": error.code,
+                    }),
+                )
+            })?;
+        self.register_proxy_stream_with_sftp(
+            environment_id,
+            tunnel,
+            Some((pool.clone(), config.clone())),
+        )
+        .await
+    }
+
+    pub async fn register_proxy_tunnel(
+        &self,
+        environment_id: EnvironmentId,
+        tunnel: ProxyTunnel,
+    ) -> Result<Arc<ProxyEnvironmentTransport>, RpcError> {
+        self.register_proxy_stream(environment_id, tunnel).await
+    }
+
+    pub async fn register_proxy_stream<S>(
+        &self,
+        environment_id: EnvironmentId,
+        stream: S,
+    ) -> Result<Arc<ProxyEnvironmentTransport>, RpcError>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        self.register_proxy_stream_with_sftp(environment_id, stream, None)
+            .await
+    }
+
+    async fn register_proxy_stream_with_sftp<S>(
+        &self,
+        environment_id: EnvironmentId,
+        stream: S,
+        sftp: Option<(SshConnectionPool, SshConfig)>,
+    ) -> Result<Arc<ProxyEnvironmentTransport>, RpcError>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        let cursor = {
+            let mut cursors = self
+                .remote_event_cursors
+                .lock()
+                .expect("remote event cursor lock");
+            cursors
+                .entry(environment_id.clone())
+                .or_insert_with(|| Arc::new(AtomicU64::new(0)))
+                .clone()
+        };
+        let transport = ProxyEnvironmentTransport::connect_with_sftp(
+            stream,
+            environment_id.clone(),
+            cursor,
+            sftp,
+        )
+        .await?;
+        self.router
+            .environment_router()
+            .register_transport(
+                environment_id.clone(),
+                transport.clone(),
+                Some(self.router.thread_manager().broadcaster().clone()),
+            )
+            .await;
+        if let Some(sync) = self
+            .usage_sync
+            .lock()
+            .expect("usage synchronization service lock")
+            .as_ref()
+        {
+            sync.handle().trigger_environment(environment_id.clone());
+        }
+        let bundle_sync = self.router.bundle_sync().clone();
+        let bundle_environment = environment_id.clone();
+        tokio::spawn(async move {
+            let _ = bundle_sync
+                .drain_environment(&bundle_environment, current_time_ms())
+                .await;
+        });
+        Ok(transport)
+    }
+
+    pub async fn disconnect_remote_environment(&self, environment_id: &EnvironmentId) {
+        self.router
+            .environment_router()
+            .unregister_transport(environment_id)
+            .await;
+        let _ =
+            self.store
+                .record_usage_sync_failure(environment_id, true, "usage_sync_unreachable");
+    }
+
+    pub async fn shutdown_remote_environments(&self) {
+        self.router.environment_router().shutdown_all().await;
+    }
+
+    pub async fn shutdown_provider_sessions(&self) {
+        self.router.thread_manager().shutdown_all().await;
+        self.router.shutdown_antigravity_auth().await;
+    }
+
+    pub fn start_usage_scanner(&self) -> std::io::Result<()> {
+        let enabled = self
+            .store
+            .get_settings()
+            .map_err(|error| std::io::Error::other(error.to_string()))?
+            .unwrap_or_default()
+            .advanced
+            .usage_scanning_enabled;
+        if !enabled {
+            return Ok(());
+        }
+        let mut scanner = self
+            .usage_scanner
+            .lock()
+            .expect("usage scanner service lock");
+        if scanner.is_some() {
+            return Ok(());
+        }
+        let service = UsageScannerService::start(
+            self.store.clone(),
+            EnvironmentId::new(self.config.environment_id.clone()),
+            self.router.data_dir().to_path_buf(),
+            UsageScannerRuntimeConfig::default(),
+        )?;
+        self.router
+            .thread_manager()
+            .set_usage_scanner(Some(service.handle()));
+        *scanner = Some(service);
+        Ok(())
+    }
+
+    pub async fn shutdown_usage_scanner(&self) -> std::io::Result<()> {
+        self.router.thread_manager().set_usage_scanner(None);
+        let scanner = self
+            .usage_scanner
+            .lock()
+            .expect("usage scanner service lock")
+            .take();
+        if let Some(scanner) = scanner {
+            scanner.shutdown().await?;
+        }
+        Ok(())
+    }
+
+    pub fn start_usage_sync(&self) -> std::io::Result<()> {
+        if self.config.role != ServerRole::Hub {
+            return Ok(());
+        }
+        let enabled = self
+            .store
+            .get_settings()
+            .map_err(|error| std::io::Error::other(error.to_string()))?
+            .unwrap_or_default()
+            .advanced
+            .usage_hub_sync_enabled;
+        if !enabled {
+            return Ok(());
+        }
+        let mut sync = self
+            .usage_sync
+            .lock()
+            .expect("usage synchronization service lock");
+        if sync.is_some() {
+            return Ok(());
+        }
+        *sync = Some(UsageHubSyncService::start(
+            self.store.clone(),
+            self.router.environment_router().clone(),
+            UsageSyncRuntimeConfig::default(),
+        )?);
+        Ok(())
+    }
+
+    pub async fn shutdown_usage_sync(&self) -> std::io::Result<()> {
+        let sync = self
+            .usage_sync
+            .lock()
+            .expect("usage synchronization service lock")
+            .take();
+        if let Some(sync) = sync {
+            sync.shutdown().await?;
+        }
+        Ok(())
     }
 
     /// Trigger provable graceful shutdown.
     pub fn shutdown(&self) {
         if !self.is_shutting_down.swap(true, Ordering::SeqCst) {
+            self.router.personal_repo().shutdown();
+            self.router.instructions().shutdown();
+            self.router.bundle_store().shutdown();
+            if let Some(polling) = self
+                .instructions_polling
+                .lock()
+                .expect("instructions polling service lock")
+                .take()
+            {
+                let _ = polling.shutdown();
+            }
+            if let Some(sweep) = self
+                .mutation_sweep
+                .lock()
+                .expect("mutation sweep service lock")
+                .take()
+            {
+                let _ = sweep.shutdown();
+            }
             let _ = self.shutdown_tx.send(());
         }
     }
 
     /// Write runtime discovery record.
     pub fn register_runtime(&self, pipe_path: &str, token: &str) -> std::io::Result<PathBuf> {
+        self.register_runtime_with_proxy(pipe_path, None, token)
+    }
+
+    pub fn register_runtime_with_proxy(
+        &self,
+        pipe_path: &str,
+        proxy_path: Option<&str>,
+        token: &str,
+    ) -> std::io::Result<PathBuf> {
+        self.register_runtime_with_proxy_and_ownership(pipe_path, proxy_path, token, false)
+    }
+
+    pub fn register_runtime_with_proxy_and_ownership(
+        &self,
+        pipe_path: &str,
+        proxy_path: Option<&str>,
+        token: &str,
+        launcher_owned: bool,
+    ) -> std::io::Result<PathBuf> {
+        let mcp_token = uuid::Uuid::new_v4().to_string();
+        self.capability_authority().configure_local_capabilities(
+            pipe_path.to_string(),
+            token.to_string(),
+            mcp_token.clone(),
+        );
         let info = RuntimeInfo {
             pid: std::process::id(),
             role: match self.config.role {
@@ -71,8 +466,12 @@ impl Server {
             },
             protocol_version: pandamux_protocol::PROTOCOL_VERSION,
             server_version: env!("CARGO_PKG_VERSION").to_string(),
+            environment_id: self.config.environment_id.clone(),
             pipe_path: pipe_path.to_string(),
+            proxy_path: proxy_path.map(str::to_string),
             token: token.to_string(),
+            mcp_token,
+            launcher_owned,
             started_at_ms: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -108,5 +507,421 @@ impl Server {
 
         let res = self.router.handle_request(req).await?;
         Some(serde_json::to_string(&res).unwrap() + "\n")
+    }
+
+    pub async fn serve_local_connection<S>(
+        &self,
+        stream: S,
+        client_identity: ClientIdentity,
+    ) -> std::io::Result<()>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        let (reader, mut writer) = tokio::io::split(stream);
+        let mut lines = BufReader::new(reader).lines();
+        let mut context = None;
+        let mut mutation_guard =
+            ConnectionMutationGuard::new(self.router.mutation_service().clone());
+        while let Some(line) = lines.next_line().await? {
+            let mut request: RpcRequest = match serde_json::from_str(line.trim()) {
+                Ok(request) => request,
+                Err(error) => {
+                    let response = pandamux_protocol::RpcResponse::error(
+                        None,
+                        RpcError::parse_error(error.to_string()),
+                    );
+                    write_response(&mut writer, &response).await?;
+                    continue;
+                }
+            };
+
+            if context.is_none() {
+                if request.method != "system.hello" {
+                    let response = pandamux_protocol::RpcResponse::error(
+                        request.id,
+                        RpcError::unauthorized(
+                            "An authenticated system.hello request is required first",
+                        ),
+                    );
+                    write_response(&mut writer, &response).await?;
+                    return Ok(());
+                }
+                let hello = request
+                    .params
+                    .as_ref()
+                    .cloned()
+                    .ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::PermissionDenied,
+                            "system.hello omitted its capability",
+                        )
+                    })
+                    .and_then(|params| {
+                        serde_json::from_value::<pandamux_protocol::HelloParams>(params).map_err(
+                            |error| std::io::Error::new(std::io::ErrorKind::InvalidData, error),
+                        )
+                    });
+                let authenticated = hello
+                    .ok()
+                    .and_then(|hello| hello.capability)
+                    .ok_or_else(|| RpcError::unauthorized("Invalid or expired capability"))
+                    .and_then(|token| {
+                        self.capability_authority()
+                            .authenticate(&token, client_identity.clone())
+                    });
+                match authenticated {
+                    Ok(authenticated) => {
+                        mutation_guard.set_context(authenticated.clone());
+                        context = Some(authenticated);
+                        if let Some(params) = request.params.as_mut().and_then(Value::as_object_mut)
+                        {
+                            params.remove("capability");
+                        }
+                    }
+                    Err(error) => {
+                        let response = pandamux_protocol::RpcResponse::error(request.id, error);
+                        write_response(&mut writer, &response).await?;
+                        return Ok(());
+                    }
+                }
+            }
+
+            if let Some(response) = self
+                .router
+                .handle_request_with_context(
+                    context.as_ref().expect("authenticated context"),
+                    request,
+                )
+                .await
+            {
+                write_response(&mut writer, &response).await?;
+            }
+        }
+        Ok(())
+    }
+}
+
+struct ConnectionMutationGuard {
+    service: MutationService,
+    context: Option<crate::RequestContext>,
+}
+
+impl ConnectionMutationGuard {
+    fn new(service: MutationService) -> Self {
+        Self {
+            service,
+            context: None,
+        }
+    }
+
+    fn set_context(&mut self, context: crate::RequestContext) {
+        self.context = Some(context);
+    }
+}
+
+impl Drop for ConnectionMutationGuard {
+    fn drop(&mut self) {
+        if let Some(context) = &self.context {
+            let _ = self.service.cancel_owned(context, current_time_ms());
+        }
+    }
+}
+
+async fn write_response<W>(
+    writer: &mut W,
+    response: &pandamux_protocol::RpcResponse,
+) -> std::io::Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    let mut line = serde_json::to_vec(response)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    line.push(b'\n');
+    writer.write_all(&line).await?;
+    writer.flush().await
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use pandamux_core::ThreadId;
+    use pandamux_protocol::{PROTOCOL_VERSION, RpcRequest, RpcResponse, ServerRole};
+    use serde_json::json;
+    use tempfile::TempDir;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream};
+    use tokio::task::JoinHandle;
+
+    use super::*;
+
+    fn test_server() -> (TempDir, Arc<Server>, RuntimeInfo) {
+        let runtime_dir = tempfile::tempdir().expect("runtime temp dir");
+        let server = Arc::new(
+            Server::new(ServerConfig {
+                role: ServerRole::Hub,
+                environment_id: "env-local".to_string(),
+                runtime_dir: runtime_dir.path().to_path_buf(),
+                db_path: None,
+            })
+            .expect("server"),
+        );
+        server
+            .register_runtime("test-endpoint", "control-capability")
+            .expect("runtime record");
+        let runtime = RuntimeInfo::read_from_dir(runtime_dir.path())
+            .expect("read runtime")
+            .expect("runtime info");
+        (runtime_dir, server, runtime)
+    }
+
+    fn connection(server: Arc<Server>) -> (BufReader<DuplexStream>, JoinHandle<io::Result<()>>) {
+        let (client, accepted) = tokio::io::duplex(64 * 1024);
+        let task = tokio::spawn(async move {
+            server
+                .serve_local_connection(
+                    accepted,
+                    ClientIdentity {
+                        description: "test-client".to_string(),
+                        process_id: Some(42),
+                        user_id: Some(7),
+                        executable: Some("test-client".to_string()),
+                    },
+                )
+                .await
+        });
+        (BufReader::new(client), task)
+    }
+
+    #[tokio::test]
+    async fn personal_repository_initializes_before_runtime_publication() {
+        let root = tempfile::tempdir().expect("temporary app-data root");
+        let server = Server::new(ServerConfig {
+            role: ServerRole::Hub,
+            environment_id: "env-local".to_string(),
+            runtime_dir: root.path().join("run"),
+            db_path: None,
+        })
+        .expect("server");
+        assert!(!server.data_paths().personal().join(".git/HEAD").exists());
+        let head = server
+            .initialize_personal_repository()
+            .await
+            .expect("initialize managed personal repository");
+        assert_eq!(
+            server
+                .router()
+                .personal_repo()
+                .current_head_sha()
+                .expect("read managed personal HEAD"),
+            head
+        );
+        assert!(server.data_paths().personal().join(".git/HEAD").is_file());
+        server.shutdown();
+    }
+
+    async fn exchange(
+        connection: &mut BufReader<DuplexStream>,
+        request: RpcRequest,
+    ) -> RpcResponse {
+        let mut request_line = serde_json::to_vec(&request).expect("serialize request");
+        request_line.push(b'\n');
+        connection
+            .get_mut()
+            .write_all(&request_line)
+            .await
+            .expect("write request");
+        connection.get_mut().flush().await.expect("flush request");
+        let mut response_line = String::new();
+        connection
+            .read_line(&mut response_line)
+            .await
+            .expect("read response");
+        serde_json::from_str(&response_line).expect("parse response")
+    }
+
+    async fn authenticate(
+        connection: &mut BufReader<DuplexStream>,
+        capability: &str,
+        client_kind: &str,
+    ) {
+        let response = exchange(
+            connection,
+            RpcRequest::new(
+                1,
+                "system.hello",
+                Some(json!({
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "clientKind": client_kind,
+                    "clientVersion": "test",
+                    "capability": capability,
+                    "peerRole": "internal",
+                    "capabilityScope": "internal",
+                })),
+            ),
+        )
+        .await;
+        assert!(response.is_success(), "authentication failed: {response:?}");
+    }
+
+    #[tokio::test]
+    async fn local_connection_rejects_requests_before_authenticated_hello() {
+        let (_runtime_dir, server, _runtime) = test_server();
+        let (mut connection, task) = connection(server);
+        let response = exchange(
+            &mut connection,
+            RpcRequest::new(1, "system.ping", Some(json!({}))),
+        )
+        .await;
+        assert_eq!(response.error.expect("unauthorized error").code, -32001);
+        drop(connection);
+        task.await
+            .expect("connection task")
+            .expect("connection result");
+    }
+
+    #[tokio::test]
+    async fn endpoint_binds_distinct_control_mcp_and_provider_scopes() {
+        let (_runtime_dir, server, runtime) = test_server();
+
+        let (mut control, control_task) = connection(server.clone());
+        authenticate(&mut control, &runtime.token, "desktop").await;
+        assert!(
+            exchange(
+                &mut control,
+                RpcRequest::new(2, "settings.get", Some(json!({}))),
+            )
+            .await
+            .is_success()
+        );
+        assert_eq!(
+            exchange(
+                &mut control,
+                RpcRequest::new(3, "mcp.list_tools", Some(json!({}))),
+            )
+            .await
+            .error
+            .expect("control cannot impersonate MCP")
+            .code,
+            -32001
+        );
+        drop(control);
+        control_task
+            .await
+            .expect("control task")
+            .expect("control connection");
+
+        let (mut mcp, mcp_task) = connection(server.clone());
+        authenticate(&mut mcp, &runtime.mcp_token, "mcp").await;
+        assert!(
+            exchange(
+                &mut mcp,
+                RpcRequest::new(2, "mcp.list_tools", Some(json!({}))),
+            )
+            .await
+            .is_success()
+        );
+        assert_eq!(
+            exchange(
+                &mut mcp,
+                RpcRequest::new(3, "settings.get", Some(json!({}))),
+            )
+            .await
+            .error
+            .expect("MCP cannot use control methods")
+            .code,
+            -32001
+        );
+        drop(mcp);
+        mcp_task.await.expect("MCP task").expect("MCP connection");
+
+        let provider_token = server.capability_authority().issue_provider_child(
+            ThreadId::new("thread-allowed"),
+            ["notification.post".to_string()],
+            60_000,
+        );
+        let (mut provider, provider_task) = connection(server);
+        authenticate(&mut provider, &provider_token, "provider-child").await;
+        assert!(
+            exchange(
+                &mut provider,
+                RpcRequest::new(
+                    2,
+                    "notification.post",
+                    Some(json!({
+                        "threadId": "thread-allowed",
+                        "title": "Allowed",
+                        "peerRole": "internal",
+                        "capabilityScope": "control",
+                    })),
+                ),
+            )
+            .await
+            .is_success()
+        );
+        for method in [
+            "settings.get",
+            "organization.set",
+            "schedule.create",
+            "environment.list",
+            "bundle.push",
+        ] {
+            let response = exchange(
+                &mut provider,
+                RpcRequest::new(
+                    3,
+                    method,
+                    Some(json!({
+                        "threadId": "thread-allowed",
+                        "peerRole": "internal",
+                        "capabilityScope": "control",
+                    })),
+                ),
+            )
+            .await;
+            assert_eq!(
+                response.error.expect("provider method denied").code,
+                -32001,
+                "unexpected result for {method}"
+            );
+        }
+        drop(provider);
+        provider_task
+            .await
+            .expect("provider task")
+            .expect("provider connection");
+    }
+
+    #[test]
+    fn rollback_switches_prevent_usage_services_from_starting() {
+        let (_runtime_dir, server, _runtime) = test_server();
+        let mut settings = server
+            .store()
+            .get_settings()
+            .expect("load settings")
+            .unwrap_or_default();
+        settings.advanced.usage_scanning_enabled = false;
+        settings.advanced.usage_hub_sync_enabled = false;
+        server
+            .store()
+            .save_settings(&settings)
+            .expect("save settings");
+
+        server.start_usage_scanner().expect("scanner start gate");
+        server.start_usage_sync().expect("sync start gate");
+
+        assert!(
+            server
+                .usage_scanner
+                .lock()
+                .expect("usage scanner service lock")
+                .is_none()
+        );
+        assert!(
+            server
+                .usage_sync
+                .lock()
+                .expect("usage synchronization service lock")
+                .is_none()
+        );
     }
 }

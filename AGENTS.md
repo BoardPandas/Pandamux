@@ -1,6 +1,6 @@
 # PandaMUX: Agent Guide
 
-PandaMUX is a native Windows terminal multiplexer for AI agents, built as a Rust workspace (Iced + alacritty_terminal + portable-pty + russh). The Electron/TypeScript prototype this repo started from has been removed.
+PandaMUX is a native, chat-first Windows desktop for supervising local and remote AI coding agents. The active Rust workspace uses a GPUI client, an authenticated server-owned JSON-RPC control plane, provider drivers, `alacritty_terminal`, `portable-pty`, and `russh`. The earlier Electron and Iced implementations have been removed from the active workspace.
 
 **The authoritative development guide is [`CLAUDE.md`](CLAUDE.md).** Read it for build/dev/test commands, the crate architecture, the release process, and the repo conventions. This file is a routing page so agent tooling that looks for `AGENTS.md` lands on the right sources without duplicating them.
 
@@ -14,7 +14,7 @@ Before running any command that may cause silence or run in the background (such
 
 ## AI fast path
 
-1. Read [`README.md`](README.md) for the product purpose, user problem, and shipped feature set.
+1. Read [`README.md`](README.md) for the product purpose, implemented feature set, and current acceptance status.
 2. Read [`CLAUDE.md`](CLAUDE.md) for architecture, invariants, commands, release mechanics, and workflow rules.
 3. Use [`docs/README.md`](docs/README.md) to open the relevant crate, feature, API, or operations page.
 4. Use [`tasks/plan-repo.md`](tasks/plan-repo.md) only for rewrite history, design rationale, and the UI specification in Section 12. It is not the current roadmap.

@@ -1,0 +1,21 @@
+{
+  "id": "sch-legacy-1",
+  "name": "Legacy schedule",
+  "projectId": "proj-legacy-1",
+  "environment": {
+    "id": "env-legacy-1",
+    "displayName": "Legacy node"
+  },
+  "trigger": {
+    "cron": "0 3 * * *",
+    "timezone": "America/New_York"
+  },
+  "target": {
+    "kind": "session",
+    "project_path": "/workspace/project",
+    "prompt": "Review the repository",
+    "thread_mode": "continue_existing_thread"
+  },
+  "approval": "auto",
+  "enabled": true
+}

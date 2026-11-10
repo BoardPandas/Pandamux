@@ -2,7 +2,7 @@ use pandamux_core::{
     event::{ApprovalDecision, ApprovalKind, TurnOutcome},
     thread::{AccessMode, TurnInput, TurnUsage},
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -53,8 +53,51 @@ pub struct AcpAgentInfo {
 pub struct AcpCapabilities {
     #[serde(rename = "loadSession", default)]
     pub load_session: bool,
-    #[serde(rename = "resumeSession", default)]
+    #[serde(
+        rename = "resumeSession",
+        default,
+        deserialize_with = "deserialize_capability_support"
+    )]
     pub resume_session: bool,
+    #[serde(rename = "sessionCapabilities", default)]
+    pub session_capabilities: AcpSessionCapabilities,
+    #[serde(default)]
+    pub auth: AcpAuthCapabilities,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AcpSessionCapabilities {
+    #[serde(default, deserialize_with = "deserialize_capability_support")]
+    pub resume: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AcpAuthCapabilities {
+    #[serde(default, deserialize_with = "deserialize_capability_support")]
+    pub logout: bool,
+}
+
+fn deserialize_capability_support<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    Ok(matches!(value, Value::Bool(true) | Value::Object(_)))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AcpAuthMethod {
+    Id(String),
+    Descriptor { id: String },
+}
+
+impl AcpAuthMethod {
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Id(id) | Self::Descriptor { id } => id,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,9 +106,10 @@ pub struct AcpInitializeResult {
     pub protocol_version: u32,
     #[serde(rename = "agentInfo")]
     pub agent_info: AcpAgentInfo,
+    #[serde(rename = "agentCapabilities", alias = "capabilities")]
     pub capabilities: AcpCapabilities,
-    #[serde(rename = "authMethods")]
-    pub auth_methods: Vec<String>,
+    #[serde(rename = "authMethods", default)]
+    pub auth_methods: Vec<AcpAuthMethod>,
 }
 
 /// Validates that an ACP initialize response satisfies Antigravity requirements.
@@ -85,13 +129,29 @@ pub fn validate_antigravity_initialize(res: &AcpInitializeResult) -> Result<(), 
             message: format!("Expected protocolVersion 1, got {}", res.protocol_version),
         });
     }
-    if !res.capabilities.load_session && !res.capabilities.resume_session {
+    if !res.capabilities.load_session {
         return Err(ProviderError::ProtocolError {
             provider: "antigravity".into(),
-            message: "ACP server missing session load/resume capabilities".into(),
+            message: "ACP server missing session load capability".into(),
         });
     }
-    if !res.auth_methods.iter().any(|m| m == "oauth-personal") {
+    if !res.capabilities.session_capabilities.resume && !res.capabilities.resume_session {
+        return Err(ProviderError::ProtocolError {
+            provider: "antigravity".into(),
+            message: "ACP server missing session resume capability".into(),
+        });
+    }
+    if !res.capabilities.auth.logout {
+        return Err(ProviderError::ProtocolError {
+            provider: "antigravity".into(),
+            message: "ACP server missing authentication logout capability".into(),
+        });
+    }
+    if !res
+        .auth_methods
+        .iter()
+        .any(|method| method.id() == "oauth-personal")
+    {
         return Err(ProviderError::ProtocolError {
             provider: "antigravity".into(),
             message: "ACP server missing 'oauth-personal' auth method".into(),
@@ -129,9 +189,16 @@ pub fn build_initialize_request(id: u64) -> Value {
         "method": "initialize",
         "params": {
             "protocolVersion": 1,
+            "clientCapabilities": {
+                "fs": {
+                    "readTextFile": false,
+                    "writeTextFile": false
+                },
+                "terminal": false
+            },
             "clientInfo": {
                 "name": "pandamux",
-                "version": "1.0.0"
+                "version": env!("CARGO_PKG_VERSION")
             }
         }
     })
@@ -168,16 +235,131 @@ pub fn is_interaction_prompt(tool_name: &str) -> bool {
 
 /// Heuristically classifies whether an ACP tool call represents a sub-agent invocation.
 pub fn is_heuristic_subagent(tool_name: &str, tool_title: Option<&str>) -> bool {
-    if tool_name.contains("subagent") || tool_name.contains("start_subagent") {
-        return true;
-    }
-    if let Some(title) = tool_title {
-        let lower = title.to_lowercase();
-        if lower.contains("subagent") || lower.contains("start_subagent") {
-            return true;
+    tool_name == "start_subagent"
+        || matches!(
+            tool_title,
+            Some("Running start_subagent" | "Run start_subagent?")
+        )
+}
+
+const MAX_RETAINED_TOOL_TEXT: usize = 8_000;
+const MAX_RETAINED_TOOL_NODES: usize = 512;
+
+fn bounded_text(value: &str) -> String {
+    if value.len() <= MAX_RETAINED_TOOL_TEXT {
+        value.to_string()
+    } else {
+        let mut start = value.len() - MAX_RETAINED_TOOL_TEXT;
+        while !value.is_char_boundary(start) {
+            start += 1;
         }
+        format!("[Earlier output truncated]\n\n{}", &value[start..])
     }
-    false
+}
+
+fn sanitize_tool_value(value: &Value, nodes: &mut usize) -> Option<Value> {
+    if *nodes == 0 {
+        return None;
+    }
+    *nodes -= 1;
+    match value {
+        Value::String(text) if text.starts_with("data:image/") => None,
+        Value::String(text) => Some(Value::String(bounded_text(text))),
+        Value::Array(values) => Some(Value::Array(
+            values
+                .iter()
+                .filter_map(|value| sanitize_tool_value(value, nodes))
+                .collect(),
+        )),
+        Value::Object(values) => {
+            let mut sanitized = serde_json::Map::new();
+            for (key, value) in values {
+                if *nodes == 0 {
+                    break;
+                }
+                if (key == "data" || key == "blob")
+                    && values.get("type").and_then(Value::as_str) == Some("image")
+                {
+                    continue;
+                }
+                if let Some(value) = sanitize_tool_value(value, nodes) {
+                    sanitized.insert(key.clone(), value);
+                }
+            }
+            Some(Value::Object(sanitized))
+        }
+        other => Some(other.clone()),
+    }
+}
+
+fn sanitized_tool_value(value: &Value) -> Value {
+    let mut nodes = MAX_RETAINED_TOOL_NODES;
+    sanitize_tool_value(value, &mut nodes).unwrap_or(Value::Null)
+}
+
+fn content_text(content: &Value) -> Option<&str> {
+    (content.get("type").and_then(Value::as_str) == Some("text"))
+        .then(|| content.get("text").and_then(Value::as_str))
+        .flatten()
+}
+
+fn permission_kind(params: &Value) -> ApprovalKind {
+    let tool = params.get("toolCall").unwrap_or(&Value::Null);
+    let kind = tool
+        .get("kind")
+        .and_then(Value::as_str)
+        .or_else(|| tool.get("tool").and_then(Value::as_str))
+        .or_else(|| params.get("permissionType").and_then(Value::as_str));
+    let title = tool
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match kind {
+        Some("execute" | "bash" | "command" | "run_command" | "execute_command") => {
+            ApprovalKind::CommandExecution
+        }
+        Some(
+            "edit" | "delete" | "move" | "fs_write" | "file_write" | "edit_file" | "write_file"
+            | "replace_content",
+        ) => ApprovalKind::FileEdit,
+        _ if title.contains("command") || title.contains("shell") => ApprovalKind::CommandExecution,
+        _ if title.contains("edit") || title.contains("write") => ApprovalKind::FileEdit,
+        _ => ApprovalKind::ToolCall,
+    }
+}
+
+fn permission_command(params: &Value) -> Option<String> {
+    let tool = params.get("toolCall")?;
+    let raw = tool.get("rawInput").or_else(|| tool.get("parameters"));
+    let command = raw.and_then(|raw| {
+        ["CommandLine", "command_line", "commandLine", "command"]
+            .iter()
+            .find_map(|name| raw.get(*name).and_then(Value::as_str))
+    });
+    command
+        .or_else(|| tool.get("title").and_then(Value::as_str))
+        .or_else(|| tool.get("tool").and_then(Value::as_str))
+        .map(bounded_text)
+}
+
+fn turn_usage(value: &Value) -> Option<TurnUsage> {
+    let usage = value.get("usage")?;
+    let input_tokens = usage
+        .get("inputTokens")
+        .or_else(|| usage.get("input_tokens"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let output_tokens = usage
+        .get("outputTokens")
+        .or_else(|| usage.get("output_tokens"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    Some(TurnUsage {
+        input_tokens,
+        output_tokens,
+        ..Default::default()
+    })
 }
 
 /// Parses an ACP JSON-RPC line into a ProviderEvent if relevant.
@@ -193,56 +375,110 @@ pub fn parse_acp_line(line: &str) -> Option<ProviderEvent> {
         let params = val.get("params").cloned().unwrap_or(Value::Null);
 
         match method {
-            "session/promptUpdate" | "session/update" => {
-                if let Some(text) = params.get("delta").and_then(|v| v.as_str()) {
+            "session/promptUpdate" => {
+                if let Some(text) = params.get("delta").and_then(Value::as_str) {
                     return Some(ProviderEvent::TextDelta {
                         delta: text.to_string(),
                     });
                 }
-                if let Some(reasoning) = params.get("reasoningDelta").and_then(|v| v.as_str()) {
+                if let Some(reasoning) = params.get("reasoningDelta").and_then(Value::as_str) {
                     return Some(ProviderEvent::ReasoningDelta {
                         delta: reasoning.to_string(),
                     });
                 }
             }
+            "session/update" => {
+                let update = params.get("update").unwrap_or(&params);
+                match update.get("sessionUpdate").and_then(Value::as_str) {
+                    Some("agent_message_chunk") => {
+                        let text = update.get("content").and_then(content_text)?;
+                        return Some(ProviderEvent::TextDelta {
+                            delta: text.to_string(),
+                        });
+                    }
+                    Some("agent_thought_chunk") => {
+                        let text = update.get("content").and_then(content_text)?;
+                        return Some(ProviderEvent::ReasoningDelta {
+                            delta: text.to_string(),
+                        });
+                    }
+                    Some("tool_call") => {
+                        let id = update
+                            .get("toolCallId")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string();
+                        let title = update
+                            .get("title")
+                            .and_then(Value::as_str)
+                            .unwrap_or("tool")
+                            .to_string();
+                        let kind = update
+                            .get("kind")
+                            .and_then(Value::as_str)
+                            .unwrap_or("other");
+                        let is_mcp = update
+                            .get("_meta")
+                            .and_then(|meta| meta.get("is_mcp_tool_call"))
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false);
+                        if !is_mcp && is_heuristic_subagent("", Some(&title)) && kind == "other" {
+                            return Some(ProviderEvent::SubAgentSpawned {
+                                tool_use_id: id,
+                                parent_tool_use_id: None,
+                                agent_type: "subagent".to_string(),
+                                description: title,
+                                model: None,
+                            });
+                        }
+                        return Some(ProviderEvent::ToolCallStarted {
+                            id,
+                            name: title,
+                            input: sanitized_tool_value(update),
+                        });
+                    }
+                    Some("tool_call_update") => {
+                        let status = update
+                            .get("status")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        if matches!(status, "completed" | "failed") {
+                            let output = update
+                                .get("rawOutput")
+                                .map(sanitized_tool_value)
+                                .and_then(|value| serde_json::to_string(&value).ok());
+                            return Some(ProviderEvent::ToolCallFinished {
+                                id: update
+                                    .get("toolCallId")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                                    .to_string(),
+                                output,
+                                error: (status == "failed").then(|| {
+                                    update
+                                        .get("title")
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("Antigravity tool call failed")
+                                        .to_string()
+                                }),
+                            });
+                        }
+                    }
+                    Some("usage_update") => {
+                        return Some(ProviderEvent::RateLimitObserved {
+                            details: sanitized_tool_value(update),
+                        });
+                    }
+                    _ => {}
+                }
+            }
             "request_permission" | "session/request_permission" => {
                 let req_id = val.get("id").map(|v| v.to_string()).unwrap_or_default();
-                let perm_type = params.get("permissionType").and_then(|v| v.as_str());
-
-                let tool_call_tool = params
-                    .get("toolCall")
-                    .and_then(|t| t.get("tool"))
-                    .and_then(|t| t.as_str());
-
-                let resource = params
-                    .get("resource")
-                    .and_then(|v| v.as_str())
-                    .or(tool_call_tool)
-                    .unwrap_or_default();
-
-                let kind = if let Some(pt) = perm_type {
-                    match pt {
-                        "bash" | "command" => ApprovalKind::CommandExecution,
-                        "fs_write" | "file_write" => ApprovalKind::FileEdit,
-                        _ => ApprovalKind::ToolCall,
-                    }
-                } else if let Some(tc) = tool_call_tool {
-                    match tc {
-                        "run_command" | "bash" | "execute_command" => {
-                            ApprovalKind::CommandExecution
-                        }
-                        "edit_file" | "write_file" | "replace_content" => ApprovalKind::FileEdit,
-                        _ => ApprovalKind::ToolCall,
-                    }
-                } else {
-                    ApprovalKind::ToolCall
-                };
-
                 return Some(ProviderEvent::ApprovalRequested {
                     request_id: req_id,
-                    kind,
-                    detail: params.clone(),
-                    command: Some(resource.to_string()),
+                    kind: permission_kind(&params),
+                    detail: sanitized_tool_value(&params),
+                    command: permission_command(&params),
                 });
             }
             "session/toolCall" => {
@@ -292,6 +528,20 @@ pub fn parse_acp_line(line: &str) -> Option<ProviderEvent> {
             }
             _ => {}
         }
+    }
+
+    if let Some(result) = val.get("result")
+        && let Some(stop_reason) = result.get("stopReason").and_then(Value::as_str)
+    {
+        let outcome = match stop_reason {
+            "cancelled" => TurnOutcome::Interrupted,
+            "refusal" | "error" => TurnOutcome::Failed,
+            _ => TurnOutcome::Success,
+        };
+        return Some(ProviderEvent::TurnCompleted {
+            outcome,
+            usage: turn_usage(result),
+        });
     }
 
     None
@@ -489,9 +739,52 @@ mod tests {
             } => {
                 assert_eq!(request_id, "106");
                 assert_eq!(kind, ApprovalKind::CommandExecution);
-                assert_eq!(command, Some("run_command".to_string()));
+                assert_eq!(command, Some("cargo test".to_string()));
             }
             _ => panic!("Expected ApprovalRequested"),
         }
+    }
+
+    #[test]
+    fn parses_standard_acp_v1_updates_and_prompt_completion() {
+        let text = r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"session-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello"}}}}"#;
+        assert_eq!(
+            parse_acp_line(text),
+            Some(ProviderEvent::TextDelta {
+                delta: "hello".to_string()
+            })
+        );
+
+        let tool = r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"session-1","update":{"sessionUpdate":"tool_call","toolCallId":"tool-1","title":"Run command","kind":"execute","status":"in_progress","rawInput":{"CommandLine":"cargo test"}}}}"#;
+        match parse_acp_line(tool).expect("tool event") {
+            ProviderEvent::ToolCallStarted { id, name, input } => {
+                assert_eq!(id, "tool-1");
+                assert_eq!(name, "Run command");
+                assert_eq!(input["rawInput"]["CommandLine"], "cargo test");
+            }
+            event => panic!("unexpected event: {event:?}"),
+        }
+
+        let completed = r#"{"jsonrpc":"2.0","id":10,"result":{"stopReason":"end_turn","usage":{"inputTokens":7,"outputTokens":11}}}"#;
+        assert_eq!(
+            parse_acp_line(completed),
+            Some(ProviderEvent::TurnCompleted {
+                outcome: TurnOutcome::Success,
+                usage: Some(TurnUsage {
+                    input_tokens: 7,
+                    output_tokens: 11,
+                    ..Default::default()
+                })
+            })
+        );
+    }
+
+    #[test]
+    fn bounds_utf8_tool_payloads_without_splitting_a_character() {
+        let value = Value::String("🦀".repeat(MAX_RETAINED_TOOL_TEXT));
+        let sanitized = sanitized_tool_value(&value);
+        let text = sanitized.as_str().expect("sanitized string");
+        assert!(text.starts_with("[Earlier output truncated]"));
+        assert!(text.ends_with('🦀'));
     }
 }

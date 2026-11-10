@@ -1,22 +1,34 @@
 pub mod client;
+pub mod configuration_projection;
 pub mod projections;
 pub mod token_queue;
 pub mod transport;
+pub mod usage;
 
 pub use client::PandamuxClient;
+pub use configuration_projection::{
+    MutationConfirmationProjection, SafeMutationDiff, TrustedConfigurationProjection,
+};
 pub use projections::{
     ChangedFileSummary, RunProjection, SubAgentProjection, SubAgentTreeNode, ThreadProjection,
     TimelineItem, WorkLogEntry, WorkLogStatus, format_duration,
 };
 pub use token_queue::TokenSmoothingQueue;
 pub use transport::{MockTransport, MockTransportPeer, TransportError};
+pub use usage::{
+    CapacityCard, UsageAction, UsageFilterChange, UsageFilterOptions, UsageFilters,
+    UsageLoadFailure, UsageViewState, UsageViewStatus, capacity_cards, classify_usage_result,
+    confidence_label, format_age, format_micro_usd, format_millionths, format_relative_time,
+    format_tokens, freshness_label, title_case_provider,
+};
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use pandamux_core::{
-        ApprovalDecision, ApprovalKind, EnvironmentId, ProviderInstanceId, Run, RunEvent, RunKind,
-        RunStatus, RunTask, RunTaskStatus, Thread, ThreadEvent, ThreadEventKind, ThreadId,
+        AgentTask, ApprovalDecision, ApprovalKind, BudgetAmount, EnvironmentId, OrchestrationMode,
+        OrganizationId, OutputContract, ProjectId, ProviderInstanceId, Run, RunSeed, RunStatus,
+        RunTaskId, RunTaskStatus, RunTrigger, Thread, ThreadEvent, ThreadEventKind, ThreadId,
         ThreadStatus, ThreadWorkspace, ToolCallStatus, TurnId, TurnInput, TurnOutcome, TurnStatus,
         TurnUsage,
     };
@@ -230,6 +242,7 @@ mod tests {
                     cache_read_tokens: None,
                     cache_write_tokens: None,
                     cost_usd: Some(0.002),
+                    ..Default::default()
                 },
             },
         });
@@ -260,57 +273,58 @@ mod tests {
     }
 
     #[test]
-    fn run_projection_reducer() {
+    fn run_projection_maps_canonical_state_without_transition_logic() {
         use pandamux_core::RunId;
 
-        let run = Run {
-            id: RunId::from("run-1"),
-            kind: RunKind::Orchestrator,
-            status: RunStatus::Planned,
-            trigger: "manual".to_string(),
-            started_at_ms: 1000,
-            ended_at_ms: None,
-            tasks: vec![],
-            blackboard: Default::default(),
-            usage: None,
-            outcome: None,
+        let seed = RunSeed {
+            trigger: RunTrigger::Manual {
+                client_id: "desktop".to_string(),
+            },
+            policy_revision: "policy-1".to_string(),
+            bundle_sha: "bundle-1".to_string(),
+            organization_id: OrganizationId::from("org-1"),
+            mode: OrchestrationMode::ApproveFirst,
+            budget_limit: BudgetAmount::default(),
+            max_parallel_tasks: 2,
         };
-        let mut proj = RunProjection::new(run);
-        assert_eq!(proj.run.status, RunStatus::Planned);
+        let mut run = Run::draft(RunId::from("run-1"), seed, 1000);
+        run.status = RunStatus::Running;
+        run.last_seq = 4;
+        run.tasks.insert(
+            RunTaskId::from("task-1"),
+            AgentTask {
+                id: RunTaskId::from("task-1"),
+                summary: "Build".to_string(),
+                class: "build".to_string(),
+                project_id: ProjectId::from("proj-1"),
+                organization_id: OrganizationId::from("org-1"),
+                required_capabilities: Default::default(),
+                access_ceiling: Default::default(),
+                inputs: vec![],
+                outputs: vec![OutputContract {
+                    kind: "patch".to_string(),
+                    schema: None,
+                }],
+                required_verification: Default::default(),
+                selected_agent_id: Some(pandamux_core::AgentId::from("agent-builder")),
+                route: None,
+                status: RunTaskStatus::Running,
+                max_attempts: 2,
+                approval_ids: Default::default(),
+                budget_limit: BudgetAmount::default(),
+                budget_reservation_id: None,
+            },
+        );
 
-        // Planned event
-        let task = RunTask {
-            task_id: "task-1".to_string(),
-            target_project_id: None,
-            agent_id: None,
-            thread_id: None,
-            status: RunTaskStatus::Pending,
-            depends_on: vec![],
-            summary: None,
-        };
-        proj.apply_event(&RunEvent::Planned {
-            run_id: RunId::from("run-1"),
-            tasks: vec![task],
-        });
-        assert_eq!(proj.run.tasks.len(), 1);
-
-        // Dispatched event
-        proj.apply_event(&RunEvent::TaskDispatched {
-            run_id: RunId::from("run-1"),
-            task_id: "task-1".to_string(),
-            target_project_id: None,
-            agent_id: None,
-            thread_id: ThreadId::from("thread-task-1"),
-        });
-        assert_eq!(proj.run.status, RunStatus::Running);
-        assert_eq!(proj.run.tasks[0].status, RunTaskStatus::Dispatched);
-
-        // Finished event
-        proj.apply_event(&RunEvent::Finished {
-            run_id: RunId::from("run-1"),
-            status: RunStatus::Succeeded,
-        });
-        assert_eq!(proj.run.status, RunStatus::Succeeded);
+        let projection = RunProjection::from_run(&run);
+        assert_eq!(projection.run_id, RunId::from("run-1"));
+        assert_eq!(projection.status, RunStatus::Running);
+        assert_eq!(projection.last_seq, 4);
+        assert_eq!(projection.task_counts[&RunTaskStatus::Running], 1);
+        assert_eq!(
+            projection.selected_agents[&RunTaskId::from("task-1")].as_str(),
+            "agent-builder"
+        );
     }
 
     #[test]
@@ -568,6 +582,35 @@ mod tests {
         let stat3 = ChangedFileSummary::parse("D\tsrc/deprecated.rs");
         assert_eq!(stat3.path, "src/deprecated.rs");
         assert_eq!(stat3.kind, FileChangeKind::Deleted);
+    }
+
+    #[test]
+    fn capacity_interruption_projects_an_actionable_continuation() {
+        let mut projection = ThreadProjection::new(mock_thread("thread-capacity"));
+        projection.apply_event(&ThreadEvent {
+            thread_id: ThreadId::from("thread-capacity"),
+            seq: 1,
+            at_ms: 2_000,
+            kind: ThreadEventKind::CapacityInterrupted {
+                turn_id: TurnId::from("turn-capacity"),
+                attempt_id: pandamux_core::TurnAttemptId::new("attempt-capacity"),
+                continuation_id: pandamux_core::ContinuationId::new("continue-capacity"),
+                provider_instance_id: ProviderInstanceId::new("provider-work"),
+                message: "Continue from the saved checkpoint.".to_string(),
+            },
+        });
+
+        assert_eq!(projection.thread.status, ThreadStatus::Idle);
+        assert!(matches!(
+            projection.items.as_slice(),
+            [TimelineItem::CapacityContinuation {
+                continuation_id,
+                provider_instance_id,
+                message,
+            }] if continuation_id == "continue-capacity"
+                && provider_instance_id == "provider-work"
+                && message == "Continue from the saved checkpoint."
+        ));
     }
 
     #[test]

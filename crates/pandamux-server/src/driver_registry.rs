@@ -1,8 +1,7 @@
 use pandamux_core::provider_config::ProviderKind;
 use pandamux_providers::traits::ProviderDriver;
 use pandamux_providers::{
-    AntigravityDriver, ClaudeDriver, CodexDriver, CursorDriver, GrokDriver, MockProviderDriver,
-    OpenCodeDriver,
+    AntigravityDriver, ClaudeDriver, CodexDriver, CursorDriver, GrokDriver, OpenCodeDriver,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -33,38 +32,31 @@ impl DriverRegistry {
         map.get(&kind).cloned()
     }
 
-    /// Creates a registry initialized with default local drivers and mock fallback.
+    /// Creates a registry initialized with default local production drivers.
     pub fn default_local() -> Self {
+        Self::default_local_at(PathBuf::from(".pandamux"))
+    }
+
+    pub fn default_local_at(base_data_dir: PathBuf) -> Self {
         let registry = Self::new();
 
-        let claude = Arc::new(ClaudeDriver::new(PathBuf::from("claude")));
+        let claude = Arc::new(ClaudeDriver::new(base_data_dir.clone()));
         registry.register(ProviderKind::Claude, claude);
 
-        let codex = Arc::new(CodexDriver::new(PathBuf::from("codex")));
+        let codex = Arc::new(CodexDriver::new(base_data_dir.clone()));
         registry.register(ProviderKind::Codex, codex);
 
-        let antigravity = Arc::new(AntigravityDriver::new(PathBuf::from(
-            ".pandamux/antigravity",
-        )));
+        let antigravity = Arc::new(AntigravityDriver::new(base_data_dir.clone()));
         registry.register(ProviderKind::Antigravity, antigravity);
 
-        let cursor = Arc::new(CursorDriver::new(PathBuf::from(".pandamux/cursor")));
+        let cursor = Arc::new(CursorDriver::new(base_data_dir.clone()));
         registry.register(ProviderKind::Cursor, cursor);
 
-        let grok = Arc::new(GrokDriver::new(PathBuf::from(".pandamux/grok")));
+        let grok = Arc::new(GrokDriver::new(base_data_dir.clone()));
         registry.register(ProviderKind::Grok, grok);
 
-        let opencode = Arc::new(OpenCodeDriver::new(
-            PathBuf::from(".pandamux/opencode"),
-            false,
-        ));
+        let opencode = Arc::new(OpenCodeDriver::new(base_data_dir, false));
         registry.register(ProviderKind::OpenCode, opencode);
-
-        let mock = Arc::new(MockProviderDriver::new(
-            ProviderKind::Custom,
-            "Mock Provider",
-        ));
-        registry.register(ProviderKind::Custom, mock);
 
         registry
     }
@@ -83,6 +75,6 @@ mod tests {
         assert!(registry.get(ProviderKind::Cursor).is_some());
         assert!(registry.get(ProviderKind::Grok).is_some());
         assert!(registry.get(ProviderKind::OpenCode).is_some());
-        assert!(registry.get(ProviderKind::Custom).is_some());
+        assert!(registry.get(ProviderKind::Custom).is_none());
     }
 }

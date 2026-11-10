@@ -1,5 +1,13 @@
-use pandamux_core::EnvironmentId;
+use pandamux_core::{EnvironmentId, ProviderInstanceId};
 use serde::{Deserialize, Serialize};
+
+/// Pinned bundle manifest describing an Antigravity ACP release.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedBundleFile {
+    pub name: String,
+    pub size: u64,
+}
 
 /// Pinned bundle manifest describing an Antigravity ACP release.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -11,7 +19,8 @@ pub struct ManagedBundleManifest {
     pub url: String,
     pub size: u64,
     pub sha256: String,
-    pub entries: Vec<String>,
+    pub executable: ManagedBundleFile,
+    pub harness: ManagedBundleFile,
 }
 
 /// Parameters for `antigravity.install`.
@@ -22,9 +31,34 @@ pub struct AntigravityInstallParams {
     pub environment_id: Option<EnvironmentId>,
     pub manifest: ManagedBundleManifest,
     #[serde(default)]
-    pub fallback_bytes_base64: Option<String>,
+    pub staged_archive_path: Option<String>,
     #[serde(default)]
     pub force: bool,
+}
+
+/// Parameters for preparing a private node-side SFTP upload target.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AntigravityPrepareUploadParams {
+    #[serde(default)]
+    pub environment_id: Option<EnvironmentId>,
+    pub manifest: ManagedBundleManifest,
+}
+
+/// Private node-side path to which the Hub may upload a verified archive.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AntigravityPrepareUploadResult {
+    pub remote_path: String,
+}
+
+/// Parameters for deleting a failed private node-side SFTP upload.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AntigravityDiscardUploadParams {
+    #[serde(default)]
+    pub environment_id: Option<EnvironmentId>,
+    pub staged_archive_path: String,
 }
 
 /// Result returned from `antigravity.install`.
@@ -44,12 +78,15 @@ pub struct AntigravityInstallResult {
 pub struct AntigravityStatusParams {
     #[serde(default)]
     pub environment_id: Option<EnvironmentId>,
+    #[serde(default)]
+    pub provider_instance_id: Option<ProviderInstanceId>,
 }
 
 /// Result returned from `antigravity.status`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AntigravityStatusResult {
+    pub provider_instance_id: ProviderInstanceId,
     pub installed: bool,
     #[serde(default)]
     pub version: Option<String>,
@@ -67,12 +104,16 @@ pub struct AntigravityStatusResult {
 pub struct AntigravityOAuthStartParams {
     #[serde(default)]
     pub environment_id: Option<EnvironmentId>,
+    #[serde(default)]
+    pub provider_instance_id: Option<ProviderInstanceId>,
 }
 
 /// Result returned from `antigravity.oauth_start`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AntigravityOAuthStartResult {
+    pub provider_instance_id: ProviderInstanceId,
+    pub flow_id: String,
     pub auth_url: String,
     pub redirect_port: u16,
     pub state: String,
@@ -84,15 +125,17 @@ pub struct AntigravityOAuthStartResult {
 pub struct AntigravityOAuthRelayParams {
     #[serde(default)]
     pub environment_id: Option<EnvironmentId>,
+    #[serde(default)]
+    pub provider_instance_id: Option<ProviderInstanceId>,
+    pub flow_id: String,
     pub callback_url: String,
-    pub state: String,
-    pub redirect_port: u16,
 }
 
 /// Result returned from `antigravity.oauth_relay`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AntigravityOAuthRelayResult {
+    pub provider_instance_id: ProviderInstanceId,
     pub success: bool,
     pub message: String,
 }

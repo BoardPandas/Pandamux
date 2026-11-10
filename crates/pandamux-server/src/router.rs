@@ -1,36 +1,81 @@
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use pandamux_core::{ThreadEventKind, UserSettings};
+use pandamux_core::{
+    AccessMode, AgentId, CAPACITY_SNAPSHOT_SCHEMA_VERSION, CapacityConfidence,
+    CapacityEvidenceScope, CapacitySnapshot, DEFAULT_CAPACITY_MAX_AGE_MS, EnvironmentId,
+    OrganizationPolicy, ProjectId, ProviderInstanceId, ProviderKind, RunId, ScheduleApprovalPolicy,
+    ScheduleRecord, ScheduleTarget, SubscriptionKey, ThreadEventKind, ThreadOrigin,
+    UsageSubscription, UserSettings,
+};
 use pandamux_protocol::antigravity_rpc::{
-    AntigravityInstallParams, AntigravityOAuthRelayParams, AntigravityOAuthRelayResult,
-    AntigravityOAuthStartParams, AntigravityOAuthStartResult, AntigravityStatusParams,
+    AntigravityDiscardUploadParams, AntigravityInstallParams, AntigravityOAuthRelayParams,
+    AntigravityOAuthRelayResult, AntigravityOAuthStartParams, AntigravityOAuthStartResult,
+    AntigravityPrepareUploadParams, AntigravityPrepareUploadResult, AntigravityStatusParams,
     AntigravityStatusResult,
 };
 use pandamux_protocol::{
     AttachmentGetParams, AttachmentImportPathParams, AttachmentListParams,
-    AttachmentPutChunkParams, CheckpointDiffParams, CheckpointListParams, CheckpointRollbackParams,
+    AttachmentPutChunkParams, BUNDLE_PUSH_SCHEMA_VERSION, BundleDiscardUploadParams,
+    BundlePrepareUploadParams, BundlePrepareUploadResult, BundlePushParams, CapacityPushParams,
+    CapacityPushResult, CapacityQueryParams, CapacityRefreshParams, CapacityRefreshResult,
+    CheckpointDiffParams, CheckpointListParams, CheckpointRollbackParams,
     EnvironmentImportSshConfigParams, EnvironmentImportSshConfigResult, EnvironmentListResult,
     GitCommitParams, GitCreatePrParams, GitPushParams, GitStatusParams, HarkDictatePromptParams,
-    HarkSpellbookSyncParams, HelloParams, HelloResult, IdentifyResult, McpCallToolParams,
-    PROTOCOL_VERSION, PingResult, ProviderHealthParams, ProviderHealthReport, ProviderHealthResult,
-    RpcError, RpcRequest, RpcResponse, ServerCapabilities, ServerRole, SettingsGetParams,
-    SettingsGetResult, SettingsSetParams, SubAgentTreeItem, SubAgentTreeParams, SubAgentTreeResult,
+    HarkSpellbookSyncParams, HelloParams, HelloResult, HubRoutingContext, IdentifyResult,
+    InstructionsApproveParams, InstructionsApproveResult, InstructionsCheckParams,
+    InstructionsCheckResult, InstructionsDiffParams, InstructionsDiffResult,
+    InstructionsHistoryParams, InstructionsHistoryResult, InstructionsProposalResult,
+    InstructionsRevertParams, InstructionsSetPolicyParams, InstructionsSetTrackingParams,
+    InstructionsStatusParams, InstructionsStatusResult, McpCallToolParams, MutationGetParams,
+    MutationGetResult, MutationListParams, MutationResolveParams, MutationResolveResult,
+    OrchestrationAttemptAckParams, OrchestrationAttemptCancelParams,
+    OrchestrationAttemptDispatchParams, OrchestrationAttemptEventsParams,
+    OrchestrationAttemptPrepareParams, OrchestrationAttemptStatusParams,
+    OrchestrationRepositoryPrepareParams, PROTOCOL_VERSION, PersonalConfigDiffParams,
+    PersonalConfigDiffResult, PersonalConfigHistoryParams, PersonalConfigHistoryResult,
+    PersonalConfigRevertParams, PersonalConfigRevertResult, PingResult, ProjectLayerDiffParams,
+    ProjectLayerDiffResult, ProjectLayerProposalResult, ProjectLayerRevokeParams,
+    ProjectLayerStatusParams, ProjectLayerStatusResult, ProjectLayerTrustParams,
+    ProviderHealthParams, ProviderHealthReport, ProviderHealthResult, ProviderLoginFlow,
+    ProviderLoginGuidance, ProviderLoginLaunchParams, ProviderLoginLaunchResult,
+    ProviderLoginPreview, ProviderLoginPreviewParams, ProviderModelInfo, ProviderModelsParams,
+    ProviderModelsReport, ProviderModelsResult, RoutingProviderCatalogEntry, RpcError, RpcRequest,
+    RpcResponse, ScheduleRunParams, ScheduleRunResult, ScheduleSaveParams, ScheduleValidateParams,
+    ScheduleValidationResult, ServerCapabilities, ServerRole, SettingsGetParams, SettingsGetResult,
+    SettingsSetParams, SubAgentTreeItem, SubAgentTreeParams, SubAgentTreeResult,
     TerminalAttachParams, TerminalCloseParams, TerminalInputParams, TerminalOpenParams,
-    TerminalResizeParams, ThreadCancelTurnParams, ThreadCreateParams, ThreadGetParams,
-    ThreadListParams, ThreadRespondApprovalParams, ThreadResumeParams, ThreadSendTurnParams,
-    WorktreeSyncDeltaParams, WorktreeSyncDeltaResult,
+    TerminalResizeParams, ThreadCancelTurnParams, ThreadContinueParams, ThreadCreateParams,
+    ThreadGetParams, ThreadListParams, ThreadRespondApprovalParams, ThreadResumeParams,
+    ThreadSendTurnParams, UsageAckParams, UsageAckResult, UsageBackfillParams, UsageCatalogResult,
+    UsageExportParams, UsageQueryParams, UsageSubscriptionSetParams, WorktreeSyncDeltaParams,
+    WorktreeSyncDeltaResult,
 };
 
 use crate::attachment::AttachmentManager;
+use crate::bundle_store::{BundleStore, BundleStoreError};
+use crate::bundle_sync::{BundleSyncError, BundleSyncService};
+use crate::configuration_service::{ConfigurationService, ConfigurationServiceError};
+use crate::data_paths::DataPaths;
 use crate::driver_registry::DriverRegistry;
+use crate::instructions_service::{InstructionsService, InstructionsServiceError};
 use crate::mcp_server::McpServer;
-use crate::store::Store;
+use crate::mutation_service::{
+    MutationProposalRequest, MutationService, MutationServiceError, PersonalMutationState,
+};
+use crate::personal_repo::PersonalRepoService;
+use crate::provider_resolver::ProviderResolver;
+use crate::remote_execution::NodeExecutionService;
+use crate::request_context::{CapabilityAuthority, PeerRole, RequestContext};
+use crate::run_execution_service::RunExecutionService;
+use crate::store::{ProjectTrustMutationState, Store, StoreError};
 use crate::terminal::TerminalServerManager;
 use crate::thread_manager::ThreadManager;
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 
 pub struct Router {
     store: Store,
@@ -39,60 +84,598 @@ pub struct Router {
     attachments: AttachmentManager,
     notifications: Arc<tokio::sync::Mutex<Vec<pandamux_core::notification::NotificationInfo>>>,
     drivers: Arc<DriverRegistry>,
+    provider_resolver: Arc<ProviderResolver>,
+    antigravity_auth: Arc<pandamux_providers::antigravity::AntigravityAuthManager>,
+    capability_authority: Arc<CapabilityAuthority>,
     terminal: TerminalServerManager,
     environment_router: Arc<crate::environment_router::EnvironmentRouter>,
     remote_terminals: Arc<std::sync::Mutex<HashMap<String, pandamux_core::ids::EnvironmentId>>>,
+    login_previews: Arc<std::sync::Mutex<HashMap<String, LoginPreviewRecord>>>,
+    login_shell_resolver: fn() -> Result<Option<String>, RpcError>,
     hark: Arc<crate::hark::HarkBridge>,
-    data_dir: PathBuf,
+    personal_repo: PersonalRepoService,
+    instructions: InstructionsService,
+    configuration: ConfigurationService,
+    bundle_store: BundleStore,
+    bundle_sync: BundleSyncService,
+    mutation: MutationService,
+    node_execution: NodeExecutionService,
+    run_execution: RunExecutionService,
+    data_paths: DataPaths,
     role: ServerRole,
     environment_id: String,
     server_version: String,
+    default_drivers: bool,
 }
 
-fn default_data_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("PANDAMUX_DATA_DIR") {
-        PathBuf::from(dir)
-    } else if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-        PathBuf::from(local_app_data).join("pandamux")
-    } else if let Ok(home) = std::env::var("HOME") {
-        PathBuf::from(home).join(".pandamux")
-    } else {
-        std::env::temp_dir().join("pandamux")
-    }
-}
-
-fn default_attachments_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("PANDAMUX_ATTACHMENTS_DIR") {
-        PathBuf::from(dir)
-    } else if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-        PathBuf::from(local_app_data)
-            .join("pandamux")
-            .join("attachments")
-    } else if let Ok(home) = std::env::var("HOME") {
-        PathBuf::from(home)
-            .join(".pandamux")
-            .join("data")
-            .join("attachments")
-    } else {
-        std::env::temp_dir().join("pandamux").join("attachments")
-    }
+#[derive(Clone)]
+struct LoginPreviewRecord {
+    preview: pandamux_protocol::ProviderLoginPreview,
+    environment: HashMap<String, String>,
+    shell: Option<String>,
 }
 
 fn account_badge_label(label: Option<&str>, sub: Option<&str>) -> Option<String> {
+    let label = label.and_then(mask_account_label);
+    let sub = sub.and_then(mask_account_label);
     match (label, sub) {
         (Some(l), Some(s)) if !l.is_empty() && !s.is_empty() && l != s => {
             Some(format!("{l} ({s})"))
         }
-        (Some(l), _) if !l.is_empty() => Some(l.to_string()),
-        (_, Some(s)) if !s.is_empty() => Some(s.to_string()),
+        (Some(l), _) if !l.is_empty() => Some(l),
+        (_, Some(s)) if !s.is_empty() => Some(s),
         _ => None,
     }
 }
 
+fn mask_account_label(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if let Some((local, domain)) = value.split_once('@') {
+        let prefix = local
+            .chars()
+            .next()
+            .map_or("*".to_string(), |first| format!("{first}***"));
+        return Some(format!("{prefix}@{domain}"));
+    }
+    let prefix = value.chars().take(2).collect::<String>();
+    Some(format!("{prefix}***"))
+}
+
+fn provider_login_guidance(provider: ProviderKind) -> ProviderLoginGuidance {
+    match provider {
+        ProviderKind::Claude | ProviderKind::Codex => ProviderLoginGuidance {
+            flow: ProviderLoginFlow::Terminal,
+            available: true,
+            summary: "Preview the isolated profile and exact CLI login command before launch"
+                .to_string(),
+            unavailable_reason: None,
+        },
+        ProviderKind::Antigravity => ProviderLoginGuidance {
+            flow: ProviderLoginFlow::Browser,
+            available: true,
+            summary: "Use the explicit Antigravity OAuth action for this isolated profile"
+                .to_string(),
+            unavailable_reason: None,
+        },
+        _ => ProviderLoginGuidance {
+            flow: ProviderLoginFlow::Manual,
+            available: false,
+            summary: "No verified non-destructive login launcher is available".to_string(),
+            unavailable_reason: Some("provider_login_flow_unverified".to_string()),
+        },
+    }
+}
+
+#[cfg(windows)]
+fn render_login_command(program: &str, args: &[String]) -> String {
+    let quote = |value: &str| format!("'{}'", value.replace('\'', "''"));
+    std::iter::once("&".to_string())
+        .chain(std::iter::once(quote(program)))
+        .chain(args.iter().map(|arg| quote(arg)))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(not(windows))]
+fn render_login_command(program: &str, args: &[String]) -> String {
+    let quote = |value: &str| format!("'{}'", value.replace('\'', "'\"'\"'"));
+    std::iter::once(quote(program))
+        .chain(args.iter().map(|arg| quote(arg)))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn login_shell() -> Result<Option<String>, RpcError> {
+    #[cfg(windows)]
+    {
+        pandamux_term::shell::resolve_powershell()
+            .map(Some)
+            .ok_or_else(|| {
+                RpcError::with_data(
+                    -32020,
+                    "PowerShell is required for a safe provider login terminal",
+                    json!({
+                        "reason": "provider_login_shell_missing",
+                        "retryable": true,
+                    }),
+                )
+            })
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(None)
+    }
+}
+
+fn login_terminal_input(display_command: &str, windows: bool) -> String {
+    let submit = if windows { '\r' } else { '\n' };
+    format!("{display_command}{submit}")
+}
+
+fn provider_health_report_from_snapshot(
+    environment_id: &EnvironmentId,
+    config: pandamux_core::provider_config::ProviderInstanceConfig,
+    snapshot: pandamux_providers::ProviderSnapshot,
+) -> ProviderHealthReport {
+    use pandamux_providers::{ProviderAuthConfidence, ProviderAuthStatus, ProviderHealth};
+
+    let (authentication_state, account_badge, subscription) = match &snapshot.auth {
+        ProviderAuthStatus::Authenticated {
+            account_label,
+            email,
+            subscription,
+        } => (
+            "authenticated",
+            account_badge_label(
+                account_label.as_deref().or(email.as_deref()),
+                subscription.as_deref(),
+            ),
+            subscription.as_deref().and_then(mask_account_label),
+        ),
+        ProviderAuthStatus::Configured => ("configured", None, None),
+        ProviderAuthStatus::Unauthenticated => ("unauthenticated", None, None),
+        ProviderAuthStatus::Unknown => ("unknown", None, None),
+    };
+    let authentication_confidence = match snapshot.auth_confidence {
+        ProviderAuthConfidence::Reported => "reported",
+        ProviderAuthConfidence::Detected => "detected",
+        ProviderAuthConfidence::Unknown => "unknown",
+    };
+    let (runtime_status, runtime_reason) = match &snapshot.health {
+        ProviderHealth::Healthy => ("healthy", None),
+        ProviderHealth::Degraded { reason } => ("degraded", Some(reason.clone())),
+        ProviderHealth::Unavailable { reason } => ("unavailable", Some(reason.clone())),
+    };
+    let (status, reason) = match &snapshot.health {
+        ProviderHealth::Unavailable { .. } => ("unavailable", runtime_reason),
+        ProviderHealth::Degraded { .. } => ("degraded", runtime_reason),
+        ProviderHealth::Healthy => match &snapshot.auth {
+            ProviderAuthStatus::Authenticated { .. } => ("healthy", None),
+            ProviderAuthStatus::Configured => (
+                "configured",
+                Some("Credentials were detected but authentication was not verified".to_string()),
+            ),
+            ProviderAuthStatus::Unauthenticated => {
+                ("unauthenticated", Some("Not logged in".to_string()))
+            }
+            ProviderAuthStatus::Unknown => (
+                "unknown",
+                Some("Authentication state is unknown".to_string()),
+            ),
+        },
+    };
+
+    ProviderHealthReport {
+        environment_id: environment_id.clone(),
+        instance_id: config.id,
+        provider: config.provider,
+        display_name: config.display_name,
+        enabled: config.enabled,
+        installed: snapshot.installed,
+        resolved_executable: snapshot.resolved_executable,
+        version: snapshot.version,
+        status: status.to_string(),
+        authentication_state: authentication_state.to_string(),
+        authentication_confidence: authentication_confidence.to_string(),
+        runtime_status: runtime_status.to_string(),
+        runtime_code: snapshot.runtime_code,
+        account_badge,
+        subscription,
+        reason,
+        disabled_reason: None,
+        checked_at_ms: snapshot.checked_at_ms,
+        expires_at_ms: snapshot.expires_at_ms,
+        last_success_at_ms: None,
+        login_guidance: Some(provider_login_guidance(config.provider)),
+        retryable: true,
+    }
+}
+
+fn capacity_snapshots_from_provider_report(
+    environment_id: &EnvironmentId,
+    config: &pandamux_core::provider_config::ProviderInstanceConfig,
+    subscription_key: pandamux_core::SubscriptionKey,
+    report: Option<pandamux_providers::UsageLimits>,
+    observed_at_ms: u64,
+) -> Vec<CapacitySnapshot> {
+    let Some(report) = report else {
+        return vec![CapacitySnapshot {
+            schema_version: CAPACITY_SNAPSHOT_SCHEMA_VERSION,
+            subscription_key,
+            environment_id: Some(environment_id.clone()),
+            provider_instance_id: Some(config.id.clone()),
+            window_name: None,
+            window_start_ms: None,
+            window_end_ms: None,
+            used_millionths: None,
+            remaining_millionths: None,
+            reset_at_ms: None,
+            source: if config.enabled {
+                format!("{}_capacity_unreported", config.provider.as_str())
+            } else {
+                "provider_disabled".to_string()
+            },
+            confidence: CapacityConfidence::Unknown,
+            evidence_scope: CapacityEvidenceScope::Local,
+            hard_limit: false,
+            provider_version: None,
+            as_of_ms: observed_at_ms,
+            max_age_ms: DEFAULT_CAPACITY_MAX_AGE_MS,
+        }];
+    };
+
+    let as_of_ms = if report.as_of_ms == 0 {
+        observed_at_ms
+    } else {
+        report.as_of_ms
+    };
+    if report.limits.is_empty() {
+        return vec![CapacitySnapshot {
+            schema_version: CAPACITY_SNAPSHOT_SCHEMA_VERSION,
+            subscription_key,
+            environment_id: Some(environment_id.clone()),
+            provider_instance_id: Some(config.id.clone()),
+            window_name: None,
+            window_start_ms: None,
+            window_end_ms: None,
+            used_millionths: None,
+            remaining_millionths: None,
+            reset_at_ms: None,
+            source: report.source,
+            confidence: CapacityConfidence::Unknown,
+            evidence_scope: CapacityEvidenceScope::Local,
+            hard_limit: false,
+            provider_version: report.provider_version,
+            as_of_ms,
+            max_age_ms: DEFAULT_CAPACITY_MAX_AGE_MS,
+        }];
+    }
+
+    report
+        .limits
+        .into_iter()
+        .map(|limit| {
+            let duration_ms = u64::from(limit.window_duration_mins).saturating_mul(60 * 1000);
+            let window_start_ms = limit
+                .resets_at_ms
+                .map(|reset| reset.saturating_sub(duration_ms));
+            CapacitySnapshot {
+                schema_version: CAPACITY_SNAPSHOT_SCHEMA_VERSION,
+                subscription_key: subscription_key.clone(),
+                environment_id: Some(environment_id.clone()),
+                provider_instance_id: Some(config.id.clone()),
+                window_name: Some(limit.limit_name),
+                window_start_ms,
+                window_end_ms: limit.resets_at_ms,
+                used_millionths: limit.used_millionths,
+                remaining_millionths: limit.remaining_millionths,
+                reset_at_ms: limit.resets_at_ms,
+                source: report.source.clone(),
+                confidence: report.confidence,
+                evidence_scope: CapacityEvidenceScope::Local,
+                hard_limit: limit.hard_limit
+                    && limit.remaining_millionths == Some(0)
+                    && limit.resets_at_ms.is_some(),
+                provider_version: report.provider_version.clone(),
+                as_of_ms,
+                max_age_ms: DEFAULT_CAPACITY_MAX_AGE_MS,
+            }
+        })
+        .collect()
+}
+
+fn parse_usage_params<T>(params: Value, method: &str) -> Result<T, RpcError>
+where
+    T: serde::de::DeserializeOwned + Default,
+{
+    if params.is_null() {
+        return Ok(T::default());
+    }
+    serde_json::from_value(params).map_err(|error| {
+        usage_params_error(
+            "usage_params_invalid",
+            format!("Invalid {method} params: {error}"),
+        )
+    })
+}
+
+fn usage_params_error(reason: &str, message: impl Into<String>) -> RpcError {
+    RpcError::with_data(
+        -32602,
+        message,
+        json!({
+            "reason": reason,
+        }),
+    )
+}
+
+fn organization_policy_rpc_error(
+    project_id: &pandamux_core::ProjectId,
+    message: impl Into<String>,
+) -> RpcError {
+    RpcError::with_data(
+        -32030,
+        message,
+        json!({
+            "reason": "organization_policy_denied",
+            "projectId": project_id,
+        }),
+    )
+}
+
+fn require_local_query_peer(context: &RequestContext) -> Result<(), RpcError> {
+    if matches!(
+        context.peer_role,
+        PeerRole::Internal | PeerRole::LocalControl
+    ) {
+        Ok(())
+    } else {
+        Err(RpcError::with_data(
+            -32001,
+            "Usage queries require authenticated local control",
+            json!({ "reason": "usage_local_control_required" }),
+        ))
+    }
+}
+
+fn require_instructions_status_peer(context: &RequestContext) -> Result<(), RpcError> {
+    if matches!(
+        context.peer_role,
+        PeerRole::Internal | PeerRole::LocalControl | PeerRole::NodeProxy
+    ) {
+        Ok(())
+    } else {
+        Err(RpcError::with_data(
+            -32001,
+            "Instructions status requires authenticated control or node access",
+            json!({ "reason": "instructions_status_scope_denied" }),
+        ))
+    }
+}
+
+fn require_local_configuration_peer(context: &RequestContext) -> Result<(), RpcError> {
+    if matches!(
+        context.peer_role,
+        PeerRole::Internal | PeerRole::LocalControl
+    ) {
+        Ok(())
+    } else {
+        Err(RpcError::with_data(
+            -32001,
+            "Instructions changes require authenticated local control",
+            json!({ "reason": "instructions_local_control_required" }),
+        ))
+    }
+}
+
+fn require_bundle_node_proxy(
+    context: &RequestContext,
+    local_environment_id: &str,
+) -> Result<(), RpcError> {
+    if matches!(context.peer_role, PeerRole::NodeProxy)
+        && context.authenticated_environment_id.as_str() == local_environment_id
+    {
+        Ok(())
+    } else {
+        Err(RpcError::with_data(
+            -32001,
+            "Bundle transfer methods require this node's authenticated proxy",
+            json!({ "reason": "bundle_node_proxy_required" }),
+        ))
+    }
+}
+
+fn instructions_rpc_error(
+    error: InstructionsServiceError,
+    source_id: Option<&pandamux_core::InstructionSourceId>,
+    expected_revision: Option<pandamux_core::ConfigurationRevision>,
+) -> RpcError {
+    RpcError::with_data(
+        -32040,
+        error.safe_message,
+        json!({
+            "reason": error.reason,
+            "sourceId": source_id,
+            "expectedRevision": expected_revision,
+            "actualRevision": error.actual_revision,
+            "retryable": error.retryable,
+        }),
+    )
+}
+
+fn configuration_rpc_error(error: ConfigurationServiceError) -> RpcError {
+    RpcError::with_data(
+        -32041,
+        error.safe_message,
+        json!({
+            "reason": error.reason,
+            "retryable": error.retryable,
+            "issues": error.issues,
+        }),
+    )
+}
+
+fn mutation_rpc_error(error: MutationServiceError) -> RpcError {
+    RpcError::with_data(
+        -32043,
+        error.safe_message,
+        json!({
+            "reason": error.reason,
+            "retryable": error.retryable,
+        }),
+    )
+}
+
+fn bundle_sync_rpc_error(error: BundleSyncError) -> RpcError {
+    RpcError::with_data(
+        -32042,
+        error.safe_message,
+        json!({
+            "reason": error.reason,
+            "retryable": error.retryable,
+        }),
+    )
+}
+
+fn personal_rpc_error(error: crate::personal_repo::PersonalRepoError) -> RpcError {
+    RpcError::with_data(
+        -32044,
+        error.safe_message,
+        json!({
+            "reason": error.reason,
+            "retryable": error.retryable,
+        }),
+    )
+}
+
+fn configuration_worker_error() -> RpcError {
+    RpcError::with_data(
+        -32000,
+        "The configuration worker did not join cleanly",
+        json!({ "reason": "configuration_worker_join_failed", "retryable": true }),
+    )
+}
+
+fn revision_drift_rpc(
+    resource_id: &str,
+    expected: pandamux_core::ConfigurationRevision,
+    actual: Option<pandamux_core::ConfigurationRevision>,
+) -> RpcError {
+    RpcError::with_data(
+        -32009,
+        "Configuration changed before the reviewed operation could be applied",
+        json!({
+            "reason": "revision_drift",
+            "resourceId": resource_id,
+            "expectedRevision": expected,
+            "actualRevision": actual,
+            "retryable": true,
+        }),
+    )
+}
+
+fn validate_request_id(request_id: &str) -> Result<(), RpcError> {
+    if request_id.trim().is_empty()
+        || request_id.len() > 256
+        || request_id.chars().any(char::is_control)
+    {
+        return Err(RpcError::with_data(
+            -32602,
+            "A bounded requestId is required",
+            json!({ "reason": "request_id_invalid" }),
+        ));
+    }
+    Ok(())
+}
+
+fn require_authenticated_local_control(context: &RequestContext) -> Result<(), RpcError> {
+    if context.peer_role == PeerRole::LocalControl {
+        Ok(())
+    } else {
+        Err(RpcError::with_data(
+            -32001,
+            "This operation requires authenticated local control",
+            json!({ "reason": "capability_scope_denied" }),
+        ))
+    }
+}
+
+fn bundle_rpc_error(error: BundleStoreError) -> RpcError {
+    RpcError::with_data(
+        -32042,
+        error.safe_message,
+        json!({
+            "reason": error.reason,
+            "retryable": error.retryable,
+        }),
+    )
+}
+
+fn provider_rpc_error(error: pandamux_providers::ProviderError) -> RpcError {
+    match error {
+        pandamux_providers::ProviderError::InstallationError {
+            operation,
+            code,
+            message,
+        } => RpcError::with_data(
+            -32020,
+            message,
+            serde_json::json!({
+                "provider": "antigravity",
+                "providerCode": code,
+                "operation": operation,
+            }),
+        ),
+        other => RpcError::with_data(
+            -32021,
+            other.to_string(),
+            serde_json::json!({
+                "provider": "antigravity",
+                "providerCode": "antigravity_operation_failed",
+            }),
+        ),
+    }
+}
+
+fn provider_rpc_error_for_target(
+    error: pandamux_providers::ProviderError,
+    instance_id: &pandamux_core::ProviderInstanceId,
+    environment_id: &EnvironmentId,
+) -> RpcError {
+    let mut error = provider_rpc_error(error);
+    let mut data = error
+        .data
+        .take()
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    data.insert(
+        "providerInstanceId".to_string(),
+        Value::String(instance_id.as_str().to_string()),
+    );
+    data.insert(
+        "environmentId".to_string(),
+        Value::String(environment_id.as_str().to_string()),
+    );
+    error.data = Some(Value::Object(data));
+    error
+}
+
 impl Router {
     pub fn new(store: Store, role: ServerRole, environment_id: String) -> Self {
-        let drivers = Arc::new(DriverRegistry::default_local());
-        Self::with_drivers(store, role, environment_id, drivers)
+        let data_paths = DataPaths::default_for_current_user().unwrap_or_else(|_| {
+            DataPaths::from_root(
+                std::env::temp_dir().join(format!("pandamux-router-{}", std::process::id())),
+            )
+            .expect("temporary router data path is valid")
+        });
+        let data_dir = data_paths.root().to_path_buf();
+        let drivers = Arc::new(DriverRegistry::default_local_at(data_dir.clone()));
+        let mut router = Self::with_drivers(store, role, environment_id, drivers);
+        router.default_drivers = true;
+        router.with_data_paths(data_paths)
     }
 
     pub fn with_drivers(
@@ -101,14 +684,59 @@ impl Router {
         environment_id: String,
         drivers: Arc<DriverRegistry>,
     ) -> Self {
+        let data_paths = DataPaths::default_for_current_user().unwrap_or_else(|_| {
+            DataPaths::from_root(
+                std::env::temp_dir().join(format!("pandamux-router-{}", std::process::id())),
+            )
+            .expect("temporary router data path is valid")
+        });
+        let data_dir = data_paths.root().to_path_buf();
+        let capability_authority = Arc::new(CapabilityAuthority::new(EnvironmentId::new(
+            environment_id.clone(),
+        )));
         let mcp = McpServer::new(store.clone());
-        let thread_manager =
-            ThreadManager::new(store.clone(), drivers.clone(), environment_id.clone());
-        let attachments = AttachmentManager::new(default_attachments_dir());
+        let provider_resolver = Arc::new(ProviderResolver::new(
+            store.clone(),
+            drivers.clone(),
+            EnvironmentId::new(environment_id.clone()),
+            data_dir.clone(),
+        ));
+        let thread_manager = ThreadManager::new(
+            store.clone(),
+            provider_resolver.clone(),
+            environment_id.clone(),
+            capability_authority.clone(),
+        );
+        let attachments = AttachmentManager::new(data_paths.attachments().to_path_buf());
+        let personal_repo = PersonalRepoService::new(data_paths.clone(), store.clone());
+        let instructions = InstructionsService::new(data_paths.clone(), store.clone());
+        let configuration =
+            ConfigurationService::new(store.clone(), instructions.clone(), personal_repo.clone());
         let terminal = TerminalServerManager::new();
         let environment_router = Arc::new(crate::environment_router::EnvironmentRouter::new(
             pandamux_core::ids::EnvironmentId::new(environment_id.clone()),
         ));
+        let bundle_store = BundleStore::new(data_paths.clone(), store.clone());
+        let bundle_sync = BundleSyncService::new(
+            store.clone(),
+            bundle_store.clone(),
+            environment_router.clone(),
+            EnvironmentId::new(environment_id.clone()),
+        );
+        let mutation = MutationService::new(store.clone(), personal_repo.clone());
+        let node_execution = NodeExecutionService::new(
+            store.clone(),
+            data_paths.clone(),
+            bundle_store.clone(),
+            thread_manager.clone(),
+            EnvironmentId::new(environment_id.clone()),
+        );
+        let run_execution = RunExecutionService::with_local_provider(
+            store.clone(),
+            thread_manager.clone(),
+            bundle_store.clone(),
+        )
+        .with_environment_router(environment_router.clone());
         Self {
             store,
             mcp,
@@ -116,14 +744,30 @@ impl Router {
             attachments,
             notifications: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             drivers,
+            provider_resolver,
+            antigravity_auth: Arc::new(
+                pandamux_providers::antigravity::AntigravityAuthManager::new(),
+            ),
+            capability_authority,
             terminal,
             environment_router,
             remote_terminals: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            login_previews: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            login_shell_resolver: login_shell,
             hark: Arc::new(crate::hark::HarkBridge::default()),
-            data_dir: default_data_dir(),
+            personal_repo,
+            instructions,
+            configuration,
+            bundle_store,
+            bundle_sync,
+            mutation,
+            node_execution,
+            run_execution,
+            data_paths,
             role,
             environment_id,
             server_version: env!("CARGO_PKG_VERSION").to_string(),
+            default_drivers: false,
         }
     }
 
@@ -137,8 +781,119 @@ impl Router {
     }
 
     pub fn with_data_dir(mut self, dir: PathBuf) -> Self {
-        self.data_dir = dir;
+        let data_paths = DataPaths::from_root(dir)
+            .expect("injected router data directory must be a valid absolute path");
+        self = self.with_data_paths(data_paths);
         self
+    }
+
+    pub fn with_data_paths(mut self, data_paths: DataPaths) -> Self {
+        let dir = data_paths.root().to_path_buf();
+        if self.default_drivers {
+            let drivers = Arc::new(DriverRegistry::default_local_at(dir.clone()));
+            let provider_resolver = Arc::new(ProviderResolver::new(
+                self.store.clone(),
+                drivers.clone(),
+                EnvironmentId::new(self.environment_id.clone()),
+                dir.clone(),
+            ));
+            self.thread_manager = ThreadManager::new(
+                self.store.clone(),
+                provider_resolver.clone(),
+                self.environment_id.clone(),
+                self.capability_authority.clone(),
+            );
+            self.drivers = drivers;
+            self.provider_resolver = provider_resolver;
+        } else {
+            self.provider_resolver.set_data_dir(dir.clone());
+        }
+        self.attachments = AttachmentManager::new(data_paths.attachments().to_path_buf());
+        self.personal_repo.shutdown();
+        self.personal_repo = PersonalRepoService::new(data_paths.clone(), self.store.clone());
+        self.instructions.shutdown();
+        self.instructions = InstructionsService::new(data_paths.clone(), self.store.clone());
+        self.configuration = ConfigurationService::new(
+            self.store.clone(),
+            self.instructions.clone(),
+            self.personal_repo.clone(),
+        );
+        self.bundle_store.shutdown();
+        self.bundle_store = BundleStore::new(data_paths.clone(), self.store.clone());
+        self.bundle_sync = BundleSyncService::new(
+            self.store.clone(),
+            self.bundle_store.clone(),
+            self.environment_router.clone(),
+            EnvironmentId::new(self.environment_id.clone()),
+        );
+        self.mutation = MutationService::new(self.store.clone(), self.personal_repo.clone());
+        self.node_execution = NodeExecutionService::new(
+            self.store.clone(),
+            data_paths.clone(),
+            self.bundle_store.clone(),
+            self.thread_manager.clone(),
+            EnvironmentId::new(self.environment_id.clone()),
+        );
+        self.run_execution = RunExecutionService::with_local_provider(
+            self.store.clone(),
+            self.thread_manager.clone(),
+            self.bundle_store.clone(),
+        )
+        .with_environment_router(self.environment_router.clone());
+        self.data_paths = data_paths;
+        self
+    }
+
+    pub fn provider_resolver(&self) -> &Arc<ProviderResolver> {
+        &self.provider_resolver
+    }
+
+    pub fn data_dir(&self) -> &std::path::Path {
+        self.data_paths.root()
+    }
+
+    pub fn data_paths(&self) -> &DataPaths {
+        &self.data_paths
+    }
+
+    pub fn personal_repo(&self) -> &PersonalRepoService {
+        &self.personal_repo
+    }
+
+    pub fn instructions(&self) -> &InstructionsService {
+        &self.instructions
+    }
+
+    pub fn configuration(&self) -> &ConfigurationService {
+        &self.configuration
+    }
+
+    pub fn bundle_store(&self) -> &BundleStore {
+        &self.bundle_store
+    }
+
+    pub fn bundle_sync(&self) -> &BundleSyncService {
+        &self.bundle_sync
+    }
+
+    pub fn mutation_service(&self) -> &MutationService {
+        &self.mutation
+    }
+
+    pub fn node_execution(&self) -> &NodeExecutionService {
+        &self.node_execution
+    }
+
+    pub fn run_execution(&self) -> &RunExecutionService {
+        &self.run_execution
+    }
+
+    pub async fn shutdown_antigravity_auth(&self) {
+        self.antigravity_auth.shutdown().await;
+    }
+
+    pub fn capability_authority(&self) -> &Arc<CapabilityAuthority> {
+        &self.capability_authority
     }
 
     pub fn with_environment_router(
@@ -146,6 +901,18 @@ impl Router {
         environment_router: Arc<crate::environment_router::EnvironmentRouter>,
     ) -> Self {
         self.environment_router = environment_router;
+        self.bundle_sync = BundleSyncService::new(
+            self.store.clone(),
+            self.bundle_store.clone(),
+            self.environment_router.clone(),
+            EnvironmentId::new(self.environment_id.clone()),
+        );
+        self.run_execution = RunExecutionService::with_local_provider(
+            self.store.clone(),
+            self.thread_manager.clone(),
+            self.bundle_store.clone(),
+        )
+        .with_environment_router(self.environment_router.clone());
         self
     }
 
@@ -244,11 +1011,292 @@ impl Router {
         Ok(())
     }
 
+    async fn forward_remote_antigravity_install(
+        &self,
+        environment_id: &EnvironmentId,
+        request: &RpcRequest,
+    ) -> Result<RpcResponse, RpcError> {
+        let params: AntigravityInstallParams = serde_json::from_value(
+            request.params.clone().unwrap_or(Value::Null),
+        )
+        .map_err(|error| {
+            RpcError::invalid_params(format!("Invalid antigravity.install params: {error}"))
+        })?;
+        if params.staged_archive_path.is_some() {
+            return Err(RpcError::unauthorized(
+                "A control client cannot choose a remote staged archive path",
+            ));
+        }
+
+        let node_download = self
+            .environment_router
+            .forward_request(environment_id, request)
+            .await?;
+        let fallback_allowed = node_download
+            .error
+            .as_ref()
+            .and_then(|error| error.data.as_ref())
+            .and_then(|data| data.get("providerCode"))
+            .and_then(Value::as_str)
+            == Some("antigravity_node_download_failed");
+        if !fallback_allowed {
+            return Ok(node_download);
+        }
+
+        let archive = pandamux_providers::antigravity::cache_bundle_archive(
+            self.data_paths.root(),
+            &params.manifest,
+        )
+        .await
+        .map_err(provider_rpc_error)?;
+        let prepare_request = RpcRequest::new(
+            Self::now_ms() as i64,
+            "antigravity.prepare_upload",
+            Some(
+                serde_json::to_value(AntigravityPrepareUploadParams {
+                    environment_id: Some(environment_id.clone()),
+                    manifest: params.manifest.clone(),
+                })
+                .map_err(|error| RpcError::internal_error(error.to_string()))?,
+            ),
+        );
+        let prepare_response = self
+            .environment_router
+            .forward_request(environment_id, &prepare_request)
+            .await?;
+        if let Some(error) = prepare_response.error {
+            return Err(error);
+        }
+        let prepared: AntigravityPrepareUploadResult = serde_json::from_value(
+            prepare_response.result.unwrap_or(Value::Null),
+        )
+        .map_err(|error| {
+            RpcError::internal_error(format!(
+                "Remote Antigravity upload preparation returned invalid data: {error}"
+            ))
+        })?;
+        if let Err(upload_error) = self
+            .environment_router
+            .upload_file(environment_id, &archive, &prepared.remote_path)
+            .await
+        {
+            let discard_request = RpcRequest::new(
+                Self::now_ms() as i64,
+                "antigravity.discard_upload",
+                Some(
+                    serde_json::to_value(AntigravityDiscardUploadParams {
+                        environment_id: Some(environment_id.clone()),
+                        staged_archive_path: prepared.remote_path.clone(),
+                    })
+                    .map_err(|error| RpcError::internal_error(error.to_string()))?,
+                ),
+            );
+            let _ = self
+                .environment_router
+                .forward_request(environment_id, &discard_request)
+                .await;
+            return Err(upload_error);
+        }
+
+        let staged_path = prepared.remote_path.clone();
+        let staged_request = RpcRequest {
+            jsonrpc: request.jsonrpc.clone(),
+            id: request.id.clone(),
+            method: request.method.clone(),
+            params: Some(
+                serde_json::to_value(AntigravityInstallParams {
+                    environment_id: Some(environment_id.clone()),
+                    manifest: params.manifest,
+                    staged_archive_path: Some(staged_path.clone()),
+                    force: params.force,
+                })
+                .map_err(|error| RpcError::internal_error(error.to_string()))?,
+            ),
+        };
+        let response = self
+            .environment_router
+            .forward_request(environment_id, &staged_request)
+            .await;
+        let discard_request = RpcRequest::new(
+            Self::now_ms() as i64,
+            "antigravity.discard_upload",
+            Some(
+                serde_json::to_value(AntigravityDiscardUploadParams {
+                    environment_id: Some(environment_id.clone()),
+                    staged_archive_path: staged_path,
+                })
+                .map_err(|error| RpcError::internal_error(error.to_string()))?,
+            ),
+        );
+        let _ = self
+            .environment_router
+            .forward_request(environment_id, &discard_request)
+            .await;
+        response
+    }
+
+    fn resolve_authorized_project_provider(
+        &self,
+        project_id: &pandamux_core::ProjectId,
+        environment_id: &EnvironmentId,
+        requested: Option<&ProviderInstanceId>,
+    ) -> Result<(OrganizationPolicy, ProviderInstanceId), RpcError> {
+        let policy = self
+            .store
+            .organization_policy_for_project(project_id)
+            .map_err(|error| organization_policy_rpc_error(project_id, error.to_string()))?;
+        if let Some(requested) = requested {
+            self.store
+                .authorize_provider_for_project(project_id, environment_id, requested)
+                .map_err(|error| organization_policy_rpc_error(project_id, error.to_string()))?;
+            self.provider_resolver
+                .resolve(requested, environment_id)
+                .map_err(|_| {
+                    organization_policy_rpc_error(
+                        project_id,
+                        "allowed named provider is unavailable in the target environment",
+                    )
+                })?;
+            return Ok((policy, requested.clone()));
+        }
+
+        let selected = policy
+            .allowed_provider_instances
+            .iter()
+            .find(|candidate| {
+                self.store
+                    .authorize_provider_for_project(project_id, environment_id, candidate)
+                    .is_ok()
+                    && self
+                        .provider_resolver
+                        .resolve(candidate, environment_id)
+                        .is_ok()
+            })
+            .cloned()
+            .ok_or_else(|| {
+                organization_policy_rpc_error(
+                    project_id,
+                    "organization has no enabled provider with an allowed named subscription",
+                )
+            })?;
+        Ok((policy, selected))
+    }
+
+    fn prepare_forwarded_thread_create(
+        &self,
+        params: &Value,
+        target_environment: &EnvironmentId,
+    ) -> Result<Value, RpcError> {
+        let mut params: ThreadCreateParams = serde_json::from_value(params.clone())
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        if let Some(project_id) = params.project_id.as_ref() {
+            let (_, provider_instance_id) = self.resolve_authorized_project_provider(
+                project_id,
+                target_environment,
+                params.provider_instance_id.as_ref(),
+            )?;
+            params.provider_instance_id = Some(provider_instance_id);
+        }
+        params.environment_id = Some(target_environment.clone());
+        serde_json::to_value(params).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn routing_context_for_forwarded_thread(
+        &self,
+        thread: &pandamux_core::Thread,
+        target_environment: &EnvironmentId,
+    ) -> Result<Option<HubRoutingContext>, RpcError> {
+        if &thread.environment_id != target_environment {
+            return Err(RpcError::with_data(
+                -32030,
+                "Thread environment disagrees with the routed environment",
+                json!({ "reason": "organization_policy_environment_mismatch" }),
+            ));
+        }
+        if let Some(project_id) = thread.project_id.as_ref() {
+            let (organization, _) = self.resolve_authorized_project_provider(
+                project_id,
+                target_environment,
+                Some(&thread.provider_instance_id),
+            )?;
+            let failover_pools = organization
+                .failover_pool_ids
+                .iter()
+                .map(|pool_id| {
+                    self.store
+                        .get_failover_pool(pool_id)
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?
+                        .ok_or_else(|| {
+                            organization_policy_rpc_error(
+                                project_id,
+                                "organization references a missing failover pool",
+                            )
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            return Ok(Some(HubRoutingContext {
+                organization,
+                failover_pools,
+            }));
+        }
+        Ok(None)
+    }
+
+    fn prepare_forwarded_thread_turn(
+        &self,
+        params: &Value,
+        target_environment: &EnvironmentId,
+    ) -> Result<Value, RpcError> {
+        let mut params: ThreadSendTurnParams = serde_json::from_value(params.clone())
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let thread = self
+            .store
+            .get_thread(&params.thread_id)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?
+            .ok_or_else(|| RpcError::not_found("Thread not found"))?;
+        params.hub_routing_context =
+            self.routing_context_for_forwarded_thread(&thread, target_environment)?;
+        serde_json::to_value(params).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn prepare_forwarded_continuation(
+        &self,
+        params: &Value,
+        target_environment: &EnvironmentId,
+    ) -> Result<Value, RpcError> {
+        let mut params: ThreadContinueParams = serde_json::from_value(params.clone())
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let thread_id = params.thread_id.as_ref().ok_or_else(|| {
+            RpcError::invalid_params("Remote capacity continuation requires threadId")
+        })?;
+        let thread = self
+            .store
+            .get_thread(thread_id)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?
+            .ok_or_else(|| RpcError::not_found("Thread not found"))?;
+        params.hub_routing_context =
+            self.routing_context_for_forwarded_thread(&thread, target_environment)?;
+        serde_json::to_value(params).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
     fn resolve_target_environment(
         &self,
-        _method: &str,
+        method: &str,
         params: &Value,
     ) -> Option<pandamux_core::ids::EnvironmentId> {
+        if matches!(
+            method,
+            "usage.export"
+                | "usage.backfill"
+                | "usage.ack"
+                | "usage.query"
+                | "usage.catalog"
+                | "usage.subscription.set"
+                | "capacity.query"
+        ) {
+            return None;
+        }
+
         // 1. Direct environmentId in params
         if let Some(env_id_val) = params
             .get("environmentId")
@@ -270,7 +1318,21 @@ impl Router {
             }
         }
 
-        // 3. Terminal-scoped methods: look up terminal_id in remote_terminals map
+        // 3. Capacity continuation methods: resolve through the durable record.
+        let continuation_id_opt = params
+            .get("continuationId")
+            .or_else(|| params.get("continuation_id"))
+            .and_then(|v| v.as_str());
+        if let Some(continuation_id) = continuation_id_opt {
+            let continuation_id = pandamux_core::ContinuationId::new(continuation_id);
+            if let Ok(Some(continuation)) = self.store.get_continuation(&continuation_id)
+                && let Ok(Some(thread)) = self.store.get_thread(&continuation.thread_id)
+            {
+                return Some(thread.environment_id);
+            }
+        }
+
+        // 4. Terminal-scoped methods: look up terminal_id in remote_terminals map
         let terminal_id_opt = params
             .get("terminalId")
             .or_else(|| params.get("terminal_id"))
@@ -287,46 +1349,144 @@ impl Router {
 
     /// Handle a single parsed JSON-RPC request and return an optional response.
     pub async fn handle_request(&self, req: RpcRequest) -> Option<RpcResponse> {
+        let context = RequestContext::internal(EnvironmentId::new(self.environment_id.clone()));
+        self.handle_request_with_context(&context, req).await
+    }
+
+    pub async fn handle_request_with_context(
+        &self,
+        context: &RequestContext,
+        req: RpcRequest,
+    ) -> Option<RpcResponse> {
         let is_notification = req.is_notification();
         let id = req.id.clone();
         let method = req.method.clone();
         let params = req.params.clone().unwrap_or(Value::Null);
 
+        if let Err(error) = context.authorize(&method, &params) {
+            if is_notification {
+                return None;
+            }
+            return Some(RpcResponse::error(id, error));
+        }
+        if method.starts_with("bundle.") && !matches!(context.peer_role, PeerRole::NodeProxy) {
+            if is_notification {
+                return None;
+            }
+            return Some(RpcResponse::error(
+                id,
+                RpcError::with_data(
+                    -32001,
+                    "Bundle transfer methods require the authenticated node proxy",
+                    json!({ "reason": "bundle_node_proxy_required" }),
+                ),
+            ));
+        }
+
         // Hub environment routing: if targeted to a remote environment, forward across transport
+        let requires_hub_preprocessing = matches!(
+            method.as_str(),
+            "attachment.import_path"
+                | "attachment.importPath"
+                | "worktree.sync_delta"
+                | "worktree.syncDelta"
+        );
         if self.role == ServerRole::Hub
+            && !requires_hub_preprocessing
             && let Some(target_env) = self.resolve_target_environment(&method, &params)
             && !self.environment_router.is_local(&Some(target_env.clone()))
         {
+            let request_to_forward = if method == "thread.create" {
+                match self.prepare_forwarded_thread_create(&params, &target_env) {
+                    Ok(params) => RpcRequest {
+                        params: Some(params),
+                        ..req.clone()
+                    },
+                    Err(error) => {
+                        if is_notification {
+                            return None;
+                        }
+                        return Some(RpcResponse::error(id, error));
+                    }
+                }
+            } else if method == "thread.send_turn" || method == "thread.sendTurn" {
+                match self.prepare_forwarded_thread_turn(&params, &target_env) {
+                    Ok(params) => RpcRequest {
+                        params: Some(params),
+                        ..req.clone()
+                    },
+                    Err(error) => {
+                        if is_notification {
+                            return None;
+                        }
+                        return Some(RpcResponse::error(id, error));
+                    }
+                }
+            } else if method == "thread.continue_capacity" || method == "thread.continueCapacity" {
+                match self.prepare_forwarded_continuation(&params, &target_env) {
+                    Ok(params) => RpcRequest {
+                        params: Some(params),
+                        ..req.clone()
+                    },
+                    Err(error) => {
+                        if is_notification {
+                            return None;
+                        }
+                        return Some(RpcResponse::error(id, error));
+                    }
+                }
+            } else {
+                req.clone()
+            };
+
             // Sync referenced attachments across tunnel before dispatching remote turn
             if (method == "thread.send_turn" || method == "thread.sendTurn")
                 && let Some(tid_str) = params.get("threadId").and_then(|v| v.as_str())
             {
                 let tid = pandamux_core::ids::ThreadId::new(tid_str);
-                if let Some(att_array) = params.get("attachments").and_then(|v| v.as_array()) {
+                if let Some(att_array) = params
+                    .get("attachmentIds")
+                    .or_else(|| params.get("attachment_ids"))
+                    .or_else(|| params.get("attachments"))
+                    .and_then(|v| v.as_array())
+                {
                     for att_val in att_array {
                         let att_id_opt = att_val
                             .as_str()
                             .or_else(|| att_val.get("id").and_then(|v| v.as_str()));
-                        if let Some(att_id) = att_id_opt
-                            && self
-                                .store
-                                .get_attachment(&tid, att_id)
-                                .ok()
-                                .flatten()
-                                .is_some()
+                        let Some(att_id) = att_id_opt else {
+                            continue;
+                        };
+                        let stored_on_hub = self
+                            .store
+                            .get_attachment(&tid, att_id)
+                            .ok()
+                            .flatten()
+                            .is_some();
+                        if !stored_on_hub {
+                            continue;
+                        }
+                        if let Err(error) = self
+                            .sync_attachment_to_environment(&target_env, &tid, att_id)
+                            .await
                         {
-                            let _ = self
-                                .sync_attachment_to_environment(&target_env, &tid, att_id)
-                                .await;
+                            if is_notification {
+                                return None;
+                            }
+                            return Some(RpcResponse::error(id, error));
                         }
                     }
                 }
             }
 
-            let forwarded = self
-                .environment_router
-                .forward_request(&target_env, &req)
-                .await;
+            let forwarded = if method == "antigravity.install" {
+                self.forward_remote_antigravity_install(&target_env, &request_to_forward)
+                    .await
+            } else {
+                self.environment_router
+                    .forward_request(&target_env, &request_to_forward)
+                    .await
+            };
 
             if is_notification {
                 return None;
@@ -350,6 +1510,14 @@ impl Router {
                     {
                         map.insert(term_res.terminal_id, target_env.clone());
                     }
+                    if method == "provider.login.launch"
+                        && let Some(val) = &resp.result
+                        && let Ok(login_res) =
+                            serde_json::from_value::<ProviderLoginLaunchResult>(val.clone())
+                        && let Ok(mut map) = self.remote_terminals.lock()
+                    {
+                        map.insert(login_res.terminal_id, target_env.clone());
+                    }
                     if method == "terminal.close"
                         && let Some(tid_str) = params
                             .get("terminalId")
@@ -370,22 +1538,101 @@ impl Router {
             "system.hello" => self.handle_hello(params),
             "system.identify" => self.handle_identify(),
             "system.capabilities" => self.handle_capabilities(),
-            "thread.create" => self.handle_thread_create(params),
+            "orchestration.repository.prepare" => {
+                self.handle_orchestration_repository_prepare(context, params)
+                    .await
+            }
+            "orchestration.attempt.prepare" => {
+                self.handle_orchestration_attempt_prepare(context, params)
+                    .await
+            }
+            "orchestration.attempt.dispatch" => {
+                self.handle_orchestration_attempt_dispatch(context, params)
+                    .await
+            }
+            "orchestration.attempt.status" => {
+                self.handle_orchestration_attempt_status(context, params)
+                    .await
+            }
+            "orchestration.attempt.cancel" => {
+                self.handle_orchestration_attempt_cancel(context, params)
+                    .await
+            }
+            "orchestration.attempt.events" => {
+                self.handle_orchestration_attempt_events(context, params)
+                    .await
+            }
+            "orchestration.attempt.ack" => {
+                self.handle_orchestration_attempt_ack(context, params).await
+            }
+            "thread.create" => self.handle_thread_create(context, params),
             "thread.get" => self.handle_thread_get(params),
             "thread.list" => self.handle_thread_list(params),
-            "thread.send_turn" | "thread.sendTurn" => self.handle_thread_send_turn(params).await,
+            "thread.send_turn" | "thread.sendTurn" => {
+                self.handle_thread_send_turn(context, params).await
+            }
             "thread.cancel_turn" | "thread.interrupt" => {
                 self.handle_thread_cancel_turn(params).await
             }
             "thread.respond_approval" | "thread.respondApproval" => {
                 self.handle_thread_respond_approval(params).await
             }
+            "thread.continue_capacity" | "thread.continueCapacity" => {
+                self.handle_thread_continue_capacity(context, params).await
+            }
             "thread.resume" => self.handle_thread_resume(params),
             "settings.get" | "config.get" => self.handle_settings_get(params),
-            "settings.set" | "config.set" => self.handle_settings_set(params),
+            "settings.set" | "config.set" => self.handle_settings_set(context, params).await,
+            "instructions.status" => self.handle_instructions_status(context, params),
+            "instructions.check" => self.handle_instructions_check(context, params).await,
+            "instructions.diff" => self.handle_instructions_diff(context, params),
+            "instructions.approve" => self.handle_instructions_approve(context, params).await,
+            "instructions.setTracking" | "instructions.set_tracking" => {
+                self.handle_instructions_set_tracking(context, params).await
+            }
+            "instructions.setPolicy" | "instructions.set_policy" => {
+                self.handle_instructions_set_policy(context, params).await
+            }
+            "instructions.history" => self.handle_instructions_history(context, params),
+            "instructions.revert" => self.handle_instructions_revert(context, params).await,
+            "projectLayer.status" => self.handle_project_layer_status(context, params).await,
+            "projectLayer.diff" => self.handle_project_layer_diff(context, params).await,
+            "projectLayer.trust" => self.handle_project_layer_trust(context, params).await,
+            "projectLayer.revoke" => self.handle_project_layer_revoke(context, params).await,
+            "personalConfig.history" => self.handle_personal_history(context, params).await,
+            "personalConfig.diff" => self.handle_personal_diff(context, params).await,
+            "personalConfig.revert" => self.handle_personal_revert(context, params).await,
+            "mutation.list" => self.handle_mutation_list(context, params),
+            "mutation.get" => self.handle_mutation_get(context, params),
+            "mutation.approveOnce" | "mutation.approve_once" => {
+                self.handle_mutation_approve(context, params).await
+            }
+            "mutation.reject" => self.handle_mutation_reject(context, params),
+            "bundle.prepareUpload" | "bundle.prepare_upload" => {
+                self.handle_bundle_prepare_upload(context, params)
+            }
+            "bundle.discardUpload" | "bundle.discard_upload" => {
+                self.handle_bundle_discard_upload(context, params)
+            }
+            "bundle.push" => self.handle_bundle_push(context, params).await,
             "provider.health" | "provider.probe" => self.handle_provider_health(params).await,
+            "provider.models" => self.handle_provider_models(params).await,
+            "provider.login.preview" => self.handle_provider_login_preview(params).await,
+            "provider.login.launch" => self.handle_provider_login_launch(params),
+            "usage.export" => self.handle_usage_export(context, params),
+            "usage.backfill" => self.handle_usage_backfill(context, params),
+            "usage.ack" => self.handle_usage_ack(context, params),
+            "usage.query" => self.handle_usage_query(context, params),
+            "usage.catalog" => self.handle_usage_catalog(context),
+            "usage.subscription.set" => self.handle_usage_subscription_set(context, params),
+            "capacity.query" => self.handle_capacity_query(context, params),
+            "capacity.refresh" => self.handle_capacity_refresh(context, params).await,
+            "capacity.push" => self.handle_capacity_push(context, params),
+            "schedule.validate" => self.handle_schedule_validate(context, params),
+            "schedule.save" => self.handle_schedule_save(context, params),
+            "schedule.run" => self.handle_schedule_run(context, params).await,
             "mcp.list_tools" => self.handle_mcp_list_tools(),
-            "mcp.call_tool" => self.handle_mcp_call_tool(params),
+            "mcp.call_tool" => self.handle_mcp_call_tool(context, params).await,
             "notification.post" => self.handle_notification_post(params).await,
             "notification.list" => self.handle_notification_list().await,
             "notification.clear" => self.handle_notification_clear(params).await,
@@ -411,10 +1658,16 @@ impl Router {
             "terminal.input" => self.handle_terminal_input(params),
             "terminal.resize" => self.handle_terminal_resize(params),
             "terminal.close" => self.handle_terminal_close(params),
-            "antigravity.status" => self.handle_antigravity_status(params),
-            "antigravity.install" => self.handle_antigravity_install(params).await,
+            "antigravity.status" => self.handle_antigravity_status(params).await,
+            "antigravity.install" => self.handle_antigravity_install(context, params).await,
+            "antigravity.prepare_upload" | "antigravity.prepareUpload" => {
+                self.handle_antigravity_prepare_upload(context, params)
+            }
+            "antigravity.discard_upload" | "antigravity.discardUpload" => {
+                self.handle_antigravity_discard_upload(context, params)
+            }
             "antigravity.oauth_start" | "antigravity.oauthStart" => {
-                self.handle_antigravity_oauth_start(params)
+                self.handle_antigravity_oauth_start(params).await
             }
             "antigravity.oauth_relay" | "antigravity.oauthRelay" => {
                 self.handle_antigravity_oauth_relay(params).await
@@ -442,12 +1695,1250 @@ impl Router {
         })
     }
 
+    fn ensure_node_execution_role(&self) -> Result<(), RpcError> {
+        if self.role != ServerRole::Node {
+            return Err(RpcError::with_data(
+                -32001,
+                "Private orchestration execution is available only on a node",
+                json!({ "reason": "orchestration_node_role_required" }),
+            ));
+        }
+        Ok(())
+    }
+
+    async fn handle_orchestration_repository_prepare(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        self.ensure_node_execution_role()?;
+        let params: OrchestrationRepositoryPrepareParams = serde_json::from_value(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let result = self
+            .node_execution
+            .repository_prepare(context, params, None)
+            .await?;
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_orchestration_attempt_prepare(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        self.ensure_node_execution_role()?;
+        let params: OrchestrationAttemptPrepareParams = serde_json::from_value(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let result = self
+            .node_execution
+            .attempt_prepare(context, params, None)
+            .await?;
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_orchestration_attempt_dispatch(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        self.ensure_node_execution_role()?;
+        let params: OrchestrationAttemptDispatchParams = serde_json::from_value(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let result = self
+            .node_execution
+            .attempt_dispatch(context, params, None)
+            .await?;
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_orchestration_attempt_status(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        self.ensure_node_execution_role()?;
+        let params: OrchestrationAttemptStatusParams = serde_json::from_value(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let result = self.node_execution.attempt_status(context, params).await?;
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_orchestration_attempt_cancel(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        self.ensure_node_execution_role()?;
+        let params: OrchestrationAttemptCancelParams = serde_json::from_value(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let result = self.node_execution.attempt_cancel(context, params).await?;
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_orchestration_attempt_events(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        self.ensure_node_execution_role()?;
+        let params: OrchestrationAttemptEventsParams = serde_json::from_value(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let result = self.node_execution.attempt_events(context, params).await?;
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_orchestration_attempt_ack(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        self.ensure_node_execution_role()?;
+        let params: OrchestrationAttemptAckParams = serde_json::from_value(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let result = self.node_execution.attempt_ack(context, params).await?;
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
     fn handle_ping(&self) -> Result<Value, RpcError> {
         let ping = PingResult {
             pong: true,
             timestamp_ms: Self::now_ms(),
         };
         serde_json::to_value(ping).map_err(|e| RpcError::internal_error(e.to_string()))
+    }
+
+    fn handle_instructions_status(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_instructions_status_peer(context)?;
+        let params = if params.is_null() {
+            InstructionsStatusParams::default()
+        } else {
+            serde_json::from_value::<InstructionsStatusParams>(params).map_err(|error| {
+                RpcError::with_data(
+                    -32602,
+                    format!("Invalid instructions.status params: {error}"),
+                    json!({ "reason": "instructions_params_invalid" }),
+                )
+            })?
+        };
+        let source = match params.source_id {
+            Some(source_id) => self
+                .store
+                .get_instruction_source(&source_id)
+                .map_err(|error| RpcError::internal_error(error.to_string()))?,
+            None => self
+                .store
+                .list_instruction_sources()
+                .map_err(|error| RpcError::internal_error(error.to_string()))?
+                .into_iter()
+                .next(),
+        };
+        let candidate = source
+            .as_ref()
+            .map(|source| self.store.latest_instruction_candidate(&source.id))
+            .transpose()
+            .map_err(|error| RpcError::internal_error(error.to_string()))?
+            .flatten()
+            .map(|candidate| candidate.record);
+        let result = InstructionsStatusResult {
+            active_bundle_sha: source
+                .as_ref()
+                .and_then(|source| source.active_bundle_sha.clone()),
+            source,
+            candidate,
+        };
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_instructions_check(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_local_configuration_peer(context)?;
+        let params =
+            serde_json::from_value::<InstructionsCheckParams>(params).map_err(|error| {
+                RpcError::with_data(
+                    -32602,
+                    format!("Invalid instructions.check params: {error}"),
+                    json!({ "reason": "instructions_params_invalid" }),
+                )
+            })?;
+        if params.request_id.trim().is_empty()
+            || params.request_id.len() > 256
+            || params.request_id.contains(['\0', '\r', '\n'])
+        {
+            return Err(RpcError::with_data(
+                -32602,
+                "instructions.check requires a bounded requestId",
+                json!({ "reason": "instructions_request_id_invalid" }),
+            ));
+        }
+        let service = self.instructions.clone();
+        let source_id = params.source_id.clone();
+        let expected_revision = params.expected_revision;
+        let outcome = tokio::task::spawn_blocking(move || {
+            service.check_source(&source_id, expected_revision, Self::now_ms())
+        })
+        .await
+        .map_err(|_| {
+            RpcError::with_data(
+                -32000,
+                "The instructions check worker did not join cleanly",
+                json!({ "reason": "instructions_worker_join_failed", "retryable": true }),
+            )
+        })?
+        .map_err(|error| {
+            instructions_rpc_error(error, Some(&params.source_id), Some(expected_revision))
+        })?;
+        let result = InstructionsCheckResult {
+            checked_at_ms: outcome.checked_at_ms,
+            unchanged: outcome.unchanged,
+            candidate: outcome.candidate,
+            safe_error_reason: outcome.safe_error_reason,
+        };
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn handle_instructions_diff(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_local_configuration_peer(context)?;
+        let params = serde_json::from_value::<InstructionsDiffParams>(params).map_err(|error| {
+            RpcError::with_data(
+                -32602,
+                format!("Invalid instructions.diff params: {error}"),
+                json!({ "reason": "instructions_params_invalid" }),
+            )
+        })?;
+        let (candidate, inspection) = self
+            .instructions
+            .load_candidate_inspection(&params.candidate_id)
+            .map_err(|error| instructions_rpc_error(error, None, None))?
+            .ok_or_else(|| {
+                RpcError::with_data(
+                    -32004,
+                    "The instructions candidate was not found",
+                    json!({
+                        "reason": "instructions_candidate_not_found",
+                        "candidateId": params.candidate_id,
+                    }),
+                )
+            })?;
+        let mut issues = inspection
+            .report
+            .issues
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        issues.extend(
+            inspection
+                .acquisition_issues
+                .iter()
+                .map(serde_json::to_value)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| RpcError::internal_error(error.to_string()))?,
+        );
+        if inspection.signature_required && !inspection.signature_verified {
+            issues.push(json!({
+                "code": "signature_verification_failed",
+                "safeReason": "The candidate commit signature could not be verified",
+                "origin": {
+                    "layer": "instructions",
+                    "logicalPath": "<commit>",
+                    "field": "/",
+                },
+            }));
+        }
+        let result = InstructionsDiffResult {
+            candidate_id: candidate.id,
+            observed_source_commit_sha: candidate.observed_source_commit_sha,
+            diff_digest: candidate.diff_digest,
+            safety: candidate.safety,
+            file_diff: serde_json::to_value(&inspection.report.file_diff)
+                .map_err(|error| RpcError::internal_error(error.to_string()))?,
+            behavioral_diff: serde_json::to_value(&inspection.report.behavioral_diff)
+                .map_err(|error| RpcError::internal_error(error.to_string()))?,
+            issues,
+            activatable: candidate.activatable,
+        };
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn persist_mutation_proposal(
+        &self,
+        context: &RequestContext,
+        request: MutationProposalRequest,
+    ) -> Result<pandamux_core::MutationProposal, RpcError> {
+        let outcome = self
+            .mutation
+            .propose(context, request)
+            .map_err(mutation_rpc_error)?;
+        if outcome.created {
+            let proposal = &outcome.proposal;
+            let info = pandamux_core::notification::NotificationInfo {
+                id: format!("notif-{}", uuid::Uuid::new_v4().simple()),
+                workspace_id: None,
+                surface_id: None,
+                title: "Configuration confirmation required".to_string(),
+                body: format!(
+                    "{} requested a reviewed change with proposal {}",
+                    proposal.caller.display_name, proposal.id
+                ),
+                source: pandamux_core::notification::NotificationSource::Generic,
+                timestamp_ms: Self::now_ms(),
+                read: false,
+            };
+            self.notifications.lock().await.push(info);
+        }
+        Ok(outcome.proposal)
+    }
+
+    fn handle_mutation_list(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        let params = if params.is_null() {
+            MutationListParams::default()
+        } else {
+            serde_json::from_value::<MutationListParams>(params)
+                .map_err(|error| RpcError::invalid_params(error.to_string()))?
+        };
+        let result = self
+            .mutation
+            .list(context, &params, Self::now_ms())
+            .map_err(mutation_rpc_error)?;
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn handle_mutation_get(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        let params = serde_json::from_value::<MutationGetParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let proposal = self
+            .mutation
+            .get(context, &params.proposal_id, Self::now_ms())
+            .map_err(mutation_rpc_error)?;
+        serde_json::to_value(MutationGetResult { proposal })
+            .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_mutation_approve(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        let params = serde_json::from_value::<MutationResolveParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let service = self.mutation.clone();
+        let resolver_context = context.clone();
+        let proposal_id = params.proposal_id;
+        let proposal = tokio::task::spawn_blocking(move || {
+            service.approve_once(&resolver_context, &proposal_id, Self::now_ms(), None)
+        })
+        .await
+        .map_err(|_| {
+            RpcError::with_data(
+                -32000,
+                "The mutation resolution worker did not join cleanly",
+                json!({ "reason": "mutation_worker_join_failed", "retryable": true }),
+            )
+        })?
+        .map_err(mutation_rpc_error)?;
+        let resolver = self.mutation.caller(context);
+        serde_json::to_value(MutationResolveResult { proposal, resolver })
+            .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn handle_mutation_reject(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        let params = serde_json::from_value::<MutationResolveParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let proposal = self
+            .mutation
+            .reject(context, &params.proposal_id, Self::now_ms())
+            .map_err(mutation_rpc_error)?;
+        let resolver = self.mutation.caller(context);
+        serde_json::to_value(MutationResolveResult { proposal, resolver })
+            .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_instructions_approve(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_authenticated_local_control(context)?;
+        let params = serde_json::from_value::<InstructionsApproveParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        validate_request_id(&params.request_id)?;
+        let (candidate, _) = self
+            .instructions
+            .load_candidate_inspection(&params.candidate_id)
+            .map_err(|error| instructions_rpc_error(error, None, None))?
+            .ok_or_else(|| {
+                RpcError::with_data(
+                    -32004,
+                    "The instructions candidate was not found",
+                    json!({ "reason": "instructions_candidate_not_found" }),
+                )
+            })?;
+        if candidate.observed_source_commit_sha != params.observed_source_commit_sha
+            || candidate.diff_digest != params.diff_digest
+            || !candidate.activatable
+            || !matches!(
+                candidate.state,
+                pandamux_core::InstructionCandidateState::AwaitingApproval
+                    | pandamux_core::InstructionCandidateState::Approved
+            )
+        {
+            return Err(RpcError::with_data(
+                -32009,
+                "The instructions candidate changed before approval",
+                json!({ "reason": "instructions_candidate_changed", "retryable": true }),
+            ));
+        }
+        let source = self
+            .store
+            .get_instruction_source(&candidate.source_id)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?
+            .ok_or_else(|| {
+                RpcError::with_data(
+                    -32004,
+                    "The instructions source was not found",
+                    json!({ "reason": "instructions_source_not_found" }),
+                )
+            })?;
+        if source.revision != params.expected_revision {
+            return Err(revision_drift_rpc(
+                "instructions_source",
+                params.expected_revision,
+                Some(source.revision),
+            ));
+        }
+        let workspace_root = self.local_project_workspace(&params.project_id)?;
+        let configuration = self.configuration.clone();
+        let project_id = params.project_id;
+        let candidate_id = params.candidate_id.clone();
+        let materialization = tokio::task::spawn_blocking(move || {
+            configuration.materialization_for_candidate(
+                &project_id,
+                &workspace_root,
+                &candidate_id,
+                Self::now_ms(),
+            )
+        })
+        .await
+        .map_err(|_| configuration_worker_error())?
+        .map_err(configuration_rpc_error)?;
+        let targets = self
+            .store
+            .get_or_initialize_settings(Self::now_ms())
+            .map_err(|error| RpcError::internal_error(error.to_string()))?
+            .settings
+            .environments
+            .into_iter()
+            .map(|environment| environment.id)
+            .collect::<Vec<_>>();
+        let sync = self.bundle_sync.clone();
+        let source_id = candidate.source_id;
+        let candidate_id = params.candidate_id;
+        let expected_revision = params.expected_revision;
+        let actor = self.mutation.caller(context).client_id;
+        let activation = tokio::task::spawn_blocking(move || {
+            sync.activate(
+                &materialization,
+                Some(&source_id),
+                Some(&candidate_id),
+                Some(expected_revision),
+                pandamux_core::BundleActivationKind::CandidateApproval,
+                &actor,
+                &targets,
+                Self::now_ms(),
+                None,
+            )
+        })
+        .await
+        .map_err(|_| configuration_worker_error())?
+        .map_err(bundle_sync_rpc_error)?;
+        let result = InstructionsApproveResult {
+            activation,
+            source_revision: expected_revision
+                .checked_next()
+                .map_err(|error| RpcError::internal_error(error.to_string()))?,
+        };
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_instructions_set_tracking(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_authenticated_local_control(context)?;
+        let params = serde_json::from_value::<InstructionsSetTrackingParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        validate_request_id(&params.request_id)?;
+        let current =
+            self.load_instruction_source_at_revision(&params.source_id, params.expected_revision)?;
+        let mut next = current.clone();
+        next.revision = current
+            .revision
+            .checked_next()
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        next.tracking = params.tracking;
+        next.last_error_reason = None;
+        let mut impact = pandamux_core::MutationImpact::default();
+        impact.tracking_summaries.insert(format!(
+            "Change instructions tracking for {}",
+            current.id.as_str()
+        ));
+        let proposal = self
+            .persist_mutation_proposal(
+                context,
+                MutationProposalRequest {
+                    request_id: params.request_id,
+                    tool_name: "instructions.setTracking".to_string(),
+                    target: pandamux_core::MutationTarget::InstructionsSource {
+                        source_id: current.id.as_str().to_string(),
+                    },
+                    expected_revision: current.revision,
+                    old_json: serde_json::to_value(current)
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?,
+                    new_json: serde_json::to_value(next)
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?,
+                    impact,
+                    created_at_ms: Self::now_ms(),
+                    ttl_ms: None,
+                },
+            )
+            .await?;
+        serde_json::to_value(InstructionsProposalResult {
+            proposal_id: proposal.id,
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_instructions_set_policy(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_authenticated_local_control(context)?;
+        let params = serde_json::from_value::<InstructionsSetPolicyParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        validate_request_id(&params.request_id)?;
+        let current =
+            self.load_instruction_source_at_revision(&params.source_id, params.expected_revision)?;
+        let mut next = current.clone();
+        next.revision = current
+            .revision
+            .checked_next()
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        next.policy = params.policy;
+        let mut impact = pandamux_core::MutationImpact::default();
+        impact.tracking_summaries.insert(format!(
+            "Change instructions update policy for {}",
+            current.id.as_str()
+        ));
+        let proposal = self
+            .persist_mutation_proposal(
+                context,
+                MutationProposalRequest {
+                    request_id: params.request_id,
+                    tool_name: "instructions.setPolicy".to_string(),
+                    target: pandamux_core::MutationTarget::InstructionsSource {
+                        source_id: current.id.as_str().to_string(),
+                    },
+                    expected_revision: current.revision,
+                    old_json: serde_json::to_value(current)
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?,
+                    new_json: serde_json::to_value(next)
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?,
+                    impact,
+                    created_at_ms: Self::now_ms(),
+                    ttl_ms: None,
+                },
+            )
+            .await?;
+        serde_json::to_value(InstructionsProposalResult {
+            proposal_id: proposal.id,
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn handle_instructions_history(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_authenticated_local_control(context)?;
+        let params = if params.is_null() {
+            InstructionsHistoryParams::default()
+        } else {
+            serde_json::from_value::<InstructionsHistoryParams>(params)
+                .map_err(|error| RpcError::invalid_params(error.to_string()))?
+        };
+        let (entries, has_more) = self
+            .store
+            .list_configuration_audit(params.before_at_ms, params.limit.unwrap_or(50))
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        serde_json::to_value(InstructionsHistoryResult { entries, has_more })
+            .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_instructions_revert(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_authenticated_local_control(context)?;
+        let params = serde_json::from_value::<InstructionsRevertParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        validate_request_id(&params.request_id)?;
+        let current =
+            self.load_instruction_source_at_revision(&params.source_id, params.expected_revision)?;
+        if current.active_bundle_sha.as_ref() == Some(&params.bundle_sha) {
+            return Err(RpcError::with_data(
+                -32602,
+                "The selected bundle is already active",
+                json!({
+                    "reason": "bundle_already_active",
+                    "bundleSha": params.bundle_sha,
+                    "retryable": false,
+                }),
+            ));
+        }
+        let object = self
+            .store
+            .get_bundle_object(&params.bundle_sha)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?
+            .ok_or_else(|| {
+                RpcError::with_data(
+                    -32004,
+                    "The retained bundle was not found",
+                    json!({ "reason": "bundle_object_not_found" }),
+                )
+            })?;
+        let mut next = current.clone();
+        next.revision = current
+            .revision
+            .checked_next()
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        next.active_source_commit_sha = Some(object.source_manifest.instructions_commit_sha);
+        next.active_bundle_sha = Some(params.bundle_sha);
+        next.last_error_reason = None;
+        let mut impact = pandamux_core::MutationImpact::default();
+        impact.tracking_summaries.insert(format!(
+            "Reactivate a retained bundle for {}",
+            current.id.as_str()
+        ));
+        let settings = self
+            .store
+            .get_or_initialize_settings(Self::now_ms())
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        impact.environment_ids.extend(
+            settings
+                .settings
+                .environments
+                .into_iter()
+                .map(|environment| environment.id),
+        );
+        let proposal = self
+            .persist_mutation_proposal(
+                context,
+                MutationProposalRequest {
+                    request_id: params.request_id,
+                    tool_name: "instructions.revert".to_string(),
+                    target: pandamux_core::MutationTarget::InstructionsSource {
+                        source_id: current.id.as_str().to_string(),
+                    },
+                    expected_revision: current.revision,
+                    old_json: serde_json::to_value(current)
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?,
+                    new_json: serde_json::to_value(next)
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?,
+                    impact,
+                    created_at_ms: Self::now_ms(),
+                    ttl_ms: None,
+                },
+            )
+            .await?;
+        serde_json::to_value(InstructionsProposalResult {
+            proposal_id: proposal.id,
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn load_instruction_source_at_revision(
+        &self,
+        source_id: &pandamux_core::InstructionSourceId,
+        expected_revision: pandamux_core::ConfigurationRevision,
+    ) -> Result<pandamux_core::InstructionsSourceRecord, RpcError> {
+        let source = self
+            .store
+            .get_instruction_source(source_id)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?
+            .ok_or_else(|| {
+                RpcError::with_data(
+                    -32004,
+                    "The instructions source was not found",
+                    json!({ "reason": "instructions_source_not_found" }),
+                )
+            })?;
+        if source.revision != expected_revision {
+            return Err(revision_drift_rpc(
+                "instructions_source",
+                expected_revision,
+                Some(source.revision),
+            ));
+        }
+        Ok(source)
+    }
+
+    async fn handle_project_layer_status(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_local_configuration_peer(context)?;
+        let params = serde_json::from_value::<ProjectLayerStatusParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let workspace_root = self.local_project_workspace(&params.project_id)?;
+        let service = self.configuration.clone();
+        let project_id = params.project_id;
+        let snapshot = tokio::task::spawn_blocking(move || {
+            service.inspect_project_layer(&project_id, &workspace_root, Self::now_ms())
+        })
+        .await
+        .map_err(|_| {
+            RpcError::with_data(
+                -32000,
+                "The project configuration worker did not join cleanly",
+                json!({ "reason": "configuration_worker_join_failed", "retryable": true }),
+            )
+        })?
+        .map_err(configuration_rpc_error)?;
+        serde_json::to_value(ProjectLayerStatusResult {
+            repository: snapshot.repository,
+            project_content_sha256: snapshot.project_content_sha256,
+            trust: snapshot.trust,
+            visible_but_inactive: snapshot.visible_but_inactive,
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_project_layer_diff(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_local_configuration_peer(context)?;
+        let params = serde_json::from_value::<ProjectLayerDiffParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let workspace_root = self.local_project_workspace(&params.project_id)?;
+        let service = self.configuration.clone();
+        let project_id = params.project_id.clone();
+        let snapshot = tokio::task::spawn_blocking(move || {
+            service.inspect_project_layer(&project_id, &workspace_root, Self::now_ms())
+        })
+        .await
+        .map_err(|_| {
+            RpcError::with_data(
+                -32000,
+                "The project configuration worker did not join cleanly",
+                json!({ "reason": "configuration_worker_join_failed", "retryable": true }),
+            )
+        })?
+        .map_err(configuration_rpc_error)?;
+        if snapshot.project_content_sha256.as_ref() != Some(&params.project_content_sha256) {
+            return Err(RpcError::with_data(
+                -32009,
+                "The project configuration changed before its diff was loaded",
+                json!({
+                    "reason": "project_content_changed",
+                    "projectId": params.project_id,
+                    "expectedContentSha256": params.project_content_sha256,
+                    "actualContentSha256": snapshot.project_content_sha256,
+                    "retryable": true,
+                }),
+            ));
+        }
+        let settings = self
+            .store
+            .get_or_initialize_settings(Self::now_ms())
+            .map_err(|_| RpcError::internal_error("configuration settings unavailable"))?;
+        let trust_digest = pandamux_orchestrator::canonical_json_sha256(&snapshot.trust);
+        let trust_digest = pandamux_core::ContentSha256::parse(trust_digest)
+            .map_err(|_| RpcError::internal_error("configuration trust digest invalid"))?;
+        let dependencies = pandamux_orchestrator::ConfigurationDependencySnapshot {
+            instructions_source_commit_sha: None,
+            canonical_remote_identity: snapshot.repository.canonical_remote_identity.clone(),
+            tracking: pandamux_core::TrackingRef::Branch("refs/heads/project-layer".to_string()),
+            project_content_sha256: snapshot.project_content_sha256.clone(),
+            personal_source_commit_sha: None,
+            settings_revision: settings.revision,
+            trust_digest,
+        };
+        let report = pandamux_orchestrator::inspect_configuration_candidate(
+            &pandamux_orchestrator::ConfigurationCandidateInspectionInput {
+                layer: pandamux_core::ValueLayer::Project,
+                baseline_documents: Vec::new(),
+                candidate_documents: snapshot.documents,
+                baseline_dependencies: dependencies.clone(),
+                candidate_dependencies: dependencies,
+                scheduled_agent_ids: BTreeSet::new(),
+                history_rewritten: false,
+            },
+        );
+        let mut issues = snapshot.issues;
+        issues.extend(
+            report
+                .issues
+                .iter()
+                .map(serde_json::to_value)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| RpcError::internal_error(error.to_string()))?,
+        );
+        issues.sort_by_key(pandamux_orchestrator::canonical_json_bytes);
+        issues.dedup();
+        serde_json::to_value(ProjectLayerDiffResult {
+            project_content_sha256: params.project_content_sha256,
+            behavioral_diff: serde_json::to_value(report.behavioral_diff)
+                .map_err(|error| RpcError::internal_error(error.to_string()))?,
+            issues,
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_project_layer_trust(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_authenticated_local_control(context)?;
+        let params = serde_json::from_value::<ProjectLayerTrustParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        validate_request_id(&params.request_id)?;
+        let snapshot = self.load_project_layer_snapshot(&params.project_id).await?;
+        if snapshot.repository.revision != params.expected_revision {
+            return Err(revision_drift_rpc(
+                "project_repository",
+                params.expected_revision,
+                Some(snapshot.repository.revision),
+            ));
+        }
+        if !snapshot.issues.is_empty()
+            || snapshot.project_content_sha256.as_ref() != Some(&params.project_content_sha256)
+        {
+            return Err(RpcError::with_data(
+                -32009,
+                "The project configuration changed or is not valid for trust",
+                json!({
+                    "reason": "project_content_changed",
+                    "issues": snapshot.issues,
+                    "retryable": true,
+                }),
+            ));
+        }
+        let old = ProjectTrustMutationState {
+            project_id: params.project_id.clone(),
+            repository_id: snapshot.repository.id.clone(),
+            project_content_sha256: params.project_content_sha256.clone(),
+            trusted: snapshot.trust.is_some(),
+        };
+        let mut new = old.clone();
+        new.trusted = true;
+        let mut impact = pandamux_core::MutationImpact::default();
+        impact
+            .organization_ids
+            .insert(snapshot.repository.organization_id);
+        impact.project_ids.insert(params.project_id.clone());
+        impact.trust_summaries.insert(format!(
+            "Trust exact project configuration {}",
+            params.project_content_sha256
+        ));
+        let proposal = self
+            .persist_mutation_proposal(
+                context,
+                MutationProposalRequest {
+                    request_id: params.request_id,
+                    tool_name: "projectLayer.trust".to_string(),
+                    target: pandamux_core::MutationTarget::ProjectLayerTrust {
+                        project_id: params.project_id,
+                    },
+                    expected_revision: params.expected_revision,
+                    old_json: serde_json::to_value(old)
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?,
+                    new_json: serde_json::to_value(new)
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?,
+                    impact,
+                    created_at_ms: Self::now_ms(),
+                    ttl_ms: None,
+                },
+            )
+            .await?;
+        serde_json::to_value(ProjectLayerProposalResult {
+            proposal_id: proposal.id,
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_project_layer_revoke(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_authenticated_local_control(context)?;
+        let params = serde_json::from_value::<ProjectLayerRevokeParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        validate_request_id(&params.request_id)?;
+        let snapshot = self.load_project_layer_snapshot(&params.project_id).await?;
+        if snapshot.repository.revision != params.expected_revision {
+            return Err(revision_drift_rpc(
+                "project_repository",
+                params.expected_revision,
+                Some(snapshot.repository.revision),
+            ));
+        }
+        let trust = snapshot.trust.ok_or_else(|| {
+            RpcError::with_data(
+                -32004,
+                "The project layer has no active trust to revoke",
+                json!({ "reason": "project_trust_not_found" }),
+            )
+        })?;
+        let old = ProjectTrustMutationState {
+            project_id: params.project_id.clone(),
+            repository_id: snapshot.repository.id.clone(),
+            project_content_sha256: trust.project_content_sha256,
+            trusted: true,
+        };
+        let mut new = old.clone();
+        new.trusted = false;
+        let mut impact = pandamux_core::MutationImpact::default();
+        impact
+            .organization_ids
+            .insert(snapshot.repository.organization_id);
+        impact.project_ids.insert(params.project_id.clone());
+        impact
+            .trust_summaries
+            .insert("Revoke the active project configuration trust".to_string());
+        let proposal = self
+            .persist_mutation_proposal(
+                context,
+                MutationProposalRequest {
+                    request_id: params.request_id,
+                    tool_name: "projectLayer.revoke".to_string(),
+                    target: pandamux_core::MutationTarget::ProjectLayerTrust {
+                        project_id: params.project_id,
+                    },
+                    expected_revision: params.expected_revision,
+                    old_json: serde_json::to_value(old)
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?,
+                    new_json: serde_json::to_value(new)
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?,
+                    impact,
+                    created_at_ms: Self::now_ms(),
+                    ttl_ms: None,
+                },
+            )
+            .await?;
+        serde_json::to_value(ProjectLayerProposalResult {
+            proposal_id: proposal.id,
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn load_project_layer_snapshot(
+        &self,
+        project_id: &ProjectId,
+    ) -> Result<crate::configuration_service::ProjectLayerSnapshot, RpcError> {
+        let workspace_root = self.local_project_workspace(project_id)?;
+        let service = self.configuration.clone();
+        let project_id = project_id.clone();
+        tokio::task::spawn_blocking(move || {
+            service.inspect_project_layer(&project_id, &workspace_root, Self::now_ms())
+        })
+        .await
+        .map_err(|_| configuration_worker_error())?
+        .map_err(configuration_rpc_error)
+    }
+
+    async fn handle_personal_history(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_authenticated_local_control(context)?;
+        let params = if params.is_null() {
+            PersonalConfigHistoryParams::default()
+        } else {
+            serde_json::from_value::<PersonalConfigHistoryParams>(params)
+                .map_err(|error| RpcError::invalid_params(error.to_string()))?
+        };
+        let limit = params.limit.unwrap_or(50).clamp(1, 100) as usize;
+        let service = self.personal_repo.clone();
+        let cursor = params.before_source_commit_sha;
+        let (entries, has_more) = tokio::task::spawn_blocking(move || {
+            let mut entries = service.history(1000)?;
+            if let Some(cursor) = cursor {
+                if let Some(index) = entries
+                    .iter()
+                    .position(|entry| entry.source_commit_sha == cursor)
+                {
+                    entries.drain(..=index);
+                } else {
+                    entries.clear();
+                }
+            }
+            let has_more = entries.len() > limit;
+            entries.truncate(limit);
+            Ok::<_, crate::personal_repo::PersonalRepoError>((entries, has_more))
+        })
+        .await
+        .map_err(|_| configuration_worker_error())?
+        .map_err(personal_rpc_error)?;
+        let state = self
+            .store
+            .get_personal_repo_state()
+            .map_err(|error| RpcError::internal_error(error.to_string()))?
+            .ok_or_else(|| RpcError::internal_error("personal repository state unavailable"))?;
+        serde_json::to_value(PersonalConfigHistoryResult {
+            head_source_commit_sha: state.head_source_commit_sha,
+            revision: state.revision,
+            entries,
+            has_more,
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_personal_diff(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_authenticated_local_control(context)?;
+        let params = serde_json::from_value::<PersonalConfigDiffParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let service = self.personal_repo.clone();
+        let from = params.from_source_commit_sha;
+        let to = params.to_source_commit_sha;
+        let diff = tokio::task::spawn_blocking(move || service.diff(&from, &to))
+            .await
+            .map_err(|_| configuration_worker_error())?
+            .map_err(personal_rpc_error)?;
+        let file_diff = json!({
+            "added": diff.added,
+            "modified": diff.modified,
+            "deleted": diff.deleted,
+        });
+        let behavioral_diff = json!({
+            "summary": "Personal configuration files changed",
+            "requiresRecompile": true,
+        });
+        serde_json::to_value(PersonalConfigDiffResult {
+            file_diff,
+            behavioral_diff,
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_personal_revert(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_authenticated_local_control(context)?;
+        let params = serde_json::from_value::<PersonalConfigRevertParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        validate_request_id(&params.request_id)?;
+        let state = self
+            .store
+            .get_personal_repo_state()
+            .map_err(|error| RpcError::internal_error(error.to_string()))?
+            .ok_or_else(|| {
+                RpcError::with_data(
+                    -32004,
+                    "The personal configuration repository is not initialized",
+                    json!({ "reason": "personal_repo_uninitialized" }),
+                )
+            })?;
+        if state.revision != params.expected_revision
+            || state.head_source_commit_sha != params.expected_source_commit_sha
+        {
+            return Err(revision_drift_rpc(
+                "personal_configuration",
+                params.expected_revision,
+                Some(state.revision),
+            ));
+        }
+        if state.head_source_commit_sha == params.target_source_commit_sha {
+            return Err(RpcError::with_data(
+                -32602,
+                "The selected personal configuration revision is already active",
+                json!({
+                    "reason": "personal_revision_already_active",
+                    "targetSourceCommitSha": params.target_source_commit_sha,
+                    "retryable": false,
+                }),
+            ));
+        }
+        let service = self.personal_repo.clone();
+        let current = state.head_source_commit_sha.clone();
+        let target = params.target_source_commit_sha.clone();
+        tokio::task::spawn_blocking(move || service.diff(&current, &target))
+            .await
+            .map_err(|_| configuration_worker_error())?
+            .map_err(personal_rpc_error)?;
+        let old = PersonalMutationState {
+            head_source_commit_sha: state.head_source_commit_sha.clone(),
+            target_source_commit_sha: state.head_source_commit_sha.clone(),
+        };
+        let new = PersonalMutationState {
+            head_source_commit_sha: state.head_source_commit_sha,
+            target_source_commit_sha: params.target_source_commit_sha,
+        };
+        let mut impact = pandamux_core::MutationImpact::default();
+        impact
+            .validation_summaries
+            .insert("Create a forward-only personal configuration revert commit".to_string());
+        let proposal = self
+            .persist_mutation_proposal(
+                context,
+                MutationProposalRequest {
+                    request_id: params.request_id,
+                    tool_name: "personalConfig.revert".to_string(),
+                    target: pandamux_core::MutationTarget::PersonalConfiguration,
+                    expected_revision: params.expected_revision,
+                    old_json: serde_json::to_value(old)
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?,
+                    new_json: serde_json::to_value(new)
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?,
+                    impact,
+                    created_at_ms: Self::now_ms(),
+                    ttl_ms: None,
+                },
+            )
+            .await?;
+        serde_json::to_value(PersonalConfigRevertResult {
+            proposal_id: proposal.id,
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn local_project_workspace(&self, project_id: &ProjectId) -> Result<PathBuf, RpcError> {
+        self.store
+            .list_threads()
+            .map_err(|_| RpcError::internal_error("project workspace unavailable"))?
+            .into_iter()
+            .find(|thread| {
+                thread.project_id.as_ref() == Some(project_id)
+                    && thread.environment_id.as_str() == self.environment_id
+                    && PathBuf::from(thread.workspace.effective_path()).is_absolute()
+            })
+            .map(|thread| PathBuf::from(thread.workspace.effective_path()))
+            .ok_or_else(|| {
+                RpcError::with_data(
+                    -32004,
+                    "No local workspace is registered for this project",
+                    json!({
+                        "reason": "project_workspace_missing",
+                        "projectId": project_id,
+                        "retryable": false,
+                    }),
+                )
+            })
+    }
+
+    fn handle_bundle_prepare_upload(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_bundle_node_proxy(context, &self.environment_id)?;
+        let params = serde_json::from_value::<BundlePrepareUploadParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        if params.schema_version != BUNDLE_PUSH_SCHEMA_VERSION
+            || params.environment_id != context.authenticated_environment_id
+            || params.archive_bytes == 0
+            || params.archive_bytes > crate::bundle_store::MAX_BUNDLE_ARCHIVE_BYTES
+        {
+            return Err(RpcError::with_data(
+                -32009,
+                "The bundle upload reservation is invalid for this node",
+                json!({ "reason": "bundle_upload_invalid", "retryable": false }),
+            ));
+        }
+        let path = self
+            .bundle_store
+            .prepare_upload(&params.transfer_id)
+            .map_err(bundle_rpc_error)?;
+        serde_json::to_value(BundlePrepareUploadResult {
+            transfer_id: params.transfer_id,
+            private_artifact_ref: path.to_string_lossy().into_owned(),
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn handle_bundle_discard_upload(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_bundle_node_proxy(context, &self.environment_id)?;
+        let params = serde_json::from_value::<BundleDiscardUploadParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        if params.environment_id != context.authenticated_environment_id {
+            return Err(RpcError::with_data(
+                -32001,
+                "The bundle upload environment does not match this node",
+                json!({ "reason": "bundle_environment_mismatch" }),
+            ));
+        }
+        self.bundle_store
+            .discard_upload(&params.transfer_id)
+            .map_err(bundle_rpc_error)?;
+        Ok(json!({ "discarded": true }))
+    }
+
+    async fn handle_bundle_push(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_bundle_node_proxy(context, &self.environment_id)?;
+        let params = serde_json::from_value::<BundlePushParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let environment_id = context.authenticated_environment_id.clone();
+        let bundle_store = self.bundle_store.clone();
+        let received_at_ms = Self::now_ms();
+        let result = tokio::task::spawn_blocking(move || {
+            bundle_store.receive_uploaded_bundle(&environment_id, &params, received_at_ms)
+        })
+        .await
+        .map_err(|_| {
+            RpcError::with_data(
+                -32000,
+                "The bundle verification worker did not join cleanly",
+                json!({ "reason": "bundle_worker_join_failed", "retryable": true }),
+            )
+        })?
+        .map_err(bundle_rpc_error)?;
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
     }
 
     fn handle_hello(&self, params: Value) -> Result<Value, RpcError> {
@@ -499,10 +2990,25 @@ impl Router {
         serde_json::to_value(caps).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
-    fn handle_thread_create(&self, params: Value) -> Result<Value, RpcError> {
+    fn handle_thread_create(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
         let p: ThreadCreateParams =
             serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
-        let thread = self.thread_manager.create_thread(p)?;
+        let thread = if matches!(context.peer_role, PeerRole::NodeProxy) {
+            if p.project_id.is_some() && p.provider_instance_id.is_none() {
+                return Err(RpcError::with_data(
+                    -32030,
+                    "Hub-authorized project routes must pin a named provider",
+                    json!({ "reason": "organization_policy_preauthorization_missing" }),
+                ));
+            }
+            self.thread_manager.create_thread_from_hub(p)?
+        } else {
+            self.thread_manager.create_thread(p)?
+        };
         serde_json::to_value(&thread).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
@@ -523,10 +3029,23 @@ impl Router {
         serde_json::to_value(threads).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
-    async fn handle_thread_send_turn(&self, params: Value) -> Result<Value, RpcError> {
+    async fn handle_thread_send_turn(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
         let p: ThreadSendTurnParams =
             serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
-        let result = self.thread_manager.send_turn(p).await?;
+        let result = if matches!(context.peer_role, PeerRole::NodeProxy) {
+            self.thread_manager.send_turn_from_hub(p).await?
+        } else {
+            if p.hub_routing_context.is_some() {
+                return Err(RpcError::unauthorized(
+                    "Hub routing context is accepted only from an authenticated node proxy",
+                ));
+            }
+            self.thread_manager.send_turn(p).await?
+        };
         serde_json::to_value(&result).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
@@ -542,6 +3061,28 @@ impl Router {
             serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
         self.thread_manager.respond_approval(p).await?;
         Ok(json!({ "acknowledged": true }))
+    }
+
+    async fn handle_thread_continue_capacity(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        let p: ThreadContinueParams =
+            serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
+        let result = if matches!(context.peer_role, PeerRole::NodeProxy) {
+            self.thread_manager
+                .continue_after_capacity_from_hub(p)
+                .await?
+        } else {
+            if p.hub_routing_context.is_some() {
+                return Err(RpcError::unauthorized(
+                    "Hub routing context is accepted only from an authenticated node proxy",
+                ));
+            }
+            self.thread_manager.continue_after_capacity(p).await?
+        };
+        serde_json::to_value(&result).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
     fn handle_thread_resume(&self, params: Value) -> Result<Value, RpcError> {
@@ -581,151 +3122,1555 @@ impl Router {
 
     fn handle_settings_get(&self, params: Value) -> Result<Value, RpcError> {
         let req_params: SettingsGetParams = serde_json::from_value(params).unwrap_or_default();
-        let settings = self
+        let record = self
             .store
-            .get_settings()
-            .map_err(|e| RpcError::internal_error(e.to_string()))?
-            .unwrap_or_default();
+            .get_or_initialize_settings(Self::now_ms())
+            .map_err(|e| RpcError::internal_error(e.to_string()))?;
+        let settings = record.settings;
 
         if let Some(key) = req_params.key {
             let val =
                 pandamux_core::settings_get(&settings, &key).map_err(RpcError::invalid_params)?;
             let res = SettingsGetResult {
                 settings,
+                revision: record.revision,
                 value: Some(val),
             };
             serde_json::to_value(res).map_err(|e| RpcError::internal_error(e.to_string()))
         } else {
             let res = SettingsGetResult {
                 settings,
+                revision: record.revision,
                 value: None,
             };
             serde_json::to_value(res).map_err(|e| RpcError::internal_error(e.to_string()))
         }
     }
 
-    fn handle_settings_set(&self, params: Value) -> Result<Value, RpcError> {
-        let mut current = self
+    async fn handle_settings_set(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        let record = self
             .store
-            .get_settings()
-            .map_err(|e| RpcError::internal_error(e.to_string()))?
-            .unwrap_or_default();
-
-        // 1. Try parsing as SettingsSetParams { settings, key, value }
-        if let Ok(p) = serde_json::from_value::<SettingsSetParams>(params.clone()) {
-            if let Some(mut updated) = p.settings {
-                updated.normalize();
-                self.store
-                    .save_settings(&updated)
-                    .map_err(|e| RpcError::internal_error(e.to_string()))?;
-                return Ok(json!({ "success": true }));
-            } else if let (Some(key), Some(value)) = (p.key, p.value) {
-                pandamux_core::settings_set(&mut current, &key, value)
+            .get_or_initialize_settings(Self::now_ms())
+            .map_err(|e| RpcError::internal_error(e.to_string()))?;
+        let request = serde_json::from_value::<SettingsSetParams>(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        if record.revision != request.expected_revision {
+            return Err(revision_drift_rpc(
+                "user_settings",
+                request.expected_revision,
+                Some(record.revision),
+            ));
+        }
+        let current = record.settings;
+        let mut updated = match (request.settings, request.key, request.value) {
+            (Some(settings), None, None) => settings,
+            (None, Some(key), Some(value)) => {
+                let mut settings = current.clone();
+                pandamux_core::settings_set(&mut settings, &key, value)
                     .map_err(RpcError::invalid_params)?;
-                current.normalize();
-                self.store
-                    .save_settings(&current)
-                    .map_err(|e| RpcError::internal_error(e.to_string()))?;
-                return Ok(json!({ "success": true }));
+                settings
             }
+            _ => {
+                return Err(RpcError::invalid_params(
+                    "Provide either settings or one key and non-null value",
+                ));
+            }
+        };
+        updated.normalize();
+        self.canonicalize_failover_pools(&mut updated)?;
+        let reenabled = current
+            .trusted_configuration
+            .disabled_agent_ids
+            .difference(&updated.trusted_configuration.disabled_agent_ids)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let full_access_added = updated
+            .trusted_configuration
+            .full_access_agent_ids
+            .difference(&current.trusted_configuration.full_access_agent_ids)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if !reenabled.is_empty() || !full_access_added.is_empty() {
+            require_authenticated_local_control(context)?;
+            let request_id = request.request_id.as_deref().ok_or_else(|| {
+                RpcError::with_data(
+                    -32602,
+                    "Access widening requires requestId for durable confirmation",
+                    json!({ "reason": "request_id_required" }),
+                )
+            })?;
+            validate_request_id(request_id)?;
+            let mut allowed = current.clone();
+            allowed.trusted_configuration = updated.trusted_configuration.clone();
+            if allowed != updated {
+                return Err(RpcError::with_data(
+                    -32602,
+                    "Access widening must be submitted separately from other settings changes",
+                    json!({ "reason": "widening_must_be_separate" }),
+                ));
+            }
+            let mut impact = pandamux_core::MutationImpact::default();
+            impact.agent_ids.extend(reenabled.iter().cloned());
+            impact.agent_ids.extend(full_access_added.iter().cloned());
+            if !reenabled.is_empty() {
+                impact.access_summaries.insert(format!(
+                    "Re-enable {} trusted configuration agent(s)",
+                    reenabled.len()
+                ));
+            }
+            if !full_access_added.is_empty() {
+                impact.full_access_summaries.insert(format!(
+                    "Grant FullAccess to {} trusted configuration agent(s)",
+                    full_access_added.len()
+                ));
+            }
+            let proposal = self
+                .persist_mutation_proposal(
+                    context,
+                    MutationProposalRequest {
+                        request_id: request_id.to_string(),
+                        tool_name: "settings.set.trustedConfiguration".to_string(),
+                        target: pandamux_core::MutationTarget::Settings,
+                        expected_revision: record.revision,
+                        old_json: serde_json::to_value(
+                            pandamux_core::TrustedSettingsMutationState {
+                                trusted_configuration: current.trusted_configuration.clone(),
+                            },
+                        )
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?,
+                        new_json: serde_json::to_value(
+                            pandamux_core::TrustedSettingsMutationState {
+                                trusted_configuration: updated.trusted_configuration.clone(),
+                            },
+                        )
+                        .map_err(|error| RpcError::internal_error(error.to_string()))?,
+                        impact,
+                        created_at_ms: Self::now_ms(),
+                        ttl_ms: None,
+                    },
+                )
+                .await?;
+            return Err(RpcError::with_data(
+                -32045,
+                "Access widening requires one local approval",
+                json!({
+                    "reason": "local_approval_required",
+                    "proposalId": proposal.id,
+                    "retryable": false,
+                }),
+            ));
         }
+        let revision = self
+            .store
+            .save_settings_with_organization_policies_cas(
+                &updated,
+                request.expected_revision,
+                Self::now_ms(),
+            )
+            .map_err(|error| match error {
+                StoreError::RevisionDrift { expected, actual } => RpcError::with_data(
+                    -32009,
+                    "Settings changed before this update could be applied",
+                    json!({
+                        "reason": "revision_drift",
+                        "resourceId": "user_settings",
+                        "expectedRevision": expected,
+                        "actualRevision": actual,
+                        "retryable": true,
+                    }),
+                ),
+                other => RpcError::internal_error(other.to_string()),
+            })?;
+        serde_json::to_value(pandamux_protocol::SettingsSetResult {
+            success: true,
+            revision,
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
 
-        // 2. Try parsing directly as UserSettings
-        if let Ok(mut settings) = serde_json::from_value::<UserSettings>(params) {
-            settings.normalize();
-            self.store
-                .save_settings(&settings)
-                .map_err(|e| RpcError::internal_error(e.to_string()))?;
-            return Ok(json!({ "success": true }));
+    fn canonicalize_failover_pools(&self, settings: &mut UserSettings) -> Result<(), RpcError> {
+        for pool in &mut settings.failover_pools {
+            let mut capabilities_changed = false;
+            for member in &mut pool.members {
+                let config = settings
+                    .providers
+                    .iter()
+                    .find(|provider| provider.id == member.provider_instance_id)
+                    .ok_or_else(|| {
+                        RpcError::invalid_params(format!(
+                            "Failover pool '{}' references a missing provider instance",
+                            pool.display_name
+                        ))
+                    })?;
+                if !config.enabled {
+                    return Err(RpcError::invalid_params(format!(
+                        "Failover pool '{}' references a disabled provider instance",
+                        pool.display_name
+                    )));
+                }
+                let driver = self.drivers.get(config.provider).ok_or_else(|| {
+                    RpcError::invalid_params(format!(
+                        "Failover pool '{}' references an unavailable provider driver",
+                        pool.display_name
+                    ))
+                })?;
+                let metadata = driver.metadata();
+                let mut declared_models = metadata
+                    .supported_models
+                    .iter()
+                    .map(|model| model.id.clone())
+                    .collect::<Vec<_>>();
+                if let Some(default_model) = config
+                    .settings
+                    .get("defaultModel")
+                    .and_then(Value::as_str)
+                    .filter(|model| !model.trim().is_empty())
+                {
+                    declared_models.push(default_model.to_string());
+                }
+                declared_models.sort();
+                declared_models.dedup();
+                if !declared_models.iter().any(|model| model == &member.model) {
+                    return Err(RpcError::invalid_params(format!(
+                        "Failover pool '{}' uses a model not declared by its provider driver",
+                        pool.display_name
+                    )));
+                }
+                if member.declared_capabilities != metadata.capabilities {
+                    member.declared_capabilities = metadata.capabilities;
+                    capabilities_changed = true;
+                }
+                pool.requirements
+                    .validate_capabilities(metadata.capabilities)
+                    .map_err(|reason| {
+                        RpcError::invalid_params(format!(
+                            "Failover pool '{}' has an incompatible member: {reason}",
+                            pool.display_name
+                        ))
+                    })?;
+            }
+            if capabilities_changed {
+                pool.revision = pool.revision.saturating_add(1);
+            }
+            pool.validate()
+                .map_err(|error| RpcError::invalid_params(error.to_string()))?;
         }
-
-        Err(RpcError::invalid_params("Invalid settings payload"))
+        Ok(())
     }
 
     async fn handle_provider_health(&self, params: Value) -> Result<Value, RpcError> {
-        let filter: ProviderHealthParams = serde_json::from_value(params).unwrap_or_default();
+        let filter = if params.is_null() {
+            ProviderHealthParams::default()
+        } else {
+            serde_json::from_value::<ProviderHealthParams>(params).map_err(|error| {
+                RpcError::with_data(
+                    -32602,
+                    format!("Invalid provider.health params: {error}"),
+                    json!({ "reason": "provider_health_params_invalid" }),
+                )
+            })?
+        };
+        filter.validate().map_err(|error| {
+            RpcError::with_data(
+                -32602,
+                error,
+                json!({ "reason": "provider_health_page_limit_invalid" }),
+            )
+        })?;
+        let environment_id = filter
+            .environment_id
+            .clone()
+            .unwrap_or_else(|| EnvironmentId::new(self.environment_id.clone()));
         let settings = self
             .store
             .get_settings()
             .map_err(|e| RpcError::internal_error(e.to_string()))?
             .unwrap_or_default();
 
-        let mut reports = Vec::new();
+        if let Some(instance_id) = filter.instance_id.as_ref()
+            && !settings
+                .providers
+                .iter()
+                .any(|config| &config.id == instance_id)
+        {
+            self.provider_resolver
+                .resolve_allow_disabled(instance_id, &environment_id)?;
+        }
 
-        for inst in &settings.providers {
-            if let Some(ref target_id) = filter.instance_id
-                && &inst.id != target_id
+        let mut instances = settings
+            .providers
+            .iter()
+            .filter(|instance| {
+                filter
+                    .instance_id
+                    .as_ref()
+                    .is_none_or(|target_id| &instance.id == target_id)
+            })
+            .filter(|instance| {
+                filter
+                    .after_instance_id
+                    .as_ref()
+                    .is_none_or(|after| instance.id.as_str() > after.as_str())
+            })
+            .collect::<Vec<_>>();
+        instances.sort_by(|left, right| left.id.cmp(&right.id));
+        let has_more = instances.len() > filter.limit as usize;
+        instances.truncate(filter.limit as usize);
+
+        enum ProbeOutcome {
+            Snapshot(pandamux_providers::ProviderSnapshot),
+            TimedOut,
+        }
+
+        let semaphore = Arc::new(Semaphore::new(filter.max_concurrency as usize));
+        let mut tasks = JoinSet::new();
+        let mut reports = Vec::with_capacity(instances.len());
+        let mut expected = HashMap::new();
+
+        for inst in instances {
+            expected.insert(
+                inst.id.clone(),
+                (inst.provider, inst.display_name.clone(), inst.enabled),
+            );
+            match self
+                .provider_resolver
+                .resolve_allow_disabled(&inst.id, &environment_id)
             {
-                continue;
-            }
-
-            if let Some(driver) = self.drivers.get(inst.provider) {
-                let snapshot = driver.probe(inst).await;
-                let (status, reason) = match &snapshot.health {
-                    pandamux_providers::models::ProviderHealth::Healthy => match &snapshot.auth {
-                        pandamux_providers::models::ProviderAuthStatus::Authenticated {
-                            ..
-                        } => ("healthy".to_string(), None),
-                        pandamux_providers::models::ProviderAuthStatus::Unauthenticated => (
-                            "unauthenticated".to_string(),
-                            Some("Not logged in".to_string()),
-                        ),
-                        pandamux_providers::models::ProviderAuthStatus::Unknown => {
-                            ("healthy".to_string(), None)
-                        }
-                    },
-                    pandamux_providers::models::ProviderHealth::Degraded { reason } => {
-                        ("degraded".to_string(), Some(reason.clone()))
-                    }
-                    pandamux_providers::models::ProviderHealth::Unavailable { reason } => {
-                        ("unavailable".to_string(), Some(reason.clone()))
-                    }
-                };
-
-                let (account_badge, subscription) = match &snapshot.auth {
-                    pandamux_providers::models::ProviderAuthStatus::Authenticated {
-                        account_label,
-                        email: _,
-                        subscription,
-                    } => (
-                        account_badge_label(account_label.as_deref(), subscription.as_deref()),
-                        subscription.clone(),
-                    ),
-                    _ => (None, None),
-                };
-
-                reports.push(ProviderHealthReport {
-                    instance_id: inst.id.clone(),
-                    provider: inst.provider,
-                    display_name: inst.display_name.clone(),
-                    enabled: inst.enabled,
-                    installed: snapshot.installed,
-                    version: snapshot.version,
-                    status,
-                    account_badge,
-                    subscription,
-                    reason,
-                    checked_at_ms: snapshot.checked_at_ms,
-                });
-            } else {
-                reports.push(ProviderHealthReport {
-                    instance_id: inst.id.clone(),
-                    provider: inst.provider,
-                    display_name: inst.display_name.clone(),
-                    enabled: inst.enabled,
-                    installed: false,
-                    version: None,
-                    status: "unavailable".to_string(),
-                    account_badge: None,
-                    subscription: None,
-                    reason: Some("No registered driver for provider".to_string()),
-                    checked_at_ms: Self::now_ms(),
-                });
+                Ok(resolved) if !resolved.config.enabled => {
+                    let disabled_reason = resolved.config.disabled_reason.clone();
+                    let reason = disabled_reason
+                        .as_ref()
+                        .map(|reason| reason.message.clone())
+                        .unwrap_or_else(|| "Provider instance is disabled".to_string());
+                    reports.push(ProviderHealthReport {
+                        environment_id: environment_id.clone(),
+                        instance_id: resolved.config.id,
+                        provider: resolved.config.provider,
+                        display_name: resolved.config.display_name,
+                        enabled: false,
+                        installed: false,
+                        resolved_executable: None,
+                        version: None,
+                        status: "disabled".to_string(),
+                        authentication_state: "unknown".to_string(),
+                        authentication_confidence: "unknown".to_string(),
+                        runtime_status: "disabled".to_string(),
+                        runtime_code: Some("provider_disabled".to_string()),
+                        account_badge: None,
+                        subscription: None,
+                        reason: Some(reason),
+                        disabled_reason,
+                        checked_at_ms: Self::now_ms(),
+                        expires_at_ms: Self::now_ms()
+                            .saturating_add(pandamux_providers::PROVIDER_SNAPSHOT_TTL_MS),
+                        last_success_at_ms: None,
+                        login_guidance: Some(provider_login_guidance(resolved.config.provider)),
+                        retryable: false,
+                    });
+                }
+                Ok(resolved) => {
+                    let semaphore = semaphore.clone();
+                    let timeout = Duration::from_millis(filter.timeout_ms);
+                    tasks.spawn(async move {
+                        let permit = semaphore.acquire_owned().await;
+                        let outcome = match permit {
+                            Ok(_permit) => {
+                                match tokio::time::timeout(
+                                    timeout,
+                                    resolved.driver.probe(&resolved.config),
+                                )
+                                .await
+                                {
+                                    Ok(snapshot) => ProbeOutcome::Snapshot(snapshot),
+                                    Err(_) => ProbeOutcome::TimedOut,
+                                }
+                            }
+                            Err(_) => ProbeOutcome::TimedOut,
+                        };
+                        (resolved.config, outcome)
+                    });
+                }
+                Err(error) => {
+                    let reason = error
+                        .data
+                        .as_ref()
+                        .and_then(|data| data.get("reason"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| error.message.clone());
+                    reports.push(ProviderHealthReport {
+                        environment_id: environment_id.clone(),
+                        instance_id: inst.id.clone(),
+                        provider: inst.provider,
+                        display_name: inst.display_name.clone(),
+                        enabled: inst.enabled,
+                        installed: false,
+                        resolved_executable: None,
+                        version: None,
+                        status: "unavailable".to_string(),
+                        authentication_state: "unknown".to_string(),
+                        authentication_confidence: "unknown".to_string(),
+                        runtime_status: "unavailable".to_string(),
+                        runtime_code: Some("provider_resolution_failed".to_string()),
+                        account_badge: None,
+                        subscription: None,
+                        reason: Some(reason),
+                        disabled_reason: None,
+                        checked_at_ms: Self::now_ms(),
+                        expires_at_ms: Self::now_ms()
+                            .saturating_add(pandamux_providers::PROVIDER_SNAPSHOT_TTL_MS),
+                        last_success_at_ms: None,
+                        login_guidance: Some(provider_login_guidance(inst.provider)),
+                        retryable: true,
+                    });
+                }
             }
         }
 
-        let res = ProviderHealthResult { reports };
+        while let Some(result) = tasks.join_next().await {
+            let Ok((config, outcome)) = result else {
+                continue;
+            };
+            let report = match outcome {
+                ProbeOutcome::Snapshot(snapshot) => {
+                    provider_health_report_from_snapshot(&environment_id, config, snapshot)
+                }
+                ProbeOutcome::TimedOut => {
+                    let checked_at_ms = Self::now_ms();
+                    ProviderHealthReport {
+                        environment_id: environment_id.clone(),
+                        instance_id: config.id,
+                        provider: config.provider,
+                        display_name: config.display_name,
+                        enabled: config.enabled,
+                        installed: config.binary_path.is_some(),
+                        resolved_executable: config.binary_path,
+                        version: None,
+                        status: "unavailable".to_string(),
+                        authentication_state: "unknown".to_string(),
+                        authentication_confidence: "unknown".to_string(),
+                        runtime_status: "timeout".to_string(),
+                        runtime_code: Some("probe_timeout".to_string()),
+                        account_badge: None,
+                        subscription: None,
+                        reason: Some(format!(
+                            "Provider health probe exceeded {} ms",
+                            filter.timeout_ms
+                        )),
+                        disabled_reason: None,
+                        checked_at_ms,
+                        expires_at_ms: checked_at_ms
+                            .saturating_add(pandamux_providers::PROVIDER_SNAPSHOT_TTL_MS),
+                        last_success_at_ms: None,
+                        login_guidance: Some(provider_login_guidance(config.provider)),
+                        retryable: true,
+                    }
+                }
+            };
+            reports.push(report);
+        }
+
+        for (instance_id, (provider, display_name, enabled)) in expected {
+            if reports
+                .iter()
+                .any(|report| report.instance_id == instance_id)
+            {
+                continue;
+            }
+            let checked_at_ms = Self::now_ms();
+            reports.push(ProviderHealthReport {
+                environment_id: environment_id.clone(),
+                instance_id,
+                provider,
+                display_name,
+                enabled,
+                installed: false,
+                resolved_executable: None,
+                version: None,
+                status: "unavailable".to_string(),
+                authentication_state: "unknown".to_string(),
+                authentication_confidence: "unknown".to_string(),
+                runtime_status: "unavailable".to_string(),
+                runtime_code: Some("probe_task_failed".to_string()),
+                account_badge: None,
+                subscription: None,
+                reason: Some("Provider health probe task failed".to_string()),
+                disabled_reason: None,
+                checked_at_ms,
+                expires_at_ms: checked_at_ms
+                    .saturating_add(pandamux_providers::PROVIDER_SNAPSHOT_TTL_MS),
+                last_success_at_ms: None,
+                login_guidance: Some(provider_login_guidance(provider)),
+                retryable: true,
+            });
+        }
+
+        reports.sort_by(|left, right| left.instance_id.cmp(&right.instance_id));
+        for report in &mut reports {
+            let previous = self
+                .store
+                .latest_provider_health_report(&report.environment_id, &report.instance_id)
+                .map_err(|error| RpcError::internal_error(error.to_string()))?;
+            report.last_success_at_ms = if report.status == "healthy" {
+                Some(report.checked_at_ms)
+            } else {
+                previous.and_then(|previous| previous.last_success_at_ms)
+            };
+            self.store
+                .save_provider_health_report(report)
+                .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        }
+
+        let next_instance_id = reports.last().map(|report| report.instance_id.clone());
+        let res = ProviderHealthResult {
+            reports,
+            next_instance_id,
+            has_more,
+        };
         serde_json::to_value(&res).map_err(|e| RpcError::internal_error(e.to_string()))
+    }
+
+    async fn handle_provider_models(&self, params: Value) -> Result<Value, RpcError> {
+        let filter = if params.is_null() {
+            ProviderModelsParams::default()
+        } else {
+            serde_json::from_value::<ProviderModelsParams>(params).map_err(|error| {
+                RpcError::with_data(
+                    -32602,
+                    format!("Invalid provider.models params: {error}"),
+                    json!({ "reason": "provider_models_params_invalid" }),
+                )
+            })?
+        };
+        filter.validate().map_err(|error| {
+            RpcError::with_data(
+                -32602,
+                error,
+                json!({ "reason": "provider_models_page_limit_invalid" }),
+            )
+        })?;
+        let environment_id = filter
+            .environment_id
+            .clone()
+            .unwrap_or_else(|| EnvironmentId::new(self.environment_id.clone()));
+        let settings = self
+            .store
+            .get_settings()
+            .map_err(|error| RpcError::internal_error(error.to_string()))?
+            .unwrap_or_default();
+
+        if let Some(instance_id) = filter.instance_id.as_ref()
+            && !settings
+                .providers
+                .iter()
+                .any(|config| &config.id == instance_id)
+        {
+            self.provider_resolver
+                .resolve_allow_disabled(instance_id, &environment_id)?;
+        }
+
+        let mut instances = settings
+            .providers
+            .iter()
+            .filter(|instance| {
+                filter
+                    .instance_id
+                    .as_ref()
+                    .is_none_or(|target_id| &instance.id == target_id)
+            })
+            .filter(|instance| {
+                filter
+                    .after_instance_id
+                    .as_ref()
+                    .is_none_or(|after| instance.id.as_str() > after.as_str())
+            })
+            .collect::<Vec<_>>();
+        instances.sort_by(|left, right| left.id.cmp(&right.id));
+        let has_more = instances.len() > filter.limit as usize;
+        instances.truncate(filter.limit as usize);
+
+        enum DiscoveryOutcome {
+            Models(Vec<pandamux_providers::ModelInfo>),
+            Failed(String),
+            TimedOut,
+        }
+
+        let semaphore = Arc::new(Semaphore::new(filter.max_concurrency as usize));
+        let mut tasks = JoinSet::new();
+        let mut reports = Vec::with_capacity(instances.len());
+        let mut expected = HashMap::new();
+
+        for instance in instances {
+            expected.insert(
+                instance.id.clone(),
+                (
+                    instance.provider,
+                    instance.display_name.clone(),
+                    instance.enabled,
+                ),
+            );
+            match self
+                .provider_resolver
+                .resolve_allow_disabled(&instance.id, &environment_id)
+            {
+                Ok(resolved) if !resolved.config.enabled => {
+                    reports.push(ProviderModelsReport {
+                        environment_id: environment_id.clone(),
+                        instance_id: resolved.config.id,
+                        provider: resolved.config.provider,
+                        display_name: resolved.config.display_name,
+                        enabled: false,
+                        models: Vec::new(),
+                        checked_at_ms: Self::now_ms(),
+                        error: Some("Provider instance is disabled".to_string()),
+                        retryable: false,
+                    });
+                }
+                Ok(resolved) => {
+                    let semaphore = semaphore.clone();
+                    let timeout = Duration::from_millis(filter.timeout_ms);
+                    tasks.spawn(async move {
+                        let outcome = match semaphore.acquire_owned().await {
+                            Ok(_permit) => match tokio::time::timeout(
+                                timeout,
+                                resolved.driver.list_models(&resolved.config),
+                            )
+                            .await
+                            {
+                                Ok(Ok(models)) => DiscoveryOutcome::Models(models),
+                                Ok(Err(error)) => DiscoveryOutcome::Failed(error.to_string()),
+                                Err(_) => DiscoveryOutcome::TimedOut,
+                            },
+                            Err(_) => DiscoveryOutcome::TimedOut,
+                        };
+                        (resolved.config, outcome)
+                    });
+                }
+                Err(error) => {
+                    reports.push(ProviderModelsReport {
+                        environment_id: environment_id.clone(),
+                        instance_id: instance.id.clone(),
+                        provider: instance.provider,
+                        display_name: instance.display_name.clone(),
+                        enabled: instance.enabled,
+                        models: Vec::new(),
+                        checked_at_ms: Self::now_ms(),
+                        error: Some(error.message),
+                        retryable: true,
+                    });
+                }
+            }
+        }
+
+        while let Some(result) = tasks.join_next().await {
+            let Ok((config, outcome)) = result else {
+                continue;
+            };
+            let checked_at_ms = Self::now_ms();
+            let (models, error) = match outcome {
+                DiscoveryOutcome::Models(models) => {
+                    let mut seen = BTreeSet::new();
+                    let models = models
+                        .into_iter()
+                        .filter(|model| {
+                            !model.id.trim().is_empty() && seen.insert(model.id.clone())
+                        })
+                        .map(|model| ProviderModelInfo {
+                            id: model.id,
+                            display_name: model.display_name,
+                            context_window: model.context_window,
+                            max_output_tokens: model.max_output_tokens,
+                            supports_reasoning: model.supports_reasoning,
+                        })
+                        .collect::<Vec<_>>();
+                    if models.is_empty() {
+                        (
+                            models,
+                            Some("Provider returned no available models".to_string()),
+                        )
+                    } else {
+                        (models, None)
+                    }
+                }
+                DiscoveryOutcome::Failed(error) => (Vec::new(), Some(error)),
+                DiscoveryOutcome::TimedOut => (
+                    Vec::new(),
+                    Some(format!(
+                        "Provider model discovery exceeded {} ms",
+                        filter.timeout_ms
+                    )),
+                ),
+            };
+            let retryable = error.is_some();
+            reports.push(ProviderModelsReport {
+                environment_id: environment_id.clone(),
+                instance_id: config.id,
+                provider: config.provider,
+                display_name: config.display_name,
+                enabled: config.enabled,
+                models,
+                checked_at_ms,
+                error,
+                retryable,
+            });
+        }
+
+        for (instance_id, (provider, display_name, enabled)) in expected {
+            if reports
+                .iter()
+                .any(|report| report.instance_id == instance_id)
+            {
+                continue;
+            }
+            reports.push(ProviderModelsReport {
+                environment_id: environment_id.clone(),
+                instance_id,
+                provider,
+                display_name,
+                enabled,
+                models: Vec::new(),
+                checked_at_ms: Self::now_ms(),
+                error: Some("Provider model discovery task failed".to_string()),
+                retryable: true,
+            });
+        }
+
+        reports.sort_by(|left, right| left.instance_id.cmp(&right.instance_id));
+        let next_instance_id = reports.last().map(|report| report.instance_id.clone());
+        serde_json::to_value(ProviderModelsResult {
+            reports,
+            next_instance_id,
+            has_more,
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_provider_login_preview(&self, params: Value) -> Result<Value, RpcError> {
+        let params: ProviderLoginPreviewParams =
+            serde_json::from_value(params).map_err(|error| {
+                RpcError::invalid_params(format!("Invalid provider.login.preview params: {error}"))
+            })?;
+        let environment_id = params
+            .environment_id
+            .unwrap_or_else(|| EnvironmentId::new(self.environment_id.clone()));
+        let resolved = self
+            .provider_resolver
+            .resolve_allow_disabled(&params.provider_instance_id, &environment_id)?;
+        let args = match resolved.config.provider {
+            ProviderKind::Claude => vec!["auth".to_string(), "login".to_string()],
+            ProviderKind::Codex => vec!["login".to_string()],
+            provider => {
+                let guidance = provider_login_guidance(provider);
+                return Err(RpcError::with_data(
+                    -32020,
+                    guidance.summary,
+                    json!({
+                        "reason": guidance.unavailable_reason
+                            .unwrap_or_else(|| "provider_login_requires_dedicated_flow".to_string()),
+                        "providerInstanceId": params.provider_instance_id,
+                        "environmentId": environment_id,
+                        "flow": guidance.flow,
+                        "retryable": true,
+                    }),
+                ));
+            }
+        };
+        let snapshot = tokio::time::timeout(
+            Duration::from_millis(pandamux_protocol::DEFAULT_PROVIDER_PROBE_TIMEOUT_MS),
+            resolved.driver.probe(&resolved.config),
+        )
+        .await
+        .map_err(|_| {
+            RpcError::with_data(
+                -32020,
+                "Provider login preview could not resolve the executable before its deadline",
+                json!({
+                    "reason": "provider_login_preview_timeout",
+                    "providerInstanceId": params.provider_instance_id,
+                    "environmentId": environment_id,
+                    "retryable": true,
+                }),
+            )
+        })?;
+        let program = snapshot.resolved_executable.ok_or_else(|| {
+            RpcError::with_data(
+                -32020,
+                "Provider executable is not installed or could not be resolved",
+                json!({
+                    "reason": "provider_login_executable_missing",
+                    "providerInstanceId": params.provider_instance_id,
+                    "environmentId": environment_id,
+                    "retryable": true,
+                }),
+            )
+        })?;
+        if program.chars().any(char::is_control) {
+            return Err(RpcError::with_data(
+                -32020,
+                "Resolved provider executable contains unsafe control characters",
+                json!({
+                    "reason": "provider_login_executable_invalid",
+                    "retryable": false,
+                }),
+            ));
+        }
+        let display_command = render_login_command(&program, &args);
+        let mut environment = resolved
+            .config
+            .env_overrides
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<HashMap<_, _>>();
+        let profile = resolved.config.profile_dir.clone();
+        let profile_key = match resolved.config.provider {
+            ProviderKind::Claude => pandamux_providers::ENV_CLAUDE_CONFIG_DIR,
+            ProviderKind::Codex => pandamux_providers::ENV_CODEX_HOME,
+            _ => unreachable!("unsupported login provider was rejected"),
+        };
+        environment.insert(profile_key.to_string(), profile.clone());
+        let now_ms = Self::now_ms();
+        let preview = ProviderLoginPreview {
+            preview_id: format!("login-preview-{}", uuid::Uuid::new_v4()),
+            environment_id,
+            provider_instance_id: resolved.config.id,
+            provider: resolved.config.provider,
+            profile,
+            flow: ProviderLoginFlow::Terminal,
+            display_command,
+            expires_at_ms: now_ms.saturating_add(5 * 60 * 1000),
+        };
+        let record = LoginPreviewRecord {
+            preview: preview.clone(),
+            environment,
+            shell: (self.login_shell_resolver)()?,
+        };
+        let mut previews = self
+            .login_previews
+            .lock()
+            .map_err(|_| RpcError::internal_error("Provider login preview registry lock failed"))?;
+        previews.retain(|_, candidate| candidate.preview.expires_at_ms > now_ms);
+        previews.insert(preview.preview_id.clone(), record);
+        serde_json::to_value(preview).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn handle_provider_login_launch(&self, params: Value) -> Result<Value, RpcError> {
+        let params: ProviderLoginLaunchParams =
+            serde_json::from_value(params).map_err(|error| {
+                RpcError::invalid_params(format!("Invalid provider.login.launch params: {error}"))
+            })?;
+        let environment_id = params
+            .environment_id
+            .unwrap_or_else(|| EnvironmentId::new(self.environment_id.clone()));
+        let now_ms = Self::now_ms();
+        let record = {
+            let mut previews = self.login_previews.lock().map_err(|_| {
+                RpcError::internal_error("Provider login preview registry lock failed")
+            })?;
+            previews.retain(|_, candidate| candidate.preview.expires_at_ms > now_ms);
+            previews.get(&params.preview_id).cloned()
+        }
+        .ok_or_else(|| {
+            RpcError::with_data(
+                -32020,
+                "Provider login preview is missing or expired",
+                json!({
+                    "reason": "provider_login_preview_expired",
+                    "retryable": true,
+                }),
+            )
+        })?;
+        if record.preview.environment_id != environment_id
+            || record.preview.provider_instance_id != params.provider_instance_id
+        {
+            return Err(RpcError::with_data(
+                -32020,
+                "Provider login launch does not match its preview",
+                json!({
+                    "reason": "provider_login_preview_mismatch",
+                    "retryable": true,
+                }),
+            ));
+        }
+        let opened = self
+            .terminal
+            .open(TerminalOpenParams {
+                terminal_id: None,
+                environment_id: Some(environment_id.clone()),
+                cwd: std::env::current_dir()
+                    .ok()
+                    .map(|path| path.to_string_lossy().to_string()),
+                shell: record.shell,
+                rows: Some(30),
+                cols: Some(120),
+                env: Some(record.environment),
+            })
+            .map_err(|error| {
+                RpcError::with_data(
+                    -32020,
+                    format!("Failed to open provider login terminal: {error}"),
+                    json!({
+                        "reason": "provider_login_terminal_open_failed",
+                        "retryable": true,
+                    }),
+                )
+            })?;
+        if let Err(error) = self.terminal.input(TerminalInputParams {
+            terminal_id: opened.terminal_id.clone(),
+            data: login_terminal_input(&record.preview.display_command, cfg!(windows)),
+        }) {
+            let _ = self.terminal.close(TerminalCloseParams {
+                terminal_id: opened.terminal_id.clone(),
+            });
+            return Err(RpcError::with_data(
+                -32020,
+                format!("Failed to launch provider login command: {error}"),
+                json!({
+                    "reason": "provider_login_terminal_input_failed",
+                    "terminalId": opened.terminal_id,
+                    "retryable": true,
+                }),
+            ));
+        }
+        if let Ok(mut previews) = self.login_previews.lock() {
+            previews.remove(&params.preview_id);
+        }
+        serde_json::to_value(ProviderLoginLaunchResult {
+            environment_id,
+            provider_instance_id: params.provider_instance_id,
+            terminal_id: opened.terminal_id,
+            display_command: record.preview.display_command,
+            retryable: true,
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn handle_usage_export(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        self.require_hub_usage_peer(context)?;
+        let params: UsageExportParams = parse_usage_params(params, "usage.export")?;
+        params
+            .validate()
+            .map_err(|error| usage_params_error("usage_page_limit_invalid", error))?;
+        let result = self
+            .store
+            .export_usage(&params)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn handle_usage_backfill(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        self.require_hub_usage_peer(context)?;
+        let params: UsageBackfillParams = parse_usage_params(params, "usage.backfill")?;
+        params
+            .validate()
+            .map_err(|error| usage_params_error("usage_backfill_invalid", error))?;
+        let result = self
+            .store
+            .export_usage_backfill(&params)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn handle_usage_ack(&self, context: &RequestContext, params: Value) -> Result<Value, RpcError> {
+        self.require_hub_usage_peer(context)?;
+        let params: UsageAckParams = serde_json::from_value(params).map_err(|error| {
+            usage_params_error(
+                "usage_ack_params_invalid",
+                format!("Invalid usage.ack params: {error}"),
+            )
+        })?;
+        params
+            .validate()
+            .map_err(|error| usage_params_error("usage_ack_invalid", error))?;
+        let outcome = self
+            .store
+            .acknowledge_and_compact_usage(
+                params.through_seq,
+                crate::store::UsageOutboxRetention::default(),
+            )
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        serde_json::to_value(UsageAckResult {
+            acknowledged: outcome.acknowledged,
+            through_seq: params.through_seq,
+            compacted: outcome.compacted,
+            retained_from_seq: outcome.retained_from_seq,
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn handle_usage_query(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_local_query_peer(context)?;
+        let params: UsageQueryParams = parse_usage_params(params, "usage.query")?;
+        params
+            .validate()
+            .map_err(|error| usage_params_error("usage_query_invalid", error))?;
+        let result = self
+            .store
+            .query_usage(&params)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn handle_usage_catalog(&self, context: &RequestContext) -> Result<Value, RpcError> {
+        require_local_query_peer(context)?;
+        let settings = self
+            .store
+            .get_settings()
+            .map_err(|error| RpcError::internal_error(error.to_string()))?
+            .unwrap_or_default();
+        let mut routing_providers = Vec::new();
+        for config in settings
+            .providers
+            .iter()
+            .filter(|provider| provider.enabled)
+        {
+            let Some(driver) = self.drivers.get(config.provider) else {
+                continue;
+            };
+            let metadata = driver.metadata();
+            let mut models = metadata
+                .supported_models
+                .into_iter()
+                .map(|model| model.id)
+                .collect::<Vec<_>>();
+            if let Some(default_model) = config
+                .settings
+                .get("defaultModel")
+                .and_then(Value::as_str)
+                .filter(|model| !model.trim().is_empty())
+            {
+                models.push(default_model.to_string());
+            }
+            models.sort();
+            models.dedup();
+            if models.is_empty() {
+                continue;
+            }
+            routing_providers.push(RoutingProviderCatalogEntry {
+                environment_id: config
+                    .environment_id
+                    .clone()
+                    .unwrap_or_else(|| EnvironmentId::new(self.environment_id.clone())),
+                provider_instance_id: config.id.clone(),
+                provider: config.provider,
+                display_name: config.display_name.clone(),
+                capabilities: metadata.capabilities,
+                models,
+            });
+        }
+        routing_providers.sort_by(|left, right| {
+            left.display_name
+                .cmp(&right.display_name)
+                .then_with(|| left.provider_instance_id.cmp(&right.provider_instance_id))
+        });
+        let result = UsageCatalogResult {
+            subscriptions: self
+                .store
+                .list_usage_subscriptions()
+                .map_err(|error| RpcError::internal_error(error.to_string()))?,
+            mappings: self
+                .store
+                .list_provider_subscription_mappings()
+                .map_err(|error| RpcError::internal_error(error.to_string()))?,
+            routing_providers,
+        };
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn handle_usage_subscription_set(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_local_query_peer(context)?;
+        let params: UsageSubscriptionSetParams =
+            serde_json::from_value(params).map_err(|error| {
+                usage_params_error(
+                    "usage_subscription_params_invalid",
+                    format!("Invalid usage.subscription.set params: {error}"),
+                )
+            })?;
+        params
+            .validate()
+            .map_err(|error| usage_params_error("usage_subscription_invalid", error))?;
+
+        let resolved = self
+            .provider_resolver
+            .resolve_allow_disabled(&params.provider_instance_id, &params.environment_id)?;
+        if pandamux_core::UsageProvider::from(resolved.config.provider) != params.provider {
+            return Err(usage_params_error(
+                "usage_subscription_provider_mismatch",
+                "subscription provider does not match the configured provider instance",
+            ));
+        }
+        if let Some(subscription_key) = params.subscription_key.as_ref()
+            && let Some(existing) = self
+                .store
+                .usage_subscription_by_key(subscription_key)
+                .map_err(|error| RpcError::internal_error(error.to_string()))?
+            && existing.provider != params.provider
+        {
+            return Err(usage_params_error(
+                "usage_subscription_provider_change_denied",
+                "an existing named subscription cannot be reassigned to another provider",
+            ));
+        }
+
+        let subscription = UsageSubscription {
+            key: params.subscription_key.unwrap_or_else(|| {
+                SubscriptionKey::new(format!("subscription-{}", uuid::Uuid::new_v4().simple()))
+            }),
+            provider: params.provider,
+            display_name: params.display_name.trim().to_string(),
+            masked_account_label: params
+                .masked_account_label
+                .map(|label| label.trim().to_string()),
+        };
+        self.store
+            .save_usage_subscription_mapping(
+                &subscription,
+                &params.environment_id,
+                &params.provider_instance_id,
+                Self::now_ms(),
+            )
+            .map_err(|error| {
+                usage_params_error("usage_subscription_save_failed", error.to_string())
+            })?;
+        self.handle_usage_catalog(context)
+    }
+
+    fn handle_capacity_query(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_local_query_peer(context)?;
+        let params: CapacityQueryParams = parse_usage_params(params, "capacity.query")?;
+        params
+            .validate()
+            .map_err(|error| usage_params_error("capacity_query_invalid", error))?;
+        let result = self
+            .store
+            .query_capacity(&params)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    async fn handle_capacity_refresh(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        self.require_capacity_refresh_peer(context)?;
+        let params: CapacityRefreshParams = parse_usage_params(params, "capacity.refresh")?;
+        params
+            .validate()
+            .map_err(|error| usage_params_error("capacity_refresh_invalid", error))?;
+        let environment_id = params
+            .environment_id
+            .clone()
+            .unwrap_or_else(|| EnvironmentId::new(self.environment_id.clone()));
+        if environment_id != context.authenticated_environment_id
+            && !matches!(
+                context.peer_role,
+                PeerRole::Internal | PeerRole::LocalControl
+            )
+        {
+            return Err(RpcError::with_data(
+                -32001,
+                "Capacity refresh environment does not match the authenticated peer",
+                json!({ "reason": "capacity_environment_mismatch" }),
+            ));
+        }
+
+        let settings = self
+            .store
+            .get_settings()
+            .map_err(|error| RpcError::internal_error(error.to_string()))?
+            .unwrap_or_default();
+        let mut snapshots = Vec::new();
+        let mut subscriptions = BTreeMap::new();
+        let mut matched = false;
+        for config in settings.providers.iter().filter(|config| {
+            params
+                .provider_instance_id
+                .as_ref()
+                .is_none_or(|requested| requested == &config.id)
+        }) {
+            matched = true;
+            let Some((subscription_key, _)) = self
+                .store
+                .usage_subscription_for_provider(&environment_id, &config.id)
+                .map_err(|error| RpcError::internal_error(error.to_string()))?
+            else {
+                if params.provider_instance_id.is_some() {
+                    return Err(RpcError::with_data(
+                        -32020,
+                        "Provider instance has no explicit subscription mapping",
+                        json!({
+                            "reason": "capacity_subscription_mapping_missing",
+                            "providerInstanceId": config.id,
+                            "environmentId": environment_id,
+                        }),
+                    ));
+                }
+                continue;
+            };
+            let subscription = self
+                .store
+                .usage_subscription_by_key(&subscription_key)
+                .map_err(|error| RpcError::internal_error(error.to_string()))?
+                .ok_or_else(|| {
+                    RpcError::internal_error(
+                        "Provider subscription mapping references missing metadata",
+                    )
+                })?;
+            subscriptions.insert(subscription_key.clone(), subscription);
+            let resolved = self
+                .provider_resolver
+                .resolve_allow_disabled(&config.id, &environment_id)?;
+            let report = if resolved.config.enabled {
+                tokio::time::timeout(
+                    Duration::from_millis(params.timeout_ms),
+                    resolved.driver.usage_limits(&resolved.config),
+                )
+                .await
+                .ok()
+                .flatten()
+            } else {
+                None
+            };
+            let mut instance_snapshots = capacity_snapshots_from_provider_report(
+                &environment_id,
+                &resolved.config,
+                subscription_key,
+                report,
+                Self::now_ms(),
+            );
+            self.store
+                .save_capacity_snapshots(&instance_snapshots)
+                .map_err(|error| RpcError::internal_error(error.to_string()))?;
+            snapshots.append(&mut instance_snapshots);
+        }
+        if params.provider_instance_id.is_some() && !matched {
+            return Err(RpcError::with_data(
+                -32020,
+                "Provider instance does not exist",
+                json!({ "reason": "provider_instance_missing" }),
+            ));
+        }
+        let subscriptions: Vec<UsageSubscription> = subscriptions.into_values().collect();
+        serde_json::to_value(CapacityRefreshResult {
+            subscriptions,
+            snapshots,
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn handle_capacity_push(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        self.require_capacity_push_peer(context)?;
+        let params: CapacityPushParams = serde_json::from_value(params).map_err(|error| {
+            usage_params_error(
+                "capacity_push_params_invalid",
+                format!("Invalid capacity.push params: {error}"),
+            )
+        })?;
+        params
+            .validate()
+            .map_err(|error| usage_params_error("capacity_push_invalid", error))?;
+        let authenticated_environment_id = if matches!(context.peer_role, PeerRole::Internal) {
+            EnvironmentId::new(self.environment_id.clone())
+        } else {
+            context.authenticated_environment_id.clone()
+        };
+        if params.environment_id != authenticated_environment_id {
+            return Err(RpcError::with_data(
+                -32001,
+                "Capacity push environment does not match the authenticated context",
+                json!({ "reason": "capacity_environment_mismatch" }),
+            ));
+        }
+        let snapshots = params
+            .snapshots
+            .into_iter()
+            .map(|mut snapshot| {
+                snapshot.schema_version = params.schema_version;
+                snapshot.environment_id = Some(authenticated_environment_id.clone());
+                snapshot.evidence_scope = CapacityEvidenceScope::Hub;
+                snapshot.max_age_ms = params.max_age_ms;
+                snapshot
+            })
+            .collect::<Vec<_>>();
+        self.store
+            .save_capacity_snapshots(&snapshots)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        serde_json::to_value(CapacityPushResult {
+            accepted: u32::try_from(snapshots.len()).unwrap_or(u32::MAX),
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn validate_schedule_policy(
+        &self,
+        schedule: &ScheduleRecord,
+    ) -> Result<(Option<OrganizationPolicy>, Option<ProviderInstanceId>), RpcError> {
+        schedule.validate().map_err(|error| {
+            RpcError::with_data(
+                -32602,
+                error,
+                json!({ "reason": "schedule_definition_invalid" }),
+            )
+        })?;
+
+        if matches!(&schedule.target, ScheduleTarget::Orchestrator { .. }) {
+            return Err(RpcError::with_data(
+                -32031,
+                "Orchestrator schedule validation is not available in this checkpoint",
+                json!({ "reason": "schedule_orchestrator_unavailable" }),
+            ));
+        }
+        if matches!(
+            &schedule.target,
+            ScheduleTarget::Session {
+                thread_mode: pandamux_core::ScheduleThreadMode::ContinueExistingThread,
+                ..
+            }
+        ) {
+            return Err(RpcError::with_data(
+                -32031,
+                "Continue-existing-thread schedules are not available in this checkpoint",
+                json!({ "reason": "schedule_continue_unavailable" }),
+            ));
+        }
+        let project_id = schedule.project_id.as_ref().ok_or_else(|| {
+            RpcError::with_data(
+                -32030,
+                "policy-sensitive schedule has no project organization",
+                json!({ "reason": "organization_policy_missing" }),
+            )
+        })?;
+        let requested = match &schedule.target {
+            ScheduleTarget::Session { provider, .. } => {
+                provider.as_deref().map(ProviderInstanceId::new)
+            }
+            ScheduleTarget::Agent { .. } | ScheduleTarget::Orchestrator { .. } => None,
+        };
+        let (policy, provider_instance_id) = self.resolve_authorized_project_provider(
+            project_id,
+            &schedule.environment.id,
+            requested.as_ref(),
+        )?;
+        Ok((Some(policy), Some(provider_instance_id)))
+    }
+
+    fn handle_schedule_validate(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_local_query_peer(context)?;
+        let params: ScheduleValidateParams = serde_json::from_value(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let result = match self.validate_schedule_policy(&params.schedule) {
+            Ok((policy, _)) => ScheduleValidationResult {
+                valid: true,
+                organization_name: policy.map(|policy| policy.display_name),
+                blocking_reasons: Vec::new(),
+            },
+            Err(error) => ScheduleValidationResult {
+                valid: false,
+                organization_name: None,
+                blocking_reasons: vec![error.message],
+            },
+        };
+        serde_json::to_value(result).map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn handle_schedule_save(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_local_query_peer(context)?;
+        let params: ScheduleSaveParams = serde_json::from_value(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        self.validate_schedule_policy(&params.schedule)?;
+        if !self
+            .environment_router
+            .is_local(&Some(params.schedule.environment.id.clone()))
+        {
+            return Err(RpcError::with_data(
+                -32031,
+                "Remote schedule storage is not available in this checkpoint",
+                json!({ "reason": "schedule_remote_storage_unavailable" }),
+            ));
+        }
+        self.store
+            .save_schedule(&params.schedule)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        Ok(json!({ "success": true }))
+    }
+
+    async fn handle_schedule_run(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        require_local_query_peer(context)?;
+        let params: ScheduleRunParams = serde_json::from_value(params)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+        let schedule = self
+            .store
+            .get_schedule(&params.schedule_id)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?
+            .ok_or_else(|| RpcError::not_found("Schedule not found"))?;
+        if !schedule.enabled {
+            return Err(RpcError::with_data(
+                -32031,
+                "Schedule is disabled",
+                json!({ "reason": "schedule_disabled" }),
+            ));
+        }
+        if !self
+            .environment_router
+            .is_local(&Some(schedule.environment.id.clone()))
+        {
+            return Err(RpcError::with_data(
+                -32031,
+                "Remote schedule execution is not available in this checkpoint",
+                json!({ "reason": "schedule_remote_execution_unavailable" }),
+            ));
+        }
+        if schedule.approval == ScheduleApprovalPolicy::ApproveFirst && !params.approved {
+            return Err(RpcError::with_data(
+                -32031,
+                "Schedule requires explicit approval before its first run",
+                json!({ "reason": "schedule_approval_required" }),
+            ));
+        }
+        let (_, provider_instance_id) = self.validate_schedule_policy(&schedule)?;
+        let provider_instance_id = provider_instance_id.ok_or_else(|| {
+            RpcError::internal_error("validated schedule did not resolve a provider")
+        })?;
+
+        let (cwd, prompt, model, agent_id) = match &schedule.target {
+            ScheduleTarget::Agent {
+                agent,
+                project_path,
+                prompt,
+            } => (
+                project_path.clone(),
+                prompt.clone(),
+                None,
+                Some(AgentId::new(agent)),
+            ),
+            ScheduleTarget::Session {
+                project_path,
+                prompt,
+                model,
+                ..
+            } => (project_path.clone(), prompt.clone(), model.clone(), None),
+            ScheduleTarget::Orchestrator { .. } => unreachable!("handled above"),
+        };
+        let mut thread = self.thread_manager.create_thread(ThreadCreateParams {
+            project_id: schedule.project_id.clone(),
+            environment_id: Some(schedule.environment.id.clone()),
+            title: Some(format!("Scheduled: {}", schedule.name)),
+            provider_instance_id: Some(provider_instance_id),
+            model,
+            effort: None,
+            access_mode: Some(if schedule.full_access_opt_in {
+                AccessMode::FullAccess
+            } else {
+                AccessMode::WorkspaceOnly
+            }),
+            agent_id,
+            cwd: Some(cwd),
+            worktree: None,
+        })?;
+        thread.origin = ThreadOrigin::Schedule {
+            schedule_id: schedule.id,
+            run_id: RunId::generate(),
+        };
+        self.store
+            .save_thread(&thread)
+            .map_err(|error| RpcError::internal_error(error.to_string()))?;
+        let turn = self
+            .thread_manager
+            .send_turn(ThreadSendTurnParams {
+                thread_id: thread.id.clone(),
+                text: prompt,
+                attachment_ids: Vec::new(),
+                model: None,
+                effort: None,
+                hub_routing_context: None,
+            })
+            .await?;
+        serde_json::to_value(ScheduleRunResult {
+            thread_id: thread.id,
+            turn_id: turn.turn_id,
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
+
+    fn require_capacity_refresh_peer(&self, context: &RequestContext) -> Result<(), RpcError> {
+        if matches!(
+            context.peer_role,
+            PeerRole::Internal | PeerRole::LocalControl | PeerRole::NodeProxy
+        ) {
+            return Ok(());
+        }
+        Err(RpcError::with_data(
+            -32001,
+            "Capacity refresh requires authenticated control or Hub context",
+            json!({ "reason": "capacity_refresh_peer_required" }),
+        ))
+    }
+
+    fn require_capacity_push_peer(&self, context: &RequestContext) -> Result<(), RpcError> {
+        if matches!(context.peer_role, PeerRole::Internal | PeerRole::NodeProxy) {
+            return Ok(());
+        }
+        Err(RpcError::with_data(
+            -32001,
+            "Capacity push is restricted to the authenticated Hub context",
+            json!({ "reason": "capacity_hub_peer_required" }),
+        ))
+    }
+
+    fn require_hub_usage_peer(&self, context: &RequestContext) -> Result<(), RpcError> {
+        if matches!(context.peer_role, PeerRole::Internal) {
+            return Ok(());
+        }
+        if matches!(context.peer_role, PeerRole::NodeProxy)
+            && context.authenticated_environment_id.as_str() == self.environment_id
+        {
+            return Ok(());
+        }
+        Err(RpcError::with_data(
+            -32001,
+            "Usage export is restricted to the authenticated Hub peer",
+            json!({ "reason": "usage_hub_peer_required" }),
+        ))
     }
 
     fn handle_mcp_list_tools(&self) -> Result<Value, RpcError> {
@@ -733,10 +4678,38 @@ impl Router {
         serde_json::to_value(tools).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
-    fn handle_mcp_call_tool(&self, params: Value) -> Result<Value, RpcError> {
+    async fn handle_mcp_call_tool(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
         let call_params: McpCallToolParams =
             serde_json::from_value(params).map_err(|e| RpcError::invalid_params(e.to_string()))?;
-        let result = self.mcp.call_tool(&call_params);
+        let result = self
+            .mcp
+            .call_tool_with_context(context, &self.mutation, &call_params);
+        let created = result.content.iter().any(|item| match item {
+            pandamux_protocol::McpContentItem::Text { text } => serde_json::from_str::<Value>(text)
+                .ok()
+                .and_then(|value| value.get("created").and_then(Value::as_bool))
+                .unwrap_or(false),
+            pandamux_protocol::McpContentItem::Resource { .. } => false,
+        });
+        if call_params.name == "propose_agent_access" && !result.is_error && created {
+            self.notifications
+                .lock()
+                .await
+                .push(pandamux_core::notification::NotificationInfo {
+                    id: format!("notif-{}", uuid::Uuid::new_v4().simple()),
+                    workspace_id: None,
+                    surface_id: None,
+                    title: "Configuration confirmation required".to_string(),
+                    body: "An MCP caller proposed a trusted agent access change".to_string(),
+                    source: pandamux_core::notification::NotificationSource::Generic,
+                    timestamp_ms: Self::now_ms(),
+                    read: false,
+                });
+        }
         serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
@@ -1002,13 +4975,12 @@ impl Router {
                 .environment_router
                 .is_local(&Some(thread.environment_id.clone()))
         {
-            let _ = self
-                .sync_attachment_to_environment(
-                    &thread.environment_id,
-                    &p.thread_id,
-                    &result.attachment.id,
-                )
-                .await;
+            self.sync_attachment_to_environment(
+                &thread.environment_id,
+                &p.thread_id,
+                &result.attachment.id,
+            )
+            .await?;
         }
 
         serde_json::to_value(&result).map_err(|e| RpcError::internal_error(e.to_string()))
@@ -1092,8 +5064,23 @@ impl Router {
         Ok(json!({ "success": true }))
     }
 
-    fn handle_antigravity_status(&self, params: Value) -> Result<Value, RpcError> {
-        let _p: AntigravityStatusParams = serde_json::from_value(params).unwrap_or_default();
+    async fn handle_antigravity_status(&self, params: Value) -> Result<Value, RpcError> {
+        let p: AntigravityStatusParams = if params.is_null() {
+            AntigravityStatusParams::default()
+        } else {
+            serde_json::from_value(params).map_err(|error| {
+                RpcError::invalid_params(format!("Invalid antigravity.status params: {error}"))
+            })?
+        };
+        let environment_id = p
+            .environment_id
+            .unwrap_or_else(|| EnvironmentId::new(self.environment_id.clone()));
+        let resolved = self.provider_resolver.resolve_kind(
+            p.provider_instance_id.as_ref(),
+            &environment_id,
+            ProviderKind::Antigravity,
+        )?;
+        let snapshot = resolved.driver.probe(&resolved.config).await;
 
         #[cfg(target_os = "windows")]
         let (platform, arch) = ("windows", "x64");
@@ -1105,80 +5092,145 @@ impl Router {
         let (platform, arch) = ("unsupported", "unknown");
 
         let platform_arch = format!("{platform}-{arch}");
-        let bin_path = pandamux_providers::antigravity::resolve_antigravity_binary(
-            None,
-            &self.data_dir,
-            &platform_arch,
-        );
-
-        let gemini_home = self.data_dir.join("profiles/antigravity/default");
-        let health = if let Some(ref bp) = bin_path {
-            pandamux_providers::antigravity::probe_antigravity_health_offline(
-                bp,
-                &gemini_home,
-                None,
-            )
+        let bin_path = if let Some(binary_path) = resolved.config.binary_path.as_ref() {
+            Some(PathBuf::from(binary_path))
         } else {
-            pandamux_providers::models::ProviderHealth::Unavailable {
-                reason: "Binary not installed".to_string(),
-            }
+            pandamux_providers::antigravity::resolve_antigravity_binary(
+                None,
+                self.data_paths.root(),
+                &platform_arch,
+            )
         };
 
-        let authenticated = matches!(health, pandamux_providers::models::ProviderHealth::Healthy);
-        let free_disk = pandamux_providers::antigravity::get_available_disk_bytes(&self.data_dir);
+        let authenticated = matches!(
+            snapshot.auth,
+            pandamux_providers::models::ProviderAuthStatus::Authenticated { .. }
+        );
+        let free_disk =
+            pandamux_providers::antigravity::get_available_disk_bytes(self.data_paths.root())
+                .map_err(provider_rpc_error)?;
 
+        let (active_processes, max_processes) =
+            pandamux_providers::antigravity::antigravity_process_counts();
         let result = AntigravityStatusResult {
-            installed: bin_path.is_some(),
-            version: if bin_path.is_some() {
-                Some("1.1.1".to_string())
-            } else {
-                None
-            },
+            provider_instance_id: resolved.config.id.clone(),
+            installed: snapshot.installed,
+            version: snapshot.version,
             binary_path: bin_path.map(|p| p.to_string_lossy().to_string()),
             authenticated,
-            active_processes: 0,
-            max_processes: 2,
+            active_processes,
+            max_processes,
             free_disk_bytes: free_disk,
         };
 
         serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
-    async fn handle_antigravity_install(&self, params: Value) -> Result<Value, RpcError> {
+    async fn handle_antigravity_install(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
         let p: AntigravityInstallParams = serde_json::from_value(params).map_err(|e| {
             RpcError::invalid_params(format!("Invalid antigravity.install params: {e}"))
         })?;
-
-        let fallback_bytes = if let Some(ref b64) = p.fallback_bytes_base64 {
-            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64).ok()
-        } else {
-            None
-        };
+        if p.staged_archive_path.is_some()
+            && !matches!(context.peer_role, PeerRole::Internal | PeerRole::NodeProxy)
+        {
+            return Err(RpcError::unauthorized(
+                "Only the authenticated Hub proxy may install a staged Antigravity archive",
+            ));
+        }
+        let staged_archive = p.staged_archive_path.as_deref().map(PathBuf::from);
 
         let result = pandamux_providers::antigravity::install_managed_bundle(
-            &self.data_dir,
+            self.data_paths.root(),
             &p.manifest,
-            fallback_bytes.as_deref(),
+            staged_archive.as_deref(),
+            p.force,
         )
         .await
-        .map_err(|e| RpcError::internal_error(format!("Antigravity bundle install failed: {e}")))?;
+        .map_err(provider_rpc_error)?;
 
         serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))
     }
 
-    fn handle_antigravity_oauth_start(&self, params: Value) -> Result<Value, RpcError> {
-        let _p: AntigravityOAuthStartParams = serde_json::from_value(params).unwrap_or_default();
+    fn handle_antigravity_prepare_upload(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        if !matches!(context.peer_role, PeerRole::Internal | PeerRole::NodeProxy) {
+            return Err(RpcError::unauthorized(
+                "Only the authenticated Hub proxy may prepare an Antigravity upload",
+            ));
+        }
+        let params: AntigravityPrepareUploadParams =
+            serde_json::from_value(params).map_err(|e| {
+                RpcError::invalid_params(format!("Invalid antigravity.prepare_upload params: {e}"))
+            })?;
+        let path = pandamux_providers::antigravity::prepare_bundle_upload(
+            self.data_paths.root(),
+            &params.manifest,
+        )
+        .map_err(provider_rpc_error)?;
+        serde_json::to_value(AntigravityPrepareUploadResult {
+            remote_path: path.to_string_lossy().to_string(),
+        })
+        .map_err(|error| RpcError::internal_error(error.to_string()))
+    }
 
-        let state = format!("agy-state-{}", &uuid::Uuid::new_v4().to_string()[..8]);
-        let redirect_port = 51123;
-        let auth_url = format!(
-            "https://accounts.google.com/o/oauth2/v2/auth?client_id=pandamux-acp.apps.googleusercontent.com&redirect_uri=http%3A%2F%2F127.0.0.1%3A{redirect_port}%2F&response_type=code&scope=openid%20profile%20email&state={state}"
-        );
+    fn handle_antigravity_discard_upload(
+        &self,
+        context: &RequestContext,
+        params: Value,
+    ) -> Result<Value, RpcError> {
+        if !matches!(context.peer_role, PeerRole::Internal | PeerRole::NodeProxy) {
+            return Err(RpcError::unauthorized(
+                "Only the authenticated Hub proxy may discard an Antigravity upload",
+            ));
+        }
+        let params: AntigravityDiscardUploadParams =
+            serde_json::from_value(params).map_err(|e| {
+                RpcError::invalid_params(format!("Invalid antigravity.discard_upload params: {e}"))
+            })?;
+        pandamux_providers::antigravity::discard_bundle_upload(
+            self.data_paths.root(),
+            std::path::Path::new(&params.staged_archive_path),
+        )
+        .map_err(provider_rpc_error)?;
+        Ok(json!({ "discarded": true }))
+    }
+
+    async fn handle_antigravity_oauth_start(&self, params: Value) -> Result<Value, RpcError> {
+        let p: AntigravityOAuthStartParams = if params.is_null() {
+            AntigravityOAuthStartParams::default()
+        } else {
+            serde_json::from_value(params).map_err(|error| {
+                RpcError::invalid_params(format!("Invalid antigravity.oauth_start params: {error}"))
+            })?
+        };
+        let environment_id = p
+            .environment_id
+            .unwrap_or_else(|| EnvironmentId::new(self.environment_id.clone()));
+        let resolved = self.provider_resolver.resolve_kind(
+            p.provider_instance_id.as_ref(),
+            &environment_id,
+            ProviderKind::Antigravity,
+        )?;
+        let instance_id = resolved.config.id.clone();
+        let started = self
+            .antigravity_auth
+            .start(&resolved.config, self.data_paths.root())
+            .await
+            .map_err(|error| provider_rpc_error_for_target(error, &instance_id, &environment_id))?;
 
         let result = AntigravityOAuthStartResult {
-            auth_url,
-            redirect_port,
-            state,
+            provider_instance_id: started.provider_instance_id,
+            flow_id: started.flow_id,
+            auth_url: started.auth_url,
+            redirect_port: started.redirect_port,
+            state: started.state,
         };
 
         serde_json::to_value(result).map_err(|e| RpcError::internal_error(e.to_string()))
@@ -1188,24 +5240,25 @@ impl Router {
         let p: AntigravityOAuthRelayParams = serde_json::from_value(params).map_err(|e| {
             RpcError::invalid_params(format!("Invalid antigravity.oauth_relay params: {e}"))
         })?;
+        let environment_id = p
+            .environment_id
+            .clone()
+            .unwrap_or_else(|| EnvironmentId::new(self.environment_id.clone()));
+        let resolved = self.provider_resolver.resolve_kind(
+            p.provider_instance_id.as_ref(),
+            &environment_id,
+            ProviderKind::Antigravity,
+        )?;
+        let instance_id = resolved.config.id.clone();
 
-        let message = pandamux_providers::antigravity::execute_oauth_relay_callback(
-            &p.callback_url,
-            &p.state,
-            p.redirect_port,
-        )
-        .await
-        .map_err(|e| RpcError::internal_error(format!("OAuth relay execution failed: {e}")))?;
-
-        let profile_dir = self.data_dir.join("profiles/antigravity/default");
-        let _ = std::fs::create_dir_all(&profile_dir);
-        let settings_path = profile_dir.join("settings.json");
-        let _ = std::fs::write(
-            &settings_path,
-            serde_json::json!({ "auth": { "type": "oauth-personal" } }).to_string(),
-        );
+        let message = self
+            .antigravity_auth
+            .complete(&resolved.config.id, &p.flow_id, &p.callback_url)
+            .await
+            .map_err(|error| provider_rpc_error_for_target(error, &instance_id, &environment_id))?;
 
         let result = AntigravityOAuthRelayResult {
+            provider_instance_id: resolved.config.id,
             success: true,
             message,
         };
@@ -1385,6 +5438,596 @@ impl Router {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+
+    #[tokio::test]
+    async fn bundle_upload_rpc_is_node_proxy_only_and_environment_bound() {
+        let root = tempfile::tempdir().expect("temporary bundle RPC root");
+        let router = Router::new(
+            Store::in_memory().expect("store"),
+            ServerRole::Node,
+            "env-node".to_string(),
+        )
+        .with_data_dir(root.path().join("app"));
+        let params = json!({
+            "schemaVersion": BUNDLE_PUSH_SCHEMA_VERSION,
+            "transferId": "bundle-transfer-rpc",
+            "environmentId": "env-node",
+            "archiveSha256": "a".repeat(64),
+            "archiveBytes": 42,
+        });
+        let denied = router
+            .handle_request(RpcRequest::new(
+                1,
+                "bundle.prepareUpload",
+                Some(params.clone()),
+            ))
+            .await
+            .expect("internal denial response");
+        assert_eq!(
+            denied
+                .error
+                .as_ref()
+                .and_then(|error| error.data.as_ref())
+                .and_then(|data| data.get("reason"))
+                .and_then(Value::as_str),
+            Some("bundle_node_proxy_required")
+        );
+
+        let node = RequestContext::node_proxy(
+            EnvironmentId::new("env-node"),
+            crate::ClientIdentity::default(),
+        );
+        let prepared = router
+            .handle_request_with_context(
+                &node,
+                RpcRequest::new(2, "bundle.prepareUpload", Some(params)),
+            )
+            .await
+            .expect("prepare response");
+        let result = prepared.result.expect("prepare result");
+        let artifact = PathBuf::from(
+            result["privateArtifactRef"]
+                .as_str()
+                .expect("private artifact path"),
+        );
+        assert!(artifact.starts_with(root.path().join("app/bundle-staging")));
+        assert!(!artifact.exists());
+
+        let forged = router
+            .handle_request_with_context(
+                &node,
+                RpcRequest::new(
+                    3,
+                    "bundle.prepareUpload",
+                    Some(json!({
+                        "schemaVersion": BUNDLE_PUSH_SCHEMA_VERSION,
+                        "transferId": "bundle-transfer-forged",
+                        "environmentId": "env-other",
+                        "archiveSha256": "b".repeat(64),
+                        "archiveBytes": 42,
+                    })),
+                ),
+            )
+            .await
+            .expect("forged response");
+        assert_eq!(forged.error.as_ref().map(|error| error.code), Some(-32001));
+    }
+
+    #[tokio::test]
+    async fn project_layer_rpc_is_local_exact_hash_and_origin_aware() {
+        let root = tempfile::tempdir().expect("temporary project RPC root");
+        let root_path =
+            std::fs::canonicalize(root.path()).expect("canonical temporary project RPC root");
+        let repository = root_path.join("repository");
+        std::fs::create_dir_all(repository.join(".git")).expect("git directory");
+        std::fs::write(
+            repository.join(".git/config"),
+            "[remote \"origin\"]\n\turl = git@github.com:BoardPandas/Pandamux.git\n",
+        )
+        .expect("git config");
+        std::fs::create_dir_all(repository.join(".pandamux")).expect("project layer");
+        std::fs::write(
+            repository.join(".pandamux/project.yaml"),
+            "schemaVersion: 1\nkind: pandamux.project\nclassOverrides: []\nverification: [cargo test]\nagents: []\nknowledge: []\n",
+        )
+        .expect("project configuration");
+        let store = Store::in_memory().expect("store");
+        let project_id = ProjectId::new("project-rpc");
+        let organization_id = pandamux_core::OrganizationId::new("organization-rpc");
+        store
+            .save_organization_policy(
+                &pandamux_core::OrganizationPolicy {
+                    id: organization_id,
+                    display_name: "RPC organization".to_string(),
+                    project_ids: vec![project_id.clone()],
+                    allowed_provider_instances: vec![ProviderInstanceId::new("provider-rpc")],
+                    allowed_subscriptions: vec![SubscriptionKey::new("subscription-rpc")],
+                    failover_pool_ids: Vec::new(),
+                    default_tier_mapping: None,
+                    max_concurrency: Some(1),
+                    daily_budget_micro_usd: None,
+                    broadside: pandamux_core::BroadsidePolicy::default(),
+                    revision: 1,
+                },
+                1,
+            )
+            .expect("organization policy");
+        store
+            .save_thread(&pandamux_core::Thread {
+                id: pandamux_core::ThreadId::new("thread-project-rpc"),
+                project_id: Some(project_id.clone()),
+                environment_id: EnvironmentId::new("env-local"),
+                parent_thread_id: None,
+                title: "Project RPC".to_string(),
+                provider_instance_id: ProviderInstanceId::new("provider-rpc"),
+                model: "test".to_string(),
+                effort: None,
+                access_mode: AccessMode::ReadOnly,
+                workspace: pandamux_core::ThreadWorkspace {
+                    cwd: repository.to_string_lossy().into_owned(),
+                    worktree: None,
+                },
+                status: pandamux_core::ThreadStatus::Idle,
+                agent: None,
+                origin: pandamux_core::ThreadOrigin::Manual,
+                created_at_ms: 1,
+                updated_at_ms: 1,
+            })
+            .expect("project thread");
+        let router = Router::new(store, ServerRole::Hub, "env-local".to_string())
+            .with_data_dir(root_path.join("app"));
+        let node = RequestContext::node_proxy(
+            EnvironmentId::new("env-node"),
+            crate::ClientIdentity::default(),
+        );
+        let denied = router
+            .handle_request_with_context(
+                &node,
+                RpcRequest::new(
+                    1,
+                    "projectLayer.status",
+                    Some(json!({ "projectId": project_id })),
+                ),
+            )
+            .await
+            .expect("node denial response");
+        assert_eq!(
+            denied
+                .error
+                .as_ref()
+                .and_then(|error| error.data.as_ref())
+                .and_then(|data| data.get("reason"))
+                .and_then(Value::as_str),
+            Some("instructions_local_control_required")
+        );
+
+        let status = router
+            .handle_request(RpcRequest::new(
+                2,
+                "projectLayer.status",
+                Some(json!({ "projectId": project_id })),
+            ))
+            .await
+            .expect("project status response");
+        let status = status.result.expect("project status result");
+        let hash = status["projectContentSha256"]
+            .as_str()
+            .expect("project content hash");
+        assert_eq!(
+            status.pointer("/repository/canonicalRemoteIdentity"),
+            Some(&json!("github.com/boardpandas/pandamux"))
+        );
+        assert_eq!(status["visibleButInactive"], true);
+
+        let diff = router
+            .handle_request(RpcRequest::new(
+                3,
+                "projectLayer.diff",
+                Some(json!({
+                    "projectId": project_id,
+                    "projectContentSha256": hash,
+                })),
+            ))
+            .await
+            .expect("project diff response");
+        let diff = diff.result.expect("project diff result");
+        assert_eq!(diff["projectContentSha256"], hash);
+        assert_eq!(
+            diff.pointer("/behavioralDiff/verification/added/0"),
+            Some(&json!("project"))
+        );
+    }
+
+    #[tokio::test]
+    async fn instructions_rpc_is_bounded_and_local_mutation_is_control_only() {
+        let root = tempfile::tempdir().expect("temporary router root");
+        let store = Store::in_memory().expect("store");
+        let router = Router::new(store.clone(), ServerRole::Hub, "env-local".to_string())
+            .with_data_dir(root.path().join("app"));
+        let source = pandamux_core::InstructionsSourceRecord {
+            id: pandamux_core::InstructionSourceId::new("instruction-source-rpc"),
+            canonical_remote_identity: root
+                .path()
+                .join("missing-remote.git")
+                .to_string_lossy()
+                .into_owned(),
+            tracking: pandamux_core::TrackingRef::Branch("refs/heads/main".to_string()),
+            policy: pandamux_core::InstructionsUpdatePolicy::ApproveEach,
+            require_signed_commit: false,
+            revision: pandamux_core::ConfigurationRevision::INITIAL,
+            last_checked_at_ms: None,
+            last_error_reason: None,
+            active_source_commit_sha: None,
+            active_bundle_sha: None,
+        };
+        store
+            .save_instruction_source(&source, 1, 1)
+            .expect("save source");
+        let node = RequestContext::node_proxy(
+            EnvironmentId::new("env-node"),
+            crate::ClientIdentity::default(),
+        );
+        let status = router
+            .handle_request_with_context(
+                &node,
+                RpcRequest::new(
+                    1,
+                    "instructions.status",
+                    Some(json!({ "sourceId": source.id })),
+                ),
+            )
+            .await
+            .expect("status response");
+        assert!(status.is_success());
+        assert_eq!(
+            status
+                .result
+                .as_ref()
+                .and_then(|value| value.pointer("/source/id"))
+                .and_then(Value::as_str),
+            Some("instruction-source-rpc")
+        );
+
+        let denied = router
+            .handle_request_with_context(
+                &node,
+                RpcRequest::new(
+                    2,
+                    "instructions.check",
+                    Some(json!({
+                        "requestId": "rpc-check-node",
+                        "sourceId": source.id,
+                        "expectedRevision": 1,
+                    })),
+                ),
+            )
+            .await
+            .expect("denied response");
+        assert_eq!(
+            denied
+                .error
+                .as_ref()
+                .and_then(|error| error.data.as_ref())
+                .and_then(|data| data.get("reason"))
+                .and_then(Value::as_str),
+            Some("instructions_local_control_required")
+        );
+
+        let checked = router
+            .handle_request(RpcRequest::new(
+                3,
+                "instructions.check",
+                Some(json!({
+                    "requestId": "rpc-check-local",
+                    "sourceId": source.id,
+                    "expectedRevision": 1,
+                })),
+            ))
+            .await
+            .expect("check response");
+        assert!(checked.is_success());
+        assert_eq!(
+            checked
+                .result
+                .as_ref()
+                .and_then(|value| value.get("safeErrorReason"))
+                .and_then(Value::as_str),
+            Some("instructions_remote_unavailable")
+        );
+    }
+
+    #[tokio::test]
+    async fn every_settings_widening_requires_one_local_confirmation() {
+        let root = tempfile::tempdir().expect("temporary mutation router root");
+        let store = Store::in_memory().expect("store");
+        let mut initial = store
+            .get_or_initialize_settings(1_000)
+            .expect("initial settings");
+        initial
+            .settings
+            .trusted_configuration
+            .disabled_agent_ids
+            .insert(AgentId::new("agent-reenable"));
+        initial.revision = store
+            .save_settings_cas(&initial.settings, initial.revision, 1_001)
+            .expect("seed disabled agent");
+        let router = Router::new(store.clone(), ServerRole::Hub, "env-local".to_string())
+            .with_data_dir(root.path().join("app"));
+        let local = RequestContext {
+            peer_role: PeerRole::LocalControl,
+            authenticated_environment_id: EnvironmentId::new("env-local"),
+            client_identity: crate::ClientIdentity {
+                description: "Desktop test".to_string(),
+                ..crate::ClientIdentity::default()
+            },
+            capability_scope: crate::CapabilityScope::Control,
+            connection_id: "desktop-mutation-test".to_string(),
+        };
+        let mcp = RequestContext {
+            peer_role: PeerRole::McpAdapter,
+            authenticated_environment_id: EnvironmentId::new("env-local"),
+            client_identity: crate::ClientIdentity::default(),
+            capability_scope: crate::CapabilityScope::Mcp,
+            connection_id: "mcp-direct-mutation-test".to_string(),
+        };
+        let mut widened = initial.settings.clone();
+        widened
+            .trusted_configuration
+            .disabled_agent_ids
+            .remove(&AgentId::new("agent-reenable"));
+        widened
+            .trusted_configuration
+            .full_access_agent_ids
+            .insert(AgentId::new("agent-full-access"));
+        let params = json!({
+            "expectedRevision": initial.revision,
+            "requestId": "settings-widening-test",
+            "settings": widened,
+        });
+
+        let denied_mcp = router
+            .handle_request_with_context(
+                &mcp,
+                RpcRequest::new(1, "settings.set", Some(params.clone())),
+            )
+            .await
+            .expect("MCP denial response");
+        assert_eq!(
+            denied_mcp
+                .error
+                .and_then(|error| error.data)
+                .and_then(|data| data.get("reason").cloned()),
+            Some(json!("capability_scope_denied"))
+        );
+
+        let proposal_required = router
+            .handle_request_with_context(&local, RpcRequest::new(2, "settings.set", Some(params)))
+            .await
+            .expect("proposal response");
+        let error = proposal_required.error.expect("local approval required");
+        assert_eq!(
+            error.data.as_ref().and_then(|data| data.get("reason")),
+            Some(&json!("local_approval_required"))
+        );
+        let proposal_id = error
+            .data
+            .as_ref()
+            .and_then(|data| data.get("proposalId"))
+            .and_then(Value::as_str)
+            .expect("proposal identity")
+            .to_string();
+        let unchanged = store
+            .get_or_initialize_settings(1_010)
+            .expect("unchanged settings");
+        assert_eq!(unchanged.revision, initial.revision);
+        assert!(
+            unchanged
+                .settings
+                .trusted_configuration
+                .disabled_agent_ids
+                .contains(&AgentId::new("agent-reenable"))
+        );
+        assert!(
+            unchanged
+                .settings
+                .trusted_configuration
+                .full_access_agent_ids
+                .is_empty()
+        );
+
+        let approved = router
+            .handle_request_with_context(
+                &local,
+                RpcRequest::new(
+                    3,
+                    "mutation.approveOnce",
+                    Some(json!({ "proposalId": proposal_id.clone() })),
+                ),
+            )
+            .await
+            .expect("approval response");
+        assert!(approved.is_success());
+        assert_eq!(
+            approved
+                .result
+                .as_ref()
+                .and_then(|value| value.pointer("/proposal/resolution")),
+            Some(&json!("approved_applied"))
+        );
+        let applied = store
+            .get_or_initialize_settings(1_020)
+            .expect("applied settings");
+        assert_eq!(
+            applied.revision,
+            initial.revision.checked_next().expect("next revision")
+        );
+        assert!(
+            !applied
+                .settings
+                .trusted_configuration
+                .disabled_agent_ids
+                .contains(&AgentId::new("agent-reenable"))
+        );
+        assert!(
+            applied
+                .settings
+                .trusted_configuration
+                .full_access_agent_ids
+                .contains(&AgentId::new("agent-full-access"))
+        );
+
+        let retry = router
+            .handle_request_with_context(
+                &local,
+                RpcRequest::new(
+                    4,
+                    "mutation.approveOnce",
+                    Some(json!({ "proposalId": proposal_id })),
+                ),
+            )
+            .await
+            .expect("approval retry response");
+        assert!(retry.is_success());
+        assert_eq!(
+            store
+                .get_or_initialize_settings(1_030)
+                .expect("settings after retry")
+                .revision,
+            applied.revision
+        );
+
+        let mut mixed = applied.settings;
+        mixed.ui.show_status_bar = !mixed.ui.show_status_bar;
+        mixed
+            .trusted_configuration
+            .full_access_agent_ids
+            .insert(AgentId::new("agent-mixed"));
+        let mixed = router
+            .handle_request_with_context(
+                &local,
+                RpcRequest::new(
+                    5,
+                    "settings.set",
+                    Some(json!({
+                        "expectedRevision": applied.revision,
+                        "requestId": "settings-mixed-test",
+                        "settings": mixed,
+                    })),
+                ),
+            )
+            .await
+            .expect("mixed widening response");
+        assert_eq!(
+            mixed
+                .error
+                .and_then(|error| error.data)
+                .and_then(|data| data.get("reason").cloned()),
+            Some(json!("widening_must_be_separate"))
+        );
+        assert_eq!(
+            store
+                .list_mutation_proposals(true, None, 100)
+                .expect("mutation list")
+                .0
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn provider_login_command_uses_the_native_terminal_submit_character() {
+        assert_eq!(
+            login_terminal_input("claude auth login", true),
+            "claude auth login\r"
+        );
+        assert_eq!(
+            login_terminal_input("claude auth login", false),
+            "claude auth login\n"
+        );
+    }
+
+    fn mock_router(store: Store) -> Router {
+        let settings = UserSettings {
+            providers: vec![pandamux_core::ProviderInstanceConfig {
+                id: pandamux_core::ProviderInstanceId::new("mock-default"),
+                provider: ProviderKind::Custom,
+                display_name: "Mock Provider".to_string(),
+                profile_dir: "profiles/custom/mock-default".to_string(),
+                environment_id: None,
+                binary_path: Some("/mock/bin/provider".to_string()),
+                concurrency_limit: 2,
+                env_overrides: Default::default(),
+                settings: json!({ "fixture": true }),
+                enabled: true,
+                disabled_reason: None,
+            }],
+            ..UserSettings::default()
+        };
+        store.save_settings(&settings).expect("save mock settings");
+        let drivers = Arc::new(DriverRegistry::new());
+        drivers.register(
+            ProviderKind::Custom,
+            Arc::new(pandamux_providers::MockProviderDriver::new(
+                ProviderKind::Custom,
+                "Mock Provider",
+            )),
+        );
+        Router::with_drivers(store, ServerRole::Hub, "env-test".to_string(), drivers)
+    }
+
+    fn add_usage_fixture(store: &Store) {
+        store
+            .save_usage_subscription(
+                &pandamux_core::UsageSubscription {
+                    key: pandamux_core::SubscriptionKey::new("subkey-work"),
+                    provider: pandamux_core::UsageProvider::Codex,
+                    display_name: "Work Codex".to_string(),
+                    masked_account_label: None,
+                },
+                1000,
+            )
+            .expect("save usage subscription");
+        store
+            .map_provider_subscription(
+                &EnvironmentId::new("env-test"),
+                &pandamux_core::ProviderInstanceId::new("codex-work"),
+                &pandamux_core::SubscriptionKey::new("subkey-work"),
+                1000,
+            )
+            .expect("map usage subscription");
+        store
+            .record_usage_batch(
+                &EnvironmentId::new("env-test"),
+                &[pandamux_core::UsageObservation {
+                    id: pandamux_core::UsageObservationId::new("usage-router"),
+                    source_kind: pandamux_core::UsageSourceKind::ManagedTurn,
+                    parser_version: 1,
+                    provider_native_session_id: None,
+                    provider_native_turn_id: Some("native-turn".to_string()),
+                    occurred_at_ms: Some(1000),
+                    provider: pandamux_core::UsageProvider::Codex,
+                    provider_instance_id: pandamux_core::ProviderInstanceId::new("codex-work"),
+                    subscription_key: pandamux_core::SubscriptionKey::new("subkey-work"),
+                    model: Some("gpt-fixture".to_string()),
+                    tokens: pandamux_core::TokenCounts {
+                        input: 5,
+                        output: 2,
+                        ..pandamux_core::TokenCounts::default()
+                    },
+                    unknown_fields: std::collections::BTreeSet::new(),
+                    provider_reported_micro_usd: None,
+                    source_record_count: 1,
+                    thread_id: None,
+                    turn_id: None,
+                    agent_id: None,
+                    schedule_id: None,
+                    fact_kind: Default::default(),
+                }],
+                None,
+            )
+            .expect("record usage observation");
+    }
 
     #[tokio::test]
     async fn router_handles_ping_and_capabilities() {
@@ -1400,6 +6043,434 @@ mod tests {
         let res = router.handle_request(caps_req).await.expect("response");
         assert!(res.is_success());
         assert_eq!(res.result.unwrap()["streaming"], true);
+    }
+
+    fn add_mock_organization_policy(store: &Store) {
+        store
+            .save_usage_subscription_mapping(
+                &pandamux_core::UsageSubscription {
+                    key: pandamux_core::SubscriptionKey::new("subkey-work"),
+                    provider: pandamux_core::UsageProvider::Custom,
+                    display_name: "Work Custom".to_string(),
+                    masked_account_label: Some("te***@example.com".to_string()),
+                },
+                &EnvironmentId::new("env-test"),
+                &pandamux_core::ProviderInstanceId::new("mock-default"),
+                1000,
+            )
+            .expect("save subscription mapping");
+        let mut settings = store
+            .get_settings()
+            .expect("load settings")
+            .expect("mock settings");
+        settings.organizations = vec![pandamux_core::OrganizationPolicy {
+            id: pandamux_core::OrganizationId::new("org-work"),
+            display_name: "Work".to_string(),
+            project_ids: vec![pandamux_core::ProjectId::new("project-work")],
+            allowed_provider_instances: vec![pandamux_core::ProviderInstanceId::new(
+                "mock-default",
+            )],
+            allowed_subscriptions: vec![pandamux_core::SubscriptionKey::new("subkey-work")],
+            failover_pool_ids: Vec::new(),
+            default_tier_mapping: None,
+            max_concurrency: Some(2),
+            daily_budget_micro_usd: None,
+            broadside: Default::default(),
+            revision: 1,
+        }];
+        store
+            .save_settings_with_organization_policies(&settings, 1001)
+            .expect("save canonical settings");
+    }
+
+    #[tokio::test]
+    async fn usage_catalog_edit_and_project_routing_are_fail_closed() {
+        let store = Store::in_memory().expect("open store");
+        let router = mock_router(store.clone());
+        add_mock_organization_policy(&store);
+
+        let catalog = router
+            .handle_request(RpcRequest::new(1, "usage.catalog", None))
+            .await
+            .expect("catalog response");
+        assert_eq!(
+            catalog.result.as_ref().unwrap()["subscriptions"][0]["displayName"],
+            "Work Custom"
+        );
+
+        let edited = router
+            .handle_request(RpcRequest::new(
+                2,
+                "usage.subscription.set",
+                Some(json!({
+                    "subscriptionKey": "subkey-work",
+                    "environmentId": "env-test",
+                    "providerInstanceId": "mock-default",
+                    "provider": "custom",
+                    "displayName": "Primary Work Custom",
+                    "maskedAccountLabel": "wo***@example.com"
+                })),
+            ))
+            .await
+            .expect("edit response");
+        assert!(edited.is_success());
+        assert_eq!(
+            edited.result.as_ref().unwrap()["subscriptions"][0]["displayName"],
+            "Primary Work Custom"
+        );
+
+        let allowed = router
+            .handle_request(RpcRequest::new(
+                3,
+                "thread.create",
+                Some(json!({
+                    "projectId": "project-work",
+                    "environmentId": "env-test",
+                    "providerInstanceId": "mock-default",
+                    "title": "Allowed"
+                })),
+            ))
+            .await
+            .expect("allowed route response");
+        assert!(allowed.is_success());
+
+        let missing = router
+            .handle_request(RpcRequest::new(
+                4,
+                "thread.create",
+                Some(json!({
+                    "projectId": "project-personal",
+                    "environmentId": "env-test",
+                    "providerInstanceId": "mock-default"
+                })),
+            ))
+            .await
+            .expect("missing policy response");
+        assert_eq!(
+            missing.error.expect("missing policy denied").data.unwrap()["reason"],
+            "organization_policy_denied"
+        );
+
+        let disallowed = router
+            .handle_request(RpcRequest::new(
+                5,
+                "thread.create",
+                Some(json!({
+                    "projectId": "project-work",
+                    "environmentId": "env-test",
+                    "providerInstanceId": "personal-instance"
+                })),
+            ))
+            .await
+            .expect("disallowed route response");
+        assert_eq!(
+            disallowed.error.expect("route denied").data.unwrap()["reason"],
+            "organization_policy_denied"
+        );
+    }
+
+    #[tokio::test]
+    async fn schedule_validation_applies_organization_policy_before_save() {
+        let store = Store::in_memory().expect("open store");
+        let router = mock_router(store.clone());
+        add_mock_organization_policy(&store);
+        let mut schedule = ScheduleRecord {
+            id: pandamux_core::ScheduleId::new("schedule-work"),
+            name: "Work review".to_string(),
+            project_id: Some(pandamux_core::ProjectId::new("project-work")),
+            environment: pandamux_core::ScheduleEnvironmentRef {
+                id: EnvironmentId::new("env-test"),
+                display_name: "Local test".to_string(),
+            },
+            trigger: pandamux_core::ScheduleTrigger {
+                cron: "0 0 * * *".to_string(),
+                timezone: "UTC".to_string(),
+            },
+            target: ScheduleTarget::Session {
+                project_path: "/repo".to_string(),
+                prompt: "Review the repository".to_string(),
+                provider: Some("mock-default".to_string()),
+                model: Some("mock-model".to_string()),
+                thread_mode: Default::default(),
+            },
+            approval: ScheduleApprovalPolicy::ApproveFirst,
+            overlap: Default::default(),
+            catch_up: Default::default(),
+            budget: Default::default(),
+            notify: Vec::new(),
+            full_access_opt_in: false,
+            enabled: true,
+        };
+        let valid = router
+            .handle_request(RpcRequest::new(
+                1,
+                "schedule.validate",
+                Some(json!({ "schedule": schedule.clone() })),
+            ))
+            .await
+            .expect("validation response");
+        assert_eq!(valid.result.as_ref().unwrap()["valid"], true);
+
+        let saved = router
+            .handle_request(RpcRequest::new(
+                2,
+                "schedule.save",
+                Some(json!({ "schedule": schedule.clone() })),
+            ))
+            .await
+            .expect("save response");
+        assert!(saved.is_success());
+
+        let approval_required = router
+            .handle_request(RpcRequest::new(
+                20,
+                "schedule.run",
+                Some(json!({
+                    "scheduleId": "schedule-work",
+                    "approved": false
+                })),
+            ))
+            .await
+            .expect("approval response");
+        assert_eq!(
+            approval_required
+                .error
+                .expect("approval required")
+                .data
+                .unwrap()["reason"],
+            "schedule_approval_required"
+        );
+
+        if let ScheduleTarget::Session { provider, .. } = &mut schedule.target {
+            *provider = Some("personal-instance".to_string());
+        }
+        let invalid = router
+            .handle_request(RpcRequest::new(
+                3,
+                "schedule.validate",
+                Some(json!({ "schedule": schedule.clone() })),
+            ))
+            .await
+            .expect("invalid validation response");
+        assert_eq!(invalid.result.as_ref().unwrap()["valid"], false);
+        assert!(
+            invalid.result.as_ref().unwrap()["blockingReasons"][0]
+                .as_str()
+                .unwrap()
+                .contains("not allowed")
+        );
+
+        if let ScheduleTarget::Session {
+            provider,
+            thread_mode,
+            ..
+        } = &mut schedule.target
+        {
+            *provider = Some("mock-default".to_string());
+            *thread_mode = pandamux_core::ScheduleThreadMode::ContinueExistingThread;
+        }
+        let continue_unavailable = router
+            .handle_request(RpcRequest::new(
+                4,
+                "schedule.validate",
+                Some(json!({ "schedule": schedule.clone() })),
+            ))
+            .await
+            .expect("continue validation response");
+        assert_eq!(
+            continue_unavailable.result.as_ref().unwrap()["valid"],
+            false
+        );
+        assert!(
+            continue_unavailable.result.as_ref().unwrap()["blockingReasons"][0]
+                .as_str()
+                .unwrap()
+                .contains("not available")
+        );
+
+        schedule.target = ScheduleTarget::Orchestrator {
+            prompt: "Coordinate the review".to_string(),
+        };
+        let orchestrator_unavailable = router
+            .handle_request(RpcRequest::new(
+                5,
+                "schedule.validate",
+                Some(json!({ "schedule": schedule })),
+            ))
+            .await
+            .expect("orchestrator validation response");
+        assert_eq!(
+            orchestrator_unavailable.result.as_ref().unwrap()["valid"],
+            false
+        );
+        assert!(
+            orchestrator_unavailable.result.as_ref().unwrap()["blockingReasons"][0]
+                .as_str()
+                .unwrap()
+                .contains("not available")
+        );
+    }
+
+    #[tokio::test]
+    async fn usage_export_is_hub_only_and_queries_are_local_control_only() {
+        let store = Store::in_memory().expect("open store");
+        add_usage_fixture(&store);
+        let router = mock_router(store);
+        router.capability_authority().configure_local_capabilities(
+            "endpoint".to_string(),
+            "control-token".to_string(),
+            "mcp-token".to_string(),
+        );
+        let control = router
+            .capability_authority()
+            .authenticate(
+                "control-token",
+                crate::request_context::ClientIdentity::default(),
+            )
+            .expect("control context");
+        let node = RequestContext::node_proxy(
+            EnvironmentId::new("env-test"),
+            crate::request_context::ClientIdentity::default(),
+        );
+
+        let denied_export = router
+            .handle_request_with_context(
+                &control,
+                RpcRequest::new(1, "usage.export", Some(json!({ "limit": 10 }))),
+            )
+            .await
+            .expect("export response");
+        assert_eq!(denied_export.error.expect("denied export").code, -32001);
+
+        let denied_backfill = router
+            .handle_request_with_context(
+                &control,
+                RpcRequest::new(10, "usage.backfill", Some(json!({ "limit": 10 }))),
+            )
+            .await
+            .expect("backfill response");
+        assert_eq!(denied_backfill.error.expect("denied backfill").code, -32001);
+
+        let denied_routed_export = router
+            .handle_request_with_context(
+                &control,
+                RpcRequest::new(
+                    11,
+                    "usage.export",
+                    Some(json!({ "environmentId": "env-other", "limit": 10 })),
+                ),
+            )
+            .await
+            .expect("routed export response");
+        assert_eq!(
+            denied_routed_export
+                .error
+                .expect("routed export denied")
+                .data
+                .unwrap()["reason"],
+            "capability_scope_denied"
+        );
+
+        let export = router
+            .handle_request_with_context(
+                &node,
+                RpcRequest::new(2, "usage.export", Some(json!({ "limit": 10 }))),
+            )
+            .await
+            .expect("export response");
+        assert!(export.is_success());
+        assert_eq!(
+            export.result.as_ref().unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let backfill = router
+            .handle_request_with_context(
+                &node,
+                RpcRequest::new(13, "usage.backfill", Some(json!({ "limit": 10 }))),
+            )
+            .await
+            .expect("backfill response");
+        assert!(backfill.is_success());
+        assert_eq!(
+            backfill.result.as_ref().unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let forged_node = RequestContext::node_proxy(
+            EnvironmentId::new("env-other"),
+            crate::request_context::ClientIdentity::default(),
+        );
+        let forged = router
+            .handle_request_with_context(
+                &forged_node,
+                RpcRequest::new(3, "usage.export", Some(json!({ "limit": 10 }))),
+            )
+            .await
+            .expect("forged response");
+        assert_eq!(
+            forged.error.expect("forged export denied").data.unwrap()["reason"],
+            "usage_hub_peer_required"
+        );
+
+        let query = router
+            .handle_request_with_context(
+                &control,
+                RpcRequest::new(4, "usage.query", Some(json!({ "limit": 10 }))),
+            )
+            .await
+            .expect("query response");
+        assert!(query.is_success());
+        assert_eq!(
+            query.result.as_ref().unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let filtered_remote_environment = router
+            .handle_request_with_context(
+                &control,
+                RpcRequest::new(
+                    12,
+                    "usage.query",
+                    Some(json!({ "environmentId": "env-other", "limit": 10 })),
+                ),
+            )
+            .await
+            .expect("filtered query response");
+        assert!(filtered_remote_environment.is_success());
+        assert!(
+            filtered_remote_environment.result.unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+
+        let denied_query = router
+            .handle_request_with_context(
+                &node,
+                RpcRequest::new(5, "usage.query", Some(json!({ "limit": 10 }))),
+            )
+            .await
+            .expect("query response");
+        assert_eq!(denied_query.error.expect("node query denied").code, -32001);
+
+        let removed_write = router
+            .handle_request_with_context(
+                &control,
+                RpcRequest::new(6, "usage.record_buckets", Some(json!({ "buckets": [] }))),
+            )
+            .await
+            .expect("removed write response");
+        assert_eq!(removed_write.error.expect("method missing").code, -32601);
     }
 
     #[tokio::test]
@@ -1425,8 +6496,7 @@ mod tests {
     #[tokio::test]
     async fn router_handles_thread_lifecycle_and_turn_streaming() {
         let store = Store::in_memory().unwrap();
-        let drivers = Arc::new(DriverRegistry::default_local());
-        let router = Router::with_drivers(store, ServerRole::Hub, "env-test".to_string(), drivers);
+        let router = mock_router(store);
 
         // 1. Create thread
         let create_req = RpcRequest::new(
@@ -1434,6 +6504,7 @@ mod tests {
             "thread.create",
             Some(json!({
                 "title": "Test Chat",
+                "providerInstanceId": "mock-default",
                 "model": "mock-fast"
             })),
         );
@@ -1509,8 +6580,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let att_dir = temp_dir.path().join("attachments");
         let attachment_manager = AttachmentManager::new(att_dir);
-        let router = Router::new(store, ServerRole::Hub, "env-test".to_string())
-            .with_attachments(attachment_manager);
+        let router = mock_router(store).with_attachments(attachment_manager);
 
         // Create thread first
         let create_req = RpcRequest::new(
@@ -1518,6 +6588,7 @@ mod tests {
             "thread.create",
             Some(json!({
                 "title": "Attachment Test",
+                "providerInstanceId": "mock-default",
                 "cwd": "/tmp"
             })),
         );
@@ -1590,20 +6661,55 @@ mod tests {
         let get_res = router.handle_request(get_req).await.unwrap();
         assert!(get_res.is_success());
         let get_val = get_res.result.unwrap();
-        assert_eq!(get_val["settings"]["version"], 2);
+        assert_eq!(
+            get_val["settings"]["version"],
+            pandamux_core::SETTINGS_SCHEMA_VERSION
+        );
         assert_eq!(get_val["settings"]["terminal"]["scrollbackLines"], 10_000);
+        let revision = get_val["revision"]
+            .as_u64()
+            .expect("settings revision is present");
 
         // 2. Update a specific key using config.set dotted path
         let set_req = RpcRequest::new(
             2,
             "config.set",
             Some(json!({
+                "expectedRevision": revision,
                 "key": "terminal.scrollbackLines",
                 "value": 25_000
             })),
         );
         let set_res = router.handle_request(set_req).await.unwrap();
         assert!(set_res.is_success());
+
+        let stale_set_req = RpcRequest::new(
+            20,
+            "settings.set",
+            Some(json!({
+                "expectedRevision": revision,
+                "key": "terminal.scrollbackLines",
+                "value": 30_000
+            })),
+        );
+        let stale_set_res = router.handle_request(stale_set_req).await.unwrap();
+        let stale_error = stale_set_res.error.expect("stale update must fail");
+        assert_eq!(
+            stale_error
+                .data
+                .as_ref()
+                .and_then(|data| data.get("reason"))
+                .and_then(Value::as_str),
+            Some("revision_drift")
+        );
+        assert_eq!(
+            stale_error
+                .data
+                .as_ref()
+                .and_then(|data| data.get("actualRevision"))
+                .and_then(Value::as_u64),
+            Some(revision + 1)
+        );
 
         // 3. Query the updated key via config.get
         let get_key_req = RpcRequest::new(
@@ -1623,12 +6729,127 @@ mod tests {
         let health_val = health_res.result.unwrap();
         let reports = health_val["reports"].as_array().unwrap();
         assert!(!reports.is_empty());
+        assert_eq!(health_val["hasMore"], false);
+        assert!(health_val["nextInstanceId"].is_string());
         // Verify report structure
         for report in reports {
             assert!(report.get("instanceId").is_some());
             assert!(report.get("provider").is_some());
             assert!(report.get("status").is_some());
         }
+        let disabled = reports
+            .iter()
+            .filter(|report| report["status"] == "disabled")
+            .collect::<Vec<_>>();
+        assert_eq!(disabled.len(), 3);
+        for report in disabled {
+            assert_eq!(
+                report["disabledReason"]["code"],
+                "live_acceptance_incomplete"
+            );
+            assert!(report["disabledReason"]["message"].is_string());
+            assert!(report["disabledReason"]["remediation"].is_string());
+        }
+
+        let first_page = router
+            .handle_request(RpcRequest::new(
+                5,
+                "provider.health",
+                Some(json!({ "limit": 1 })),
+            ))
+            .await
+            .unwrap();
+        assert!(first_page.is_success());
+        let first_page = first_page.result.unwrap();
+        assert_eq!(first_page["reports"].as_array().unwrap().len(), 1);
+        assert_eq!(first_page["hasMore"], true);
+        let first_cursor = first_page["nextInstanceId"].as_str().unwrap();
+
+        let second_page = router
+            .handle_request(RpcRequest::new(
+                6,
+                "provider.health",
+                Some(json!({ "afterInstanceId": first_cursor, "limit": 1 })),
+            ))
+            .await
+            .unwrap();
+        assert!(second_page.is_success());
+        assert_ne!(
+            second_page.result.unwrap()["reports"][0]["instanceId"],
+            first_cursor
+        );
+
+        let invalid_page = router
+            .handle_request(RpcRequest::new(
+                7,
+                "provider.health",
+                Some(json!({ "limit": 0 })),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            invalid_page.error.unwrap().data.unwrap()["reason"],
+            "provider_health_page_limit_invalid"
+        );
+    }
+
+    #[tokio::test]
+    async fn router_discovers_models_for_configured_provider_instances() {
+        let store = Store::in_memory().unwrap();
+        let router = mock_router(store);
+
+        let response = router
+            .handle_request(RpcRequest::new(
+                1,
+                "provider.models",
+                Some(json!({ "environmentId": "env-test" })),
+            ))
+            .await
+            .expect("provider models response");
+        assert!(response.is_success());
+        let result = response.result.expect("provider models result");
+        assert_eq!(result["hasMore"], false);
+        assert_eq!(result["nextInstanceId"], "mock-default");
+        assert_eq!(result["reports"].as_array().unwrap().len(), 1);
+        let report = &result["reports"][0];
+        assert_eq!(report["environmentId"], "env-test");
+        assert_eq!(report["instanceId"], "mock-default");
+        assert_eq!(report["displayName"], "Mock Provider");
+        assert_eq!(report["error"], Value::Null);
+        assert_eq!(report["retryable"], false);
+        assert_eq!(report["models"].as_array().unwrap().len(), 2);
+        assert_eq!(report["models"][0]["id"], "mock-fast");
+        assert_eq!(report["models"][1]["id"], "mock-reasoning");
+
+        let empty_page = router
+            .handle_request(RpcRequest::new(
+                2,
+                "provider.models",
+                Some(json!({
+                    "environmentId": "env-test",
+                    "afterInstanceId": "mock-default"
+                })),
+            ))
+            .await
+            .expect("empty provider models page");
+        assert!(empty_page.is_success());
+        let empty_page = empty_page.result.expect("empty page result");
+        assert!(empty_page["reports"].as_array().unwrap().is_empty());
+        assert_eq!(empty_page["hasMore"], false);
+        assert_eq!(empty_page["nextInstanceId"], Value::Null);
+
+        let invalid_page = router
+            .handle_request(RpcRequest::new(
+                3,
+                "provider.models",
+                Some(json!({ "limit": 0 })),
+            ))
+            .await
+            .expect("invalid provider models page");
+        assert_eq!(
+            invalid_page.error.unwrap().data.unwrap()["reason"],
+            "provider_models_page_limit_invalid"
+        );
     }
 
     #[tokio::test]
@@ -2077,7 +7298,13 @@ mod tests {
         };
 
         let mock_thread_clone = mock_thread.clone();
+        let forwarded_methods = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let forwarded_methods_for_transport = forwarded_methods.clone();
         let mock_transport = Arc::new(MockEnvironmentTransport::new(move |req| {
+            forwarded_methods_for_transport
+                .lock()
+                .expect("forwarded methods")
+                .push(req.method.clone());
             let id = req.id.clone().unwrap_or(1.into());
             if req.method == "thread.create" {
                 Ok(RpcResponse::success(
@@ -2139,7 +7366,29 @@ mod tests {
         let get_val = get_res.result.unwrap();
         assert_eq!(get_val["thread"]["id"], "th-remote-1");
 
-        // 5. Test event relaying to Hub broadcaster
+        // 5. Continuations include thread identity so the Hub can route them.
+        let continuation_res = hub_router
+            .handle_request(RpcRequest::new(
+                4,
+                "thread.continue_capacity",
+                Some(json!({
+                    "continuationId": "continue-remote-1",
+                    "threadId": "th-remote-1"
+                })),
+            ))
+            .await
+            .expect("remote continuation response");
+        assert!(continuation_res.is_success());
+        assert_eq!(
+            forwarded_methods
+                .lock()
+                .expect("forwarded methods")
+                .last()
+                .map(String::as_str),
+            Some("thread.continue_capacity")
+        );
+
+        // 6. Test event relaying to Hub broadcaster
         let mut hub_events = hub_router.thread_manager().subscribe();
         mock_transport.emit_event(pandamux_protocol::EventEnvelope {
             subscription_id: "remote-sub".to_string(),
@@ -2156,6 +7405,168 @@ mod tests {
         let relayed = hub_events.recv().await.unwrap();
         assert_eq!(relayed.environment_id.as_str(), "env-remote");
         assert_eq!(relayed.seq, 101);
+    }
+
+    #[tokio::test]
+    async fn remote_project_routes_are_filtered_and_pinned_before_forwarding() {
+        use crate::environment_router::MockEnvironmentTransport;
+        use pandamux_core::{
+            OrganizationId, OrganizationPolicy, ProjectId, ProviderInstanceId, SubscriptionKey,
+            Thread, ThreadId, ThreadOrigin, ThreadStatus, ThreadWorkspace, UsageProvider,
+            UsageSubscription,
+        };
+        use std::sync::Mutex as StdMutex;
+
+        let store = Store::in_memory().expect("store");
+        let remote_env = EnvironmentId::new("env-remote-policy");
+        for (key, provider, instance, name) in [
+            (
+                "subkey-remote-claude",
+                UsageProvider::Claude,
+                "claude-default",
+                "Remote Claude",
+            ),
+            (
+                "subkey-remote-codex",
+                UsageProvider::Codex,
+                "codex-default",
+                "Remote Codex",
+            ),
+        ] {
+            store
+                .save_usage_subscription_mapping(
+                    &UsageSubscription {
+                        key: SubscriptionKey::new(key),
+                        provider,
+                        display_name: name.to_string(),
+                        masked_account_label: None,
+                    },
+                    &remote_env,
+                    &ProviderInstanceId::new(instance),
+                    1000,
+                )
+                .expect("save remote mapping");
+        }
+        let settings = UserSettings {
+            organizations: vec![OrganizationPolicy {
+                id: OrganizationId::new("org-remote"),
+                display_name: "Remote work".to_string(),
+                project_ids: vec![ProjectId::new("project-remote")],
+                allowed_provider_instances: vec![ProviderInstanceId::new("claude-default")],
+                allowed_subscriptions: vec![SubscriptionKey::new("subkey-remote-claude")],
+                failover_pool_ids: Vec::new(),
+                default_tier_mapping: None,
+                max_concurrency: None,
+                daily_budget_micro_usd: None,
+                broadside: Default::default(),
+                revision: 1,
+            }],
+            ..UserSettings::default()
+        };
+        store
+            .save_settings_with_organization_policies(&settings, 1001)
+            .expect("save remote policy");
+
+        let hub_router = Router::new(store.clone(), ServerRole::Hub, "env-local".to_string());
+        let forwarded = Arc::new(StdMutex::new(Vec::new()));
+        let forwarded_for_transport = forwarded.clone();
+        let remote_env_for_transport = remote_env.clone();
+        let transport = Arc::new(MockEnvironmentTransport::new(move |request| {
+            forwarded_for_transport
+                .lock()
+                .expect("forwarded requests")
+                .push(request.clone());
+            let params: ThreadCreateParams =
+                serde_json::from_value(request.params.clone().expect("thread create params"))
+                    .expect("decode forwarded create");
+            let thread = Thread {
+                id: ThreadId::new("thread-remote-policy"),
+                project_id: params.project_id,
+                environment_id: remote_env_for_transport.clone(),
+                parent_thread_id: None,
+                title: params.title.unwrap_or_else(|| "Remote policy".to_string()),
+                provider_instance_id: params
+                    .provider_instance_id
+                    .expect("Hub pins provider before forwarding"),
+                model: params.model.unwrap_or_else(|| "default".to_string()),
+                effort: params.effort,
+                access_mode: params.access_mode.unwrap_or_default(),
+                workspace: ThreadWorkspace {
+                    cwd: params.cwd.unwrap_or_else(|| "/remote/project".to_string()),
+                    worktree: params.worktree,
+                },
+                status: ThreadStatus::Idle,
+                agent: None,
+                origin: ThreadOrigin::Manual,
+                created_at_ms: 100,
+                updated_at_ms: 100,
+            };
+            Ok(RpcResponse::success(
+                request.id.clone().unwrap_or(1.into()),
+                serde_json::to_value(thread).expect("encode thread"),
+            ))
+        }));
+        hub_router
+            .environment_router()
+            .register_transport(remote_env.clone(), transport, None)
+            .await;
+
+        let denied = hub_router
+            .handle_request(RpcRequest::new(
+                1,
+                "thread.create",
+                Some(json!({
+                    "projectId": "project-remote",
+                    "environmentId": remote_env.as_str(),
+                    "providerInstanceId": "codex-default"
+                })),
+            ))
+            .await
+            .expect("denied response");
+        assert_eq!(
+            denied.error.expect("route denied").data.unwrap()["reason"],
+            "organization_policy_denied"
+        );
+        assert!(forwarded.lock().expect("forwarded requests").is_empty());
+
+        let allowed = hub_router
+            .handle_request(RpcRequest::new(
+                2,
+                "thread.create",
+                Some(json!({
+                    "projectId": "project-remote",
+                    "environmentId": remote_env.as_str(),
+                    "title": "Remote policy"
+                })),
+            ))
+            .await
+            .expect("allowed response");
+        assert!(allowed.is_success());
+        let forwarded = forwarded.lock().expect("forwarded requests");
+        assert_eq!(forwarded.len(), 1);
+        assert_eq!(
+            forwarded[0].params.as_ref().unwrap()["providerInstanceId"],
+            "claude-default"
+        );
+        drop(forwarded);
+
+        let prepared_turn = hub_router
+            .prepare_forwarded_thread_turn(
+                &json!({
+                    "threadId": "thread-remote-policy",
+                    "text": "use the canonical remote policy"
+                }),
+                &remote_env,
+            )
+            .expect("prepare remote project turn");
+        assert_eq!(
+            prepared_turn["hubRoutingContext"]["organization"]["id"],
+            "org-remote"
+        );
+        assert_eq!(
+            prepared_turn["hubRoutingContext"]["failoverPools"],
+            json!([])
+        );
     }
 
     #[tokio::test]
@@ -2248,7 +7659,7 @@ mod tests {
             Some(json!({
                 "threadId": thread_id.as_str(),
                 "text": "Analyze this screenshot",
-                "attachments": ["att-paste-1"]
+                "attachmentIds": ["att-paste-1"]
             })),
         );
         let send_res = hub_router.handle_request(send_req).await.unwrap();
@@ -2260,6 +7671,83 @@ mod tests {
             1
         );
         assert_eq!(turns_received.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn remote_attachment_path_is_imported_on_the_hub_before_forwarding() {
+        use crate::environment_router::MockEnvironmentTransport;
+        use pandamux_core::ids::{EnvironmentId, ThreadId};
+        use pandamux_core::{Thread, ThreadWorkspace};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let source_path = temp_dir.path().join("source.png");
+        std::fs::write(&source_path, b"PNG_BYTES").unwrap();
+        let store = Store::in_memory().unwrap();
+        let hub_router = Router::new(store.clone(), ServerRole::Hub, "env-local".to_string())
+            .with_attachments(AttachmentManager::new(temp_dir.path().join("attachments")));
+        let remote_env = EnvironmentId::new("env-remote");
+        let thread_id = ThreadId::new("th-remote-import");
+        store
+            .save_thread(&Thread {
+                id: thread_id.clone(),
+                project_id: None,
+                environment_id: remote_env.clone(),
+                parent_thread_id: None,
+                title: "Remote import".to_string(),
+                provider_instance_id: pandamux_core::ProviderInstanceId::new("claude-default"),
+                model: "claude-test".to_string(),
+                effort: None,
+                access_mode: pandamux_core::thread::AccessMode::WorkspaceOnly,
+                workspace: ThreadWorkspace {
+                    cwd: "/remote/project".to_string(),
+                    worktree: None,
+                },
+                status: pandamux_core::thread::ThreadStatus::Idle,
+                agent: None,
+                origin: pandamux_core::thread::ThreadOrigin::Manual,
+                created_at_ms: 100,
+                updated_at_ms: 100,
+            })
+            .unwrap();
+
+        let import_calls = Arc::new(AtomicUsize::new(0));
+        let put_calls = Arc::new(AtomicUsize::new(0));
+        let import_calls_for_transport = Arc::clone(&import_calls);
+        let put_calls_for_transport = Arc::clone(&put_calls);
+        let transport = Arc::new(MockEnvironmentTransport::new(move |request| {
+            let id = request.id.clone().unwrap_or(1.into());
+            match request.method.as_str() {
+                "attachment.import_path" | "attachment.importPath" => {
+                    import_calls_for_transport.fetch_add(1, Ordering::SeqCst);
+                }
+                "attachment.put" => {
+                    put_calls_for_transport.fetch_add(1, Ordering::SeqCst);
+                }
+                _ => {}
+            }
+            Ok(RpcResponse::success(id, json!({"isComplete": true})))
+        }));
+        hub_router
+            .environment_router()
+            .register_transport(remote_env, transport, None)
+            .await;
+
+        let response = hub_router
+            .handle_request(RpcRequest::new(
+                1,
+                "attachment.import_path",
+                Some(json!({
+                    "threadId": thread_id,
+                    "path": source_path
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(response.is_success());
+        assert!(response.result.unwrap().get("attachment").is_some());
+        assert_eq!(import_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(put_calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
@@ -2277,12 +7765,14 @@ mod tests {
         let input_count = Arc::new(AtomicUsize::new(0));
         let resize_count = Arc::new(AtomicUsize::new(0));
         let close_count = Arc::new(AtomicUsize::new(0));
+        let login_launch_count = Arc::new(AtomicUsize::new(0));
 
         let oc = Arc::clone(&open_count);
         let ac = Arc::clone(&attach_count);
         let ic = Arc::clone(&input_count);
         let rc = Arc::clone(&resize_count);
         let cc = Arc::clone(&close_count);
+        let lc = Arc::clone(&login_launch_count);
 
         let mock_transport = Arc::new(crate::environment_router::MockEnvironmentTransport::new(
             move |req| match req.method.as_str() {
@@ -2300,6 +7790,12 @@ mod tests {
                 }
                 "terminal.attach" => {
                     ac.fetch_add(1, Ordering::SeqCst);
+                    let terminal_id = req
+                        .params
+                        .as_ref()
+                        .and_then(|p| p.get("terminalId"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("term-remote-1");
                     let since = req
                         .params
                         .as_ref()
@@ -2309,7 +7805,7 @@ mod tests {
                     Ok(RpcResponse::success(
                         req.id.clone().unwrap_or(2.into()),
                         json!({
-                            "terminalId": "term-remote-1",
+                            "terminalId": terminal_id,
                             "rows": 30,
                             "cols": 120,
                             "offset": since + 45,
@@ -2337,6 +7833,19 @@ mod tests {
                     Ok(RpcResponse::success(
                         req.id.clone().unwrap_or(5.into()),
                         json!({ "success": true }),
+                    ))
+                }
+                "provider.login.launch" => {
+                    lc.fetch_add(1, Ordering::SeqCst);
+                    Ok(RpcResponse::success(
+                        req.id.clone().unwrap_or(6.into()),
+                        json!({
+                            "environmentId": "env_remote_node",
+                            "providerInstanceId": "claude-remote",
+                            "terminalId": "term-remote-login",
+                            "displayCommand": "claude auth login",
+                            "retryable": true
+                        }),
                     ))
                 }
                 _ => Err(RpcError::method_not_found(&req.method)),
@@ -2428,16 +7937,64 @@ mod tests {
         assert!(close_res.is_success());
         assert_eq!(close_count.load(Ordering::SeqCst), 1);
         assert!(!hub_router.remote_terminals().contains_key("term-remote-1"));
+
+        // 6. A provider login creates a terminal too; register it for later
+        // attach/input/close routing just like terminal.open.
+        let login_req = RpcRequest::new(
+            6,
+            "provider.login.launch",
+            Some(json!({
+                "previewId": "login-preview-remote",
+                "providerInstanceId": "claude-remote",
+                "environmentId": "env_remote_node"
+            })),
+        );
+        let login_res = hub_router.handle_request(login_req).await.unwrap();
+        assert!(login_res.is_success());
+        assert_eq!(login_launch_count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            hub_router.remote_terminals().get("term-remote-login"),
+            Some(&remote_env)
+        );
+
+        let attach_login_req = RpcRequest::new(
+            7,
+            "terminal.attach",
+            Some(json!({
+                "terminalId": "term-remote-login",
+                "sinceOffset": 0
+            })),
+        );
+        let attach_login_res = hub_router.handle_request(attach_login_req).await.unwrap();
+        assert!(attach_login_res.is_success());
+        assert_eq!(
+            attach_login_res.result.unwrap()["terminalId"],
+            "term-remote-login"
+        );
+        assert_eq!(attach_count.load(Ordering::SeqCst), 2);
+
+        let close_login_req = RpcRequest::new(
+            8,
+            "terminal.close",
+            Some(json!({ "terminalId": "term-remote-login" })),
+        );
+        let close_login_res = hub_router.handle_request(close_login_req).await.unwrap();
+        assert!(close_login_res.is_success());
+        assert_eq!(close_count.load(Ordering::SeqCst), 2);
+        assert!(
+            !hub_router
+                .remote_terminals()
+                .contains_key("term-remote-login")
+        );
     }
 
     #[tokio::test]
-    async fn router_handles_antigravity_node_install_and_oauth_relay() {
+    async fn router_rejects_unpinned_antigravity_installs_without_fabricating_auth() {
         let temp_dir = tempfile::tempdir().unwrap();
         let store = Store::in_memory().unwrap();
         let router = Router::new(store, ServerRole::Node, "env_node".to_string())
             .with_data_dir(temp_dir.path().to_path_buf());
 
-        // 1. Initial status: uninstalled
         let status_req = RpcRequest::new(1, "antigravity.status", None);
         let status_res = router.handle_request(status_req).await.unwrap();
         assert!(status_res.is_success());
@@ -2447,91 +8004,58 @@ mod tests {
         assert!(!status.authenticated);
         assert_eq!(status.max_processes, 2);
 
-        let payload = b"sample-binary-payload-for-testing";
-        let sha256_hash =
-            "92207cde24114feb016121530c70b5c3de6d8e021bfbc9412c328a778147f78a".to_string();
-
-        #[cfg(windows)]
-        let (platform, arch, bin_entry) = ("windows", "x64", "agy_acp_server.exe");
-        #[cfg(not(windows))]
-        let (platform, arch, bin_entry) = ("linux", "x64", "agy_acp_server.par");
-
-        use pandamux_protocol::antigravity_rpc::{AntigravityInstallResult, ManagedBundleManifest};
-        let manifest = ManagedBundleManifest {
-            version: "1.1.1".to_string(),
-            platform: platform.to_string(),
-            arch: arch.to_string(),
-            url: format!(
-                "https://dl.google.com/antigravity/releases/{platform}-{arch}/agy_acp_server_1.1.1.zip"
-            ),
-            size: payload.len() as u64,
-            sha256: sha256_hash,
-            entries: vec![bin_entry.to_string(), "localharness_external".to_string()],
-        };
-
-        let b64_payload =
-            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, payload);
-        let install_req = RpcRequest::new(
+        let manifest = pandamux_providers::antigravity::current_bundle_manifest()
+            .expect("test target has an Antigravity pin");
+        let prepare_req = RpcRequest::new(
             2,
+            "antigravity.prepare_upload",
+            Some(json!({ "manifest": manifest.clone() })),
+        );
+        let prepare_res = router.handle_request(prepare_req).await.unwrap();
+        assert!(prepare_res.is_success());
+        let prepared: AntigravityPrepareUploadResult =
+            serde_json::from_value(prepare_res.result.unwrap()).unwrap();
+        let prepared_path = Path::new(&prepared.remote_path);
+        assert!(
+            prepared_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(".upload-"))
+        );
+        assert_eq!(
+            prepared_path
+                .parent()
+                .and_then(Path::file_name)
+                .and_then(|name| name.to_str()),
+            Some("antigravity")
+        );
+        assert_eq!(
+            prepared_path
+                .parent()
+                .and_then(Path::parent)
+                .and_then(Path::file_name)
+                .and_then(|name| name.to_str()),
+            Some("cache")
+        );
+
+        let mut unpinned = manifest;
+        unpinned.url = "https://example.invalid/not-the-pinned-runtime.zip".to_string();
+        let install_req = RpcRequest::new(
+            3,
             "antigravity.install",
-            Some(json!({
-                "manifest": manifest,
-                "fallbackBytesBase64": b64_payload
-            })),
+            Some(json!({ "manifest": unpinned })),
         );
         let install_res = router.handle_request(install_req).await.unwrap();
-        assert!(install_res.is_success());
-        let install_out: AntigravityInstallResult =
-            serde_json::from_value(install_res.result.unwrap()).unwrap();
-        assert!(install_out.installed);
-        assert_eq!(install_out.version, "1.1.1");
+        let install_error = install_res.error.expect("unpinned install error");
+        assert_eq!(
+            install_error.data.unwrap()["providerCode"],
+            "antigravity_manifest_not_pinned"
+        );
 
-        // 3. Status after installation: installed, but unauthenticated
-        let status_req_2 = RpcRequest::new(3, "antigravity.status", None);
-        let status_res_2 = router.handle_request(status_req_2).await.unwrap();
-        assert!(status_res_2.is_success());
-        let status_2: AntigravityStatusResult =
-            serde_json::from_value(status_res_2.result.unwrap()).unwrap();
-        assert!(status_2.installed);
-        assert!(!status_2.authenticated);
-
-        // 4. OAuth start generates valid auth URL
         let oauth_start_req = RpcRequest::new(4, "antigravity.oauth_start", None);
         let oauth_start_res = router.handle_request(oauth_start_req).await.unwrap();
-        assert!(oauth_start_res.is_success());
-        let oauth_start: AntigravityOAuthStartResult =
-            serde_json::from_value(oauth_start_res.result.unwrap()).unwrap();
-        assert!(
-            oauth_start
-                .auth_url
-                .starts_with("https://accounts.google.com/")
-        );
-        assert_eq!(oauth_start.redirect_port, 51123);
-
-        // 5. OAuth relay callback completes authentication
-        let callback_url = format!(
-            "http://127.0.0.1:51123/?code=4/sample_code&state={}",
-            oauth_start.state
-        );
-        let relay_req = RpcRequest::new(
-            5,
-            "antigravity.oauth_relay",
-            Some(json!({
-                "callbackUrl": callback_url,
-                "state": oauth_start.state,
-                "redirectPort": oauth_start.redirect_port
-            })),
-        );
-        let relay_res = router.handle_request(relay_req).await.unwrap();
-        assert!(relay_res.is_success());
-
-        // 6. Final status: installed AND authenticated!
-        let status_req_3 = RpcRequest::new(6, "antigravity.status", None);
-        let status_res_3 = router.handle_request(status_req_3).await.unwrap();
-        let status_3: AntigravityStatusResult =
-            serde_json::from_value(status_res_3.result.unwrap()).unwrap();
-        assert!(status_3.installed);
-        assert!(status_3.authenticated);
+        assert!(oauth_start_res.error.is_some());
+        assert!(oauth_start_res.result.is_none());
     }
 
     #[tokio::test]
@@ -2557,7 +8081,7 @@ mod tests {
                         req.id.clone().unwrap_or(1.into()),
                         json!({
                             "installed": true,
-                            "version": "1.1.1",
+                            "version": "agy_acp_server_1.1.1",
                             "binaryPath": "/remote/tools/agy_acp_server.par",
                             "source": "hub_push",
                             "freeDiskBytes": 10737418240u64
@@ -2593,13 +8117,14 @@ mod tests {
             Some(json!({
                 "environmentId": "env_galahad",
                 "manifest": {
-                    "version": "1.1.1",
+                    "version": "agy_acp_server_1.1.1",
                     "platform": "linux",
                     "arch": "x64",
                     "url": "https://dl.google.com/test.zip",
                     "size": 100,
-                    "sha256": "0123456789abcdef",
-                    "entries": ["agy_acp_server.par", "localharness_external"]
+                    "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                    "executable": { "name": "agy_acp_server.par", "size": 80 },
+                    "harness": { "name": "localharness_external", "size": 20 }
                 }
             })),
         );
@@ -2613,9 +8138,8 @@ mod tests {
             "antigravity.oauth_relay",
             Some(json!({
                 "environmentId": "env_galahad",
+                "flowId": "flow-1",
                 "callbackUrl": "http://127.0.0.1:51123/?code=123&state=state-1",
-                "state": "state-1",
-                "redirectPort": 51123
             })),
         );
         let relay_res = hub_router.handle_request(relay_req).await.unwrap();
@@ -2824,5 +8348,590 @@ Host worker-node
         assert!(sync_out.synced);
         assert_eq!(sync_out.target_branch, "synced-main");
         assert!(sync_out.bundle_size_bytes > 0);
+    }
+
+    #[tokio::test]
+    async fn remote_worktree_sync_builds_the_bundle_on_the_hub() {
+        use crate::environment_router::MockEnvironmentTransport;
+        use pandamux_core::EnvironmentId;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let origin = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| {
+            let result = std::process::Command::new("git")
+                .current_dir(origin.path())
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        };
+        run(&["init"]);
+        run(&["config", "user.name", "Tester"]);
+        run(&["config", "user.email", "test@example.com"]);
+        std::fs::write(origin.path().join("delta.txt"), "unpushed delta").unwrap();
+        run(&["add", "delta.txt"]);
+        run(&["commit", "-m", "add unpushed delta"]);
+
+        let store = Store::in_memory().unwrap();
+        let router = Router::new(store, ServerRole::Hub, "env-local".to_string());
+        let remote_env = EnvironmentId::new("env-remote-sync");
+        let received_bundle = Arc::new(AtomicBool::new(false));
+        let received_bundle_for_transport = Arc::clone(&received_bundle);
+        let transport = Arc::new(MockEnvironmentTransport::new(move |request| {
+            let id = request.id.clone().unwrap_or(1.into());
+            let params = request.params.as_ref().unwrap();
+            received_bundle_for_transport.store(
+                params
+                    .get("bundleBytesBase64")
+                    .and_then(Value::as_str)
+                    .is_some_and(|bundle| !bundle.is_empty()),
+                Ordering::SeqCst,
+            );
+            Ok(RpcResponse::success(
+                id,
+                json!({
+                    "synced": true,
+                    "targetBranch": "r0-live-delta",
+                    "bundleSizeBytes": 1,
+                    "message": "Applied 1 commit(s) successfully"
+                }),
+            ))
+        }));
+        router
+            .environment_router()
+            .register_transport(remote_env.clone(), transport, None)
+            .await;
+
+        let response = router
+            .handle_request(RpcRequest::new(
+                1,
+                "worktree.sync_delta",
+                Some(json!({
+                    "environmentId": remote_env,
+                    "localPath": origin.path(),
+                    "remotePath": "/remote/repository",
+                    "revRange": "HEAD",
+                    "targetBranch": "r0-live-delta"
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(response.is_success());
+        assert!(received_bundle.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn health_fixtures_are_bounded_persisted_and_never_start_sessions() {
+        let store = Store::in_memory().expect("open health store");
+        let scenarios = [
+            (
+                "missing",
+                json!({
+                    "installed": false,
+                    "authState": "unknown",
+                    "authConfidence": "unknown",
+                    "runtimeHealth": "unavailable",
+                    "runtimeCode": "binary_missing",
+                    "probeDelayMs": 30
+                }),
+            ),
+            (
+                "unsupported",
+                json!({
+                    "version": "0.0.1",
+                    "authState": "authenticated",
+                    "runtimeHealth": "unavailable",
+                    "runtimeCode": "unsupported_version",
+                    "probeDelayMs": 30
+                }),
+            ),
+            (
+                "unknown-auth",
+                json!({
+                    "authState": "unknown",
+                    "authConfidence": "unknown",
+                    "runtimeHealth": "healthy",
+                    "probeDelayMs": 30
+                }),
+            ),
+            (
+                "logged-out",
+                json!({
+                    "authState": "unauthenticated",
+                    "authConfidence": "reported",
+                    "runtimeHealth": "healthy",
+                    "probeDelayMs": 30
+                }),
+            ),
+            (
+                "logged-in",
+                json!({
+                    "authState": "authenticated",
+                    "authConfidence": "reported",
+                    "runtimeHealth": "healthy",
+                    "accountLabel": "person@example.com",
+                    "subscription": "Team",
+                    "probeDelayMs": 30
+                }),
+            ),
+            (
+                "malformed",
+                json!({
+                    "authState": "unknown",
+                    "authConfidence": "unknown",
+                    "runtimeHealth": "degraded",
+                    "runtimeCode": "malformed_output",
+                    "healthReason": "Provider returned malformed probe output",
+                    "probeDelayMs": 30
+                }),
+            ),
+            (
+                "timeout",
+                json!({
+                    "authState": "authenticated",
+                    "runtimeHealth": "healthy",
+                    "probeDelayMs": 150
+                }),
+            ),
+        ];
+        let providers = scenarios
+            .into_iter()
+            .map(|(id, settings)| pandamux_core::ProviderInstanceConfig {
+                id: pandamux_core::ProviderInstanceId::new(id),
+                provider: ProviderKind::Custom,
+                display_name: id.to_string(),
+                profile_dir: format!("profiles/custom/{id}"),
+                environment_id: None,
+                binary_path: Some(format!("/mock/bin/{id}")),
+                concurrency_limit: 1,
+                env_overrides: Default::default(),
+                settings,
+                enabled: true,
+                disabled_reason: None,
+            })
+            .collect::<Vec<_>>();
+        store
+            .save_settings(&UserSettings {
+                providers,
+                ..UserSettings::default()
+            })
+            .expect("save health fixtures");
+        let driver = Arc::new(pandamux_providers::MockProviderDriver::new(
+            ProviderKind::Custom,
+            "Health fixture",
+        ));
+        let drivers = Arc::new(DriverRegistry::new());
+        drivers.register(ProviderKind::Custom, driver.clone());
+        let router = Router::with_drivers(
+            store.clone(),
+            ServerRole::Hub,
+            "env-health".to_string(),
+            drivers,
+        );
+
+        let response = router
+            .handle_request(RpcRequest::new(
+                1,
+                "provider.health",
+                Some(json!({
+                    "timeoutMs": 80,
+                    "maxConcurrency": 2
+                })),
+            ))
+            .await
+            .expect("health response");
+        let result: ProviderHealthResult =
+            serde_json::from_value(response.result.expect("health result"))
+                .expect("typed health result");
+        assert_eq!(result.reports.len(), 7);
+        let report = |id: &str| {
+            result
+                .reports
+                .iter()
+                .find(|report| report.instance_id.as_str() == id)
+                .expect("health fixture report")
+        };
+        assert_eq!(
+            report("missing").runtime_code.as_deref(),
+            Some("binary_missing")
+        );
+        assert_eq!(
+            report("unsupported").runtime_code.as_deref(),
+            Some("unsupported_version")
+        );
+        assert_eq!(report("unknown-auth").status, "unknown");
+        assert_eq!(report("logged-out").status, "unauthenticated");
+        assert_eq!(report("logged-in").status, "healthy");
+        assert_eq!(
+            report("logged-in").account_badge.as_deref(),
+            Some("p***@example.com (Te***)")
+        );
+        assert_eq!(report("logged-in").subscription.as_deref(), Some("Te***"));
+        assert!(
+            !serde_json::to_string(report("logged-in"))
+                .expect("serialize masked health report")
+                .contains("Team")
+        );
+        assert_eq!(report("malformed").status, "degraded");
+        assert_eq!(report("timeout").runtime_status, "timeout");
+        assert!(report("timeout").retryable);
+        assert!(driver.max_concurrent_probes() >= 2);
+        assert!(driver.max_concurrent_probes() <= 2);
+        assert_eq!(driver.session_start_count(), 0);
+        assert_eq!(
+            store
+                .provider_health_snapshot_count()
+                .expect("health snapshot count"),
+            7
+        );
+
+        let first_success = report("logged-in")
+            .last_success_at_ms
+            .expect("healthy last success");
+        let mut settings = store
+            .get_settings()
+            .expect("load health settings")
+            .expect("health settings");
+        settings
+            .providers
+            .iter_mut()
+            .find(|config| config.id.as_str() == "logged-in")
+            .expect("logged-in config")
+            .settings = json!({
+            "authState": "unknown",
+            "authConfidence": "unknown",
+            "runtimeHealth": "unavailable",
+            "runtimeCode": "remote_probe_failed"
+        });
+        store
+            .save_settings(&settings)
+            .expect("save failed health state");
+        let failed = router
+            .handle_request(RpcRequest::new(
+                2,
+                "provider.health",
+                Some(json!({
+                    "instanceId": "logged-in",
+                    "timeoutMs": 80,
+                    "maxConcurrency": 1
+                })),
+            ))
+            .await
+            .expect("failed health response");
+        let failed: ProviderHealthResult =
+            serde_json::from_value(failed.result.expect("failed health result"))
+                .expect("typed failed health result");
+        assert_eq!(failed.reports[0].status, "unavailable");
+        assert_eq!(failed.reports[0].last_success_at_ms, Some(first_success));
+        assert_eq!(driver.session_start_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn remote_health_and_login_launch_failures_remain_visible_and_retryable() {
+        let store = Store::in_memory().expect("open provider action store");
+        let provider = pandamux_core::ProviderInstanceConfig {
+            id: pandamux_core::ProviderInstanceId::new("claude-login"),
+            provider: ProviderKind::Claude,
+            display_name: "Claude Login".to_string(),
+            profile_dir: "profiles/claude/login".to_string(),
+            environment_id: None,
+            binary_path: Some("/mock/bin/claude".to_string()),
+            concurrency_limit: 1,
+            env_overrides: Default::default(),
+            settings: json!({ "authState": "unauthenticated" }),
+            enabled: true,
+            disabled_reason: None,
+        };
+        store
+            .save_settings(&UserSettings {
+                providers: vec![provider],
+                ..UserSettings::default()
+            })
+            .expect("save login provider");
+        let driver = Arc::new(pandamux_providers::MockProviderDriver::new(
+            ProviderKind::Claude,
+            "Login fixture",
+        ));
+        let drivers = Arc::new(DriverRegistry::new());
+        drivers.register(ProviderKind::Claude, driver.clone());
+        let mut router =
+            Router::with_drivers(store, ServerRole::Hub, "env-login".to_string(), drivers);
+        router.login_shell_resolver = || Ok(None);
+
+        let unreachable = router
+            .handle_request(RpcRequest::new(
+                1,
+                "provider.health",
+                Some(json!({ "environmentId": "env-offline" })),
+            ))
+            .await
+            .expect("unreachable response");
+        let unreachable = unreachable.error.expect("unreachable error");
+        let unreachable_data = unreachable.data.expect("unreachable data");
+        assert_eq!(unreachable_data["state"], "unreachable");
+        assert_eq!(unreachable_data["retryable"], true);
+
+        let preview = router
+            .handle_request(RpcRequest::new(
+                2,
+                "provider.login.preview",
+                Some(json!({
+                    "providerInstanceId": "claude-login",
+                    "environmentId": "env-login"
+                })),
+            ))
+            .await
+            .expect("preview response");
+        let preview: ProviderLoginPreview =
+            serde_json::from_value(preview.result.expect("preview result")).expect("typed preview");
+        assert_eq!(preview.flow, ProviderLoginFlow::Terminal);
+        assert!(preview.display_command.contains("auth"));
+        assert!(preview.display_command.contains("login"));
+        assert!(router.terminal.list().terminals.is_empty());
+
+        let failed_launch = router
+            .handle_request(RpcRequest::new(
+                3,
+                "provider.login.launch",
+                Some(json!({
+                    "previewId": preview.preview_id.clone(),
+                    "providerInstanceId": "different-instance",
+                    "environmentId": "env-login"
+                })),
+            ))
+            .await
+            .expect("failed launch response");
+        let failed_launch = failed_launch.error.expect("failed launch error");
+        let data = failed_launch.data.expect("failed launch data");
+        assert_eq!(data["reason"], "provider_login_preview_mismatch");
+        assert_eq!(data["retryable"], true);
+        assert!(router.terminal.list().terminals.is_empty());
+
+        let invalid_shell = tempfile::tempdir().expect("invalid shell directory");
+        router
+            .login_previews
+            .lock()
+            .expect("login preview registry")
+            .get_mut(&preview.preview_id)
+            .expect("retained login preview")
+            .shell = Some(invalid_shell.path().to_string_lossy().to_string());
+        let terminal_failure = router
+            .handle_request(RpcRequest::new(
+                4,
+                "provider.login.launch",
+                Some(json!({
+                    "previewId": preview.preview_id.clone(),
+                    "providerInstanceId": "claude-login",
+                    "environmentId": "env-login"
+                })),
+            ))
+            .await
+            .expect("terminal failure response")
+            .error
+            .expect("terminal failure error");
+        let terminal_failure = terminal_failure.data.expect("terminal failure data");
+        assert_eq!(
+            terminal_failure["reason"],
+            "provider_login_terminal_open_failed"
+        );
+        assert_eq!(terminal_failure["retryable"], true);
+        assert!(router.terminal.list().terminals.is_empty());
+        assert_eq!(driver.session_start_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn capacity_refresh_and_context_bound_push_preserve_safer_local_evidence() {
+        let store = Store::in_memory().expect("open capacity store");
+        let environment_id = EnvironmentId::new("env-capacity");
+        let instance_id = pandamux_core::ProviderInstanceId::new("custom-capacity");
+        let subscription_key = pandamux_core::SubscriptionKey::new("subkey-capacity");
+        store
+            .save_settings(&UserSettings {
+                providers: vec![pandamux_core::ProviderInstanceConfig {
+                    id: instance_id.clone(),
+                    provider: ProviderKind::Custom,
+                    display_name: "Capacity fixture".to_string(),
+                    profile_dir: "profiles/custom/capacity".to_string(),
+                    environment_id: None,
+                    binary_path: Some("/mock/bin/capacity".to_string()),
+                    concurrency_limit: 1,
+                    env_overrides: Default::default(),
+                    settings: json!({
+                        "capacityReport": {
+                            "source": "fixture_report",
+                            "confidence": "reported",
+                            "providerVersion": "fixture-2",
+                            "asOfMs": 1_000_000,
+                            "limits": [{
+                                "limitName": "primary",
+                                "usedMillionths": 400_000,
+                                "remainingMillionths": 600_000,
+                                "windowDurationMins": 60,
+                                "resetsAtMs": 2_000_000,
+                                "hardLimit": false
+                            }]
+                        }
+                    }),
+                    enabled: true,
+                    disabled_reason: None,
+                }],
+                ..UserSettings::default()
+            })
+            .expect("save capacity settings");
+        store
+            .save_usage_subscription(
+                &pandamux_core::UsageSubscription {
+                    key: subscription_key.clone(),
+                    provider: pandamux_core::UsageProvider::Custom,
+                    display_name: "Capacity subscription".to_string(),
+                    masked_account_label: None,
+                },
+                1,
+            )
+            .expect("save capacity subscription");
+        store
+            .map_provider_subscription(&environment_id, &instance_id, &subscription_key, 1)
+            .expect("map capacity subscription");
+        let drivers = Arc::new(DriverRegistry::new());
+        drivers.register(
+            ProviderKind::Custom,
+            Arc::new(pandamux_providers::MockProviderDriver::new(
+                ProviderKind::Custom,
+                "Capacity fixture",
+            )),
+        );
+        let router = Router::with_drivers(
+            store.clone(),
+            ServerRole::Hub,
+            environment_id.as_str().to_string(),
+            drivers,
+        );
+
+        let refreshed = router
+            .handle_request(RpcRequest::new(
+                1,
+                "capacity.refresh",
+                Some(json!({
+                    "environmentId": environment_id,
+                    "providerInstanceId": instance_id,
+                    "timeoutMs": 1000
+                })),
+            ))
+            .await
+            .expect("capacity refresh response");
+        let refreshed: CapacityRefreshResult =
+            serde_json::from_value(refreshed.result.expect("capacity refresh result"))
+                .expect("typed capacity refresh");
+        assert_eq!(refreshed.snapshots.len(), 1);
+        assert_eq!(refreshed.snapshots[0].remaining_millionths, Some(600_000));
+        assert_eq!(
+            refreshed.snapshots[0].confidence,
+            CapacityConfidence::Reported
+        );
+
+        let local_hard_limit = CapacitySnapshot {
+            schema_version: CAPACITY_SNAPSHOT_SCHEMA_VERSION,
+            subscription_key: subscription_key.clone(),
+            environment_id: Some(environment_id.clone()),
+            provider_instance_id: Some(instance_id.clone()),
+            window_name: Some("primary".to_string()),
+            window_start_ms: Some(900_000),
+            window_end_ms: Some(2_000_000),
+            used_millionths: Some(1_000_000),
+            remaining_millionths: Some(0),
+            reset_at_ms: Some(2_000_000),
+            source: "local_rate_limit".to_string(),
+            confidence: CapacityConfidence::Reported,
+            evidence_scope: CapacityEvidenceScope::Local,
+            hard_limit: true,
+            provider_version: Some("fixture-2".to_string()),
+            as_of_ms: 900_000,
+            max_age_ms: 1,
+        };
+        store
+            .save_capacity_snapshot(&local_hard_limit)
+            .expect("save local hard limit");
+        let hub_snapshot = CapacitySnapshot {
+            schema_version: CAPACITY_SNAPSHOT_SCHEMA_VERSION,
+            subscription_key: subscription_key.clone(),
+            environment_id: Some(EnvironmentId::new("spoofed-environment")),
+            provider_instance_id: Some(instance_id.clone()),
+            window_name: Some("primary".to_string()),
+            window_start_ms: Some(900_000),
+            window_end_ms: Some(2_000_000),
+            used_millionths: Some(100_000),
+            remaining_millionths: Some(900_000),
+            reset_at_ms: Some(2_000_000),
+            source: "hub_projection".to_string(),
+            confidence: CapacityConfidence::Reported,
+            evidence_scope: CapacityEvidenceScope::Local,
+            hard_limit: false,
+            provider_version: Some("fixture-2".to_string()),
+            as_of_ms: 1_010_000,
+            max_age_ms: DEFAULT_CAPACITY_MAX_AGE_MS,
+        };
+        let node_context = RequestContext::node_proxy(
+            environment_id.clone(),
+            crate::request_context::ClientIdentity::default(),
+        );
+        let pushed = router
+            .handle_request_with_context(
+                &node_context,
+                RpcRequest::new(
+                    2,
+                    "capacity.push",
+                    Some(
+                        serde_json::to_value(CapacityPushParams {
+                            environment_id: environment_id.clone(),
+                            schema_version: CAPACITY_SNAPSHOT_SCHEMA_VERSION,
+                            issued_at_ms: 1_010_000,
+                            max_age_ms: DEFAULT_CAPACITY_MAX_AGE_MS,
+                            snapshots: vec![hub_snapshot],
+                        })
+                        .expect("serialize capacity push"),
+                    ),
+                ),
+            )
+            .await
+            .expect("capacity push response");
+        assert!(pushed.is_success());
+
+        let queried = store
+            .query_capacity(&CapacityQueryParams {
+                subscription_key: Some(subscription_key),
+                environment_id: Some(environment_id.clone()),
+                at_ms: Some(1_010_000),
+                after: None,
+                limit: 100,
+            })
+            .expect("query effective capacity");
+        let effective = queried
+            .effective
+            .iter()
+            .find(|projection| projection.window_name.as_deref() == Some("primary"))
+            .expect("primary capacity projection");
+        assert_eq!(effective.remaining_millionths, Some(0));
+        assert!(effective.hard_limited);
+        assert!(effective.conflicting_evidence);
+        assert!(queried.snapshots.iter().any(|snapshot| {
+            snapshot.evidence_scope == CapacityEvidenceScope::Hub
+                && snapshot.environment_id.as_ref() == Some(&environment_id)
+        }));
+
+        store
+            .record_usage_sync_failure(&environment_id, true, "capacity_fixture_offline")
+            .expect("record offline environment");
+        let offline = store
+            .query_capacity(&CapacityQueryParams {
+                environment_id: Some(environment_id.clone()),
+                at_ms: Some(1_010_000),
+                ..CapacityQueryParams::default()
+            })
+            .expect("query offline coverage");
+        assert_eq!(offline.offline_environments, vec![environment_id]);
     }
 }

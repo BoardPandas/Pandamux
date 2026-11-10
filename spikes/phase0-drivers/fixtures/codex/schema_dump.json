@@ -1,31 +1,32 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "CodexAppServerSchema",
-  "version": "1.0.0",
+  "title": "CodexAppServerContractProjection",
+  "generatedBy": "codex-cli 0.158.0",
+  "protocol": "codex_app_server_protocol v2",
   "methods": {
     "initialize": {
       "params": {
         "type": "object",
         "properties": {
-          "clientName": { "type": "string" },
-          "clientVersion": { "type": "string" }
+          "clientInfo": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "title": { "type": ["string", "null"] },
+              "version": { "type": "string" }
+            },
+            "required": ["name", "version"]
+          }
         },
-        "required": ["clientName", "clientVersion"]
+        "required": ["clientInfo"]
       },
       "result": {
         "type": "object",
         "properties": {
-          "serverVersion": { "type": "string" },
-          "capabilities": {
-            "type": "object",
-            "properties": {
-              "developerInstructions": { "type": "boolean" },
-              "sandboxPolicies": { "type": "boolean" },
-              "rateLimits": { "type": "boolean" }
-            }
-          }
-        },
-        "required": ["serverVersion", "capabilities"]
+          "userAgent": { "type": "string" },
+          "platformFamily": { "type": "string" },
+          "platformOs": { "type": "string" }
+        }
       }
     },
     "thread/start": {
@@ -35,23 +36,57 @@
           "cwd": { "type": "string" },
           "model": { "type": "string" },
           "developerInstructions": { "type": "string" },
-          "sandboxPolicy": {
+          "sandbox": {
             "type": "string",
             "enum": ["read-only", "workspace-write", "danger-full-access"]
           },
           "approvalPolicy": {
             "type": "string",
-            "enum": ["never", "on-write", "always"]
+            "enum": ["never", "on-request", "untrusted"]
           }
-        },
-        "required": ["cwd", "model"]
+        }
       },
       "result": {
         "type": "object",
         "properties": {
-          "threadId": { "type": "string" }
+          "thread": {
+            "type": "object",
+            "properties": { "id": { "type": "string" } },
+            "required": ["id"]
+          }
+        },
+        "required": ["thread"]
+      }
+    },
+    "thread/resume": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "threadId": { "type": "string" },
+          "cwd": { "type": ["string", "null"] },
+          "model": { "type": ["string", "null"] },
+          "developerInstructions": { "type": ["string", "null"] },
+          "sandbox": {
+            "type": ["string", "null"],
+            "enum": ["read-only", "workspace-write", "danger-full-access", null]
+          },
+          "approvalPolicy": {
+            "type": ["string", "null"],
+            "enum": ["never", "on-request", "untrusted", null]
+          }
         },
         "required": ["threadId"]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "thread": {
+            "type": "object",
+            "properties": { "id": { "type": "string" } },
+            "required": ["id"]
+          }
+        },
+        "required": ["thread"]
       }
     },
     "turn/start": {
@@ -64,9 +99,10 @@
             "items": {
               "type": "object",
               "properties": {
-                "type": { "type": "string", "enum": ["text", "image", "attachment"] },
+                "type": { "type": "string", "enum": ["text", "image", "localImage"] },
                 "text": { "type": "string" },
-                "uri": { "type": "string" }
+                "url": { "type": "string" },
+                "path": { "type": "string" }
               },
               "required": ["type"]
             }
@@ -77,9 +113,19 @@
       "result": {
         "type": "object",
         "properties": {
-          "turnId": { "type": "string" }
+          "turn": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "status": {
+                "type": "string",
+                "enum": ["completed", "interrupted", "failed", "inProgress"]
+              }
+            },
+            "required": ["id", "status"]
+          }
         },
-        "required": ["turnId"]
+        "required": ["turn"]
       }
     },
     "turn/interrupt": {
@@ -94,9 +140,7 @@
       "result": {
         "type": "object",
         "properties": {
-          "interrupted": { "type": "boolean" }
-        },
-        "required": ["interrupted"]
+        }
       }
     },
     "account/read": {
@@ -116,20 +160,23 @@
       "result": {
         "type": "object",
         "properties": {
-          "models": {
+          "data": {
             "type": "array",
             "items": {
               "type": "object",
               "properties": {
                 "id": { "type": "string" },
+                "model": { "type": "string" },
                 "displayName": { "type": "string" },
-                "contextWindow": { "type": "integer" }
+                "hidden": { "type": "boolean" },
+                "isDefault": { "type": "boolean" },
+                "supportedReasoningEfforts": { "type": "array" }
               },
-              "required": ["id", "displayName"]
+              "required": ["id", "model", "displayName", "hidden", "isDefault", "supportedReasoningEfforts"]
             }
           }
         },
-        "required": ["models"]
+        "required": ["data"]
       }
     },
     "account/rateLimits/read": {
@@ -138,21 +185,28 @@
         "type": "object",
         "properties": {
           "rateLimits": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "limitName": { "type": "string" },
-                "usedPercent": { "type": "number" },
-                "windowDurationMins": { "type": "integer" },
-                "resetsAt": { "type": "string" }
-              },
-              "required": ["limitName", "usedPercent", "windowDurationMins", "resetsAt"]
+            "type": "object",
+            "properties": {
+              "limitId": { "type": ["string", "null"] },
+              "limitName": { "type": ["string", "null"] },
+              "primary": { "$ref": "#/definitions/RateLimitWindow" },
+              "secondary": { "$ref": "#/definitions/RateLimitWindow" }
             }
           }
         },
         "required": ["rateLimits"]
       }
+    }
+  },
+  "definitions": {
+    "RateLimitWindow": {
+      "type": ["object", "null"],
+      "properties": {
+        "usedPercent": { "type": "integer" },
+        "windowDurationMins": { "type": ["integer", "null"] },
+        "resetsAt": { "type": ["integer", "null"] }
+      },
+      "required": ["usedPercent"]
     }
   }
 }

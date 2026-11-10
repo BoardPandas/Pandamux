@@ -1,0 +1,23 @@
+schemaVersion: 1
+kind: pandamux.orchestrator
+minPandamuxVersion: "0.60.67"
+defaults:
+  mode: approve_first
+  defaultAgent: builder
+  maxParallelTasks: 4
+  maxTasksPerRun: 6
+  maxAttemptsPerTask: 2
+prompts:
+  intake: prompts/intake.md
+  planner: prompts/planner.md
+  handoff: prompts/handoff.md
+classes: []
+providerPolicy:
+  minRemainingMillionths: 150000
+  concurrency: {}
+fallbacks:
+  onRateLimit: next_provider
+  onNoProvider: queue
+  onFailure: ask
+verification:
+  useProjectCommands: true

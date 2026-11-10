@@ -46,9 +46,13 @@ pub fn resolve_shell(preferred: Option<&str>) -> String {
 /// Resolve the Project launcher shell contract: PowerShell 7 first, then
 /// Windows PowerShell. Unlike the legacy resolver this never falls back to cmd.
 pub fn resolve_powershell() -> Option<String> {
+    resolve_powershell_with(is_shell_available)
+}
+
+fn resolve_powershell_with(available: impl Fn(&str) -> bool) -> Option<String> {
     ["pwsh.exe", "powershell.exe"]
         .into_iter()
-        .find(|candidate| is_shell_available(candidate))
+        .find(|candidate| available(candidate))
         .map(str::to_string)
 }
 
@@ -103,10 +107,99 @@ fn is_shell_available(shell: &str) -> bool {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x0800_0000);
     }
-    command
+    let located = command
         .status()
         .map(|status| status.success())
-        .unwrap_or(false)
+        .unwrap_or(false);
+    if !located {
+        return false;
+    }
+
+    #[cfg(windows)]
+    if shell_type(shell) == ShellType::PowerShell {
+        return powershell_version_probe(shell);
+    }
+
+    true
+}
+
+#[cfg(any(windows, test))]
+fn is_powershell_version_output(output: &str) -> bool {
+    let version = output.trim();
+    version.starts_with(char::is_numeric)
+        && version.contains('.')
+        && version
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || ".-+".contains(character))
+}
+
+/// App Execution Aliases can make `where pwsh.exe` succeed even when no usable
+/// PowerShell 7 installation exists. Require the candidate to return a real
+/// version within a short bound so shell resolution can continue to Windows
+/// PowerShell instead of opening a dead terminal (or the Microsoft Store).
+#[cfg(windows)]
+fn powershell_version_probe(shell: &str) -> bool {
+    use std::sync::OnceLock;
+
+    if shell.eq_ignore_ascii_case("pwsh.exe") {
+        static PWSH_USABLE: OnceLock<bool> = OnceLock::new();
+        return *PWSH_USABLE.get_or_init(|| run_powershell_version_probe(shell));
+    }
+    if shell.eq_ignore_ascii_case("powershell.exe") {
+        static WINDOWS_POWERSHELL_USABLE: OnceLock<bool> = OnceLock::new();
+        return *WINDOWS_POWERSHELL_USABLE.get_or_init(|| run_powershell_version_probe(shell));
+    }
+    run_powershell_version_probe(shell)
+}
+
+#[cfg(windows)]
+fn run_powershell_version_probe(shell: &str) -> bool {
+    use std::io::Read;
+    use std::os::windows::process::CommandExt;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    let mut command = Command::new(shell);
+    command
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$PSVersionTable.PSVersion.ToString()",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .creation_flags(0x0800_0000);
+    let Ok(mut child) = command.spawn() else {
+        return false;
+    };
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(20)),
+            Ok(None) | Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+        }
+    };
+    if !status.success() {
+        return false;
+    }
+
+    let mut output = String::new();
+    let Some(mut stdout) = child.stdout.take() else {
+        return false;
+    };
+    if stdout.read_to_string(&mut output).is_err() {
+        return false;
+    }
+    is_powershell_version_output(&output)
 }
 
 /// Split `data` into ConPTY-friendly chunks of at most `chunk_size` bytes.
@@ -221,6 +314,23 @@ mod tests {
     fn falls_back_to_default_when_nothing_available() {
         let resolved = resolve_shell_with(None, &[], |_| false);
         assert_eq!(resolved, FALLBACK_SHELL);
+    }
+
+    #[test]
+    fn powershell_resolution_skips_an_unusable_pwsh_alias() {
+        let resolved = resolve_powershell_with(|candidate| candidate == "powershell.exe");
+        assert_eq!(resolved.as_deref(), Some("powershell.exe"));
+    }
+
+    #[test]
+    fn validates_real_powershell_version_output() {
+        assert!(is_powershell_version_output("7.5.3\r\n"));
+        assert!(is_powershell_version_output("5.1.26100.7019"));
+        assert!(is_powershell_version_output("7.6.0-preview.5"));
+        assert!(!is_powershell_version_output(""));
+        assert!(!is_powershell_version_output(
+            "Install PowerShell from the Microsoft Store"
+        ));
     }
 
     #[test]

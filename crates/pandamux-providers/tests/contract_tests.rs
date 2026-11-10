@@ -1,17 +1,26 @@
-use pandamux_core::{ids::ProviderInstanceId, provider_config::ProviderKind};
+use pandamux_core::{
+    AttachmentRecord,
+    event::TurnOutcome,
+    ids::{ProviderInstanceId, ThreadId},
+    provider_config::ProviderKind,
+    thread::{AccessMode, TurnInput},
+};
 use pandamux_providers::{
     ENV_CLAUDE_CONFIG_DIR, ENV_CODEX_HOME, ENV_GEMINI_HOME, apply_profile_environment,
-    build_claude_launch_args,
-    claude::{ClaudeAuthStatus, ControlResponse, parse_stream_json_lines},
+    build_claude_interrupt_request, build_claude_launch_args, build_claude_user_message,
+    claude::{ClaudeAuthStatus, ClaudeStreamEventParser, ControlResponse, parse_stream_json_lines},
+    claude_disallowed_tools, claude_permission_mode,
     codex::{
         CodexApprovalPolicy, CodexNotificationEvent, CodexSandboxPolicy, JsonRpcResponse,
         build_approval_response, build_thread_start_request, build_turn_start_request,
-        parse_codex_notification, parse_rate_limits_response,
+        build_turn_start_request_with_attachments, codex_session_policies,
+        parse_codex_notification, parse_rate_limits_response, parse_rate_limits_value,
     },
     resolve_command_shim, resolve_profile_dir,
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 const CLAUDE_AUTH_JSON: &str =
     include_str!("../../../spikes/phase0-drivers/fixtures/claude/auth_status_auth.json");
@@ -58,9 +67,10 @@ fn test_claude_stream_json_and_subagents() {
     );
 
     // Allow response
-    let allow = ControlResponse::allow(&perm.request_id);
+    let allow = ControlResponse::allow(&perm.request_id, perm.input.clone());
     let allow_json = serde_json::to_string(&allow).expect("serialize allow");
-    assert!(allow_json.contains("\"decision\":\"allow\""));
+    assert!(allow_json.contains("\"behavior\":\"allow\""));
+    assert!(allow_json.contains("\"updatedInput\""));
 
     // Subagent extraction
     assert_eq!(parsed.subagents.len(), 1);
@@ -86,7 +96,7 @@ fn test_claude_control_denial_and_launch_args() {
         "Outbound POST blocked",
     );
     let deny_json = serde_json::to_string(&deny).expect("serialize deny");
-    assert!(deny_json.contains("\"decision\":\"deny\""));
+    assert!(deny_json.contains("\"behavior\":\"deny\""));
     assert!(deny_json.contains("Outbound POST blocked"));
 
     let args = build_claude_launch_args(
@@ -101,6 +111,455 @@ fn test_claude_control_denial_and_launch_args() {
     assert!(args.contains(&"--disallowedTools".into()));
     assert!(args.contains(&"--permission-mode".into()));
     assert!(args.contains(&"--session-id".into()));
+    assert!(args.contains(&"--include-partial-messages".into()));
+
+    let bypass_args = build_claude_launch_args(None, &[], &[], Some("bypassPermissions"), None);
+    assert!(
+        bypass_args.contains(&"--allow-dangerously-skip-permissions".to_string()),
+        "full access must explicitly enable Claude's bypass mode"
+    );
+}
+
+#[test]
+fn test_claude_access_modes_map_to_supported_permission_modes() {
+    assert_eq!(claude_permission_mode(AccessMode::ReadOnly), "plan");
+    assert_eq!(claude_permission_mode(AccessMode::Ask), "manual");
+    assert_eq!(claude_permission_mode(AccessMode::WorkspaceOnly), "manual");
+    assert_eq!(claude_permission_mode(AccessMode::AutoEdit), "acceptEdits");
+    assert_eq!(
+        claude_permission_mode(AccessMode::FullAccess),
+        "bypassPermissions"
+    );
+}
+
+#[test]
+fn test_claude_read_only_disallows_exiting_plan_mode() {
+    let configured = vec!["WebFetch".to_string()];
+    assert_eq!(
+        claude_disallowed_tools(AccessMode::ReadOnly, &configured),
+        vec!["WebFetch".to_string(), "ExitPlanMode".to_string()]
+    );
+    assert_eq!(
+        claude_disallowed_tools(AccessMode::Ask, &configured),
+        configured
+    );
+    assert_eq!(
+        claude_disallowed_tools(AccessMode::ReadOnly, &["ExitPlanMode".to_string()]),
+        vec!["ExitPlanMode".to_string()]
+    );
+}
+
+#[test]
+fn test_claude_stream_input_uses_the_sdk_user_message_schema() {
+    let input = TurnInput {
+        text: "Describe the attachment".to_string(),
+        attachments: vec![AttachmentRecord {
+            id: "att-claude-1".to_string(),
+            thread_id: ThreadId::from("thread-claude-1"),
+            file_name: "diagram.png".to_string(),
+            mime_type: "image/png".to_string(),
+            size_bytes: 12,
+            file_path: "/workspace/diagram.png".to_string(),
+            created_at_ms: 1,
+        }],
+        ..TurnInput::default()
+    };
+
+    let message = build_claude_user_message(&input);
+    assert_eq!(message["type"], "user");
+    assert_eq!(message["message"]["role"], "user");
+    assert_eq!(message["message"]["content"][0]["type"], "text");
+    let text = message["message"]["content"][0]["text"]
+        .as_str()
+        .expect("text content");
+    assert!(text.starts_with("Describe the attachment"));
+    assert!(text.contains("diagram.png (image/png, 12 B): /workspace/diagram.png"));
+    assert!(message.get("text").is_none());
+    assert!(message.get("attachments").is_none());
+}
+
+#[test]
+fn test_claude_current_stream_output_schema() {
+    let assistant = serde_json::json!({
+        "type": "assistant",
+        "message": {
+            "content": [{"type": "text", "text": "R0_CLAUDE_PROTOCOL_OK"}]
+        },
+        "session_id": "session-current"
+    });
+    assert_eq!(
+        pandamux_providers::claude::parse_stream_json_line(&assistant.to_string()),
+        Some(pandamux_providers::ProviderEvent::TextDelta {
+            delta: "R0_CLAUDE_PROTOCOL_OK".to_string()
+        })
+    );
+
+    let failed = serde_json::json!({
+        "type": "result",
+        "subtype": "error_during_execution",
+        "is_error": true,
+        "usage": {"input_tokens": 3, "output_tokens": 1}
+    });
+    assert!(matches!(
+        pandamux_providers::claude::parse_stream_json_line(&failed.to_string()),
+        Some(pandamux_providers::ProviderEvent::TurnCompleted {
+            outcome: TurnOutcome::Failed,
+            ..
+        })
+    ));
+
+    let tool_use = serde_json::json!({
+        "type": "assistant",
+        "message": {
+            "content": [{
+                "type": "tool_use",
+                "id": "tool-current",
+                "name": "Bash",
+                "input": {"command": "pwd"}
+            }]
+        }
+    });
+    assert!(matches!(
+        pandamux_providers::claude::parse_stream_json_line(&tool_use.to_string()),
+        Some(pandamux_providers::ProviderEvent::ToolCallStarted { id, name, .. })
+            if id == "tool-current" && name == "Bash"
+    ));
+
+    let tool_result = serde_json::json!({
+        "type": "user",
+        "message": {
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": "tool-current",
+                "content": "workspace path",
+                "is_error": false
+            }]
+        }
+    });
+    assert!(matches!(
+        pandamux_providers::claude::parse_stream_json_line(&tool_result.to_string()),
+        Some(pandamux_providers::ProviderEvent::ToolCallFinished { id, error: None, .. })
+            if id == "tool-current"
+    ));
+}
+
+#[test]
+fn test_claude_stream_accumulates_exact_message_components() {
+    let lines = [
+        serde_json::json!({
+            "type": "system",
+            "session_id": "session-component"
+        }),
+        serde_json::json!({
+            "type": "assistant",
+            "session_id": "session-component",
+            "timestamp": "2026-10-06T10:00:01Z",
+            "message": {
+                "id": "message-thinking-and-text",
+                "model": "claude-actual-one",
+                "content": [{"type": "thinking", "thinking": "reasoning"}],
+                "usage": {"input_tokens": 10, "output_tokens": 1}
+            }
+        }),
+        serde_json::json!({
+            "type": "assistant",
+            "session_id": "session-component",
+            "timestamp": "2026-10-06T10:00:02Z",
+            "message": {
+                "id": "message-thinking-and-text",
+                "model": "claude-actual-one",
+                "content": [{"type": "text", "text": "first answer"}],
+                "usage": {"input_tokens": 10, "output_tokens": 3}
+            }
+        }),
+        serde_json::json!({
+            "type": "assistant",
+            "session_id": "session-component",
+            "timestamp": "2026-10-06T10:00:03Z",
+            "message": {
+                "id": "message-after-tool",
+                "model": "claude-actual-two",
+                "content": [{"type": "text", "text": "tool result"}],
+                "usage": {
+                    "input_tokens": 2,
+                    "output_tokens": 4,
+                    "cache_read_input_tokens": 5,
+                    "cache_creation_input_tokens": 6
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "result",
+            "subtype": "success",
+            "session_id": "session-component",
+            "uuid": "result-uuid-not-a-message-id",
+            "timestamp": "2026-10-06T10:00:04Z",
+            "model": "selected-routing-model",
+            "total_cost_usd": 0.0123,
+            "usage": {"input_tokens": 12, "output_tokens": 7}
+        }),
+    ];
+    let mut parser = ClaudeStreamEventParser::default();
+    let mut completed = None;
+    for line in lines {
+        if let Some(pandamux_providers::ProviderEvent::TurnCompleted { usage, .. }) =
+            parser.parse_line(&line.to_string())
+        {
+            completed = usage;
+        }
+    }
+    let usage = completed.expect("terminal usage");
+    assert_eq!(usage.components.len(), 2);
+    assert_eq!(usage.input_tokens, 12);
+    assert_eq!(usage.output_tokens, 7);
+    assert_eq!(usage.provider_reported_micro_usd, Some(12_300));
+    assert_eq!(
+        usage
+            .provenance
+            .as_ref()
+            .and_then(|value| value.provider_native_turn_id.as_deref()),
+        Some("result-uuid-not-a-message-id")
+    );
+
+    let first = &usage.components[0];
+    assert_eq!(
+        first.provider_native_message_id,
+        "message-thinking-and-text"
+    );
+    assert_eq!(first.model.as_deref(), Some("claude-actual-one"));
+    assert_eq!(first.output_tokens, 3);
+    assert_eq!(first.cache_read_tokens, None);
+    assert_eq!(first.cache_write_tokens, None);
+
+    let second = &usage.components[1];
+    assert_eq!(second.provider_native_message_id, "message-after-tool");
+    assert_eq!(second.model.as_deref(), Some("claude-actual-two"));
+    assert_eq!(second.cache_read_tokens, Some(5));
+    assert_eq!(second.cache_write_tokens, Some(6));
+    assert!(
+        usage
+            .components
+            .iter()
+            .all(|component| component.model.as_deref() != Some("selected-routing-model"))
+    );
+}
+
+#[test]
+fn test_claude_partial_message_usage_finalizes_tool_turn_components() {
+    let lines = [
+        serde_json::json!({
+            "type": "system",
+            "session_id": "session-partial"
+        }),
+        serde_json::json!({
+            "type": "stream_event",
+            "parent_tool_use_id": null,
+            "event": {
+                "type": "message_start",
+                "message": {
+                    "id": "message-before-tool",
+                    "model": "claude-actual",
+                    "usage": {
+                        "input_tokens": 2,
+                        "output_tokens": 8,
+                        "cache_read_input_tokens": 11,
+                        "cache_creation_input_tokens": 12
+                    }
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "assistant",
+            "session_id": "session-partial",
+            "timestamp": "2026-10-07T04:18:50Z",
+            "message": {
+                "id": "message-before-tool",
+                "model": "claude-actual",
+                "usage": {
+                    "input_tokens": 2,
+                    "output_tokens": 16,
+                    "cache_read_input_tokens": 11,
+                    "cache_creation_input_tokens": 12
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "stream_event",
+            "parent_tool_use_id": null,
+            "event": {
+                "type": "message_delta",
+                "usage": {
+                    "input_tokens": 2,
+                    "output_tokens": 74,
+                    "cache_read_input_tokens": 11,
+                    "cache_creation_input_tokens": 12
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "stream_event",
+            "parent_tool_use_id": null,
+            "event": {"type": "message_stop"}
+        }),
+        serde_json::json!({
+            "type": "stream_event",
+            "parent_tool_use_id": null,
+            "event": {
+                "type": "message_start",
+                "message": {
+                    "id": "message-after-tool",
+                    "model": "claude-actual",
+                    "usage": {
+                        "input_tokens": 3,
+                        "output_tokens": 6,
+                        "cache_read_input_tokens": 21,
+                        "cache_creation_input_tokens": 22
+                    }
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "assistant",
+            "session_id": "session-partial",
+            "timestamp": "2026-10-07T04:18:55Z",
+            "message": {
+                "id": "message-after-tool",
+                "model": "claude-actual",
+                "usage": {
+                    "input_tokens": 3,
+                    "output_tokens": 6,
+                    "cache_read_input_tokens": 21,
+                    "cache_creation_input_tokens": 22
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "stream_event",
+            "parent_tool_use_id": null,
+            "event": {
+                "type": "message_delta",
+                "usage": {
+                    "input_tokens": 3,
+                    "output_tokens": 272,
+                    "cache_read_input_tokens": 21,
+                    "cache_creation_input_tokens": 22
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "stream_event",
+            "parent_tool_use_id": null,
+            "event": {"type": "message_stop"}
+        }),
+        serde_json::json!({
+            "type": "result",
+            "subtype": "success",
+            "session_id": "session-partial",
+            "uuid": "result-not-a-message-id",
+            "total_cost_usd": 0.123,
+            "usage": {
+                "input_tokens": 5,
+                "output_tokens": 346,
+                "cache_read_input_tokens": 32,
+                "cache_creation_input_tokens": 34
+            }
+        }),
+    ];
+    let mut parser = ClaudeStreamEventParser::default();
+    let mut completed = None;
+    for line in lines {
+        if let Some(pandamux_providers::ProviderEvent::TurnCompleted { usage, .. }) =
+            parser.parse_line(&line.to_string())
+        {
+            completed = usage;
+        }
+    }
+
+    let usage = completed.expect("terminal usage");
+    assert_eq!(usage.output_tokens, 346);
+    assert_eq!(usage.components.len(), 2);
+    assert_eq!(
+        usage.components[0].provider_native_message_id,
+        "message-before-tool"
+    );
+    assert_eq!(usage.components[0].output_tokens, 74);
+    assert_eq!(usage.components[0].occurred_at_ms, Some(1_791_346_730_000));
+    assert_eq!(
+        usage.components[1].provider_native_message_id,
+        "message-after-tool"
+    );
+    assert_eq!(usage.components[1].output_tokens, 272);
+    assert_eq!(
+        usage
+            .components
+            .iter()
+            .map(|component| component.output_tokens)
+            .sum::<u64>(),
+        usage.output_tokens
+    );
+}
+
+#[test]
+fn test_claude_current_control_request_and_response_schema() {
+    let request = serde_json::json!({
+        "type": "control_request",
+        "request_id": "request-current",
+        "request": {
+            "subtype": "can_use_tool",
+            "tool_name": "Bash",
+            "input": {
+                "command": "printf ready > /tmp/marker",
+                "description": "Write marker"
+            },
+            "description": "Write marker"
+        }
+    });
+    let parsed = parse_stream_json_lines(&request.to_string()).expect("parse current request");
+    let permission = parsed.control_requests.first().expect("control request");
+    assert_eq!(permission.request_id, "request-current");
+    assert_eq!(permission.tool_name, "Bash");
+    assert_eq!(
+        permission.command.as_deref(),
+        Some("printf ready > /tmp/marker")
+    );
+    assert_eq!(permission.input["description"], "Write marker");
+
+    assert!(matches!(
+        pandamux_providers::claude::parse_stream_json_line(&request.to_string()),
+        Some(pandamux_providers::ProviderEvent::ApprovalRequested {
+            request_id,
+            command: Some(command),
+            ..
+        }) if request_id == "request-current" && command == "printf ready > /tmp/marker"
+    ));
+
+    let response = ControlResponse::allow(&permission.request_id, permission.input.clone());
+    assert_eq!(
+        serde_json::to_value(response).expect("serialize current allow"),
+        serde_json::json!({
+            "type": "control_response",
+            "response": {
+                "subtype": "success",
+                "request_id": "request-current",
+                "response": {
+                    "behavior": "allow",
+                    "updatedInput": {
+                        "command": "printf ready > /tmp/marker",
+                        "description": "Write marker"
+                    }
+                }
+            }
+        })
+    );
+
+    assert_eq!(
+        build_claude_interrupt_request("interrupt-current"),
+        serde_json::json!({
+            "type": "control_request",
+            "request_id": "interrupt-current",
+            "request": {"subtype": "interrupt"}
+        })
+    );
 }
 
 #[test]
@@ -110,11 +569,17 @@ fn test_codex_schema_and_knobs_contract() {
     let methods = schema_val.get("methods").expect("methods in schema");
 
     assert!(methods.get("thread/start").is_some());
+    assert!(methods.get("thread/resume").is_some());
+    assert!(methods.get("turn/interrupt").is_some());
+    assert!(methods.get("model/list").is_some());
     assert!(methods.get("account/rateLimits/read").is_some());
+
+    let initialize = &methods["initialize"]["params"]["properties"];
+    assert!(initialize.get("clientInfo").is_some());
 
     let thread_start = &methods["thread/start"]["params"]["properties"];
     assert!(thread_start.get("developerInstructions").is_some());
-    assert!(thread_start.get("sandboxPolicy").is_some());
+    assert!(thread_start.get("sandbox").is_some());
     assert!(thread_start.get("approvalPolicy").is_some());
 
     let thread_req = build_thread_start_request(
@@ -123,61 +588,312 @@ fn test_codex_schema_and_knobs_contract() {
         "o3-mini",
         Some("Developer instructions for reviewer"),
         CodexSandboxPolicy::WorkspaceWrite,
-        CodexApprovalPolicy::OnWrite,
+        CodexApprovalPolicy::OnRequest,
     );
     let thread_json = serde_json::to_string(&thread_req).expect("serialize thread/start");
     assert!(thread_json.contains("developerInstructions"));
     assert!(thread_json.contains("workspace-write"));
-    assert!(thread_json.contains("on-write"));
+    assert!(thread_json.contains("on-request"));
+    assert!(thread_json.contains("\"sandbox\""));
+    assert!(!thread_json.contains("sandboxPolicy"));
+    assert!(!thread_json.contains("jsonrpc"));
 
     let turn_req = build_turn_start_request(11, "th_codex_01", "Inspect crate boundaries");
     let turn_json = serde_json::to_string(&turn_req).expect("serialize turn/start");
     assert!(turn_json.contains("th_codex_01"));
+    assert!(turn_json.contains("\"type\":\"text\""));
+    assert!(!turn_json.contains("jsonrpc"));
+
+    let image = AttachmentRecord {
+        id: "att-1".to_string(),
+        thread_id: ThreadId::from("thread-1"),
+        file_name: "diagram.png".to_string(),
+        mime_type: "image/png".to_string(),
+        size_bytes: 12,
+        file_path: "/workspace/diagram.png".to_string(),
+        created_at_ms: 1,
+    };
+    let image_req = build_turn_start_request_with_attachments(
+        12,
+        "th_codex_01",
+        "Describe the image",
+        &[image],
+    );
+    assert_eq!(
+        image_req.params["input"][1],
+        serde_json::json!({
+            "type": "localImage",
+            "path": "/workspace/diagram.png"
+        })
+    );
+}
+
+#[test]
+fn test_codex_access_modes_preserve_the_pandamux_ceiling() {
+    use pandamux_core::thread::AccessMode;
+
+    assert_eq!(
+        codex_session_policies(AccessMode::ReadOnly),
+        (CodexSandboxPolicy::ReadOnly, CodexApprovalPolicy::Never)
+    );
+    assert_eq!(
+        codex_session_policies(AccessMode::Ask),
+        (
+            CodexSandboxPolicy::WorkspaceWrite,
+            CodexApprovalPolicy::Untrusted
+        )
+    );
+    assert_eq!(
+        codex_session_policies(AccessMode::WorkspaceOnly),
+        (
+            CodexSandboxPolicy::WorkspaceWrite,
+            CodexApprovalPolicy::OnRequest
+        )
+    );
+    assert_eq!(
+        codex_session_policies(AccessMode::AutoEdit),
+        (
+            CodexSandboxPolicy::WorkspaceWrite,
+            CodexApprovalPolicy::Never
+        )
+    );
+    assert_eq!(
+        codex_session_policies(AccessMode::FullAccess),
+        (
+            CodexSandboxPolicy::DangerFullAccess,
+            CodexApprovalPolicy::Never
+        )
+    );
 }
 
 #[test]
 fn test_codex_lifecycle_and_ratelimits() {
-    let mut turn_tokens = 0;
+    let mut outcome = None;
     let mut approval_seen = false;
 
     for line in CODEX_LIFECYCLE_JSONL.lines() {
-        if line.contains("\"turn/approvalRequest\"") {
+        if line.contains("\"item/commandExecution/requestApproval\"") {
             if let Ok(CodexNotificationEvent::ApprovalRequest {
-                approval_id,
+                request_id,
                 command,
                 ..
             }) = parse_codex_notification(line)
             {
                 approval_seen = true;
-                let appr_resp = build_approval_response(20, &approval_id, true);
-                assert_eq!(appr_resp.method, "turn/approvalResponse");
+                assert_eq!(request_id, "approval-01");
+                let appr_resp = build_approval_response(true);
+                assert_eq!(appr_resp["decision"], "accept");
                 assert_eq!(command, "cargo check --workspace");
             }
         } else if line.contains("\"turn/completed\"")
-            && let Ok(CodexNotificationEvent::TurnCompleted { total_tokens }) =
-                parse_codex_notification(line)
+            && let Ok(CodexNotificationEvent::TurnCompleted {
+                outcome: turn_outcome,
+            }) = parse_codex_notification(line)
         {
-            turn_tokens = total_tokens;
+            outcome = Some(turn_outcome);
         }
     }
 
     assert!(approval_seen);
-    assert_eq!(turn_tokens, 1420);
+    assert_eq!(outcome, Some(TurnOutcome::Success));
 
     let limits_raw: serde_json::Value =
         serde_json::from_str(CODEX_RATELIMITS_JSON).expect("parse limits fixture");
     let limits_resp = JsonRpcResponse {
-        jsonrpc: "2.0".into(),
+        jsonrpc: None,
         id: 5,
         result: Some(limits_raw),
         error: None,
     };
     let parsed_limits = parse_rate_limits_response(&limits_resp).expect("parse rate limits");
     assert_eq!(parsed_limits.len(), 2);
-    assert_eq!(parsed_limits[0].limit_name, "tokens");
-    assert_eq!(parsed_limits[0].used_percent, 34.2);
-    assert_eq!(parsed_limits[1].limit_name, "requests");
-    assert_eq!(parsed_limits[1].used_percent, 18.5);
+    assert_eq!(parsed_limits[0].limit_name, "Codex primary");
+    assert_eq!(parsed_limits[0].used_millionths, Some(340_000));
+    assert_eq!(parsed_limits[0].remaining_millionths, Some(660_000));
+    assert_eq!(parsed_limits[0].resets_at_ms, Some(1_790_395_200_000));
+    assert_eq!(parsed_limits[1].limit_name, "Codex secondary");
+    assert_eq!(parsed_limits[1].used_millionths, Some(180_000));
+    assert_eq!(parsed_limits[1].remaining_millionths, Some(820_000));
+}
+
+#[test]
+fn test_codex_rate_limit_fraction_conversion_is_exact_and_bounded() {
+    let limits = parse_rate_limits_value(&serde_json::json!({
+        "limitName": "Codex",
+        "primary": {
+            "usedPercent": "14.825",
+            "windowDurationMins": 300,
+            "resetsAt": "1790395200"
+        }
+    }))
+    .expect("parse exact decimal percentage");
+    assert_eq!(limits[0].used_millionths, Some(148_250));
+    assert_eq!(limits[0].remaining_millionths, Some(851_750));
+    assert_eq!(limits[0].resets_at_ms, Some(1_790_395_200_000));
+
+    assert!(
+        parse_rate_limits_value(&serde_json::json!({
+            "primary": { "usedPercent": 100.0001 }
+        }))
+        .is_err()
+    );
+}
+
+#[test]
+fn test_codex_included_usage_and_credit_paths_control_hard_limit() {
+    let allowed = JsonRpcResponse {
+        jsonrpc: None,
+        id: 5,
+        result: Some(serde_json::json!({
+            "ordinaryUsageAllowed": true,
+            "rateLimits": {
+                "limitId": "codex",
+                "primary": {
+                    "usedPercent": 100,
+                    "windowDurationMins": 10080,
+                    "resetsAt": 1791948542
+                },
+                "credits": {
+                    "hasCredits": true,
+                    "unlimited": false,
+                    "balance": "100"
+                },
+                "spendControlReached": null,
+                "rateLimitReachedType": null
+            }
+        })),
+        error: None,
+    };
+    let allowed_limits = parse_rate_limits_response(&allowed).expect("parse allowed limits");
+    assert_eq!(allowed_limits.len(), 1);
+    assert_eq!(allowed_limits[0].used_millionths, Some(1_000_000));
+    assert_eq!(allowed_limits[0].remaining_millionths, Some(0));
+    assert!(!allowed_limits[0].hard_limit);
+
+    let credit_serviceable = JsonRpcResponse {
+        result: Some(serde_json::json!({
+            "ordinaryUsageAllowed": false,
+            "rateLimits": {
+                "limitId": "codex",
+                "primary": {
+                    "usedPercent": 100,
+                    "windowDurationMins": 10080,
+                    "resetsAt": 1791948542
+                },
+                "credits": {
+                    "hasCredits": true,
+                    "unlimited": false,
+                    "balance": "100"
+                },
+                "spendControlReached": false,
+                "rateLimitReachedType": "rate_limit_reached"
+            }
+        })),
+        ..allowed.clone()
+    };
+    let serviceable_limits =
+        parse_rate_limits_response(&credit_serviceable).expect("parse credit-serviceable limits");
+    assert_eq!(serviceable_limits[0].used_millionths, Some(1_000_000));
+    assert_eq!(serviceable_limits[0].remaining_millionths, Some(0));
+    assert!(!serviceable_limits[0].hard_limit);
+
+    let unknown_credit_path = JsonRpcResponse {
+        result: Some(serde_json::json!({
+            "ordinaryUsageAllowed": false,
+            "rateLimits": {
+                "limitId": "codex",
+                "primary": {
+                    "usedPercent": 42,
+                    "windowDurationMins": 10080,
+                    "resetsAt": 1791948542
+                }
+            }
+        })),
+        ..allowed.clone()
+    };
+    let unknown_limits =
+        parse_rate_limits_response(&unknown_credit_path).expect("parse unknown credit path");
+    assert_eq!(unknown_limits[0].used_millionths, Some(420_000));
+    assert_eq!(unknown_limits[0].remaining_millionths, Some(580_000));
+    assert!(!unknown_limits[0].hard_limit);
+
+    let blocked = JsonRpcResponse {
+        result: Some(serde_json::json!({
+            "ordinaryUsageAllowed": false,
+            "rateLimits": {
+                "limitId": "codex",
+                "primary": {
+                    "usedPercent": 42,
+                    "windowDurationMins": 10080,
+                    "resetsAt": 1791948542
+                },
+                "credits": {
+                    "hasCredits": false,
+                    "unlimited": false,
+                    "balance": null
+                },
+                "spendControlReached": false,
+                "rateLimitReachedType": "rate_limit_reached"
+            }
+        })),
+        ..allowed
+    };
+    let blocked_limits = parse_rate_limits_response(&blocked).expect("parse fully blocked limits");
+    assert_eq!(blocked_limits[0].used_millionths, Some(1_000_000));
+    assert_eq!(blocked_limits[0].remaining_millionths, Some(0));
+    assert!(blocked_limits[0].hard_limit);
+}
+
+#[test]
+fn test_codex_snapshot_requires_explicit_block_for_hard_limit() {
+    let observed = parse_rate_limits_value(&serde_json::json!({
+        "limitId": "codex",
+        "primary": {
+            "usedPercent": 100,
+            "windowDurationMins": 10080,
+            "resetsAt": 1791948542
+        },
+        "spendControlReached": null,
+        "rateLimitReachedType": null
+    }))
+    .expect("parse serviceable observation");
+    assert!(!observed[0].hard_limit);
+
+    let credit_serviceable = parse_rate_limits_value(&serde_json::json!({
+        "limitId": "codex",
+        "primary": {
+            "usedPercent": 100,
+            "windowDurationMins": 10080,
+            "resetsAt": 1791948542
+        },
+        "credits": {
+            "hasCredits": true,
+            "unlimited": false,
+            "balance": "100"
+        },
+        "spendControlReached": false,
+        "rateLimitReachedType": "rate_limit_reached"
+    }))
+    .expect("parse credit-serviceable observation");
+    assert!(!credit_serviceable[0].hard_limit);
+
+    let blocked = parse_rate_limits_value(&serde_json::json!({
+        "limitId": "codex",
+        "primary": {
+            "usedPercent": 100,
+            "windowDurationMins": 10080,
+            "resetsAt": 1791948542
+        },
+        "credits": {
+            "hasCredits": false,
+            "unlimited": false,
+            "balance": null
+        },
+        "spendControlReached": true,
+        "rateLimitReachedType": "workspace_owner_usage_limit_reached"
+    }))
+    .expect("parse blocked observation");
+    assert!(blocked[0].hard_limit);
 }
 
 #[test]
@@ -253,8 +969,13 @@ fn test_antigravity_initialize_contract() {
     assert_eq!(res.protocol_version, 1);
     assert_eq!(res.agent_info.name, "antigravity-acp");
     assert!(res.capabilities.load_session);
-    assert!(res.capabilities.resume_session);
-    assert!(res.auth_methods.contains(&"oauth-personal".to_string()));
+    assert!(res.capabilities.session_capabilities.resume);
+    assert!(res.capabilities.auth.logout);
+    assert!(
+        res.auth_methods
+            .iter()
+            .any(|method| method.id() == "oauth-personal")
+    );
 
     pandamux_providers::acp::validate_antigravity_initialize(&res)
         .expect("validate initialize succeeds");
@@ -321,27 +1042,27 @@ fn test_antigravity_oauth_flow_contract() {
 
 #[test]
 fn test_antigravity_managed_bundle_manifest_validation() {
-    use pandamux_providers::antigravity::{ManagedBundleManifest, verify_bundle_manifest};
+    use pandamux_providers::antigravity::{
+        ManagedBundleManifest, pinned_bundle_manifest, validate_pinned_manifest,
+    };
 
     let manifest: ManagedBundleManifest =
         serde_json::from_str(AGY_MANIFEST_JSON).expect("parse manifest fixture");
-    assert_eq!(manifest.version, "1.1.1");
-    assert_eq!(manifest.entries.len(), 2);
-    assert!(manifest.entries.contains(&"agy_acp_server.exe".to_string()));
-    assert!(
-        manifest
-            .entries
-            .contains(&"localharness_external.exe".to_string())
+    assert_eq!(manifest.version, "agy_acp_server_1.1.1");
+    assert_eq!(manifest.executable.name, "agy_acp_server.exe");
+    assert_eq!(manifest.executable.size, 430_801_616);
+    assert_eq!(manifest.harness.name, "localharness_external.exe");
+    assert_eq!(manifest.harness.size, 130_971_800);
+    assert_eq!(
+        manifest,
+        pinned_bundle_manifest("windows", "x86_64").expect("Windows x64 pin")
     );
+    validate_pinned_manifest(&manifest).expect("official pin is accepted");
 
-    // Path traversal in manifest must be rejected
+    // Any caller-controlled release metadata must be rejected.
     let mut bad_manifest = manifest.clone();
-    bad_manifest.entries = vec![
-        "../evil.exe".to_string(),
-        "localharness_external.exe".to_string(),
-    ];
-    let dummy_bytes = vec![0u8; bad_manifest.size as usize];
-    assert!(verify_bundle_manifest(&bad_manifest, &dummy_bytes).is_err());
+    bad_manifest.executable.name = "../evil.exe".to_string();
+    assert!(validate_pinned_manifest(&bad_manifest).is_err());
 }
 
 #[test]
@@ -423,7 +1144,7 @@ fn test_antigravity_seven_reliability_rules() {
     let _ = std::fs::remove_dir_all(&scratch);
 
     // Rule 3: Concurrency limiter (max 2 active processes)
-    let limiter = AntigravityConcurrencyLimiter::new(2);
+    let limiter = Arc::new(AntigravityConcurrencyLimiter::new(2));
     let guard1 = limiter.try_acquire().expect("acquire 1");
     let guard2 = limiter.try_acquire().expect("acquire 2");
     assert!(

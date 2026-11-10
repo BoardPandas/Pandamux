@@ -1,19 +1,31 @@
-use gpui_kit::base::StyledExt as _;
+use gpui_kit::base::{Disableable as _, StyledExt as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::gpui::*;
 use gpui_kit::prelude::FluentBuilder as _;
-use pandamux_core::UserSettings;
-use pandamux_core::provider_config::ProviderKind;
-use pandamux_protocol::ProviderHealthReport;
+use pandamux_client::{TrustedConfigurationProjection, format_age, format_micro_usd};
+use pandamux_core::{
+    AccessMode, ConfigurationRevision, EnvironmentId, FailoverPool, FailoverPoolId,
+    FailoverPoolMember, ProviderInstanceId, RoutingCapabilityRequirements, SubscriptionKey,
+    UserSettings,
+};
+use pandamux_protocol::{
+    ProviderHealthReport, ProviderLoginPreview, RoutingProviderCatalogEntry, UsageCatalogResult,
+};
 
 use crate::theme::{AccentColor, Radii, Theme, Typography};
+use crate::trusted_configuration_view::{
+    TrustedConfigurationHandler, render_trusted_configuration,
+};
 
 /// Top-level categories in the Settings view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum SettingsCategory {
     #[default]
     Providers,
+    Organizations,
     Environments,
+    TrustedConfiguration,
     Terminal,
     General,
     Advanced,
@@ -23,7 +35,9 @@ impl SettingsCategory {
     pub fn title(&self) -> &'static str {
         match self {
             Self::Providers => "Providers & Tier Mapping",
+            Self::Organizations => "Organizations & Policy",
             Self::Environments => "Remote Environments & Nodes",
+            Self::TrustedConfiguration => "Trusted Configuration",
             Self::Terminal => "Terminal Configuration",
             Self::General => "General & Appearance",
             Self::Advanced => "Advanced Engine & Diagnostics",
@@ -33,10 +47,16 @@ impl SettingsCategory {
     pub fn subtitle(&self) -> &'static str {
         match self {
             Self::Providers => {
-                "Configure scoped provider instances, model targets, and run zero-spawn offline health checks."
+                "Configure scoped provider instances, model targets, health evidence, and explicit login actions."
+            }
+            Self::Organizations => {
+                "Edit canonical project, provider, subscription, budget, and Broadside boundaries."
             }
             Self::Environments => {
                 "Manage local and remote SSH environments, daemon versions, bootstrap states, and host connectivity."
+            }
+            Self::TrustedConfiguration => {
+                "Review immutable bundles, candidates, exact project trust, history, reverts, and durable confirmations."
             }
             Self::Terminal => {
                 "Configure scrollback history buffer, default shell family, and interaction options."
@@ -53,7 +73,9 @@ impl SettingsCategory {
     pub fn icon(&self) -> &'static str {
         match self {
             Self::Providers => "🔑",
+            Self::Organizations => "🏢",
             Self::Environments => "🖥️",
+            Self::TrustedConfiguration => "🛡️",
             Self::Terminal => "📟",
             Self::General => "🎨",
             Self::Advanced => "⚙️",
@@ -66,11 +88,15 @@ impl SettingsCategory {
 pub struct SettingsViewState {
     pub active_category: SettingsCategory,
     pub settings: UserSettings,
+    pub settings_revision: ConfigurationRevision,
     pub health_reports: Vec<ProviderHealthReport>,
     pub environments: Vec<pandamux_core::Environment>,
+    pub trusted_configuration: TrustedConfigurationProjection,
     pub is_checking_health: bool,
     pub is_saving: bool,
     pub status_banner: Option<(String, bool)>, // (message, is_error)
+    pub login_preview: Option<ProviderLoginPreview>,
+    pub is_login_busy: bool,
 }
 
 impl Default for SettingsViewState {
@@ -78,11 +104,15 @@ impl Default for SettingsViewState {
         Self {
             active_category: SettingsCategory::Providers,
             settings: UserSettings::default(),
+            settings_revision: ConfigurationRevision::INITIAL,
             health_reports: Vec::new(),
             environments: vec![pandamux_core::Environment::local_default()],
+            trusted_configuration: TrustedConfigurationProjection::default(),
             is_checking_health: false,
             is_saving: false,
             status_banner: None,
+            login_preview: None,
+            is_login_busy: false,
         }
     }
 }
@@ -144,13 +174,241 @@ fn format_number(n: impl Into<u64>) -> String {
     out
 }
 
+const ORGANIZATION_BUDGET_STEP_MICRO_USD: u64 = 10_000_000;
+
+fn increase_organization_budget(current: Option<u64>) -> Option<u64> {
+    Some(
+        current
+            .unwrap_or_default()
+            .saturating_add(ORGANIZATION_BUDGET_STEP_MICRO_USD),
+    )
+}
+
+fn decrease_organization_budget(current: Option<u64>) -> Option<u64> {
+    current.and_then(|value| {
+        value
+            .checked_sub(ORGANIZATION_BUDGET_STEP_MICRO_USD)
+            .filter(|remaining| *remaining > 0)
+    })
+}
+
+fn increase_organization_concurrency(current: Option<u32>) -> Option<u32> {
+    Some(current.unwrap_or_default().saturating_add(1).max(1))
+}
+
+fn decrease_organization_concurrency(current: Option<u32>) -> Option<u32> {
+    current.and_then(|value| value.checked_sub(1).filter(|remaining| *remaining > 0))
+}
+
+fn eligible_routing_choices(
+    settings: &UserSettings,
+    organization_index: usize,
+    catalog: &UsageCatalogResult,
+) -> Vec<(RoutingProviderCatalogEntry, SubscriptionKey)> {
+    let Some(organization) = settings.organizations.get(organization_index) else {
+        return Vec::new();
+    };
+    let mut choices = catalog
+        .routing_providers
+        .iter()
+        .filter(|provider| {
+            organization
+                .allowed_provider_instances
+                .contains(&provider.provider_instance_id)
+                && !provider.models.is_empty()
+        })
+        .filter_map(|provider| {
+            let mapping = catalog.mappings.iter().find(|mapping| {
+                mapping.environment_id == provider.environment_id
+                    && mapping.provider_instance_id == provider.provider_instance_id
+                    && organization
+                        .allowed_subscriptions
+                        .contains(&mapping.subscription_key)
+            })?;
+            Some((provider.clone(), mapping.subscription_key.clone()))
+        })
+        .collect::<Vec<_>>();
+    choices.sort_by(|left, right| {
+        left.0
+            .display_name
+            .cmp(&right.0.display_name)
+            .then_with(|| {
+                left.0
+                    .provider_instance_id
+                    .cmp(&right.0.provider_instance_id)
+            })
+    });
+    choices
+}
+
+fn create_organization_failover_pool(
+    settings: &mut UserSettings,
+    organization_index: usize,
+    catalog: &UsageCatalogResult,
+) -> bool {
+    let choices = eligible_routing_choices(settings, organization_index, catalog);
+    let Some((provider, subscription_key)) = choices.into_iter().find(|(provider, _)| {
+        provider
+            .capabilities
+            .supports_access_mode(AccessMode::WorkspaceOnly)
+    }) else {
+        return false;
+    };
+    let Some(organization) = settings.organizations.get(organization_index) else {
+        return false;
+    };
+    let display_name = format!(
+        "{} failover {}",
+        organization.display_name,
+        organization.failover_pool_ids.len().saturating_add(1)
+    );
+    let pool = FailoverPool {
+        id: FailoverPoolId::generate(),
+        display_name,
+        members: vec![FailoverPoolMember {
+            provider_instance_id: provider.provider_instance_id,
+            subscription_key,
+            model: provider.models[0].clone(),
+            declared_capabilities: provider.capabilities,
+            user_preference: 0,
+        }],
+        requirements: RoutingCapabilityRequirements::default(),
+        revision: 1,
+    };
+    let pool_id = pool.id.clone();
+    settings.failover_pools.push(pool);
+    if let Some(organization) = settings.organizations.get_mut(organization_index) {
+        organization.failover_pool_ids.push(pool_id);
+        organization.revision = organization.revision.saturating_add(1);
+    }
+    true
+}
+
+fn detach_organization_failover_pool(
+    settings: &mut UserSettings,
+    organization_index: usize,
+    pool_id: &FailoverPoolId,
+) {
+    if let Some(organization) = settings.organizations.get_mut(organization_index) {
+        organization
+            .failover_pool_ids
+            .retain(|candidate| candidate != pool_id);
+        organization.revision = organization.revision.saturating_add(1);
+    }
+    let still_referenced = settings
+        .organizations
+        .iter()
+        .any(|organization| organization.failover_pool_ids.contains(pool_id));
+    if !still_referenced {
+        settings.failover_pools.retain(|pool| &pool.id != pool_id);
+    }
+}
+
+fn add_failover_pool_member(
+    settings: &mut UserSettings,
+    organization_index: usize,
+    pool_id: &FailoverPoolId,
+    provider_instance_id: &ProviderInstanceId,
+    catalog: &UsageCatalogResult,
+) -> bool {
+    let Some(pool) = settings
+        .failover_pools
+        .iter()
+        .find(|pool| &pool.id == pool_id)
+    else {
+        return false;
+    };
+    if pool
+        .members
+        .iter()
+        .any(|member| &member.provider_instance_id == provider_instance_id)
+    {
+        return false;
+    }
+    let requirements = pool.requirements;
+    let Some((provider, subscription_key)) =
+        eligible_routing_choices(settings, organization_index, catalog)
+            .into_iter()
+            .find(|(provider, _)| {
+                &provider.provider_instance_id == provider_instance_id
+                    && requirements
+                        .validate_capabilities(provider.capabilities)
+                        .is_ok()
+            })
+    else {
+        return false;
+    };
+    let Some(pool) = settings
+        .failover_pools
+        .iter_mut()
+        .find(|pool| &pool.id == pool_id)
+    else {
+        return false;
+    };
+    pool.members.push(FailoverPoolMember {
+        provider_instance_id: provider.provider_instance_id,
+        subscription_key,
+        model: provider.models[0].clone(),
+        declared_capabilities: provider.capabilities,
+        user_preference: 0,
+    });
+    pool.revision = pool.revision.saturating_add(1);
+    true
+}
+
+fn next_compatible_access_mode(current: AccessMode, members: &[FailoverPoolMember]) -> AccessMode {
+    let modes = [
+        AccessMode::ReadOnly,
+        AccessMode::WorkspaceOnly,
+        AccessMode::Ask,
+        AccessMode::AutoEdit,
+        AccessMode::FullAccess,
+    ];
+    let current_index = modes.iter().position(|mode| *mode == current).unwrap_or(0);
+    for offset in 1..=modes.len() {
+        let candidate = modes[(current_index + offset) % modes.len()];
+        if members
+            .iter()
+            .all(|member| member.declared_capabilities.supports_access_mode(candidate))
+        {
+            return candidate;
+        }
+    }
+    current
+}
+
+fn settings_scroll_offset_for_key(
+    key: &str,
+    current: Pixels,
+    maximum: Pixels,
+    viewport: Pixels,
+) -> Option<Pixels> {
+    let page = (viewport * 0.85).max(px(1.));
+    match key {
+        "pagedown" => Some((current - page).max(-maximum)),
+        "pageup" => Some((current + page).min(px(0.))),
+        _ => None,
+    }
+}
+
 /// Renders the complete Settings view based on active category.
+#[allow(clippy::too_many_arguments)]
 pub fn render_settings_view<V: 'static>(
     state: &SettingsViewState,
+    usage_catalog: &UsageCatalogResult,
     theme: &Theme,
     server_status: String,
+    scroll_handle: &ScrollHandle,
     on_save: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
-    on_check_health: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
+    on_check_health: impl Fn(&mut V, Option<ProviderInstanceId>, &mut Window, &mut Context<V>)
+    + 'static
+    + Copy,
+    on_preview_login: impl Fn(&mut V, ProviderInstanceId, EnvironmentId, &mut Window, &mut Context<V>)
+    + 'static
+    + Copy,
+    on_launch_login: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
+    on_cancel_login: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
+    on_trusted_configuration: TrustedConfigurationHandler<V>,
     on_modify: impl Fn(
         &mut V,
         Box<dyn FnOnce(&mut UserSettings) + Send + 'static>,
@@ -160,9 +418,43 @@ pub fn render_settings_view<V: 'static>(
     + 'static
     + Copy,
     cx: &mut Context<V>,
-) -> impl IntoElement {
+) -> AnyElement {
+    let category_content = match state.active_category {
+        SettingsCategory::Providers => render_providers_tab(
+            state,
+            theme,
+            on_check_health,
+            on_preview_login,
+            on_modify,
+            cx,
+        )
+        .into_any_element(),
+        SettingsCategory::Organizations => {
+            render_organizations_tab(state, usage_catalog, theme, on_modify, cx).into_any_element()
+        }
+        SettingsCategory::Environments => {
+            render_environments_tab(state, theme, cx).into_any_element()
+        }
+        SettingsCategory::TrustedConfiguration => render_trusted_configuration(
+            &state.trusted_configuration,
+            theme,
+            on_trusted_configuration,
+            cx,
+        )
+        .into_any_element(),
+        SettingsCategory::Terminal => {
+            render_terminal_tab(state, theme, on_modify, cx).into_any_element()
+        }
+        SettingsCategory::General => {
+            render_general_tab(state, theme, on_modify, cx).into_any_element()
+        }
+        SettingsCategory::Advanced => {
+            render_advanced_tab(state, theme, server_status, on_modify, cx).into_any_element()
+        }
+    };
     div()
         .flex_1()
+        .min_w_0()
         .h_full()
         .v_flex()
         .bg(theme.chrome.bg_base_start)
@@ -194,8 +486,29 @@ pub fn render_settings_view<V: 'static>(
             } else {
                 rgba(0x43d9c944)
             };
+            let role = if *is_err { Role::Alert } else { Role::Status };
+            let accessible_message = if *is_err {
+                format!("Settings error: {msg}")
+            } else {
+                format!("Settings status: {msg}")
+            };
             this.child(
                 div()
+                    .id("settings-status-banner")
+                    .role(role)
+                    .aria_label(accessible_message)
+                    .a11y_synthetic_children({
+                        let is_err = *is_err;
+                        move |builder| {
+                            let node = builder.parent_node();
+                            node.set_live(if is_err {
+                                accesskit::Live::Assertive
+                            } else {
+                                accesskit::Live::Polite
+                            });
+                            node.set_live_atomic();
+                        }
+                    })
                     .h_flex()
                     .items_center()
                     .justify_between()
@@ -210,25 +523,58 @@ pub fn render_settings_view<V: 'static>(
                     .child(msg.clone()),
             )
         })
+        // Keep the confirmation outside the scrolling provider list so an
+        // asynchronously prepared command cannot appear below the viewport.
+        .when(
+            state.active_category == SettingsCategory::Providers,
+            |this| {
+                this.when_some(state.login_preview.as_ref(), |this, preview| {
+                    this.child(render_provider_login_confirmation(
+                        preview,
+                        state.is_login_busy,
+                        theme,
+                        on_launch_login,
+                        on_cancel_login,
+                        cx,
+                    ))
+                })
+            },
+        )
         // Category Content Body
-        .child(match state.active_category {
-            SettingsCategory::Providers => {
-                render_providers_tab(state, theme, on_check_health, on_modify, cx)
-                    .into_any_element()
-            }
-            SettingsCategory::Environments => {
-                render_environments_tab(state, theme, cx).into_any_element()
-            }
-            SettingsCategory::Terminal => {
-                render_terminal_tab(state, theme, on_modify, cx).into_any_element()
-            }
-            SettingsCategory::General => {
-                render_general_tab(state, theme, on_modify, cx).into_any_element()
-            }
-            SettingsCategory::Advanced => {
-                render_advanced_tab(state, theme, server_status, on_modify, cx).into_any_element()
-            }
-        })
+        .child(
+            div()
+                .id("settings-content-scroll")
+                .flex_1()
+                .min_h_0()
+                .track_scroll(scroll_handle)
+                // Page Up/Down and the visible scrollbar must drive the same
+                // viewport; overflow_y_scrollbar creates a private handle.
+                .overflow_y_scroll()
+                .vertical_scrollbar(scroll_handle)
+                .on_key_down({
+                    let scroll_handle = scroll_handle.clone();
+                    move |event, window, cx| {
+                        if event.keystroke.modifiers.modified() {
+                            return;
+                        }
+                        let current = scroll_handle.offset();
+                        let maximum = scroll_handle.max_offset();
+                        let viewport = scroll_handle.bounds().size;
+                        if let Some(y) = settings_scroll_offset_for_key(
+                            event.keystroke.key.as_str(),
+                            current.y,
+                            maximum.y,
+                            viewport.height,
+                        ) {
+                            scroll_handle.set_offset(point(current.x, y));
+                            window.refresh();
+                            cx.stop_propagation();
+                        }
+                    }
+                })
+                .child(category_content),
+        )
+        .into_any_element()
 }
 
 /// Renders the Settings category header and save actions.
@@ -236,9 +582,11 @@ fn render_settings_header<V: 'static>(
     state: &SettingsViewState,
     theme: &Theme,
     on_save: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
-    on_check_health: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
+    on_check_health: impl Fn(&mut V, Option<ProviderInstanceId>, &mut Window, &mut Context<V>)
+    + 'static
+    + Copy,
     cx: &mut Context<V>,
-) -> impl IntoElement {
+) -> AnyElement {
     let cat = state.active_category;
 
     div()
@@ -289,8 +637,9 @@ fn render_settings_header<V: 'static>(
                             } else {
                                 "⚡ Check Health"
                             })
+                            .disabled(state.is_checking_health)
                             .on_click(cx.listener(move |this, _event, window, cx| {
-                                on_check_health(this, window, cx);
+                                on_check_health(this, None, window, cx);
                             })),
                     )
                 })
@@ -307,13 +656,115 @@ fn render_settings_header<V: 'static>(
                         })),
                 ),
         )
+        .into_any_element()
+}
+
+struct ProviderHealthAccessibility<'a> {
+    display_name: &'a str,
+    status: &'a str,
+    version: &'a str,
+    authentication: &'a str,
+    freshness: &'a str,
+    last_success: &'a str,
+    reason: &'a str,
+    account_badge: Option<&'a str>,
+}
+
+impl ProviderHealthAccessibility<'_> {
+    fn label(&self) -> String {
+        let mut label = format!(
+            "{} provider health. Status: {}. Version: {}. Authentication: {}. Freshness: {}. Last successful snapshot: {}. Reason: {}.",
+            self.display_name,
+            self.status,
+            self.version,
+            self.authentication,
+            self.freshness,
+            self.last_success,
+            self.reason,
+        );
+        if let Some(account_badge) = self.account_badge {
+            label.push_str(&format!(" Account: {account_badge}."));
+        }
+        label
+    }
+}
+
+fn provider_health_is_error(status: Option<&str>) -> bool {
+    matches!(status, Some("degraded" | "unavailable"))
+}
+
+fn render_provider_login_confirmation<V: 'static>(
+    preview: &ProviderLoginPreview,
+    is_login_busy: bool,
+    theme: &Theme,
+    on_launch_login: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
+    on_cancel_login: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
+    cx: &mut Context<V>,
+) -> AnyElement {
+    div()
+        .id("provider-login-confirmation")
+        .role(Role::Group)
+        .aria_label(format!(
+            "Confirm provider login. Profile: {}. Command: {}",
+            preview.profile, preview.display_command
+        ))
+        .p_3()
+        .v_flex()
+        .gap_2()
+        .rounded(Radii::ROW)
+        .bg(theme.chrome.panel2)
+        .border_1()
+        .border_color(theme.accent.color())
+        .child(
+            div()
+                .font_weight(FontWeight::BOLD)
+                .child("Confirm provider login"),
+        )
+        .child(format!("Profile: {}", preview.profile))
+        .child(format!("Command: {}", preview.display_command))
+        .child(
+            "Opening the terminal is the first side effect. Health checks never perform this action.",
+        )
+        .child(
+            div()
+                .h_flex()
+                .gap_2()
+                .child(
+                    Button::new("confirm-provider-login")
+                        .primary()
+                        .label("Open login terminal")
+                        .disabled(is_login_busy)
+                        .accessibility_label(
+                            "Open the reviewed provider login command in a terminal",
+                        )
+                        .on_click(cx.listener(move |this, _event, window, cx| {
+                            on_launch_login(this, window, cx);
+                        })),
+                )
+                .child(
+                    Button::new("cancel-provider-login")
+                        .ghost()
+                        .label("Cancel")
+                        .accessibility_label("Cancel provider login")
+                        .on_click(cx.listener(move |this, _event, window, cx| {
+                            on_cancel_login(this, window, cx);
+                        })),
+                ),
+        )
+        .into_any_element()
 }
 
 /// Renders the Providers & Tier Mapping settings panel.
+#[allow(clippy::too_many_arguments)]
 fn render_providers_tab<V: 'static>(
     state: &SettingsViewState,
     theme: &Theme,
-    _on_check_health: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Copy,
+    on_check_health: impl Fn(&mut V, Option<ProviderInstanceId>, &mut Window, &mut Context<V>)
+    + 'static
+    + Copy,
+    on_preview_login: impl Fn(&mut V, ProviderInstanceId, EnvironmentId, &mut Window, &mut Context<V>)
+    + 'static
+    + Copy,
     on_modify: impl Fn(
         &mut V,
         Box<dyn FnOnce(&mut UserSettings) + Send + 'static>,
@@ -323,7 +774,11 @@ fn render_providers_tab<V: 'static>(
     + 'static
     + Copy,
     cx: &mut Context<V>,
-) -> impl IntoElement {
+) -> AnyElement {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
     div()
         .v_flex()
         .gap_4()
@@ -347,7 +802,7 @@ fn render_providers_tab<V: 'static>(
                                 .text_size(Typography::TITLE_SIZE)
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(theme.chrome.text_t1)
-                                .child("Zero-Spawn Health Status (Rule 1)"),
+                        .child("Provider Health Evidence"),
                         )
                         .child(
                             div()
@@ -357,14 +812,14 @@ fn render_providers_tab<V: 'static>(
                                 .bg(rgba(0x43d9c922))
                                 .text_size(Typography::META_SIZE)
                                 .text_color(rgb(0x43d9c9))
-                                .child("Never Triggers Auth"),
+                                .child("Login Is Always Separate"),
                         ),
                 )
                 .child(
                     div()
                         .text_size(Typography::SECONDARY_SIZE)
                         .text_color(theme.chrome.text_t3)
-                        .child("Health checks inspect local disk manifests, CLI binary resolution, and profile credentials. Antigravity bundles are never spawned (saving ~1 GB PyInstaller unpack per check), and no interactive OAuth logins are triggered."),
+                        .child("Health probes may run bounded non-interactive status/version commands. They never start an interactive login or provider session; login requires a separate preview and confirmation."),
                 ),
         )
         // 2. Provider Instances List
@@ -381,19 +836,114 @@ fn render_providers_tab<V: 'static>(
                 )
                 .children(state.settings.providers.iter().enumerate().map(|(idx, inst)| {
                     let instance_id = inst.id.clone();
-                    let health_report = state.health_reports.iter().find(|r| r.instance_id == instance_id);
-                    let (status_text, status_color, bg_pill) = match health_report.map(|r| r.status.as_str()) {
-                        Some("healthy") => ("● Healthy", rgb(0x7fd88f), rgba(0x7fd88f22)),
-                        Some("unauthenticated") => ("▲ Unauthenticated", rgb(0xd8b45e), rgba(0xd8b45e22)),
-                        Some("degraded") => ("▲ Degraded", rgb(0xd8b45e), rgba(0xd8b45e22)),
-                        Some("unavailable") => ("✕ Unavailable", rgb(0xf87171), rgba(0xf8717122)),
-                        _ => ("○ Not Checked", rgb(0x888899), rgba(0x88889922)),
-                    };
-
-                    let badge = health_report.and_then(|r| r.account_badge.as_ref());
+                    let health_instance_id = instance_id.clone();
+                    let environment_id = inst
+                        .environment_id
+                        .clone()
+                        .unwrap_or_else(|| EnvironmentId::new("env-local"));
+                    let health_report = state
+                        .health_reports
+                        .iter()
+                        .find(|report| report.instance_id == instance_id);
+                    let (status_name, status_marker, status_color, bg_pill) =
+                        match health_report.map(|report| report.status.as_str()) {
+                            Some("healthy") => {
+                                ("Healthy", "●", rgb(0x7fd88f), rgba(0x7fd88f22))
+                            }
+                            Some("unauthenticated") => {
+                                ("Unauthenticated", "▲", rgb(0xd8b45e), rgba(0xd8b45e22))
+                            }
+                            Some("degraded") => {
+                                ("Degraded", "▲", rgb(0xd8b45e), rgba(0xd8b45e22))
+                            }
+                            Some("unavailable") => {
+                                ("Unavailable", "✕", rgb(0xf87171), rgba(0xf8717122))
+                            }
+                            Some("disabled") => {
+                                ("Disabled", "○", rgb(0x888899), rgba(0x88889922))
+                            }
+                            Some("configured") => {
+                                ("Configured", "○", rgb(0x94a3b8), rgba(0x94a3b822))
+                            }
+                            Some(_) => ("Unknown", "?", rgb(0x94a3b8), rgba(0x94a3b822)),
+                            None => ("Not checked", "○", rgb(0x888899), rgba(0x88889922)),
+                        };
+                    let status_text = format!("{status_marker} {status_name}");
+                    let version = health_report
+                        .and_then(|report| report.version.as_deref())
+                        .unwrap_or("Not reported");
+                    let reason = health_report
+                        .and_then(|report| report.reason.as_deref())
+                        .unwrap_or("No reason reported");
+                    let authentication = health_report
+                        .map(|report| {
+                            format!(
+                                "{} ({})",
+                                report.authentication_state, report.authentication_confidence
+                            )
+                        })
+                        .unwrap_or_else(|| "Unknown (not reported)".to_string());
+                    let freshness = health_report.map_or_else(
+                        || "Not reported".to_string(),
+                        |report| {
+                            if now_ms <= report.expires_at_ms {
+                                format!("Fresh · checked {}", format_age(now_ms, Some(report.checked_at_ms)))
+                            } else {
+                                format!("Stale · checked {}", format_age(now_ms, Some(report.checked_at_ms)))
+                            }
+                        },
+                    );
+                    let last_success = health_report
+                        .and_then(|report| report.last_success_at_ms)
+                        .map(|timestamp| format_age(now_ms, Some(timestamp)))
+                        .unwrap_or_else(|| "Not reported".to_string());
+                    let guidance = health_report.and_then(|report| report.login_guidance.as_ref());
+                    let login_available = guidance.is_some_and(|guidance| guidance.available);
+                    let login_tooltip = guidance.map_or_else(
+                        || "Login guidance is not reported".to_string(),
+                        |guidance| {
+                            if guidance.available {
+                                guidance.summary.clone()
+                            } else {
+                                guidance
+                                    .unavailable_reason
+                                    .clone()
+                                    .unwrap_or_else(|| guidance.summary.clone())
+                            }
+                        },
+                    );
                     let is_enabled = inst.enabled;
+                    let health_is_error = provider_health_is_error(
+                        health_report.map(|report| report.status.as_str()),
+                    );
+                    let provider_health_label = ProviderHealthAccessibility {
+                        display_name: &inst.display_name,
+                        status: status_name,
+                        version,
+                        authentication: &authentication,
+                        freshness: &freshness,
+                        last_success: &last_success,
+                        reason,
+                        account_badge: health_report
+                            .and_then(|report| report.account_badge.as_deref()),
+                    }
+                    .label();
 
                     div()
+                        .id(format!("provider-health-card-{}", inst.id.as_str()))
+                        .role(if health_is_error {
+                            Role::Alert
+                        } else {
+                            Role::Group
+                        })
+                        .aria_label(provider_health_label)
+                        .when(health_is_error, |card| {
+                            card.a11y_synthetic_children(|builder| {
+                                let node = builder.parent_node();
+                                node.set_live(accesskit::Live::Assertive);
+                                node.set_live_atomic();
+                            })
+                        })
                         .p_3()
                         .rounded(Radii::ROW)
                         .bg(theme.chrome.panel)
@@ -401,7 +951,6 @@ fn render_providers_tab<V: 'static>(
                         .border_color(if is_enabled { rgba(0xffffff0d) } else { rgba(0xffffff05) })
                         .v_flex()
                         .gap_2()
-                        // Row 1: Icon, Name, Provider Kind, Status Badge, Enabled Switch
                         .child(
                             div()
                                 .h_flex()
@@ -409,22 +958,8 @@ fn render_providers_tab<V: 'static>(
                                 .justify_between()
                                 .child(
                                     div()
-                                        .h_flex()
-                                        .items_center()
-                                        .gap_2()
-                                        .child(
-                                            div()
-                                                .text_size(Typography::TITLE_SIZE)
-                                                .child(match inst.provider {
-                                                    ProviderKind::Claude => "🟣",
-                                                    ProviderKind::Codex => "🟢",
-                                                    ProviderKind::Antigravity => "🔵",
-                                                    ProviderKind::Cursor => "⚡",
-                                                    ProviderKind::Grok => "🚀",
-                                                    ProviderKind::OpenCode => "💻",
-                                                    _ => "🤖",
-                                                }),
-                                        )
+                                        .v_flex()
+                                        .gap_1()
                                         .child(
                                             div()
                                                 .text_size(Typography::TITLE_SIZE)
@@ -434,13 +969,12 @@ fn render_providers_tab<V: 'static>(
                                         )
                                         .child(
                                             div()
-                                                .px_2()
-                                                .py_0p5()
-                                                .rounded(Radii::CHIP)
-                                                .bg(theme.chrome.panel2)
                                                 .text_size(Typography::META_SIZE)
                                                 .text_color(theme.chrome.text_t3)
-                                                .child(inst.id.as_str().to_string()),
+                                                .child(format!(
+                                                    "{} provider · version {version}",
+                                                    inst.provider.as_str()
+                                                )),
                                         ),
                                 )
                                 .child(
@@ -448,7 +982,6 @@ fn render_providers_tab<V: 'static>(
                                         .h_flex()
                                         .items_center()
                                         .gap_2()
-                                        // Health pill
                                         .child(
                                             div()
                                                 .px_2()
@@ -460,52 +993,79 @@ fn render_providers_tab<V: 'static>(
                                                 .text_color(status_color)
                                                 .child(status_text),
                                         )
-                                        // Account / subscription badge
-                                        .when_some(badge, |this, b| {
-                                            this.child(
-                                                div()
-                                                    .px_2()
-                                                    .py_0p5()
-                                                    .rounded(Radii::CHIP)
-                                                    .bg(theme.chrome.panel2)
-                                                    .text_size(Typography::META_SIZE)
-                                                    .text_color(theme.chrome.text_t2)
-                                                    .child(b.clone()),
-                                            )
-                                        })
-                                        // Enable/Disable toggle
                                         .child(
                                             Button::new(format!("toggle-enable-{}", inst.id.as_str()))
                                                 .ghost()
                                                 .label(if is_enabled { "Enabled" } else { "Disabled" })
+                                                .accessibility_label(format!(
+                                                    "{} {}",
+                                                    if is_enabled { "Disable" } else { "Enable" },
+                                                    inst.display_name
+                                                ))
                                                 .on_click(cx.listener(move |this, _event, window, cx| {
-                                                    on_modify(this, Box::new(move |s| {
-                                                        if let Some(p) = s.providers.get_mut(idx) {
-                                                            p.enabled = !p.enabled;
+                                                    on_modify(this, Box::new(move |settings| {
+                                                        if let Some(provider) = settings.providers.get_mut(idx) {
+                                                            provider.enabled = !provider.enabled;
                                                         }
                                                     }), window, cx);
                                                 })),
                                         ),
                                 ),
                         )
-                        // Row 2: Profile directory info & Concurrency limit
+                        .child(
+                            div()
+                                .v_flex()
+                                .gap_1()
+                                .text_size(Typography::SECONDARY_SIZE)
+                                .text_color(theme.chrome.text_t2)
+                                .child(format!("Authentication: {authentication}"))
+                                .child(format!("Freshness: {freshness}"))
+                                .child(format!("Last successful snapshot: {last_success}"))
+                                .child(format!("Reason: {reason}"))
+                                .when_some(health_report.and_then(|report| report.account_badge.as_ref()), |this, badge| {
+                                    this.child(format!("Account: {badge}"))
+                                }),
+                        )
                         .child(
                             div()
                                 .h_flex()
                                 .items_center()
                                 .justify_between()
-                                .text_size(Typography::SECONDARY_SIZE)
-                                .text_color(theme.chrome.text_t3)
                                 .child(
                                     div()
                                         .h_flex()
                                         .gap_2()
-                                        .child("Profile Path:")
                                         .child(
-                                            div()
-                                                .text_color(theme.chrome.text_t2)
-                                                .font_family(Typography::MONO_FAMILY)
-                                                .child(inst.profile_dir.clone()),
+                                            Button::new(format!("retry-health-{}", inst.id.as_str()))
+                                                .ghost()
+                                                .label("Retry health")
+                                                .disabled(state.is_checking_health)
+                                                .accessibility_label(format!("Retry health check for {}", inst.display_name))
+                                                .on_click(cx.listener(move |this, _event, window, cx| {
+                                                    on_check_health(
+                                                        this,
+                                                        Some(health_instance_id.clone()),
+                                                        window,
+                                                        cx,
+                                                    );
+                                                })),
+                                        )
+                                        .child(
+                                            Button::new(format!("login-provider-{}", inst.id.as_str()))
+                                                .ghost()
+                                                .label("Prepare login")
+                                                .disabled(!login_available || state.is_login_busy)
+                                                .accessibility_label(format!("Prepare login for {}", inst.display_name))
+                                                .tooltip(login_tooltip)
+                                                .on_click(cx.listener(move |this, _event, window, cx| {
+                                                    on_preview_login(
+                                                        this,
+                                                        instance_id.clone(),
+                                                        environment_id.clone(),
+                                                        window,
+                                                        cx,
+                                                    );
+                                                })),
                                         ),
                                 )
                                 .child(
@@ -517,11 +1077,12 @@ fn render_providers_tab<V: 'static>(
                                         .child(
                                             Button::new(format!("inc-conc-{}", inst.id.as_str()))
                                                 .ghost()
-                                                .label("▲")
+                                                .label("Increase")
+                                                .accessibility_label(format!("Increase concurrency for {}", inst.display_name))
                                                 .on_click(cx.listener(move |this, _event, window, cx| {
-                                                    on_modify(this, Box::new(move |s| {
-                                                        if let Some(p) = s.providers.get_mut(idx) {
-                                                            p.concurrency_limit = (p.concurrency_limit + 1).min(8);
+                                                    on_modify(this, Box::new(move |settings| {
+                                                        if let Some(provider) = settings.providers.get_mut(idx) {
+                                                            provider.concurrency_limit = (provider.concurrency_limit + 1).min(8);
                                                         }
                                                     }), window, cx);
                                                 })),
@@ -529,11 +1090,12 @@ fn render_providers_tab<V: 'static>(
                                         .child(
                                             Button::new(format!("dec-conc-{}", inst.id.as_str()))
                                                 .ghost()
-                                                .label("▼")
+                                                .label("Decrease")
+                                                .accessibility_label(format!("Decrease concurrency for {}", inst.display_name))
                                                 .on_click(cx.listener(move |this, _event, window, cx| {
-                                                    on_modify(this, Box::new(move |s| {
-                                                        if let Some(p) = s.providers.get_mut(idx) {
-                                                            p.concurrency_limit = (p.concurrency_limit.saturating_sub(1)).max(1);
+                                                    on_modify(this, Box::new(move |settings| {
+                                                        if let Some(provider) = settings.providers.get_mut(idx) {
+                                                            provider.concurrency_limit = (provider.concurrency_limit.saturating_sub(1)).max(1);
                                                         }
                                                     }), window, cx);
                                                 })),
@@ -573,6 +1135,13 @@ fn render_providers_tab<V: 'static>(
                             state.settings.tier_mapping.as_ref().map(|tm| {
                                 tm.tiers.iter().map(|(tier, target)| {
                                     let tier_name = tier.clone();
+                                    let instance_name = state
+                                        .settings
+                                        .providers
+                                        .iter()
+                                        .find(|provider| provider.id == target.provider_instance_id)
+                                        .map(|provider| provider.display_name.clone())
+                                        .unwrap_or_else(|| "Missing named instance".to_string());
                                     div()
                                         .h_flex()
                                         .items_center()
@@ -595,7 +1164,7 @@ fn render_providers_tab<V: 'static>(
                                                     div()
                                                         .text_size(Typography::META_SIZE)
                                                         .text_color(theme.chrome.text_t3)
-                                                        .child(format!("Instance: {}", target.provider_instance_id.as_str())),
+                                                        .child(format!("Instance: {instance_name}")),
                                                 ),
                                         )
                                         .child(
@@ -634,6 +1203,1330 @@ fn render_providers_tab<V: 'static>(
                         ),
                 ),
         )
+        .into_any_element()
+}
+
+fn render_organizations_tab<V: 'static>(
+    state: &SettingsViewState,
+    catalog: &UsageCatalogResult,
+    theme: &Theme,
+    on_modify: impl Fn(
+        &mut V,
+        Box<dyn FnOnce(&mut UserSettings) + Send + 'static>,
+        &mut Window,
+        &mut Context<V>,
+    )
+    + 'static
+    + Copy,
+    cx: &mut Context<V>,
+) -> AnyElement {
+    div()
+        .v_flex()
+        .gap_3()
+        .when(state.settings.organizations.is_empty(), |this| {
+            this.child(
+                div()
+                    .p_3()
+                    .v_flex()
+                    .gap_2()
+                    .rounded(Radii::ROW)
+                    .bg(theme.chrome.panel)
+                    .border_1()
+                    .border_color(rgba(0xffffff0d))
+                    .child("No canonical organization policy is configured.")
+                    .child(
+                        div()
+                            .text_size(Typography::SECONDARY_SIZE)
+                            .text_color(theme.chrome.text_t3)
+                            .child("Project-scoped routing, schedules, MCP proposals, failover, and Broadside sharing fail closed until a project is assigned by a policy-capable workflow."),
+                    )
+                    .child(
+                        Button::new("create-organization-unavailable")
+                            .ghost()
+                            .label("Create organization")
+                            .disabled(true)
+                            .tooltip("Unavailable: the current project catalog does not expose a safe assignment editor"),
+                    ),
+            )
+        })
+        .children(
+            state
+                .settings
+                .organizations
+                .iter()
+                .enumerate()
+                .map(|(organization_index, organization)| {
+                    let provider_count = organization.allowed_provider_instances.len();
+                    let valid_provider_count = organization
+                        .allowed_provider_instances
+                        .iter()
+                        .filter(|provider_id| {
+                            let Some(provider) = state
+                                .settings
+                                .providers
+                                .iter()
+                                .find(|provider| &provider.id == *provider_id)
+                            else {
+                                return false;
+                            };
+                            if !provider.enabled {
+                                return false;
+                            }
+                            let environment_id = provider
+                                .environment_id
+                                .clone()
+                                .unwrap_or_else(|| EnvironmentId::new("env-local"));
+                            catalog.mappings.iter().any(|mapping| {
+                                mapping.provider_instance_id == provider.id
+                                    && mapping.environment_id == environment_id
+                                    && organization
+                                        .allowed_subscriptions
+                                        .contains(&mapping.subscription_key)
+                                    && catalog.subscriptions.iter().any(|subscription| {
+                                        subscription.key == mapping.subscription_key
+                                    })
+                            })
+                        })
+                        .count();
+                    div()
+                        .p_3()
+                        .v_flex()
+                        .gap_3()
+                        .rounded(Radii::ROW)
+                        .bg(theme.chrome.panel)
+                        .border_1()
+                        .border_color(rgba(0xffffff0d))
+                        .child(
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .justify_between()
+                                .child(
+                                    div()
+                                        .v_flex()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .text_size(Typography::TITLE_SIZE)
+                                                .font_weight(FontWeight::BOLD)
+                                                .text_color(theme.chrome.text_t1)
+                                                .child(organization.display_name.clone()),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(Typography::META_SIZE)
+                                                .text_color(theme.chrome.text_t3)
+                                                .child(format!(
+                                                    "{} project assignment{} · revision {}",
+                                                    organization.project_ids.len(),
+                                                    if organization.project_ids.len() == 1 { "" } else { "s" },
+                                                    organization.revision
+                                                )),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(Typography::SECONDARY_SIZE)
+                                        .text_color(theme.chrome.text_t2)
+                                        .child(format!(
+                                            "Valid named routes: {valid_provider_count}/{provider_count}"
+                                        )),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .v_flex()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .text_size(Typography::GROUP_HEADER_SIZE)
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(theme.chrome.text_t2)
+                                        .child("PROVIDER / SUBSCRIPTION MATRIX"),
+                                )
+                                .children(
+                                    organization
+                                        .allowed_provider_instances
+                                        .iter()
+                                        .map(|provider_id| {
+                                            let provider = state
+                                                .settings
+                                                .providers
+                                                .iter()
+                                                .find(|provider| &provider.id == provider_id);
+                                            let provider_environment_id = provider
+                                                .and_then(|provider| provider.environment_id.clone())
+                                                .unwrap_or_else(|| EnvironmentId::new("env-local"));
+                                            let mapping = catalog
+                                                .mappings
+                                                .iter()
+                                                .find(|mapping| {
+                                                    &mapping.provider_instance_id == provider_id
+                                                        && mapping.environment_id
+                                                            == provider_environment_id
+                                                });
+                                            let subscription = mapping.and_then(|mapping| {
+                                                catalog.subscriptions.iter().find(|subscription| {
+                                                    subscription.key == mapping.subscription_key
+                                                })
+                                            });
+                                            let provider_is_valid = provider.is_some_and(|provider| provider.enabled)
+                                                && mapping.is_some_and(|mapping| {
+                                                    organization
+                                                        .allowed_subscriptions
+                                                        .contains(&mapping.subscription_key)
+                                                })
+                                                && subscription.is_some();
+                                            let removal_blocked = provider_count <= 1
+                                                || (provider_is_valid
+                                                    && valid_provider_count <= 1);
+                                            let provider_name = provider
+                                                .map(|provider| provider.display_name.clone())
+                                                .unwrap_or_else(|| "Missing provider instance".to_string());
+                                            let subscription_name = subscription
+                                                .map(|subscription| subscription.display_name.clone())
+                                                .unwrap_or_else(|| "No named subscription".to_string());
+                                            let provider_id = provider_id.clone();
+                                            let subscription_key = mapping
+                                                .map(|mapping| mapping.subscription_key.clone());
+                                            let subscription_used_by_another_provider =
+                                                subscription_key.as_ref().is_some_and(|key| {
+                                                    organization
+                                                        .allowed_provider_instances
+                                                        .iter()
+                                                        .filter(|candidate| {
+                                                            candidate.as_str()
+                                                                != provider_id.as_str()
+                                                        })
+                                                        .any(|candidate| {
+                                                            catalog.mappings.iter().any(|mapping| {
+                                                                mapping.provider_instance_id
+                                                                    == *candidate
+                                                                    && mapping.subscription_key
+                                                                        == *key
+                                                            })
+                                                        })
+                                                });
+                                            div()
+                                                .h_flex()
+                                                .items_center()
+                                                .justify_between()
+                                                .p_2()
+                                                .rounded(Radii::CHIP)
+                                                .bg(theme.chrome.panel2)
+                                                .child(
+                                                    div()
+                                                        .v_flex()
+                                                        .gap_1()
+                                                        .child(
+                                                            div()
+                                                                .font_weight(FontWeight::BOLD)
+                                                                .child(provider_name.clone()),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .text_size(Typography::META_SIZE)
+                                                                .text_color(theme.chrome.text_t3)
+                                                                .child(format!("Subscription: {subscription_name}")),
+                                                        ),
+                                                )
+                                                .child(
+                                                    Button::new(format!(
+                                                        "remove-org-provider-{organization_index}-{}",
+                                                        provider_id.as_str()
+                                                    ))
+                                                    .ghost()
+                                                    .label("Remove")
+                                                    .disabled(removal_blocked)
+                                                    .tooltip(if removal_blocked {
+                                                        "Blocked: an organization must keep at least one valid named provider"
+                                                    } else {
+                                                        "Removal is checked against enabled schedules when saved"
+                                                    })
+                                                    .accessibility_label(format!(
+                                                        "Remove {provider_name} from {}",
+                                                        organization.display_name
+                                                    ))
+                                                    .on_click(cx.listener(move |this, _event, window, cx| {
+                                                        let provider_id = provider_id.clone();
+                                                        let subscription_key = subscription_key.clone();
+                                                        let subscription_used_by_another_provider =
+                                                            subscription_used_by_another_provider;
+                                                        on_modify(
+                                                            this,
+                                                            Box::new(move |settings| {
+                                                                if let Some(policy) = settings.organizations.get_mut(organization_index) {
+                                                                    policy.allowed_provider_instances.retain(|candidate| candidate != &provider_id);
+                                                                    if let Some(subscription_key) = subscription_key
+                                                                        && !subscription_used_by_another_provider
+                                                                        && policy.allowed_subscriptions.len() > 1
+                                                                    {
+                                                                        policy.allowed_subscriptions.retain(|candidate| candidate != &subscription_key);
+                                                                    }
+                                                                    policy.revision = policy.revision.saturating_add(1);
+                                                                }
+                                                            }),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    })),
+                                                )
+                                        }),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .v_flex()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .text_size(Typography::GROUP_HEADER_SIZE)
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(theme.chrome.text_t2)
+                                        .child("ADD NAMED INSTANCE"),
+                                )
+                                .children(state.settings.providers.iter().filter_map(|provider| {
+                                    if organization.allowed_provider_instances.contains(&provider.id) {
+                                        return None;
+                                    }
+                                    let provider_environment_id = provider
+                                        .environment_id
+                                        .clone()
+                                        .unwrap_or_else(|| EnvironmentId::new("env-local"));
+                                    let mapping = catalog
+                                        .mappings
+                                        .iter()
+                                        .find(|mapping| {
+                                            mapping.provider_instance_id == provider.id
+                                                && mapping.environment_id
+                                                    == provider_environment_id
+                                        });
+                                    let subscription = mapping.and_then(|mapping| {
+                                        catalog.subscriptions.iter().find(|subscription| {
+                                            subscription.key == mapping.subscription_key
+                                        })
+                                    });
+                                    let provider_id = provider.id.clone();
+                                    let subscription_key = mapping.map(|mapping| mapping.subscription_key.clone());
+                                    let provider_name = provider.display_name.clone();
+                                    Some(
+                                        Button::new(format!(
+                                            "add-org-provider-{organization_index}-{}",
+                                            provider.id.as_str()
+                                        ))
+                                        .ghost()
+                                        .label(format!("Add {provider_name}"))
+                                        .disabled(subscription.is_none() || !provider.enabled)
+                                        .tooltip(if !provider.enabled {
+                                            "Enable this named provider before adding it"
+                                        } else if subscription.is_some() {
+                                            "Add the named instance and its subscription boundary"
+                                        } else {
+                                            "Name this provider's subscription in Usage before adding it"
+                                        })
+                                        .on_click(cx.listener(move |this, _event, window, cx| {
+                                            let provider_id = provider_id.clone();
+                                            let subscription_key = subscription_key.clone();
+                                            on_modify(
+                                                this,
+                                                Box::new(move |settings| {
+                                                    if let (Some(policy), Some(subscription_key)) = (
+                                                        settings.organizations.get_mut(organization_index),
+                                                        subscription_key,
+                                                    ) {
+                                                        policy.allowed_provider_instances.push(provider_id);
+                                                        if !policy.allowed_subscriptions.contains(&subscription_key) {
+                                                            policy.allowed_subscriptions.push(subscription_key);
+                                                        }
+                                                        policy.revision = policy.revision.saturating_add(1);
+                                                    }
+                                                }),
+                                                window,
+                                                cx,
+                                            );
+                                        })),
+                                    )
+                                })),
+                        )
+                        .child(
+                            div()
+                                .v_flex()
+                                .gap_2()
+                                .child({
+                                    let current = organization.daily_budget_micro_usd;
+                                    let organization_name = organization.display_name.clone();
+                                    div()
+                                        .h_flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .p_2()
+                                        .rounded(Radii::CHIP)
+                                        .bg(theme.chrome.panel2)
+                                        .child(
+                                            div()
+                                                .v_flex()
+                                                .child(
+                                                    div()
+                                                        .font_weight(FontWeight::BOLD)
+                                                        .child("Daily API-equivalent budget"),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(Typography::META_SIZE)
+                                                        .text_color(theme.chrome.text_t3)
+                                                        .child(current.map_or_else(
+                                                            || "Not set".to_string(),
+                                                            |value| format_micro_usd(Some(value)),
+                                                        )),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .h_flex()
+                                                .gap_2()
+                                                .child(
+                                                    Button::new(format!(
+                                                        "decrease-org-budget-{organization_index}"
+                                                    ))
+                                                    .ghost()
+                                                    .label("Decrease $10")
+                                                    .disabled(current.is_none())
+                                                    .accessibility_label(format!(
+                                                        "Decrease daily budget for {organization_name} by 10 dollars"
+                                                    ))
+                                                    .on_click(cx.listener(
+                                                        move |this, _event, window, cx| {
+                                                            on_modify(
+                                                                this,
+                                                                Box::new(move |settings| {
+                                                                    if let Some(policy) = settings
+                                                                        .organizations
+                                                                        .get_mut(organization_index)
+                                                                    {
+                                                                        policy.daily_budget_micro_usd =
+                                                                            decrease_organization_budget(
+                                                                                current,
+                                                                            );
+                                                                        policy.revision = policy
+                                                                            .revision
+                                                                            .saturating_add(1);
+                                                                    }
+                                                                }),
+                                                                window,
+                                                                cx,
+                                                            );
+                                                        },
+                                                    )),
+                                                )
+                                                .child({
+                                                    let organization_name =
+                                                        organization.display_name.clone();
+                                                    Button::new(format!(
+                                                        "increase-org-budget-{organization_index}"
+                                                    ))
+                                                    .ghost()
+                                                    .label("Increase $10")
+                                                    .accessibility_label(format!(
+                                                        "Increase daily budget for {organization_name} by 10 dollars"
+                                                    ))
+                                                    .on_click(cx.listener(
+                                                        move |this, _event, window, cx| {
+                                                            on_modify(
+                                                                this,
+                                                                Box::new(move |settings| {
+                                                                    if let Some(policy) = settings
+                                                                        .organizations
+                                                                        .get_mut(organization_index)
+                                                                    {
+                                                                        policy.daily_budget_micro_usd =
+                                                                            increase_organization_budget(
+                                                                                current,
+                                                                            );
+                                                                        policy.revision = policy
+                                                                            .revision
+                                                                            .saturating_add(1);
+                                                                    }
+                                                                }),
+                                                                window,
+                                                                cx,
+                                                            );
+                                                        },
+                                                    ))
+                                                }),
+                                        )
+                                })
+                                .child({
+                                    let current = organization.max_concurrency;
+                                    let organization_name = organization.display_name.clone();
+                                    div()
+                                        .h_flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .p_2()
+                                        .rounded(Radii::CHIP)
+                                        .bg(theme.chrome.panel2)
+                                        .child(
+                                            div()
+                                                .v_flex()
+                                                .child(
+                                                    div()
+                                                        .font_weight(FontWeight::BOLD)
+                                                        .child("Concurrency ceiling"),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(Typography::META_SIZE)
+                                                        .text_color(theme.chrome.text_t3)
+                                                        .child(
+                                                            current
+                                                                .map(|value| value.to_string())
+                                                                .unwrap_or_else(|| {
+                                                                    "Not set".to_string()
+                                                                }),
+                                                        ),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .h_flex()
+                                                .gap_2()
+                                                .child(
+                                                    Button::new(format!(
+                                                        "decrease-org-concurrency-{organization_index}"
+                                                    ))
+                                                    .ghost()
+                                                    .label("Decrease")
+                                                    .disabled(current.is_none())
+                                                    .accessibility_label(format!(
+                                                        "Decrease concurrency ceiling for {organization_name}"
+                                                    ))
+                                                    .on_click(cx.listener(
+                                                        move |this, _event, window, cx| {
+                                                            on_modify(
+                                                                this,
+                                                                Box::new(move |settings| {
+                                                                    if let Some(policy) = settings
+                                                                        .organizations
+                                                                        .get_mut(organization_index)
+                                                                    {
+                                                                        policy.max_concurrency =
+                                                                            decrease_organization_concurrency(
+                                                                                current,
+                                                                            );
+                                                                        policy.revision = policy
+                                                                            .revision
+                                                                            .saturating_add(1);
+                                                                    }
+                                                                }),
+                                                                window,
+                                                                cx,
+                                                            );
+                                                        },
+                                                    )),
+                                                )
+                                                .child({
+                                                    let organization_name =
+                                                        organization.display_name.clone();
+                                                    Button::new(format!(
+                                                        "increase-org-concurrency-{organization_index}"
+                                                    ))
+                                                    .ghost()
+                                                    .label("Increase")
+                                                    .accessibility_label(format!(
+                                                        "Increase concurrency ceiling for {organization_name}"
+                                                    ))
+                                                    .on_click(cx.listener(
+                                                        move |this, _event, window, cx| {
+                                                            on_modify(
+                                                                this,
+                                                                Box::new(move |settings| {
+                                                                    if let Some(policy) = settings
+                                                                        .organizations
+                                                                        .get_mut(organization_index)
+                                                                    {
+                                                                        policy.max_concurrency =
+                                                                            increase_organization_concurrency(
+                                                                                current,
+                                                                            );
+                                                                        policy.revision = policy
+                                                                            .revision
+                                                                            .saturating_add(1);
+                                                                    }
+                                                                }),
+                                                                window,
+                                                                cx,
+                                                            );
+                                                        },
+                                                    ))
+                                                }),
+                                        )
+                                })
+                                .child({
+                                    let workspace_mapping = state.settings.tier_mapping.clone();
+                                    let workspace_mapping_is_allowed = workspace_mapping
+                                        .as_ref()
+                                        .is_some_and(|mapping| {
+                                            mapping.tiers.values().all(|target| {
+                                                organization
+                                                    .allowed_provider_instances
+                                                    .contains(&target.provider_instance_id)
+                                            })
+                                        });
+                                    let has_override = organization.default_tier_mapping.is_some();
+                                    div()
+                                        .v_flex()
+                                        .gap_2()
+                                        .p_2()
+                                        .rounded(Radii::CHIP)
+                                        .bg(theme.chrome.panel2)
+                                        .child(
+                                            div()
+                                                .h_flex()
+                                                .items_center()
+                                                .justify_between()
+                                                .child(
+                                                    div()
+                                                        .v_flex()
+                                                        .child(
+                                                            div()
+                                                                .font_weight(FontWeight::BOLD)
+                                                                .child("Default capability tiers"),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .text_size(Typography::META_SIZE)
+                                                                .text_color(theme.chrome.text_t3)
+                                                                .child(if has_override {
+                                                                    "Organization override"
+                                                                } else {
+                                                                    "No organization override"
+                                                                }),
+                                                        ),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .h_flex()
+                                                        .gap_2()
+                                                        .child({
+                                                            let mapping = workspace_mapping.clone();
+                                                            Button::new(format!(
+                                                                "apply-org-tier-map-{organization_index}"
+                                                            ))
+                                                            .ghost()
+                                                            .label("Use workspace mapping")
+                                                            .disabled(!workspace_mapping_is_allowed)
+                                                            .tooltip(if workspace_mapping_is_allowed {
+                                                                "Copy the current workspace tier mapping into this organization"
+                                                            } else {
+                                                                "Unavailable: the workspace mapping names a provider outside this organization"
+                                                            })
+                                                            .on_click(cx.listener(
+                                                                move |this, _event, window, cx| {
+                                                                    let mapping = mapping.clone();
+                                                                    on_modify(
+                                                                        this,
+                                                                        Box::new(move |settings| {
+                                                                            if let Some(policy) = settings
+                                                                                .organizations
+                                                                                .get_mut(organization_index)
+                                                                            {
+                                                                                policy.default_tier_mapping =
+                                                                                    mapping;
+                                                                                policy.revision = policy
+                                                                                    .revision
+                                                                                    .saturating_add(1);
+                                                                            }
+                                                                        }),
+                                                                        window,
+                                                                        cx,
+                                                                    );
+                                                                },
+                                                            ))
+                                                        })
+                                                        .child(
+                                                            Button::new(format!(
+                                                                "clear-org-tier-map-{organization_index}"
+                                                            ))
+                                                            .ghost()
+                                                            .label("Clear override")
+                                                            .disabled(!has_override)
+                                                            .on_click(cx.listener(
+                                                                move |this, _event, window, cx| {
+                                                                    on_modify(
+                                                                        this,
+                                                                        Box::new(move |settings| {
+                                                                            if let Some(policy) = settings
+                                                                                .organizations
+                                                                                .get_mut(organization_index)
+                                                                            {
+                                                                                policy.default_tier_mapping =
+                                                                                    None;
+                                                                                policy.revision = policy
+                                                                                    .revision
+                                                                                    .saturating_add(1);
+                                                                            }
+                                                                        }),
+                                                                        window,
+                                                                        cx,
+                                                                    );
+                                                                },
+                                                            )),
+                                                        ),
+                                                ),
+                                        )
+                                        .children(
+                                            organization
+                                                .default_tier_mapping
+                                                .iter()
+                                                .flat_map(|mapping| mapping.tiers.iter())
+                                                .map(|(tier, target)| {
+                                                    let provider_name = state
+                                                        .settings
+                                                        .providers
+                                                        .iter()
+                                                        .find(|provider| {
+                                                            provider.id
+                                                                == target.provider_instance_id
+                                                        })
+                                                        .map(|provider| {
+                                                            provider.display_name.clone()
+                                                        })
+                                                        .unwrap_or_else(|| {
+                                                            "Missing named provider".to_string()
+                                                        });
+                                                    div()
+                                                        .h_flex()
+                                                        .items_center()
+                                                        .justify_between()
+                                                        .child(format!("{}: {provider_name}", tier))
+                                                        .child(target.model.clone())
+                                                }),
+                                        )
+                                })
+                                .child(
+                                    div()
+                                        .h_flex()
+                                        .flex_wrap()
+                                        .gap_2()
+                                        .child(
+                                            Button::new(format!(
+                                                "edit-org-projects-{organization_index}"
+                                            ))
+                                            .ghost()
+                                            .label(format!(
+                                                "Project assignments: {}",
+                                                organization.project_ids.len()
+                                            ))
+                                            .disabled(true)
+                                            .tooltip("Unavailable: the current project catalog does not expose a safe assignment editor"),
+                                        ),
+                                ),
+                        )
+                        .child(render_failover_pools_editor(
+                            state,
+                            catalog,
+                            organization_index,
+                            theme,
+                            on_modify,
+                            cx,
+                        ))
+                        .child(
+                            div()
+                                .v_flex()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .text_size(Typography::GROUP_HEADER_SIZE)
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(theme.chrome.text_t2)
+                                        .child("BROADSIDE SHARING"),
+                                )
+                                .child(
+                                    div()
+                                        .h_flex()
+                                        .flex_wrap()
+                                        .gap_2()
+                                        .child({
+                                            let enabled = organization.broadside.allow_artifacts;
+                                            Button::new(format!(
+                                                "broadside-artifacts-{organization_index}"
+                                            ))
+                                            .ghost()
+                                            .label(format!(
+                                                "Artifacts: {}",
+                                                if enabled { "Allowed" } else { "Blocked" }
+                                            ))
+                                            .accessibility_label(
+                                                "Toggle Broadside artifact sharing",
+                                            )
+                                            .on_click(cx.listener(
+                                                move |this, _event, window, cx| {
+                                                    on_modify(
+                                                        this,
+                                                        Box::new(move |settings| {
+                                                            if let Some(policy) = settings
+                                                                .organizations
+                                                                .get_mut(organization_index)
+                                                            {
+                                                                policy.broadside.allow_artifacts =
+                                                                    !enabled;
+                                                                policy.revision = policy
+                                                                    .revision
+                                                                    .saturating_add(1);
+                                                            }
+                                                        }),
+                                                        window,
+                                                        cx,
+                                                    );
+                                                },
+                                            ))
+                                        })
+                                        .child({
+                                            let enabled =
+                                                organization.broadside.allow_transcripts;
+                                            Button::new(format!(
+                                                "broadside-transcripts-{organization_index}"
+                                            ))
+                                            .ghost()
+                                            .label(format!(
+                                                "Transcripts: {}",
+                                                if enabled { "Allowed" } else { "Blocked" }
+                                            ))
+                                            .accessibility_label(
+                                                "Toggle Broadside transcript sharing",
+                                            )
+                                            .on_click(cx.listener(
+                                                move |this, _event, window, cx| {
+                                                    on_modify(
+                                                        this,
+                                                        Box::new(move |settings| {
+                                                            if let Some(policy) = settings
+                                                                .organizations
+                                                                .get_mut(organization_index)
+                                                            {
+                                                                policy.broadside.allow_transcripts =
+                                                                    !enabled;
+                                                                policy.revision = policy
+                                                                    .revision
+                                                                    .saturating_add(1);
+                                                            }
+                                                        }),
+                                                        window,
+                                                        cx,
+                                                    );
+                                                },
+                                            ))
+                                        }),
+                                ),
+                        )
+                }),
+        )
+        .into_any_element()
+}
+
+fn render_failover_pools_editor<V: 'static>(
+    state: &SettingsViewState,
+    catalog: &UsageCatalogResult,
+    organization_index: usize,
+    theme: &Theme,
+    on_modify: impl Fn(
+        &mut V,
+        Box<dyn FnOnce(&mut UserSettings) + Send + 'static>,
+        &mut Window,
+        &mut Context<V>,
+    )
+    + 'static
+    + Copy,
+    cx: &mut Context<V>,
+) -> AnyElement {
+    let Some(organization) = state.settings.organizations.get(organization_index) else {
+        return div().into_any_element();
+    };
+    let can_create = eligible_routing_choices(&state.settings, organization_index, catalog)
+        .into_iter()
+        .any(|(provider, _)| {
+            provider
+                .capabilities
+                .supports_access_mode(AccessMode::WorkspaceOnly)
+        });
+    let catalog_for_create = catalog.clone();
+
+    div()
+        .v_flex()
+        .gap_2()
+        .child(
+            div()
+                .h_flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .v_flex()
+                        .child(
+                            div()
+                                .text_size(Typography::GROUP_HEADER_SIZE)
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(theme.chrome.text_t2)
+                                .child("FAILOVER POOLS"),
+                        )
+                        .child(
+                            div()
+                                .text_size(Typography::META_SIZE)
+                                .text_color(theme.chrome.text_t3)
+                                .child("Hard-filtered routes with explicit capabilities, models, and account boundaries."),
+                        ),
+                )
+                .child(
+                    Button::new(format!("create-org-failover-{organization_index}"))
+                        .ghost()
+                        .label("Create pool")
+                        .disabled(!can_create)
+                        .tooltip(if can_create {
+                            "Create a pool from the first eligible named route"
+                        } else {
+                            "Add an enabled named route with a declared model first"
+                        })
+                        .on_click(cx.listener(move |this, _event, window, cx| {
+                            let catalog = catalog_for_create.clone();
+                            on_modify(
+                                this,
+                                Box::new(move |settings| {
+                                    create_organization_failover_pool(
+                                        settings,
+                                        organization_index,
+                                        &catalog,
+                                    );
+                                }),
+                                window,
+                                cx,
+                            );
+                        })),
+                ),
+        )
+        .when(organization.failover_pool_ids.is_empty(), |this| {
+            this.child(
+                div()
+                    .p_2()
+                    .rounded(Radii::CHIP)
+                    .bg(theme.chrome.panel2)
+                    .text_size(Typography::SECONDARY_SIZE)
+                    .text_color(theme.chrome.text_t3)
+                    .child("No failover pool is assigned. New turns keep their selected provider."),
+            )
+        })
+        .children(organization.failover_pool_ids.iter().map(|pool_id| {
+            let Some(pool) = state
+                .settings
+                .failover_pools
+                .iter()
+                .find(|pool| &pool.id == pool_id)
+            else {
+                return div()
+                    .p_2()
+                    .rounded(Radii::CHIP)
+                    .bg(rgba(0xef444415))
+                    .text_color(rgb(0xef4444))
+                    .child("Missing failover pool definition")
+                    .into_any_element();
+            };
+            let pool_id_for_detach = pool.id.clone();
+            let pool_id_for_access = pool.id.clone();
+            let next_access =
+                next_compatible_access_mode(pool.requirements.access_mode, &pool.members);
+            let access_changes = next_access != pool.requirements.access_mode;
+
+            div()
+                .v_flex()
+                .gap_2()
+                .p_2()
+                .rounded(Radii::ROW)
+                .bg(theme.chrome.panel2)
+                .border_1()
+                .border_color(rgba(0xffffff0d))
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .v_flex()
+                                .child(
+                                    div()
+                                        .font_weight(FontWeight::BOLD)
+                                        .child(pool.display_name.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(Typography::META_SIZE)
+                                        .text_color(theme.chrome.text_t3)
+                                        .child(format!(
+                                            "{} member{} · revision {}",
+                                            pool.members.len(),
+                                            if pool.members.len() == 1 { "" } else { "s" },
+                                            pool.revision
+                                        )),
+                                ),
+                        )
+                        .child(
+                            Button::new(format!("detach-failover-{}", pool.id.as_str()))
+                                .ghost()
+                                .label("Remove pool")
+                                .tooltip("Detach this pool. Unshared definitions are deleted on save.")
+                                .on_click(cx.listener(move |this, _event, window, cx| {
+                                    let pool_id = pool_id_for_detach.clone();
+                                    on_modify(
+                                        this,
+                                        Box::new(move |settings| {
+                                            detach_organization_failover_pool(
+                                                settings,
+                                                organization_index,
+                                                &pool_id,
+                                            );
+                                        }),
+                                        window,
+                                        cx,
+                                    );
+                                })),
+                        ),
+                )
+                .child(
+                    div()
+                        .h_flex()
+                        .flex_wrap()
+                        .gap_2()
+                        .children([
+                            (
+                                "Instructions",
+                                pool.requirements.requires_instructions,
+                                pool.members.iter().all(|member| {
+                                    member.declared_capabilities.supports_system_prompt
+                                }),
+                                0_u8,
+                            ),
+                            (
+                                "Tools",
+                                pool.requirements.requires_tool_calls,
+                                pool.members.iter().all(|member| {
+                                    member.declared_capabilities.supports_tool_calls
+                                }),
+                                1_u8,
+                            ),
+                            (
+                                "Approvals",
+                                pool.requirements.requires_approvals,
+                                pool.members.iter().all(|member| {
+                                    member.declared_capabilities.supports_approvals
+                                }),
+                                2_u8,
+                            ),
+                            (
+                                "Reasoning",
+                                pool.requirements.requires_reasoning,
+                                pool.members.iter().all(|member| {
+                                    member.declared_capabilities.supports_reasoning
+                                }),
+                                3_u8,
+                            ),
+                        ].into_iter().map(|(label, enabled, supported, field)| {
+                            let pool_id = pool.id.clone();
+                            Button::new(format!(
+                                "failover-requirement-{}-{field}",
+                                pool.id.as_str()
+                            ))
+                            .ghost()
+                            .label(format!(
+                                "{label}: {}",
+                                if enabled { "Required" } else { "Optional" }
+                            ))
+                            .disabled(!enabled && !supported)
+                            .tooltip(if !enabled && !supported {
+                                "At least one member does not declare this capability"
+                            } else {
+                                "Toggle this hard capability requirement"
+                            })
+                            .on_click(cx.listener(move |this, _event, window, cx| {
+                                let pool_id = pool_id.clone();
+                                on_modify(
+                                    this,
+                                    Box::new(move |settings| {
+                                        if let Some(pool) = settings
+                                            .failover_pools
+                                            .iter_mut()
+                                            .find(|pool| pool.id == pool_id)
+                                        {
+                                            match field {
+                                                0 => pool.requirements.requires_instructions = !enabled,
+                                                1 => pool.requirements.requires_tool_calls = !enabled,
+                                                2 => pool.requirements.requires_approvals = !enabled,
+                                                _ => pool.requirements.requires_reasoning = !enabled,
+                                            }
+                                            pool.revision = pool.revision.saturating_add(1);
+                                        }
+                                    }),
+                                    window,
+                                    cx,
+                                );
+                            }))
+                        }))
+                        .child(
+                            Button::new(format!("failover-access-{}", pool.id.as_str()))
+                                .ghost()
+                                .label(format!("Access: {:?}", pool.requirements.access_mode))
+                                .disabled(!access_changes)
+                                .tooltip(if access_changes {
+                                    "Cycle the required access ceiling"
+                                } else {
+                                    "No other access level is compatible with every member"
+                                })
+                                .on_click(cx.listener(move |this, _event, window, cx| {
+                                    let pool_id = pool_id_for_access.clone();
+                                    on_modify(
+                                        this,
+                                        Box::new(move |settings| {
+                                            if let Some(pool) = settings
+                                                .failover_pools
+                                                .iter_mut()
+                                                .find(|pool| pool.id == pool_id)
+                                            {
+                                                pool.requirements.access_mode = next_access;
+                                                pool.revision = pool.revision.saturating_add(1);
+                                            }
+                                        }),
+                                        window,
+                                        cx,
+                                    );
+                                })),
+                        ),
+                )
+                .children(pool.members.iter().enumerate().map(|(member_index, member)| {
+                    let provider = catalog
+                        .routing_providers
+                        .iter()
+                        .find(|provider| {
+                            provider.provider_instance_id == member.provider_instance_id
+                        });
+                    let provider_name = provider
+                        .map(|provider| provider.display_name.clone())
+                        .unwrap_or_else(|| "Missing provider".to_string());
+                    let subscription_name = catalog
+                        .subscriptions
+                        .iter()
+                        .find(|subscription| subscription.key == member.subscription_key)
+                        .map(|subscription| subscription.display_name.clone())
+                        .unwrap_or_else(|| "Missing subscription".to_string());
+                    let models = provider
+                        .map(|provider| provider.models.clone())
+                        .unwrap_or_default();
+                    let next_model = models
+                        .iter()
+                        .position(|model| model == &member.model)
+                        .and_then(|index| models.get((index + 1) % models.len().max(1)))
+                        .cloned()
+                        .or_else(|| models.first().cloned());
+                    let pool_id_for_model = pool.id.clone();
+                    let pool_id_for_less = pool.id.clone();
+                    let pool_id_for_more = pool.id.clone();
+                    let pool_id_for_remove = pool.id.clone();
+                    let current_preference = member.user_preference;
+                    div()
+                        .h_flex()
+                        .flex_wrap()
+                        .items_center()
+                        .justify_between()
+                        .gap_2()
+                        .p_2()
+                        .rounded(Radii::CHIP)
+                        .bg(theme.chrome.panel)
+                        .child(
+                            div()
+                                .v_flex()
+                                .child(
+                                    div()
+                                        .font_weight(FontWeight::BOLD)
+                                        .child(provider_name),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(Typography::META_SIZE)
+                                        .text_color(theme.chrome.text_t3)
+                                        .child(format!("Subscription: {subscription_name}")),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .h_flex()
+                                .flex_wrap()
+                                .gap_2()
+                                .child(
+                                    Button::new(format!(
+                                        "failover-model-{}-{member_index}",
+                                        pool.id.as_str()
+                                    ))
+                                    .ghost()
+                                    .label(format!("Model: {}", member.model))
+                                    .disabled(
+                                        models.is_empty()
+                                            || (models.len() == 1
+                                                && models.first() == Some(&member.model)),
+                                    )
+                                    .tooltip("Cycle the driver-declared model")
+                                    .on_click(cx.listener(move |this, _event, window, cx| {
+                                        let pool_id = pool_id_for_model.clone();
+                                        let next_model = next_model.clone();
+                                        on_modify(
+                                            this,
+                                            Box::new(move |settings| {
+                                                if let (Some(pool), Some(model)) = (
+                                                    settings.failover_pools.iter_mut().find(|pool| pool.id == pool_id),
+                                                    next_model,
+                                                ) && let Some(member) = pool.members.get_mut(member_index)
+                                                {
+                                                    member.model = model;
+                                                    pool.revision = pool.revision.saturating_add(1);
+                                                }
+                                            }),
+                                            window,
+                                            cx,
+                                        );
+                                    })),
+                                )
+                                .child(
+                                    Button::new(format!(
+                                        "failover-preference-less-{}-{member_index}",
+                                        pool.id.as_str()
+                                    ))
+                                    .ghost()
+                                    .label("Priority -")
+                                    .disabled(current_preference == 0)
+                                    .on_click(cx.listener(move |this, _event, window, cx| {
+                                        let pool_id = pool_id_for_less.clone();
+                                        on_modify(
+                                            this,
+                                            Box::new(move |settings| {
+                                                if let Some(pool) = settings.failover_pools.iter_mut().find(|pool| pool.id == pool_id)
+                                                    && let Some(member) = pool.members.get_mut(member_index)
+                                                {
+                                                    member.user_preference = member.user_preference.saturating_sub(100);
+                                                    pool.revision = pool.revision.saturating_add(1);
+                                                }
+                                            }),
+                                            window,
+                                            cx,
+                                        );
+                                    })),
+                                )
+                                .child(
+                                    Button::new(format!(
+                                        "failover-preference-more-{}-{member_index}",
+                                        pool.id.as_str()
+                                    ))
+                                    .ghost()
+                                    .label(format!("Priority: {current_preference}"))
+                                    .disabled(current_preference >= 1_000)
+                                    .on_click(cx.listener(move |this, _event, window, cx| {
+                                        let pool_id = pool_id_for_more.clone();
+                                        on_modify(
+                                            this,
+                                            Box::new(move |settings| {
+                                                if let Some(pool) = settings.failover_pools.iter_mut().find(|pool| pool.id == pool_id)
+                                                    && let Some(member) = pool.members.get_mut(member_index)
+                                                {
+                                                    member.user_preference = member.user_preference.saturating_add(100).min(1_000);
+                                                    pool.revision = pool.revision.saturating_add(1);
+                                                }
+                                            }),
+                                            window,
+                                            cx,
+                                        );
+                                    })),
+                                )
+                                .child(
+                                    Button::new(format!(
+                                        "failover-remove-member-{}-{member_index}",
+                                        pool.id.as_str()
+                                    ))
+                                    .ghost()
+                                    .label("Remove member")
+                                    .disabled(pool.members.len() <= 1)
+                                    .tooltip("A pool must retain at least one member")
+                                    .on_click(cx.listener(move |this, _event, window, cx| {
+                                        let pool_id = pool_id_for_remove.clone();
+                                        on_modify(
+                                            this,
+                                            Box::new(move |settings| {
+                                                if let Some(pool) = settings.failover_pools.iter_mut().find(|pool| pool.id == pool_id)
+                                                    && pool.members.len() > 1
+                                                    && member_index < pool.members.len()
+                                                {
+                                                    pool.members.remove(member_index);
+                                                    pool.revision = pool.revision.saturating_add(1);
+                                                }
+                                            }),
+                                            window,
+                                            cx,
+                                        );
+                                    })),
+                                ),
+                        )
+                }))
+                .child(
+                    div()
+                        .h_flex()
+                        .flex_wrap()
+                        .gap_2()
+                        .children(
+                            eligible_routing_choices(
+                                &state.settings,
+                                organization_index,
+                                catalog,
+                            )
+                            .into_iter()
+                            .filter(|(provider, _)| {
+                                !pool.members.iter().any(|member| {
+                                    member.provider_instance_id == provider.provider_instance_id
+                                }) && pool
+                                    .requirements
+                                    .validate_capabilities(provider.capabilities)
+                                    .is_ok()
+                            })
+                            .map(|(provider, _)| {
+                                let pool_id = pool.id.clone();
+                                let provider_id = provider.provider_instance_id.clone();
+                                let provider_name = provider.display_name.clone();
+                                let catalog = catalog.clone();
+                                Button::new(format!(
+                                    "failover-add-member-{}-{}",
+                                    pool.id.as_str(),
+                                    provider.provider_instance_id.as_str()
+                                ))
+                                .ghost()
+                                .label(format!("Add {provider_name}"))
+                                .on_click(cx.listener(move |this, _event, window, cx| {
+                                    let pool_id = pool_id.clone();
+                                    let provider_id = provider_id.clone();
+                                    let catalog = catalog.clone();
+                                    on_modify(
+                                        this,
+                                        Box::new(move |settings| {
+                                            add_failover_pool_member(
+                                                settings,
+                                                organization_index,
+                                                &pool_id,
+                                                &provider_id,
+                                                &catalog,
+                                            );
+                                        }),
+                                        window,
+                                        cx,
+                                    );
+                                }))
+                            }),
+                        ),
+                )
+                .into_any_element()
+        }))
+        .into_any_element()
 }
 
 /// Renders the Terminal settings panel.
@@ -1138,6 +3031,10 @@ fn render_advanced_tab<V: 'static>(
     let adv = &state.settings.advanced;
     let concurrency = adv.global_concurrency_limit;
     let max_checkpoints = adv.max_checkpoints_per_thread;
+    let usage_scanning = adv.usage_scanning_enabled;
+    let usage_hub_sync = adv.usage_hub_sync_enabled;
+    let capacity_routing = adv.capacity_routing_enabled;
+    let automatic_failover = adv.automatic_failover_enabled;
 
     div()
         .v_flex()
@@ -1192,6 +3089,8 @@ fn render_advanced_tab<V: 'static>(
                                     Button::new("inc-global-conc")
                                         .ghost()
                                         .label("▲")
+                                        .accessibility_label("Increase global concurrency")
+                                        .tooltip("Increase global concurrency")
                                         .on_click(cx.listener(move |this, _event, window, cx| {
                                             on_modify(this, Box::new(move |s| {
                                                 s.advanced.global_concurrency_limit = (s.advanced.global_concurrency_limit + 1).min(16);
@@ -1202,6 +3101,8 @@ fn render_advanced_tab<V: 'static>(
                                     Button::new("dec-global-conc")
                                         .ghost()
                                         .label("▼")
+                                        .accessibility_label("Decrease global concurrency")
+                                        .tooltip("Decrease global concurrency")
                                         .on_click(cx.listener(move |this, _event, window, cx| {
                                             on_modify(this, Box::new(move |s| {
                                                 s.advanced.global_concurrency_limit = (s.advanced.global_concurrency_limit.saturating_sub(1)).max(1);
@@ -1240,6 +3141,101 @@ fn render_advanced_tab<V: 'static>(
                                 .font_family(Typography::MONO_FAMILY)
                                 .text_color(theme.accent_color())
                                 .child(format!("{max_checkpoints} checkpoints")),
+                        ),
+                ),
+        )
+        .child(
+            div()
+                .p_3()
+                .rounded(Radii::ROW)
+                .bg(theme.chrome.panel)
+                .border_1()
+                .border_color(rgba(0xffffff0d))
+                .v_flex()
+                .gap_3()
+                .child(
+                    div()
+                        .v_flex()
+                        .child(
+                            div()
+                                .text_size(Typography::TITLE_SIZE)
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(theme.chrome.text_t1)
+                                .child("Phase 4 rollback controls"),
+                        )
+                        .child(
+                            div()
+                                .text_size(Typography::SECONDARY_SIZE)
+                                .text_color(theme.chrome.text_t3)
+                                .child("Scanner and Hub sync changes take effect after server restart. Routing controls apply to subsequent turns."),
+                        ),
+                )
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .justify_between()
+                        .child("Usage transcript scanning")
+                        .child(
+                            Button::new("toggle-usage-scanning")
+                                .ghost()
+                                .label(if usage_scanning { "Enabled" } else { "Disabled" })
+                                .on_click(cx.listener(move |this, _event, window, cx| {
+                                    on_modify(this, Box::new(move |settings| {
+                                        settings.advanced.usage_scanning_enabled = !usage_scanning;
+                                    }), window, cx);
+                                })),
+                        ),
+                )
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .justify_between()
+                        .child("Hub usage synchronization")
+                        .child(
+                            Button::new("toggle-usage-hub-sync")
+                                .ghost()
+                                .label(if usage_hub_sync { "Enabled" } else { "Disabled" })
+                                .on_click(cx.listener(move |this, _event, window, cx| {
+                                    on_modify(this, Box::new(move |settings| {
+                                        settings.advanced.usage_hub_sync_enabled = !usage_hub_sync;
+                                    }), window, cx);
+                                })),
+                        ),
+                )
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .justify_between()
+                        .child("Capacity-aware route scoring")
+                        .child(
+                            Button::new("toggle-capacity-routing")
+                                .ghost()
+                                .label(if capacity_routing { "Enabled" } else { "Disabled" })
+                                .on_click(cx.listener(move |this, _event, window, cx| {
+                                    on_modify(this, Box::new(move |settings| {
+                                        settings.advanced.capacity_routing_enabled = !capacity_routing;
+                                    }), window, cx);
+                                })),
+                        ),
+                )
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .justify_between()
+                        .child("Automatic safe-state failover")
+                        .child(
+                            Button::new("toggle-automatic-failover")
+                                .ghost()
+                                .label(if automatic_failover { "Enabled" } else { "Disabled" })
+                                .on_click(cx.listener(move |this, _event, window, cx| {
+                                    on_modify(this, Box::new(move |settings| {
+                                        settings.advanced.automatic_failover_enabled = !automatic_failover;
+                                    }), window, cx);
+                                })),
                         ),
                 ),
         )
@@ -1562,6 +3558,49 @@ mod tests {
     }
 
     #[test]
+    fn settings_page_keys_clamp_scroll_offset() {
+        assert_eq!(
+            settings_scroll_offset_for_key("pagedown", px(0.), px(1_000.), px(400.)),
+            Some(px(-340.))
+        );
+        assert_eq!(
+            settings_scroll_offset_for_key("pagedown", px(-900.), px(1_000.), px(400.)),
+            Some(px(-1_000.))
+        );
+        assert_eq!(
+            settings_scroll_offset_for_key("pageup", px(-200.), px(1_000.), px(400.)),
+            Some(px(0.))
+        );
+        assert_eq!(
+            settings_scroll_offset_for_key("tab", px(-200.), px(1_000.), px(400.)),
+            None
+        );
+    }
+
+    #[test]
+    fn provider_health_accessibility_exposes_failures_and_evidence() {
+        assert!(provider_health_is_error(Some("degraded")));
+        assert!(provider_health_is_error(Some("unavailable")));
+        assert!(!provider_health_is_error(Some("healthy")));
+        assert!(!provider_health_is_error(None));
+
+        assert_eq!(
+            ProviderHealthAccessibility {
+                display_name: "Claude Code",
+                status: "Unavailable",
+                version: "1.2.3",
+                authentication: "unknown (low)",
+                freshness: "Stale; checked 2 minutes ago",
+                last_success: "3 minutes ago",
+                reason: "Executable was not found",
+                account_badge: Some("na***@example.com"),
+            }
+            .label(),
+            "Claude Code provider health. Status: Unavailable. Version: 1.2.3. Authentication: unknown (low). Freshness: Stale; checked 2 minutes ago. Last successful snapshot: 3 minutes ago. Reason: Executable was not found. Account: na***@example.com."
+        );
+    }
+
+    #[test]
     fn test_settings_view_import_ssh_hosts() {
         let mut state = SettingsViewState::default();
         assert_eq!(state.environments.len(), 1);
@@ -1581,5 +3620,141 @@ Host galahad
         let reimported = state.import_ssh_hosts(Some(config));
         assert_eq!(reimported, 0);
         assert_eq!(state.environments.len(), 2);
+    }
+
+    #[test]
+    fn organization_limit_controls_preserve_unset_and_positive_values() {
+        assert_eq!(increase_organization_budget(None), Some(10_000_000));
+        assert_eq!(
+            increase_organization_budget(Some(10_000_000)),
+            Some(20_000_000)
+        );
+        assert_eq!(
+            decrease_organization_budget(Some(20_000_000)),
+            Some(10_000_000)
+        );
+        assert_eq!(decrease_organization_budget(Some(10_000_000)), None);
+        assert_eq!(decrease_organization_budget(None), None);
+
+        assert_eq!(increase_organization_concurrency(None), Some(1));
+        assert_eq!(increase_organization_concurrency(Some(1)), Some(2));
+        assert_eq!(decrease_organization_concurrency(Some(2)), Some(1));
+        assert_eq!(decrease_organization_concurrency(Some(1)), None);
+        assert_eq!(decrease_organization_concurrency(None), None);
+    }
+
+    #[test]
+    fn failover_editor_uses_named_mappings_and_rejects_incompatible_members() {
+        fn capabilities(supports_tool_calls: bool) -> pandamux_core::ProviderCapabilities {
+            pandamux_core::ProviderCapabilities {
+                supports_streaming: true,
+                supports_tool_calls,
+                supports_sub_agents: true,
+                supports_system_prompt: true,
+                supports_reasoning: true,
+                supports_approvals: true,
+                supports_rate_limits: true,
+                supports_resume: false,
+                supports_images: true,
+                max_access_mode: AccessMode::FullAccess,
+            }
+        }
+
+        let environment_id = EnvironmentId::new("env-local");
+        let primary_id = ProviderInstanceId::new("provider-primary");
+        let fallback_id = ProviderInstanceId::new("provider-fallback");
+        let mut settings = UserSettings {
+            organizations: vec![pandamux_core::OrganizationPolicy {
+                id: pandamux_core::OrganizationId::new("org-work"),
+                display_name: "Work".to_string(),
+                project_ids: vec![pandamux_core::ProjectId::new("project-work")],
+                allowed_provider_instances: vec![primary_id.clone(), fallback_id.clone()],
+                allowed_subscriptions: vec![
+                    SubscriptionKey::new("subkey-primary"),
+                    SubscriptionKey::new("subkey-fallback"),
+                ],
+                failover_pool_ids: Vec::new(),
+                default_tier_mapping: None,
+                max_concurrency: Some(2),
+                daily_budget_micro_usd: None,
+                broadside: pandamux_core::BroadsidePolicy::default(),
+                revision: 1,
+            }],
+            ..UserSettings::default()
+        };
+        let mut catalog = UsageCatalogResult {
+            subscriptions: Vec::new(),
+            mappings: vec![
+                pandamux_protocol::UsageProviderSubscriptionMapping {
+                    environment_id: environment_id.clone(),
+                    provider_instance_id: primary_id.clone(),
+                    subscription_key: SubscriptionKey::new("subkey-primary"),
+                },
+                pandamux_protocol::UsageProviderSubscriptionMapping {
+                    environment_id: environment_id.clone(),
+                    provider_instance_id: fallback_id.clone(),
+                    subscription_key: SubscriptionKey::new("subkey-fallback"),
+                },
+            ],
+            routing_providers: vec![
+                RoutingProviderCatalogEntry {
+                    environment_id: environment_id.clone(),
+                    provider_instance_id: primary_id.clone(),
+                    provider: pandamux_core::ProviderKind::Custom,
+                    display_name: "A Primary".to_string(),
+                    capabilities: capabilities(true),
+                    models: vec!["mock-fast".to_string()],
+                },
+                RoutingProviderCatalogEntry {
+                    environment_id,
+                    provider_instance_id: fallback_id.clone(),
+                    provider: pandamux_core::ProviderKind::Custom,
+                    display_name: "B Fallback".to_string(),
+                    capabilities: capabilities(false),
+                    models: vec!["mock-fast".to_string()],
+                },
+            ],
+        };
+
+        assert!(create_organization_failover_pool(
+            &mut settings,
+            0,
+            &catalog
+        ));
+        let pool_id = settings.organizations[0].failover_pool_ids[0].clone();
+        assert_eq!(
+            settings.failover_pools[0].members[0].provider_instance_id,
+            primary_id
+        );
+        settings.failover_pools[0].requirements.requires_tool_calls = true;
+        assert!(!add_failover_pool_member(
+            &mut settings,
+            0,
+            &pool_id,
+            &fallback_id,
+            &catalog,
+        ));
+
+        catalog.routing_providers[1].capabilities = capabilities(true);
+        assert!(add_failover_pool_member(
+            &mut settings,
+            0,
+            &pool_id,
+            &fallback_id,
+            &catalog,
+        ));
+        assert_eq!(settings.failover_pools[0].members.len(), 2);
+        assert_eq!(settings.failover_pools[0].revision, 2);
+
+        let mut limited_member = settings.failover_pools[0].members[0].clone();
+        limited_member.declared_capabilities.max_access_mode = AccessMode::WorkspaceOnly;
+        assert_eq!(
+            next_compatible_access_mode(AccessMode::WorkspaceOnly, &[limited_member]),
+            AccessMode::ReadOnly
+        );
+
+        detach_organization_failover_pool(&mut settings, 0, &pool_id);
+        assert!(settings.organizations[0].failover_pool_ids.is_empty());
+        assert!(settings.failover_pools.is_empty());
     }
 }

@@ -1,17 +1,21 @@
 pub mod agent_def;
 pub mod ast_diff;
 pub mod attachment;
+pub mod configuration;
 pub mod environment;
 pub mod event;
 pub mod home;
 pub mod i18n;
 pub mod ids;
+pub mod instruction_bundle;
+pub mod mutation;
 pub mod notification;
 pub mod organization;
 pub mod project;
 pub mod project_registry;
 pub mod provider_config;
 pub mod remote_manifest;
+pub mod routing;
 pub mod run;
 pub mod schedule;
 pub mod secrets;
@@ -22,8 +26,8 @@ pub mod thread;
 pub mod usage;
 
 pub use agent_def::{
-    AgentAuthor, AgentChange, AgentChangeStatus, AgentDefinition, AgentScope, MemoryEntry,
-    MemoryScope,
+    AgentAuthor, AgentBudget, AgentChange, AgentChangeStatus, AgentDefinition, AgentProviderPolicy,
+    AgentScope, AgentToolPolicy, MemoryEntry, MemoryScope, OutputContract,
 };
 pub use ast_diff::{
     AstChangeType, AstDiffSummary, AstFileDiff, AstNodeChange, AstNodeKind, compress_unified_diff,
@@ -35,7 +39,17 @@ pub use attachment::{
     format_attachments_summary, format_file_size, is_image_mime, validate_attachment_size,
     validate_total_attachments_size,
 };
-pub use environment::{Environment, EnvironmentKind, EnvironmentStatus};
+pub use configuration::{
+    ArchiveSha256, BundleActivationKind, BundleActivationRecord, BundleDistributionReceipt,
+    BundleDistributionState, BundleSha, ConfigurationAuditRecord, ConfigurationRevision,
+    ConfigurationUpdateSafety, ContentSha256, InstructionCandidateRecord,
+    InstructionCandidateState, InstructionsSourceRecord, InstructionsUpdatePolicy,
+    InvalidConfigurationIdentity, ProjectLayerTrustRecord, ProjectRepositoryRecord,
+    SourceCommitSha, TrackingRef,
+};
+pub use environment::{
+    DEFAULT_ENVIRONMENT_EXECUTION_LIMIT, Environment, EnvironmentKind, EnvironmentStatus,
+};
 pub use event::{
     ApprovalDecision, ApprovalKind, FileChangeKind, PlanStep, PlanStepStatus, ThreadEvent,
     ThreadEventKind, ToolCallStatus, TurnOutcome,
@@ -43,11 +57,31 @@ pub use event::{
 pub use home::{HomeLayout, HomePane};
 pub use i18n::{Locale, Localizer};
 pub use ids::{
-    AgentId, EnvironmentId, PaneId, ProjectId, ProviderInstanceId, RunId, ScheduleId, SshProfileId,
-    SurfaceId, ThreadId, TurnId, WindowId, WorkspaceId,
+    AgentId, ApprovalId, ArtifactKey, AttemptProgressId, AttemptWorktreeId, BlackboardEntryId,
+    BudgetGrantId, BudgetReservationId, BundleActivationId, BundleTransferId, CheckpointId,
+    CleanupRecordId, ConfigurationAuditId, ContinuationId, DependencyEdgeId, EnvironmentId,
+    ExecutionLeaseId, FailoverPoolId, InstructionCandidateId, InstructionSourceId, MutationAuditId,
+    MutationProposalId, NodeStoreId, OrchestrationEffectId, OrganizationId, PaneId, PersonalEditId,
+    PricingVersionId, ProjectId, ProjectLayerTrustId, ProjectRepositoryId, ProviderInstanceId,
+    RecoveryReviewId, RunAttemptId, RunEventId, RunId, RunTaskId, ScheduleId, ServerIncarnationId,
+    SshProfileId, SubscriptionKey, SurfaceId, ThreadId, TurnAttemptId, TurnId, UsageObservationId,
+    VerificationEvidenceId, WindowId, WorkspaceId,
+};
+pub use instruction_bundle::{
+    BundleReference, BundleSourceManifest, COMPILED_BUNDLE_SCHEMA_VERSION, CompiledClassRule,
+    CompiledInstructionBundleV1, CompiledKnowledge, CompiledOrchestrationPolicy, CompiledPrompt,
+    FailureFallback, NoProviderFallback, PromptPurpose, RateLimitFallback, ValueLayer, ValueOrigin,
+};
+pub use mutation::{
+    MutationAuditRecord, MutationCaller, MutationImpact, MutationProposal, MutationResolution,
+    MutationTarget, TrustedSettingsMutationState,
 };
 pub use notification::{NewNotification, NotificationInfo, NotificationSource, Notifications};
-pub use organization::{ModelTarget, OrganizationPolicy, OrganizationSubscription, TierMapping};
+pub use organization::{
+    BroadsideContent, BroadsidePolicy, FailoverPool, FailoverPoolError, FailoverPoolMember,
+    ModelTarget, OrganizationPolicy, OrganizationPolicyError, OrganizationSubscription,
+    TierMapping, resolve_project_organization,
+};
 pub use project::{
     FolderBreadcrumb, FolderEntry, FolderListing, ProjectError, ProjectErrorCategory, ProjectKey,
     ProjectLocation, ProjectSpec, local_breadcrumbs, local_parent, normalize_posix_path,
@@ -60,13 +94,37 @@ pub use project_registry::{
     resolve_project_id,
 };
 pub use provider_config::{
-    ProviderCapabilities, ProviderEnvironmentOverride, ProviderInstanceConfig, ProviderKind,
+    ProviderCapabilities, ProviderDisabledReason, ProviderEnvironmentOverride,
+    ProviderInstanceConfig, ProviderKind,
 };
 pub use remote_manifest::{
     RemoteArch, RemoteBinaryKind, RemoteBinaryManifest, RemoteBinaryMeta, RemotePlatform,
     RemoteTargetBinaries, embedded_remote_manifest,
 };
-pub use run::{Run, RunEvent, RunKind, RunStatus, RunTask, RunTaskStatus};
+pub use routing::{
+    AttemptBoundary, AttemptExecutionEvidence, CapacityInterruptionEvidence, ContinuationDelivery,
+    ContinuationDeliveryKind, ContinuationDeliveryState, ContinuationRecord, ContinuationState,
+    RoutingAuthentication, RoutingCandidate, RoutingCapabilityRequirements, RoutingDecision,
+    RoutingEvaluation, RoutingHealth, RoutingScore, ToolLedgerEntry, ToolLedgerStatus, TurnAttempt,
+    TurnAttemptStatus, select_route,
+};
+pub use run::{
+    AgentEvaluation, AgentSelectionScore, AgentTask, ApprovalDecisionProvenance,
+    ApprovalRequirement, ArtifactProvenance, Attempt, AttemptFailure, AttemptProgressKind,
+    AttemptProgressRecord, AttemptStatus, BlackboardArtifact, BlackboardEntry, BudgetAmount,
+    BudgetDimension, BudgetIncomplete, BudgetReservation, BudgetReservationState, BudgetUsage,
+    CheckpointKind, CheckpointRef, CleanupRecord, CleanupState, DependencyEdge,
+    DependencyRequirement, EffectDeliveryRecord, EffectDeliveryState, EffectReceipt,
+    ExecutionLease, FailureClass, LeaseResourceKind, MAX_ARTIFACT_BYTES,
+    MAX_ARTIFACT_CONTAINER_ITEMS, MAX_ARTIFACT_JSON_DEPTH, MAX_ARTIFACT_STRING_BYTES,
+    MAX_ARTIFACTS_PER_RUN, MAX_ARTIFACTS_PER_TASK, MAX_RUN_ARTIFACT_BYTES, OrchestrationEffect,
+    OrchestrationEffectKind, OrchestrationMode, OwnedAttemptWorktree, RecoveryReview,
+    RecoveryReviewStatus, RoutingEnvironment, Run, RunApprovalKind, RunApprovalStatus, RunBudget,
+    RunCommand, RunEvent, RunEventKind, RunSeed, RunStatus, RunTaskStatus, RunTrigger,
+    SupplementalBudgetGrant, TaskInput, TaskRouteDecision, ValidatedPlan, VerificationEvidence,
+    VerificationEvidenceKind, VerificationEvidenceOutcome, WorktreeCleanupEligibility,
+    WorktreeDirtyState,
+};
 pub use schedule::{
     PerDayBudget, PerRunBudget, ScheduleApprovalPolicy, ScheduleBudget, ScheduleCatchUpPolicy,
     ScheduleEnvironmentRef, ScheduleOverlapPolicy, ScheduleRecord, ScheduleTarget,
@@ -77,8 +135,9 @@ pub use secrets::{
     scrub_memory,
 };
 pub use settings::{
-    AdvancedSettings, KeyboardSettings, SETTINGS_SCHEMA_VERSION, TerminalSettings, UiSettings,
-    UserSettings, default_providers, default_tier_mapping, settings_get, settings_set,
+    AdvancedSettings, KeyboardSettings, SETTINGS_SCHEMA_VERSION, TerminalSettings,
+    TrustedConfigurationSettings, UiSettings, UserSettings, default_providers,
+    default_tier_mapping, settings_get, settings_set,
 };
 pub use ssh::{
     ClipboardConfig, SshAuthConfig, SshHostProfile, SshProfiles, default_ssh_config_path,
@@ -87,6 +146,13 @@ pub use ssh::{
 pub use terminal::{RingBufferConfig, TerminalResize, TerminalSessionMeta};
 pub use thread::{
     AccessMode, AgentInstanceRef, Thread, ThreadOrigin, ThreadStatus, ThreadWorkspace, Turn,
-    TurnInput, TurnStatus, TurnUsage, WorktreeRef,
+    TurnInput, TurnStatus, TurnUsage, TurnUsageComponent, TurnUsageProvenance, WorktreeRef,
 };
-pub use usage::{DailyBudgetLedger, TokenUsageSummary, UsageRecord};
+pub use usage::{
+    CAPACITY_SNAPSHOT_SCHEMA_VERSION, CapacityConfidence, CapacityEvidenceScope, CapacityFreshness,
+    CapacityProjection, CapacitySnapshot, DEFAULT_CAPACITY_MAX_AGE_MS, DailyBudgetLedger,
+    TokenCounts, TokenUsageSummary, UsageArithmeticError, UsageBucket, UsageFactKind,
+    UsageObservation, UsageObservationError, UsagePricingRates, UsagePricingRule,
+    UsagePricingVersion, UsageProvider, UsageRecord, UsageSourceKind, UsageSubscription,
+    UsageUnknownField, estimate_usage_micro_usd, project_capacity_revisions,
+};

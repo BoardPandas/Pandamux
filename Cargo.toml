@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/pandamux-core",
+  "crates/pandamux-orchestrator",
   "crates/pandamux-protocol",
   "crates/pandamux-client",
   "crates/pandamux-server",
@@ -9,6 +10,7 @@ members = [
   "crates/pandamux-remote",
   "crates/pandamux-cli",
   "crates/pandamux-desktop",
+  "tools/pandamux-boundary-check",
 ]
 resolver = "3"
 exclude = [
@@ -18,19 +20,47 @@ exclude = [
   "spikes/phase0-remote-bootstrap",
   "spikes/phase0-packaging",
   "spikes/phase0-acp-providers",
+  "vendor/gpui-base",
+  "vendor/gpui-pre",
+  "vendor/gpui-pre-util",
 ]
 
 [workspace.package]
-version = "0.54.1"
+version = "0.60.122"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/BoardPandas/Pandamux"
-rust-version = "1.88"
+rust-version = "1.89"
 
 [workspace.dependencies]
+anyhow = "=1.0.103"
 base64 = "=0.22.1"
-rusqlite = { version = "0.33", features = ["bundled"] }
+fs4 = "=1.1.0"
+hex = "=0.4.3"
+reqwest = { version = "=0.12.28", default-features = false, features = ["rustls-tls-webpki-roots"] }
+rusqlite = { version = "=0.33.0", features = ["backup", "bundled"] }
+schemars = "=1.2.2"
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.150"
+serde-saphyr = { version = "=1.3.0", default-features = false, features = ["deserialize"] }
+sha2 = "=0.10.9"
 tokio = { version = "=1.52.3", features = ["io-util", "macros", "net", "rt-multi-thread", "sync"] }
+url = "=2.5.8"
 uuid = { version = "=1.23.4", features = ["v4"] }
+windows-sys = "=0.61.2"
+zip = { version = "=4.6.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+[patch.crates-io]
+# gpui-base 0.6.6 uses AtomicU64::try_update(), which is newer than our
+# declared Rust 1.89 MSRV. Keep the exact gpui-kit family pinned and use the
+# stable, behavior-equivalent fetch_update() operation locally until upstream
+# declares a compatible MSRV.
+gpui-base = { path = "vendor/gpui-base" }
+# gpui-pre 0.3.6 uses optimizer and string-boundary helpers stabilized after
+# Rust 1.89. Keep the exact gpui-kit family pinned and carry stable equivalents
+# locally until the upstream crate declares a compatible MSRV.
+gpui-pre = { path = "vendor/gpui-pre" }
+# gpui-pre-util 0.3.6 uses slice::as_array(), which is newer than our declared
+# Rust 1.89 MSRV. Keep the exact gpui-kit family pinned and carry the one-line
+# stable conversion locally until the upstream crate declares a compatible MSRV.
+gpui-pre-util = { path = "vendor/gpui-pre-util" }

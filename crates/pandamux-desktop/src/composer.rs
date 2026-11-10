@@ -190,6 +190,8 @@ pub fn render_composer<V: 'static>(
                                 Button::new(format!("del-att-{}", att.id))
                                     .ghost()
                                     .label("✕")
+                                    .accessibility_label(format!("Remove attachment {}", att.file_name))
+                                    .tooltip("Remove attachment")
                                     .on_click(cx.listener(move |this, _event, window, cx| {
                                         on_remove_attachment(this, att_id.clone(), window, cx);
                                     })),

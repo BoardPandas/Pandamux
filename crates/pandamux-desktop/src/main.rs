@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use gpui_kit::component::Root;
+use gpui_kit::component::{Root, Theme as ComponentTheme, ThemeMode as ComponentThemeMode};
 use gpui_kit::gpui::*;
 use pandamux_desktop::{AccentColor, AppView, Theme};
 
@@ -25,6 +25,7 @@ fn main() {
 
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
+        ComponentTheme::change(ComponentThemeMode::Dark, None, cx);
 
         cx.open_window(
             WindowOptions {

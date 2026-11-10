@@ -1,164 +1,332 @@
 <h1 align="center">PandaMUX</h1>
-<p align="center">A visibility layer for Claude Code on Windows: see what your AI agent does in real-time</p>
+<p align="center">A native, chat-first desktop for supervising local and remote AI coding agents.</p>
 
-<p align="center">
-  Native, GPU-rendered Windows terminal multiplexer for AI agents. Built in Rust
-  (Iced + alacritty_terminal + portable-pty + russh). Named-pipe protocol lineage
-  traces to <a href="https://github.com/manaflow-ai/cmux">cmux</a>.
-</p>
+PandaMUX is a Rust workspace built around a GPUI desktop, an authenticated JSON-RPC server, provider adapters, and SSH-connected Linux nodes. The server owns durable thread, turn, terminal, settings, and event state. The desktop and CLI are clients of that same service.
 
-<p align="center">
-  <a href="https://github.com/BoardPandas/Pandamux"><img src="https://img.shields.io/badge/platform-Windows-0078D4?logo=windows" alt="Windows" /></a>
-  <a href="https://github.com/BoardPandas/Pandamux/releases"><img src="https://img.shields.io/github/v/release/BoardPandas/Pandamux?label=release&color=555" alt="Release" /></a>
-  <a href="https://github.com/BoardPandas/Pandamux/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-555" alt="License" /></a>
-</p>
+This repository began as an Electron prototype, then had an Iced multiplexer implementation. Both have been removed from the active workspace. Historical rationale remains in [`tasks/plan-repo.md`](tasks/plan-repo.md), while [`tasks/plan-rewrite.md`](tasks/plan-rewrite.md) is the current implementation contract.
 
-## What it is
+## Current development status
 
-PandaMUX is a Windows terminal multiplexer built for running many Claude Code (and other CLI) agents in parallel, each in its own visible pane. Shell integration and the agent registry surface session state, project context, and attention signals without changing the AI tools themselves.
+The workspace version comes only from `[workspace.package] version` in [`Cargo.toml`](Cargo.toml). Do not infer the current version from documentation prose.
 
-It is a fully native Rust application (no web view). The terminal grid is GPU-rendered for smooth output at any speed, and the whole app is coordinated through a single named-pipe API that the CLI, shell integration, and the bundled orchestrator plugin all speak.
+The codebase retains an open provider-controlled Phase 4 acceptance row while
+implementing the explicitly authorized Phase 5A orchestrator, Phase 5B trusted
+configuration control plane, and Phase 5C internal execution runtime after the
+R0 development gate:
 
-> **History**: this repo began as an Electron/TypeScript prototype and was rewritten to a native Rust workspace. The prototype has been removed. The in-app CDP browser pane was intentionally dropped; agents use Claude Code's own browser tooling instead. See [`tasks/plan-repo.md`](tasks/plan-repo.md) for the full plan and phase history.
+- R0.1 preserves and verifies the unfinished Phase 4 usage prototype without treating it as accepted production code.
+- R0.2 implements Hub-to-node routing through a versioned SSH exec proxy, reconnect semantics, event replay, and joined cleanup.
+- R0.3 resolves every provider turn from the exact stored provider instance and holds per-instance capacity for the provider process lifetime.
+- R0.4 secures local IPC with server-assigned request contexts, distinct capabilities, OS-user boundaries, and redacted MCP reads.
+- R0.5 has exact live evidence for Galahad and native Windows IPC. The two rows
+  deferred for development sequencing on 2026-09-29 later passed on exact
+  0.60.64: one physical MSI laptop remained disconnected from Wi-Fi for more
+  than 30 minutes during a real provider turn, and one remote full-screen
+  terminal survived 39 minutes of Connected Modern Standby. P4-C6 is Pass.
+- Phase 4A provides normalized usage observations, durable transactional cursors and outbox state, canonical organization and failover policy, migration-4 reconciliation through additive migration 6, and bounded authenticated usage, capacity, and health protocol pages.
+- Phase 4B adds node-owned Claude and Codex transcript scanners with durable platform file identity, bounded lifecycle and retention, explicit coverage diagnostics, transactional cursor advancement, and managed-turn reconciliation. Claude token usage is keyed to exact assistant message identity, while terminal result cost remains a separate turn-level fact. Raw transcript text and paths remain node-local.
+- Phase 4C adds bounded Hub pulls, transactional per-node high-water marks, acknowledged outbox compaction, explicit retention-gap backfill, indexed SQL aggregates, effective-dated integer pricing, and cross-node coverage metadata. Provider-reported spend remains separate from API-equivalent estimates.
+- Phase 4D adds schema-versioned capacity revisions and conservative projections,
+  authenticated Hub-to-node capacity exchange, bounded concurrent provider health with
+  durable freshness, and explicit preview-before-launch login actions. Codex quota
+  evidence can be Reported; unverified provider capacity remains Unknown.
+- Phase 4E adds the top-level Usage and capacity surface, pure client reducers for every
+  data and failure state, named subscription and provider presentation, canonical
+  organization-policy editing and enforcement, truthful health controls, and the
+  source-level accessibility gate. Exact 0.60.22 native Windows evidence passes
+  the executed 100 and 200 percent keyboard paths, semantic table and editor
+  focus, empty and populated table semantics, dark and light review, High
+  Contrast, disabled animations, actionable Offline behavior, and genuine
+  Narrator status, error, table, field-label, and focus-return checks.
+- Phase 4F adds explicit capability-compatible failover pools, deterministic hard-filter-
+  first routing, durable per-attempt side-effect boundaries, one automatic retry only
+  before output, and audited fresh-session continuation after unsafe capacity exhaustion.
+  Provider success fails closed when a started tool still lacks a durable result, leaving
+  its ledger intact without retry or an invented continuation.
+  A completed tool result commits its immutable ledger transition, timeline event, and
+  delivered marker atomically, so identical replay after reconnect or restart cannot
+  create a second projected result.
+  Authenticated remote turns carry a Hub-owned policy and pool snapshot that the node
+  validates again before selecting a route. Independent rollback switches preserve
+  observations while disabling scanning, Hub synchronization, capacity-aware
+  routing, or automatic failover. Exact 0.60.15 passed accounting and cloned-store
+  reconciliation, exact 0.60.17 partially passed the P4-C5 durability and control
+  matrix. Exact 0.60.22 also passed the current normal-user IPC matrix, but
+  P4-C3 was reopened because its successful provider-login launch path was not
+  exercised and later left the Terminal surface undiscoverable and
+  noninteractive. Exact 0.60.24 proved the repaired panel, terminal binding,
+  and automatic focus natively, but PowerShell did not execute the injected
+  login command because ConPTY received a line feed instead of carriage
+  return. Exact 0.60.25 proved command execution visually, then exposed that
+  painted Terminal output was absent from UI Automation. Exact 0.60.26 added
+  a bounded semantic output log and passed the successful-login interaction,
+  High Contrast, and disabled-animation rows, but genuine Narrator Speech
+  Recap did not announce the READY or ECHO output. Exact 0.60.27 then passed
+  the successful-login interaction, 200 percent scaling, High Contrast, and
+  disabled-animation rows, but its output Log could not receive focus through
+  UI Automation and the advertised Tab path remained PTY input. Exact 0.60.28
+  added an explicit F6 input/output focus toggle and passed the successful-login,
+  200 percent scaling, High Contrast, and disabled-animation rows. Narrator
+  displaced focus to the PandaMUX window, where the terminal-scoped shortcut
+  could not run, so 0.60.28 is rejected. Exact 0.60.29 commit `2b3b806`
+  passed native build, smoke, remote lifecycle, successful-login, 200 percent,
+  High Contrast, and disabled-animation rows, but its root visual handler still
+  had no GPUI focus path under Narrator and did not receive F6. Exact 0.60.30
+  commit `9dae237` passed native build, smoke, remote lifecycle, and standard
+  successful-login interaction, but Narrator still consumed or withheld F6
+  before PandaMUX received it. Exact 0.60.31 commit `0394eb3` passed native
+  build, smoke, remote lifecycle, and standard successful-login interaction.
+  Its explicit `Type here` and `Read output` controls were visible and
+  invokable, but accessibility activation restored window-level focus after
+  the click handler requested the output Log, so Narrator still could not read
+  READY or ECHO. Exact 0.60.32 commit `952b280` passed native build, smoke,
+  remote lifecycle, and standard successful-login interaction, but direct UI
+  Automation Invoke still left focus on the PandaMUX window because the styled
+  control fell back to synthesized pointer input under Narrator. Exact 0.60.33
+  commit `58452e7` passed native build, smoke, remote lifecycle, and standard
+  successful-login interaction, but its direct AccessKit handler deferred the
+  focus update and UI Automation Invoke still left focus on the PandaMUX window.
+  Exact 0.60.34 commit `1f1df21` passed native build, smoke, remote lifecycle,
+  and standard successful-login interaction, but Windows UI Automation still
+  restored window-level focus after the synchronous accessibility callback.
+  Exact 0.60.35 commit `b54f8e3` repeated the requested focus after platform
+  Invoke dispatch and passed the standard row, but GPUI elided the delayed
+  same-handle request while UI Automation focus remained on the PandaMUX
+  window. Exact 0.60.36 commit `6fd5d02` made that move a distinct GPUI focus
+  transition and passed the same native build, smoke, remote lifecycle, and
+  standard row, but UI Automation still reported the PandaMUX window. Exact
+  0.60.37 commit `f21bc2d` activated PandaMUX and passed the same gates, but its
+  Narrator result was unchanged. Diagnostics proved PandaMUX already owned the
+  foreground window and had visibly entered output-reading mode. Exact 0.60.38
+  commit `d328ad8` then passed the complete local gate, native build, host smoke,
+  remote lifecycle, and standard successful-login interaction. Ordinary UI
+  Automation honored its active-descendant output focus, but Narrator still
+  reported the PandaMUX root and did not speak READY. Instrumented follow-ups
+  proved that PandaMUX's HWND was foreground, active, and owned native keyboard
+  focus, while synchronized Narrator navigation reached all three terminal
+  header controls and then skipped the semantic Log group entirely. Exact
+  0.60.39 commit `8b7b880` exposed the output through AccessKit's dedicated
+  Terminal role and passed the complete local gate, native build, host gates,
+  and standard successful-login interaction. Windows reported the output as a
+  focusable UI Automation Document, but genuine Narrator visited that Document
+  without speaking its parent-only accessible name, then left PandaMUX. Exact
+  0.60.40 commit `d4c9dd8` kept that Document and attempted a semantic Label
+  child; its local gate, native build, and host gates passed, but the standard
+  guest row proved the label-only child was absent from Windows UI Automation.
+  Exact 0.60.41 commit `c6a20ff` supplies the child value plus a synthetic text
+  run so the Document exposes TextPattern content. It passed the complete local
+  gate, clean native build, host gates, controlled login-terminal matrix at 100
+  and 200 percent, High Contrast, disabled animations, genuine Narrator with
+  exact READY, ECHO, and reopened-output phrases, visual review, and the full
+  named-pipe security matrix. Those P4-C3 rows remain accepted. Exact 0.60.43
+  commit `372f2ae` then replaced static provider kinds and stale models with
+  authenticated configured instances and live driver discovery. Its complete
+  local gate, schema migration, six-model Codex discovery, and real
+  `codex-default` plus `gpt-6-luna` turn passed. Exact limited-user Windows
+  artifacts then passed native build, headless smoke, visible no-route fallback,
+  and an authenticated picker-created thread. Exact 0.60.62 commit `757caf0`
+  passed the affected provider-login and Surfaces matrix at 100/200 percent on the physical MSI, so P4-C3 is Pass.
+  A separate supporting live run later killed the exact remote proxy after
+  visible text and one successful file-writing shell tool. Reconnect retained
+  one protected attempt and the one-line marker without replay. Exact 0.60.47
+  then repaired a false-success path for unresolved tools and passed a clean
+  supporting run with one approval plus one loopback HTTP POST across abrupt
+  proxy loss. Reconnect retained one request, one terminal tool ledger row, one
+  protected attempt, one settled turn, and one matching managed usage
+  observation without replay.
+  Exact 0.60.49 then made terminal tool-result persistence atomic across the
+  ledger, timeline, and delivery marker, with duplicate-provider and database
+  reopen regressions. Its exact Galahad server also passed a controlled real
+  approval-result restart: one approval dispatched one loopback POST, a fault
+  left its delivery Pending, and two identical submissions after daemon restart
+  both refused redispatch with `approval_delivery_pending` while the request
+  count remained one.
+  The same hash-pinned server then passed an exact process crash inside the
+  terminal tool-result transaction. One real Codex command completed exactly
+  one loopback HTTP side effect before the isolated daemon process group was
+  killed under a confirmed SQLite writer lock. The database exposed only the
+  complete pre-result state, and restart reconciled the interrupted attempt
+  without a second request, terminal event, or delivery row.
+  Exact 0.60.52 then repaired stale continuation-route persistence and passed
+  a controlled-source, real-Codex continuation restart. The target provider and
+  model survived persistence, exactly one loopback request occurred, the exact
+  five-process descendant tree was killed while its tool remained Started, and
+  restart reconciled the continuation and attempt without redispatch or replay.
+  Two duplicate continuation calls both refused a second dispatch.
+  The unchanged exact server later passed a real external-service interruption
+  against one disposable Webhook.site HTTPS endpoint. Organization policy
+  selected real `claude-default` plus `claude-3-7-sonnet-latest`, one marked
+  POST committed, and the harness killed the exact five-process descendant
+  tree while the tool remained durably Started. Restart produced
+  Interrupted, Failed, and Idle state without a second request, terminal tool
+  result, continuation, or delivery. Cleanup revoked the endpoint and restored
+  the isolated profile without changing either source database.
+  Later capacity diagnostics deliberately preferred Codex over Claude, but
+  Codex completed each turn while credits remained available. The retained
+  rejected runs first exposed a false hard limit from a 100 percent window,
+  then proved that `ordinaryUsageAllowed=false` describes exhausted included
+  use rather than total provider unavailability. Version 0.60.56 keeps
+  available or unlimited credits serviceable, preserves explicit full-block
+  signals, and handles terminal structured Codex capacity errors without
+  interrupting app-server retries. The exact 0.60.56 artifact then passed a
+  live credit-serviceability route proof: capacity-aware routing retained
+  Codex at 100 percent included-use utilization, one Codex attempt completed,
+  and no capacity retry or Claude fallback appeared. This verifies the
+  correction but does not close the real capacity-failover row because credits
+  were still available.
+  A supporting Hyper-V rehearsal first exercised the same recovery paths, but
+  did not substitute for physical hardware. Exact 0.60.64 commit `a41c5bd`
+  subsequently passed both physical P4-C6 rows with exact event, usage,
+  terminal offset, replay, abandoned-proxy cleanup, SleepStudy, and restoration
+  evidence. Real pre-output provider capacity exhaustion and the final P4-C7
+  archive after that row stabilizes keep P4-C5 Partial and the Phase 4 exit
+  matrix open.
+- Phase 5 work proceeds as an explicit sequencing exception without marking
+  P4-C5 or P4-C7 complete. Phase 5A adds versioned authored schemas, a
+  trust-aware canonical instruction bundle, validated task DAGs, deterministic
+  task-to-agent and existing provider routing, durable approval identity,
+  bounded model-output parsing, and replayable run state in the pure
+  orchestrator crate. It does not add persistence, effect execution, provider
+  dispatch, worktrees, run RPC, CLI commands, or desktop surfaces.
+- Phase 5B adds one private app-data graph, revisioned settings, a managed
+  personal Git repository, bounded instructions mirrors, exact project-layer
+  trust, immutable compiled bundles, authenticated node distribution, durable
+  mutation proposals, and a Trusted Configuration desktop surface. Exact
+  0.60.88 commit `a0e6def` passes the complete local matrix plus the required
+  native Windows private-path, ownership, reparse, atomic-recovery,
+  no-console-Git, physical keyboard, and UI Automation checks. External Git or
+  SFTP distribution, CI, production activation, push, deployment, packaging,
+  signing, publication, and release were not exercised. This does not close
+  P4-C5 or P4-C7.
+- Phase 5C adds migration 14, replay-verified run persistence, a durable effect
+  outbox, attempt-owned worktrees and checkpoints, shared admission and budget
+  enforcement, local and authenticated loopback-node provider execution,
+  bounded typed artifacts and verification evidence, watchdogs, cancellation,
+  joined shutdown, and startup recovery. Exact 0.60.119 commit `ce9c48f` closes
+  the binding native Linux, Windows, and macOS rows; all eight jobs of exact
+  0.60.120 run `38056999487` also pass. Exact 0.60.121 commit `88cfdd1` closes
+  the physical Galahad, live Codex/Claude/Antigravity success and cancellation,
+  and controlled one-effect response-loss rows. Recovery preserves the exact
+  tool-side-effect boundary, creates one durable review, and never dispatches a
+  replacement provider or effect. The Phase 5C execution-runtime matrix is
+  complete, but production acceptance is not established: Phase 5C has no
+  public run RPC, CLI, or desktop orchestration surface, P4-C5 remains Partial,
+  P4-C7 remains open, and no deployment or release occurred.
 
-## Features
+See the [Phase 4 live acceptance record](docs/operations/PHASE4_ACCEPTANCE.md),
+the [Phase 5A pure-domain acceptance record](docs/operations/PHASE5A_ACCEPTANCE.md),
+the [Phase 5B trusted configuration acceptance record](docs/operations/PHASE5B_ACCEPTANCE.md),
+the [Phase 5C execution-runtime acceptance record](docs/operations/PHASE5C_ACCEPTANCE.md),
+and the completion criteria in [`tasks/plan-rewrite.md`](tasks/plan-rewrite.md).
 
-- **AI-agent visibility:** runs Claude, Codex, Gemini, and custom commands in visible terminal surfaces while shell integration and agent status keep the sidebar current. No API keys; each tool uses its existing login.
-- **Splits, tabs, workspaces** — split any pane right or down, zoom to full screen, keep multiple keep-alive tabs per pane (PTY sessions stay live when switching), and organize panes into workspaces. Drag-and-drop a tab to split.
-- **Sessions panel** — every shell context indexed across workspaces, grouped by project / type / host; select one to focus its pane.
-- **SSH remote surfaces** — run Claude Code on remote Linux hosts over SSH (russh). Durable via remote `tmux` with reconnect-on-disconnect. Host profiles + `~/.ssh/config` import; agent/key/password auth.
-- **Copy/paste over SSH (OSC 52)** — copy from a remote session to your local clipboard and paste back, with bracketed-paste handling.
-- **Image paste** — copy a screenshot and press `Ctrl+V`: locally the temp path is injected; on a remote surface the image is uploaded via SFTP and the remote path is injected, so Claude Code reads it directly.
-- **Notifications** — panes flash and the bell lights up when agents finish or need attention (OSC 9/99/777, `pandamux notify`, idle detection); a panel lists everything with click-to-jump.
-- **Terminal themes** — bundled themes plus import from Windows Terminal `settings.json` or Ghostty config; per-surface color schemes.
-- **pandamux-orchestrator plugin** — decomposes a task into parallel agents, each in its own visible pane, coordinated in dependency-aware waves with automated review. Activate with `/pandamux:orchestrate`.
-- **Scriptable** — named-pipe server (`\\.\pipe\pandamux`) with a JSON-RPC API: create workspaces, split panes, send keystrokes, read terminal content, drive SSH/clipboard, and spawn sub-agent terminals.
-- **In-app updates** — checks GitHub Releases and offers to install a newer signed build (past a quarantine window). Find-in-terminal, clickable links, session restore, and multi-window are all built in.
+## Product shape
 
-## Install
+- Chat threads stream provider output into a virtualized timeline and support approval, cancel, reconnect, attachments, model selection, and effort selection.
+- Provider instances are explicit stored configurations. New threads select only
+  enabled, authenticated instances with successful driver-backed model discovery;
+  PandaMUX does not substitute a provider kind or stale hard-coded model. Claude,
+  Codex, Antigravity, Cursor, Grok, and OpenCode adapters exist, but live acceptance
+  varies by provider and environment.
+- The right-side surfaces include agents, diffs, confined files, pull-request views, terminal sessions, floor-plan data, and artifacts.
+- Settings includes a Trusted Configuration surface for active source status,
+  candidate and project-layer review, local mutation confirmation, retained
+  history, and forward-only revert actions.
+- The server contains the private Phase 5C orchestration runtime, but public
+  run RPC, CLI commands, and desktop orchestration surfaces remain Phase 5D.
+- The server owns local PTYs and durable byte replay. The desktop owns only terminal grid rendering.
+- Linux nodes run `pandamux-server daemon`; the Hub reaches them through `pandamux-server proxy` over SSH. No remote TCP listener is opened.
+- The CLI supports connectivity, identification, thread listing and sending,
+  notifications, and a restricted MCP adapter with read-only inspection plus
+  one proposal-only trusted access tool.
 
-### Download (recommended)
+## Build and run
 
-Download the latest `PandaMUX-Setup-<version>.exe` from [GitHub Releases](https://github.com/BoardPandas/Pandamux/releases/latest) and run it. The installer and app are Authenticode-signed (Azure Trusted Signing), and the app updates itself from within.
-
-### From source
-
-Requires the Rust stable toolchain (rustup) and the MSVC build tools.
+Rust 1.98.1 is pinned for development and evidence. The workspace declares
+Rust 1.89 as its tested MSRV for the Windows product and Linux headless graphs.
+Windows development uses the MSVC build tools. The workspace has no Node
+runtime dependency.
 
 ```bash
-git clone https://github.com/BoardPandas/Pandamux.git
-cd Pandamux
-cargo run -p pandamux-app --features iced-runtime -- --iced-shell
+# Run the authenticated local Hub.
+cargo run -p pandamux-server
+
+# Run the GPUI desktop. It discovers or starts the Hub automatically.
+cargo run -p pandamux-desktop
+
+# Noninteractive desktop checks.
+cargo run -p pandamux-desktop -- --headless
+cargo run -p pandamux-desktop -- --smoke
+
+# Inspect the actual CLI surface.
+cargo run -p pandamux-cli -- --help
+cargo run -p pandamux-cli -- ping
+cargo run -p pandamux-cli -- thread list
 ```
 
-See [`CLAUDE.md`](CLAUDE.md) for the full build, test, and release documentation.
-
-## Why PandaMUX?
-
-Running many Claude Code sessions in parallel on Windows is painful. Windows Terminal has tabs but no notification system, so you check each tab manually to see if an agent finished or is waiting. tmux works in WSL but loses Windows integration. PandaMUX is a visibility layer for AI coding agents: it does not replace Claude Code or change how it works; it observes and shows you what is happening. The sidebar combines shell integration, agent state, and native git and port polling to show project context and attention signals.
-
-## pandamux-orchestrator
-
-A bundled Claude Code plugin for parallel multi-agent orchestration. Install it manually with `/plugin install pandamux-orchestrator`, then activate it with `/pandamux:orchestrate`. It analyzes the codebase, decomposes the task into independent units, assigns each to an agent in its own pane, runs them in dependency-aware waves, and has a reviewer agent inspect the combined output and trigger auto-fixes. It also works without PandaMUX by falling back to native subagents. The bundled source lives under `resources/pandamux-orchestrator/`; PandaMUX does not write to `~/.claude` or install the plugin automatically.
-
-## Shell Integration
-
-PandaMUX injects integration scripts into your shells (PowerShell, CMD, Bash/Zsh in WSL). The native backend accepts the V1 `report_pwd` hook, per-session cwd tracking also uses OSC 9;9 / OSC 7, and native pollers compute git and port state independently.
-
-Environment variables available in all shells:
-
-| Variable | Description |
-|----------|-------------|
-| `PANDAMUX` | Always `1` inside PandaMUX |
-| `PANDAMUX_SURFACE_ID` | Current surface (tab) ID |
-| `PANDAMUX_PIPE` | Named pipe path (`\\.\pipe\pandamux`) |
-| `PANDAMUX_AGENT_ID` | Agent ID (set for orchestrator-spawned panes) |
-
-## CLI
-
-The `pandamux` CLI communicates with the running app over the named pipe.
+Common validation commands:
 
 ```bash
-pandamux ping                          # Check if pandamux is running
-pandamux notify "Build complete"       # Send a notification
-pandamux new-workspace --title "API"   # Create a workspace
-pandamux list-workspaces               # List all workspaces
-pandamux split --right                 # Split focused pane
-pandamux send "cargo test"             # Send text to terminal
-pandamux send-key Enter --ctrl         # Send keystroke
-pandamux read-screen --lines 50        # Read terminal content
-
-# SSH remote surfaces
-pandamux ssh connect <host>            # Open a remote surface (tmux-durable)
-pandamux ssh list                      # List remote sessions
-pandamux ssh import                    # Import hosts from ~/.ssh/config
-
-# Clipboard (OSC 52) + image paste
-pandamux clipboard copy "text"         # Set the OS clipboard
-pandamux paste                         # Paste into the focused surface
-pandamux paste-image                   # Paste/upload a clipboard image
-
-# Agents
-pandamux agent spawn --cmd "claude --resume abc" --label "Research"
-pandamux agent spawn-batch --json '[{"cmd":"claude","label":"Agent 1"},{"cmd":"claude","label":"Agent 2"}]'
-pandamux agent list                    # List all agents
-pandamux agent status <agent-id>       # Check agent status
-pandamux agent kill <agent-id>         # Kill an agent
-
-pandamux tree                          # Workspace / pane / surface hierarchy
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo run --locked -p pandamux-boundary-check --quiet
+node scripts/check-claude-wiring.mjs
 ```
 
-## Socket API
-
-Connect to `\\.\pipe\pandamux` for programmatic control. Two protocols:
-
-**V1** (text, currently handles liveness and cwd reporting):
-```
-report_pwd <surface_id> <path>
-ping
-```
-
-**V2** (JSON-RPC, used by the CLI and automation):
-```json
-{"method": "workspace.create", "params": {"title": "Agent 1"}}
-{"method": "surface.send_text", "params": {"id": "surf-...", "text": "cargo test\n"}}
-{"method": "surface.read_text", "params": {"id": "surf-...", "lines": 50}}
-{"method": "ssh.connect", "params": {"host": "galahad"}}
-{"method": "clipboard.copy", "params": {"text": "hello"}}
-{"method": "agent.spawn", "params": {"cmd": "claude --resume abc", "label": "Research"}}
-{"method": "agent.spawn_batch", "params": {"agents": [], "strategy": "distribute"}}
-{"method": "system.tree", "params": {}}
-```
-
-`system.capabilities` reports `browser: false`; there is no `pandamux browser` command (use Claude Code's own browser tooling).
+Cargo builds and tests should run serially in one checkout because they share the target directory and may contend on the package cache. See [`CLAUDE.md`](CLAUDE.md) for scoped checks and platform notes.
 
 ## Architecture
 
-Native Rust workspace. The backend owns all canonical state; the Iced UI is a read-projection that submits intents. The named-pipe server (CLI/agents/orchestrator) and the UI both submit the same intents to the same dispatcher, so CLI-driven and UI-driven mutations are identical at the state layer.
-
-```
+```text
 crates/
-  pandamux-core/   Domain types, split tree, session/agent/notification/ssh models. Zero UI deps.
-  pandamux-term/   Terminal engine: alacritty_terminal grid, portable-pty, russh (remote PTY + SFTP),
-                   OSC 52, search/serialize/link detection, shell lifecycle.
-  pandamux-ui/     Iced app: GPU terminal viewport, panes/splits/tabs, chrome, overlays, theming.
-  pandamux-app/    pandamux.exe: tokio runtime, canonical state, pipe server, pollers, persistence,
-                   updater, OS clipboard bridge.
-  pandamux-cli/    pandamux-cli.exe: the `pandamux` CLI (pipe client).
-resources/         Runtime assets: themes, sounds, shell-integration, pandamux-orchestrator.
+  pandamux-core/       Framework-free domain types and policy data
+  pandamux-orchestrator/ Pure schema, bundle, DAG, routing, policy, and run-state engine
+  pandamux-protocol/   Versioned JSON-RPC, subscription, and proxy wire contracts
+  pandamux-providers/  Provider drivers, profiles, process supervision, and parsing
+  pandamux-remote/     SSH pooling, exec, SFTP, bootstrap, and proxy tunnels
+  pandamux-server/     Store, orchestration execution and recovery, providers, PTYs, Hub and node runtime
+  pandamux-client/     Client-side event and trusted-configuration projections
+  pandamux-desktop/    GPUI chat-first desktop, settings controls, and terminal grid rendering
+  pandamux-cli/        Authenticated CLI and restricted MCP stdio adapter
+  pandamux-term/       Feature-split terminal grid and local PTY primitives
+tools/
+  pandamux-boundary-check/ Target-resolved dependency and feature graph validator
 ```
 
-Full developer docs, including the release/signing pipeline, are in [`CLAUDE.md`](CLAUDE.md).
+Important boundaries:
 
-## Lineage
+- `pandamux-server` is the production composition owner of `pandamux-remote` and depends on `pandamux-term` with only the `pty` feature.
+- `pandamux-desktop` uses `pandamux-term` with only the `grid` feature and does not own provider processes or durable state.
+- `pandamux-orchestrator` has serializable value inputs and effects and cannot depend on runtime, storage, UI, provider, keyring, or embedding implementations.
+- `pandamux-protocol` carries wire types but does not depend on the server, desktop, terminal, or SSH implementations.
+- `pandamux-core` is framework-free.
 
-PandaMUX is an independent Windows project whose named-pipe protocol and design philosophy trace to [cmux](https://github.com/manaflow-ai/cmux), the macOS terminal for multitasking. Its non-browser V2 pipe surface preserves that protocol lineage, but PandaMUX does not reuse cmux's source code.
+## Local control security
 
-## Contributing
+Clients discover the endpoint through `server.json` under the private runtime directory. A connection must begin with `system.hello` and a server-issued capability. Desktop and interactive CLI clients receive the local control scope; MCP receives a distinct read-only adapter scope; provider children receive an expiring capability bound to one thread and a narrow notification or memory allowlist.
 
-- [GitHub Issues](https://github.com/BoardPandas/Pandamux/issues): bug reports and feature requests
-- [GitHub Discussions](https://github.com/BoardPandas/Pandamux/discussions): questions and ideas
+On Windows, the pipe name contains the current user SID, the pipe DACL grants that user access, remote pipe clients are rejected, and the connecting process ID and image are validated. On Unix, the runtime directory is mode `0700`, sockets and runtime records are mode `0600`, unsafe symlinks or owners are rejected, and peer credentials must match the socket owner.
+
+This is not a hostile same-user sandbox. A malicious process already running as the same OS user can read user-owned files, and a FullAccess provider intentionally has host-user authority. Scoped capabilities protect normal sandboxed and accidental call paths; they do not make FullAccess process-isolated.
+
+## Remote composition
+
+The Hub uses `pandamux-remote` to authenticate over SSH, detect the Linux target, bootstrap verified server and CLI artifacts, and open an exec channel running `pandamux-server proxy`. The proxy connects to the node daemon's private Unix socket and carries versioned requests, responses, cancellation, and replayable events. Node work continues when the laptop disconnects; reconnect resumes from durable sequence cursors.
+
+The narrow R0 artifact harness is [`scripts/r0-node-artifacts.sh`](scripts/r0-node-artifacts.sh). It requires a clean exact commit, builds both node binaries, records sizes and SHA-256 hashes, verifies the result, and keeps publication disabled. It is not the Phase 7 release pipeline.
+
+## Documentation
+
+- [`AGENTS.md`](AGENTS.md): agent routing and repository authority order
+- [`CLAUDE.md`](CLAUDE.md): authoritative development guide
+- [`docs/README.md`](docs/README.md): maintained documentation index
+- [`docs/features/TRUSTED_CONFIGURATION.md`](docs/features/TRUSTED_CONFIGURATION.md): Phase 5B architecture and operations
+- [`docs/features/AGENT_ORCHESTRATION.md`](docs/features/AGENT_ORCHESTRATION.md): Phase 5A and Phase 5C orchestration architecture
+- [`docs/operations/PHASE5B_ACCEPTANCE.md`](docs/operations/PHASE5B_ACCEPTANCE.md): exact Phase 5B evidence and limitations
+- [`docs/operations/PHASE5C_ACCEPTANCE.md`](docs/operations/PHASE5C_ACCEPTANCE.md): exact Phase 5C checkpoints plus local, native, physical, live-provider, controlled-effect, and retained-debt evidence
+- [`tasks/plan-rewrite.md`](tasks/plan-rewrite.md): current implementation and acceptance contract
+- [`tasks/plan-repo.md`](tasks/plan-repo.md): historical rewrite record and retained UI specification
 
 ## License
 
-PandaMUX is open source under the [MIT License](LICENSE). Its socket protocol and design are inspired by cmux; it does not incorporate cmux's source code.
+PandaMUX is licensed under the [MIT License](LICENSE).

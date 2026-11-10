@@ -38,6 +38,7 @@ impl PandamuxClient {
             protocol_version: PROTOCOL_VERSION,
             client_kind: client_kind.to_string(),
             client_version: client_version.to_string(),
+            capability: None,
         };
         let req = RpcRequest::new(
             self.next_id(),

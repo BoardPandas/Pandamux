@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
-use pandamux_protocol::{RpcId, RpcRequest, RpcResponse};
+use pandamux_protocol::{HelloParams, PROTOCOL_VERSION, RpcId, RpcRequest, RpcResponse};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -22,20 +22,47 @@ pub struct IpcClient {
 impl IpcClient {
     /// Connects to `pandamux-server` using the specified or auto-discovered pipe path.
     pub async fn connect(explicit_pipe: Option<&str>) -> Result<Self, String> {
-        let pipe_path = match explicit_pipe {
-            Some(p) => p.to_string(),
-            None => resolve_pipe_path()?,
-        };
+        Self::connect_with_scope(explicit_pipe, false).await
+    }
 
-        let stream: Box<dyn AsyncReadWrite> = connect_stream(&pipe_path).await?;
+    pub async fn connect_mcp(explicit_pipe: Option<&str>) -> Result<Self, String> {
+        Self::connect_with_scope(explicit_pipe, true).await
+    }
+
+    async fn connect_with_scope(
+        explicit_pipe: Option<&str>,
+        mcp_scope: bool,
+    ) -> Result<Self, String> {
+        let (pipe_path, capability, expected_server_pid) =
+            resolve_connection_info(explicit_pipe, mcp_scope)?;
+
+        let stream: Box<dyn AsyncReadWrite> =
+            connect_stream(&pipe_path, expected_server_pid).await?;
         let (reader, writer) = tokio::io::split(stream);
         let lines = BufReader::new(reader).lines();
 
-        Ok(Self {
+        let mut client = Self {
             lines,
             writer,
             next_id: Arc::new(AtomicI64::new(1)),
-        })
+        };
+        if let Some(capability) = capability {
+            let hello = HelloParams {
+                protocol_version: PROTOCOL_VERSION,
+                client_kind: if mcp_scope {
+                    "pandamux-mcp".to_string()
+                } else {
+                    "pandamux-cli".to_string()
+                },
+                client_version: env!("CARGO_PKG_VERSION").to_string(),
+                capability: Some(capability),
+            };
+            let _: Value = client
+                .call_typed("system.hello", &hello)
+                .await
+                .map_err(|error| format!("IPC authentication failed: {error}"))?;
+        }
+        Ok(client)
     }
 
     /// Dispatches an RPC method call and waits for the response.
@@ -143,6 +170,56 @@ pub fn resolve_pipe_path() -> Result<String, String> {
         .ok_or_else(|| "Missing 'pipePath' in server.json".to_string())
 }
 
+fn resolve_connection_info(
+    explicit_pipe: Option<&str>,
+    mcp_scope: bool,
+) -> Result<(String, Option<String>, Option<u32>), String> {
+    if let Ok(capability) = std::env::var("PANDAMUX_CAPABILITY")
+        && !capability.trim().is_empty()
+        && !mcp_scope
+    {
+        let pipe_path = match explicit_pipe {
+            Some(pipe) => pipe.to_string(),
+            None => resolve_pipe_path()?,
+        };
+        return Ok((pipe_path, Some(capability), None));
+    }
+
+    let runtime = get_server_runtime_path()
+        .filter(|path| path.exists())
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|content| serde_json::from_str::<Value>(&content).ok());
+    let pipe_path = explicit_pipe
+        .map(str::to_string)
+        .or_else(|| {
+            runtime
+                .as_ref()
+                .and_then(|value| value.get("pipePath"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .ok_or_else(|| "Missing 'pipePath' in server.json".to_string())?;
+    let matching_runtime = runtime.as_ref().filter(|value| {
+        explicit_pipe.is_none()
+            || value
+                .get("pipePath")
+                .and_then(Value::as_str)
+                .is_some_and(|runtime_pipe| runtime_pipe == pipe_path)
+    });
+    let token_key = if mcp_scope { "mcpToken" } else { "token" };
+    let capability = matching_runtime
+        .and_then(|value| value.get(token_key))
+        .and_then(Value::as_str)
+        .filter(|token| !token.is_empty())
+        .map(str::to_string);
+    let expected_server_pid = matching_runtime
+        .and_then(|value| value.get("pid"))
+        .and_then(Value::as_u64)
+        .and_then(|pid| u32::try_from(pid).ok())
+        .filter(|pid| *pid != 0);
+    Ok((pipe_path, capability, expected_server_pid))
+}
+
 /// Resolves standard location for `server.json`.
 pub fn get_server_runtime_path() -> Option<PathBuf> {
     #[cfg(windows)]
@@ -183,13 +260,21 @@ pub fn get_server_runtime_path() -> Option<PathBuf> {
 }
 
 /// Connects to server IPC (Windows Named Pipe or Unix Domain Socket).
-async fn connect_stream(pipe_path: &str) -> Result<Box<dyn AsyncReadWrite>, String> {
+async fn connect_stream(
+    pipe_path: &str,
+    _expected_server_pid: Option<u32>,
+) -> Result<Box<dyn AsyncReadWrite>, String> {
     #[cfg(windows)]
     {
         use tokio::net::windows::named_pipe::ClientOptions;
         let client = ClientOptions::new()
             .open(pipe_path)
             .map_err(|e| format!("Failed to open named pipe '{pipe_path}': {e}"))?;
+        pandamux_protocol::windows_security::validate_named_pipe_server(
+            &client,
+            _expected_server_pid,
+        )
+        .map_err(|e| format!("Named-pipe server validation failed: {e}"))?;
         Ok(Box::new(client))
     }
 

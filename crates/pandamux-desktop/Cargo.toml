@@ -26,3 +26,6 @@ serde_json.workspace = true
 uuid.workspace = true
 anyhow = "=1.0.103"
 smol = "=2.0.2"
+
+[dev-dependencies]
+gpui-kit = { version = "=0.6.6", features = ["test-support"] }

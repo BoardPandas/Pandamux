@@ -1,28 +1,45 @@
 pub mod antigravity_rpc;
 pub mod attachment_rpc;
+pub mod bundle_rpc;
 pub mod checkpoint_rpc;
 pub mod environment_rpc;
 pub mod fs_rpc;
 pub mod git_rpc;
 pub mod hark_rpc;
+pub mod instructions_rpc;
 pub mod jsonrpc;
 pub mod mcp;
+pub mod mutation_rpc;
+pub mod orchestration_execution;
+pub mod personal_config_rpc;
+pub mod project_layer_rpc;
+pub mod provider_rpc;
+pub mod proxy;
+pub mod schedule_rpc;
 pub mod settings_rpc;
 pub mod subagent_rpc;
 pub mod subscription;
 pub mod system;
 pub mod terminal_rpc;
 pub mod thread_rpc;
+pub mod usage_rpc;
+#[cfg(windows)]
+pub mod windows_security;
 pub mod worktree_rpc;
 
 pub use antigravity_rpc::{
-    AntigravityInstallParams, AntigravityInstallResult, AntigravityOAuthRelayParams,
-    AntigravityOAuthRelayResult, AntigravityOAuthStartParams, AntigravityOAuthStartResult,
-    AntigravityStatusParams, AntigravityStatusResult, ManagedBundleManifest,
+    AntigravityDiscardUploadParams, AntigravityInstallParams, AntigravityInstallResult,
+    AntigravityOAuthRelayParams, AntigravityOAuthRelayResult, AntigravityOAuthStartParams,
+    AntigravityOAuthStartResult, AntigravityPrepareUploadParams, AntigravityPrepareUploadResult,
+    AntigravityStatusParams, AntigravityStatusResult, ManagedBundleFile, ManagedBundleManifest,
 };
 pub use attachment_rpc::{
     AttachmentGetParams, AttachmentGetResult, AttachmentImportPathParams, AttachmentImportResult,
     AttachmentListParams, AttachmentListResult, AttachmentPutChunkParams, AttachmentPutResult,
+};
+pub use bundle_rpc::{
+    BUNDLE_PUSH_SCHEMA_VERSION, BundleDiscardUploadParams, BundlePrepareUploadParams,
+    BundlePrepareUploadResult, BundlePushParams, BundlePushResult,
 };
 pub use checkpoint_rpc::{CheckpointDiffParams, CheckpointListParams, CheckpointRollbackParams};
 pub use environment_rpc::{
@@ -38,10 +55,55 @@ pub use hark_rpc::{
     HarkDictatePromptParams, HarkDictatePromptResult, HarkSpellbookEntry, HarkSpellbookSyncParams,
     HarkSpellbookSyncResult, HarkStatusResult,
 };
+pub use instructions_rpc::{
+    InstructionsApproveParams, InstructionsApproveResult, InstructionsCheckParams,
+    InstructionsCheckResult, InstructionsDiffParams, InstructionsDiffResult,
+    InstructionsHistoryParams, InstructionsHistoryResult, InstructionsProposalResult,
+    InstructionsRevertParams, InstructionsSetPolicyParams, InstructionsSetTrackingParams,
+    InstructionsStatusParams, InstructionsStatusResult,
+};
 pub use jsonrpc::{JSONRPC_VERSION, RpcError, RpcId, RpcRequest, RpcResponse};
 pub use mcp::{McpCallToolParams, McpCallToolResult, McpContentItem, McpToolDefinition};
+pub use mutation_rpc::{
+    MutationGetParams, MutationGetResult, MutationListParams, MutationListResult,
+    MutationResolveParams, MutationResolveResult,
+};
+pub use orchestration_execution::{
+    ORCHESTRATION_EXECUTION_SCHEMA_VERSION, OrchestrationAttemptAckParams,
+    OrchestrationAttemptAckResult, OrchestrationAttemptCancelParams,
+    OrchestrationAttemptCancelResult, OrchestrationAttemptDispatchParams,
+    OrchestrationAttemptEventsParams, OrchestrationAttemptEventsResult,
+    OrchestrationAttemptPrepareParams, OrchestrationAttemptPrepareResult,
+    OrchestrationAttemptReceipt, OrchestrationAttemptStatusParams,
+    OrchestrationAttemptStatusResult, OrchestrationExecutionIdentity,
+    OrchestrationNodeAttemptState, OrchestrationNodeEvent, OrchestrationPreparedExecution,
+    OrchestrationRepositoryPrepareParams, OrchestrationRepositoryPrepareResult,
+};
+pub use personal_config_rpc::{
+    PersonalConfigDiffParams, PersonalConfigDiffResult, PersonalConfigHistoryEntry,
+    PersonalConfigHistoryParams, PersonalConfigHistoryResult, PersonalConfigRevertParams,
+    PersonalConfigRevertResult,
+};
+pub use project_layer_rpc::{
+    ProjectLayerDiffParams, ProjectLayerDiffResult, ProjectLayerProposalResult,
+    ProjectLayerRevokeParams, ProjectLayerStatusParams, ProjectLayerStatusResult,
+    ProjectLayerTrustParams,
+};
+pub use provider_rpc::{
+    ProviderLoginFlow, ProviderLoginGuidance, ProviderLoginLaunchParams, ProviderLoginLaunchResult,
+    ProviderLoginPreview, ProviderLoginPreviewParams,
+};
+pub use proxy::{PROXY_PROTOCOL_VERSION, ProxyMessage};
+pub use schedule_rpc::{
+    ScheduleRunParams, ScheduleRunResult, ScheduleSaveParams, ScheduleValidateParams,
+    ScheduleValidationResult,
+};
 pub use settings_rpc::{
-    ProviderHealthParams, ProviderHealthReport, ProviderHealthResult, SettingsGetParams,
+    DEFAULT_PROVIDER_HEALTH_PAGE_SIZE, DEFAULT_PROVIDER_PROBE_CONCURRENCY,
+    DEFAULT_PROVIDER_PROBE_TIMEOUT_MS, MAX_PROVIDER_HEALTH_PAGE_SIZE,
+    MAX_PROVIDER_PROBE_CONCURRENCY, MAX_PROVIDER_PROBE_TIMEOUT_MS, MIN_PROVIDER_PROBE_TIMEOUT_MS,
+    ProviderHealthParams, ProviderHealthReport, ProviderHealthResult, ProviderModelInfo,
+    ProviderModelsParams, ProviderModelsReport, ProviderModelsResult, SettingsGetParams,
     SettingsGetResult, SettingsSetParams, SettingsSetResult,
 };
 pub use subagent_rpc::{SubAgentTreeItem, SubAgentTreeParams, SubAgentTreeResult};
@@ -56,9 +118,22 @@ pub use terminal_rpc::{
     TerminalOutputEvent, TerminalResizeParams,
 };
 pub use thread_rpc::{
-    ThreadCancelTurnParams, ThreadCreateParams, ThreadGetParams, ThreadGetResult, ThreadListParams,
+    HubRoutingContext, ThreadCancelTurnParams, ThreadContinueParams, ThreadContinueResult,
+    ThreadCreateParams, ThreadGetParams, ThreadGetResult, ThreadListParams,
     ThreadRespondApprovalParams, ThreadResumeParams, ThreadResumeResult, ThreadSendTurnParams,
     ThreadSendTurnResult,
+};
+pub use usage_rpc::{
+    CapacityPushParams, CapacityPushResult, CapacityQueryCursor, CapacityQueryParams,
+    CapacityQueryResult, CapacityRefreshParams, CapacityRefreshResult,
+    DEFAULT_CAPACITY_REFRESH_TIMEOUT_MS, DEFAULT_USAGE_PAGE_SIZE, MAX_CAPACITY_REFRESH_TIMEOUT_MS,
+    MAX_CAPACITY_SNAPSHOTS_PER_PUSH, MAX_USAGE_PAGE_SIZE, RoutingProviderCatalogEntry,
+    UsageAckParams, UsageAckResult, UsageAggregate, UsageBackfillCursor, UsageBackfillItem,
+    UsageBackfillParams, UsageBackfillResult, UsageCatalogResult, UsageCoverage, UsageCoverageGap,
+    UsageEnvironmentSyncCoverage, UsageEnvironmentSyncState, UsageExportItem, UsageExportParams,
+    UsageExportResult, UsageNodeCoverageSnapshot, UsageProviderSubscriptionMapping,
+    UsageQueryCursor, UsageQueryItem, UsageQueryParams, UsageQueryResult, UsageScannerDiagnostic,
+    UsageSourceCoverageState, UsageSubscriptionSetParams,
 };
 pub use worktree_rpc::{WorktreeSyncDeltaParams, WorktreeSyncDeltaResult};
 
@@ -175,6 +250,53 @@ mod tests {
         assert_eq!(parsed.root_agents.len(), 1);
         assert_eq!(parsed.root_agents[0].children.len(), 1);
         assert_eq!(parsed.root_agents[0].children[0].id, "sub-2");
+    }
+
+    #[test]
+    fn trusted_configuration_contracts_round_trip_without_untyped_hashes() {
+        use pandamux_core::{
+            ArchiveSha256, BundleSha, BundleSourceManifest, BundleTransferId,
+            ConfigurationRevision, InstructionSourceId, SourceCommitSha, TrackingRef,
+        };
+
+        let tracking = InstructionsSetTrackingParams {
+            request_id: "request-1".to_string(),
+            source_id: InstructionSourceId::new("instruction-source-test"),
+            tracking: TrackingRef::Commit(
+                SourceCommitSha::parse("a".repeat(40)).expect("commit identity"),
+            ),
+            expected_revision: ConfigurationRevision::new(3).expect("revision"),
+        };
+        let tracking_json = serde_json::to_value(&tracking).expect("serialize tracking");
+        assert_eq!(
+            serde_json::from_value::<InstructionsSetTrackingParams>(tracking_json)
+                .expect("deserialize tracking"),
+            tracking
+        );
+
+        let push = BundlePushParams {
+            schema_version: BUNDLE_PUSH_SCHEMA_VERSION,
+            transfer_id: BundleTransferId::new("bundle-transfer-test"),
+            bundle_sha: BundleSha::parse("b".repeat(64)).expect("bundle identity"),
+            archive_sha256: ArchiveSha256::parse("c".repeat(64)).expect("archive identity"),
+            archive_bytes: 42,
+            source_manifest: BundleSourceManifest {
+                instructions_commit_sha: SourceCommitSha::parse("d".repeat(40))
+                    .expect("source identity"),
+                project_layer_content_sha256: None,
+                personal_commit_sha: None,
+                settings_revision: ConfigurationRevision::new(5).expect("settings revision"),
+            },
+            compiler_version: "test".to_string(),
+            private_artifact_ref: "transfer/test.bundle".to_string(),
+            expected_prior_bundle_sha: None,
+        };
+        let push_json = serde_json::to_value(&push).expect("serialize push");
+        assert!(push_json.get("environmentId").is_none());
+        assert_eq!(
+            serde_json::from_value::<BundlePushParams>(push_json).expect("deserialize push"),
+            push
+        );
     }
 
     #[test]

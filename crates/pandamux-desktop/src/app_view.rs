@@ -2,18 +2,36 @@ use std::collections::HashMap;
 
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::InputState;
+use gpui_kit::component::{Theme as ComponentTheme, ThemeMode as ComponentThemeMode};
 use gpui_kit::gpui::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use pandamux_client::projections::ThreadProjection;
+use pandamux_client::{
+    MutationConfirmationProjection, UsageAction, UsageFilterChange, UsageLoadFailure,
+    UsageViewState,
+};
 use pandamux_core::{
-    AgentId, ApprovalDecision, EnvironmentId, Thread, ThreadEvent, ThreadId, ThreadStatus,
+    AgentId, ApprovalDecision, BundleSha, EnvironmentId, MutationProposalId, ProjectId,
+    SourceCommitSha, Thread, ThreadEvent, ThreadId, ThreadStatus,
 };
 use pandamux_protocol::{
     AttachmentImportPathParams, AttachmentImportResult, AttachmentPutChunkParams,
-    AttachmentPutResult, EventEnvelope, GitCommitParams, GitCommitResult, GitCreatePrParams,
-    GitCreatePrResult, GitPushParams, GitPushResult, GitStatusParams, GitStatusResult,
-    ProviderHealthResult, SettingsGetResult, SettingsSetParams, ThreadCancelTurnParams,
-    ThreadCreateParams, ThreadRespondApprovalParams, ThreadSendTurnParams,
+    AttachmentPutResult, CapacityQueryResult, EventEnvelope, GitCommitParams, GitCommitResult,
+    GitCreatePrParams, GitCreatePrResult, GitPushParams, GitPushResult, GitStatusParams,
+    GitStatusResult, InstructionsApproveParams, InstructionsDiffParams, InstructionsDiffResult,
+    InstructionsHistoryParams, InstructionsHistoryResult, InstructionsRevertParams,
+    InstructionsStatusResult, MutationListParams, MutationListResult, MutationResolveParams,
+    PersonalConfigHistoryParams, PersonalConfigHistoryResult, PersonalConfigRevertParams,
+    ProjectLayerDiffParams, ProjectLayerDiffResult, ProjectLayerRevokeParams,
+    ProjectLayerStatusParams, ProjectLayerStatusResult, ProjectLayerTrustParams,
+    ProviderHealthParams, ProviderHealthResult, ProviderLoginLaunchParams,
+    ProviderLoginLaunchResult, ProviderLoginPreview, ProviderLoginPreviewParams,
+    ProviderModelsParams, ProviderModelsResult, SettingsGetResult, SettingsSetParams,
+    SettingsSetResult, TerminalAttachParams, TerminalAttachResult, TerminalCloseParams,
+    TerminalInputParams, TerminalOpenResult, ThreadCancelTurnParams, ThreadContinueParams,
+    ThreadContinueResult, ThreadCreateParams, ThreadRespondApprovalParams, ThreadSendTurnParams,
+    UsageCatalogResult, UsageQueryResult, UsageSubscriptionSetParams,
 };
 
 use crate::command_palette::{
@@ -26,13 +44,61 @@ use crate::notification::{
 use crate::picker::PickerState;
 use crate::scratchpad::{ScratchpadState, render_scratchpad_window};
 use crate::server_bridge::{ServerBridgeHandle, ServerStatus, spawn_server_bridge};
-use crate::settings_view::{SettingsViewState, render_settings_view};
+use crate::settings_view::{SettingsCategory, SettingsViewState, render_settings_view};
 use crate::sidebar::{RailTab, render_rail, render_sidebar};
-use crate::surfaces_panel::{SurfaceTab, SurfacesPanelState, render_surfaces_panel};
+use crate::surfaces_panel::{
+    SurfaceTab, SurfacesPanelState, TerminalFocusTarget, render_surfaces_panel,
+    terminal_focus_target,
+};
 use crate::theme::{AccentColor, Radii, Spacing, Theme, Typography};
 use crate::timeline::{VirtualizedTimelineState, render_virtualized_timeline};
 use crate::titlebar::CustomTitlebar;
 use crate::tray::SystemTrayState;
+use crate::trusted_configuration_view::TrustedConfigurationIntent;
+use crate::usage_view::{UsageEditorTarget, UsageFilterIntent, render_usage_view};
+
+fn wall_clock_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn trusted_configuration_request_id(kind: &str) -> String {
+    format!("desktop-{kind}-{}", uuid::Uuid::new_v4().simple())
+}
+
+fn decode_rpc_result<T: serde::de::DeserializeOwned>(
+    response: Result<
+        Result<pandamux_protocol::RpcResponse, String>,
+        tokio::sync::oneshot::error::RecvError,
+    >,
+) -> Result<T, String> {
+    let response = response.map_err(|error| error.to_string())??;
+    if let Some(error) = response.error {
+        return Err(error.message);
+    }
+    let value = response
+        .result
+        .ok_or_else(|| "Server returned no result".to_string())?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
+}
+
+fn cycle_value<T: Clone + PartialEq>(current: &Option<T>, mut values: Vec<T>) -> Option<T> {
+    let mut unique = Vec::new();
+    for value in values.drain(..) {
+        if !unique.contains(&value) {
+            unique.push(value);
+        }
+    }
+    match current {
+        None => unique.into_iter().next(),
+        Some(current) => unique
+            .iter()
+            .position(|candidate| candidate == current)
+            .and_then(|index| unique.get(index + 1).cloned()),
+    }
+}
 
 /// The primary application view for PandaMUX Desktop.
 pub struct AppView {
@@ -55,10 +121,27 @@ pub struct AppView {
     pub surfaces_panel: SurfacesPanelState,
     pub scratchpad: ScratchpadState,
     pub system_tray: SystemTrayState,
+    pub usage_view: UsageViewState,
+    pub usage_catalog: UsageCatalogResult,
+    provider_models: ProviderModelsResult,
+    usage_request_generation: u64,
+    trusted_configuration_request_generation: u64,
+    usage_editor_target: Option<UsageEditorTarget>,
+    usage_editor_previous_focus: Option<WeakFocusHandle>,
+    usage_scroll_handle: ScrollHandle,
+    settings_scroll_handle: ScrollHandle,
+    usage_table_focus: FocusHandle,
+    usage_table_scroll_anchor: ScrollAnchor,
+    usage_subscriptions_scroll_anchor: ScrollAnchor,
+    usage_subscription_name_input: Entity<InputState>,
+    usage_account_label_input: Entity<InputState>,
+    terminal_focus: FocusHandle,
+    terminal_poll_generation: u64,
+    focus_terminal_on_render: bool,
 }
 
 impl AppView {
-    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (event_tx, event_rx) = smol::channel::unbounded::<EventEnvelope>();
         let (status_tx, status_rx) = smol::channel::unbounded::<ServerStatus>();
 
@@ -90,6 +173,54 @@ impl AppView {
         })
         .detach();
 
+        let usage_subscription_name_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Work subscription"));
+        let usage_account_label_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("na***@example.com"));
+        let usage_scroll_handle = ScrollHandle::new();
+        let settings_scroll_handle = ScrollHandle::new();
+        let usage_table_focus = cx.focus_handle().tab_stop(true);
+        let terminal_focus = cx.focus_handle().tab_stop(true);
+        // Intercept before focus-path dispatch so F6 can change the terminal's
+        // active-descendant mode even when UI Automation reports the window root.
+        let app_window = window.window_handle();
+        let app_view = cx.weak_entity();
+        cx.intercept_keystrokes(move |event, window, cx| {
+            if window.window_handle() != app_window {
+                return;
+            }
+
+            let _ = app_view.update(cx, |this, cx| {
+                let terminal_is_open = this.surfaces_panel.is_open
+                    && this.surfaces_panel.active_tab == Some(SurfaceTab::Terminal)
+                    && this.surfaces_panel.terminal.is_some();
+                if !terminal_is_open {
+                    return;
+                }
+
+                if let Some(target) = terminal_focus_target(
+                    &event.keystroke,
+                    this.surfaces_panel.terminal_output_mode,
+                ) {
+                    this.surfaces_panel.terminal_output_mode =
+                        target == TerminalFocusTarget::Output;
+                    window.focus(&this.terminal_focus, cx);
+                    cx.notify();
+                    cx.stop_propagation();
+                }
+            });
+        })
+        .detach();
+        let usage_table_scroll_anchor = ScrollAnchor::for_handle(usage_scroll_handle.clone());
+        let usage_subscriptions_scroll_anchor =
+            ScrollAnchor::for_handle(usage_scroll_handle.clone());
+        let table_scroll_anchor = usage_table_scroll_anchor.clone();
+        cx.on_focus(&usage_table_focus, window, move |_this, window, cx| {
+            table_scroll_anchor.scroll_to(window, cx);
+            schedule_post_scroll_refresh(window);
+        })
+        .detach();
+
         let mut app = Self {
             theme: Theme::dark(AccentColor::Teal),
             server_status: ServerStatus::Connecting,
@@ -110,10 +241,28 @@ impl AppView {
             surfaces_panel: SurfacesPanelState::new(),
             scratchpad: ScratchpadState::new(),
             system_tray: SystemTrayState::new(),
+            usage_view: UsageViewState::default(),
+            usage_catalog: UsageCatalogResult::default(),
+            provider_models: ProviderModelsResult::default(),
+            usage_request_generation: 0,
+            trusted_configuration_request_generation: 0,
+            usage_editor_target: None,
+            usage_editor_previous_focus: None,
+            usage_scroll_handle,
+            settings_scroll_handle,
+            usage_table_focus,
+            usage_table_scroll_anchor,
+            usage_subscriptions_scroll_anchor,
+            usage_subscription_name_input,
+            usage_account_label_input,
+            terminal_focus,
+            terminal_poll_generation: 0,
+            focus_terminal_on_render: false,
         };
 
         app.load_settings(cx);
-        app.run_health_checks(cx);
+        app.run_health_checks(None, cx);
+        app.load_usage(cx);
         app
     }
 
@@ -165,6 +314,9 @@ impl AppView {
                         cx,
                     );
                 }
+                pandamux_core::ThreadEventKind::CapacityInterrupted { message, .. } => {
+                    self.notify_user("Capacity Interrupted", message, NotificationLevel::Warn, cx);
+                }
                 pandamux_core::ThreadEventKind::Error { class, message, .. } => {
                     self.notify_user(
                         &format!("Error: {class}"),
@@ -204,7 +356,7 @@ impl AppView {
             "light".to_string()
         };
         self.settings_view.settings.ui.theme = new_theme.clone();
-        self.sync_theme_from_settings();
+        self.sync_theme_from_settings(cx);
         self.notify_user(
             "Theme Updated",
             &format!("Switched to {new_theme} theme"),
@@ -217,7 +369,7 @@ impl AppView {
     /// Updates the accent color and persists.
     pub fn set_accent(&mut self, accent: AccentColor, cx: &mut Context<Self>) {
         self.settings_view.settings.ui.accent = accent.name().to_string();
-        self.sync_theme_from_settings();
+        self.sync_theme_from_settings(cx);
         self.notify_user(
             "Accent Color Updated",
             &format!("Accent color set to {}", accent.name()),
@@ -260,6 +412,9 @@ impl AppView {
         match action {
             CommandAction::SelectRail(tab) => {
                 self.select_rail_tab(tab);
+                if tab == RailTab::Usage {
+                    self.load_usage(cx);
+                }
             }
             CommandAction::ToggleTheme => {
                 self.toggle_theme(cx);
@@ -286,7 +441,7 @@ impl AppView {
                 self.refresh_git_status(cx);
             }
             CommandAction::CheckHealth => {
-                self.run_health_checks(cx);
+                self.run_health_checks(None, cx);
             }
             CommandAction::OpenSettings => {
                 self.select_rail_tab(RailTab::Settings);
@@ -320,14 +475,17 @@ impl AppView {
 
     /// Dispatches create_thread intent to backend server using active picker state.
     pub fn create_default_thread(&mut self, cx: &mut Context<Self>) {
+        let Some((provider_instance_id, model, effort)) = self.selected_picker_route(cx) else {
+            return;
+        };
         let title = format!("Thread #{}", self.thread_order.len() + 1);
         let params = ThreadCreateParams {
             project_id: None,
             environment_id: Some(EnvironmentId::from("env-local")),
             title: Some(title),
-            provider_instance_id: Some(self.picker.provider_instance_id()),
-            model: Some(self.picker.model().to_string()),
-            effort: self.picker.effort.clone(),
+            provider_instance_id: Some(provider_instance_id),
+            model: Some(model),
+            effort,
             access_mode: None,
             agent_id: None,
             cwd: None,
@@ -339,14 +497,17 @@ impl AppView {
 
     /// Dispatches create_thread intent assigned to a specific agent.
     pub fn create_agent_thread(&mut self, agent_id: &'static str, cx: &mut Context<Self>) {
+        let Some((provider_instance_id, model, effort)) = self.selected_picker_route(cx) else {
+            return;
+        };
         let title = format!("Agent: {agent_id} #{}", self.thread_order.len() + 1);
         let params = ThreadCreateParams {
             project_id: None,
             environment_id: Some(EnvironmentId::from("env-local")),
             title: Some(title),
-            provider_instance_id: Some(self.picker.provider_instance_id()),
-            model: Some(self.picker.model().to_string()),
-            effort: self.picker.effort.clone(),
+            provider_instance_id: Some(provider_instance_id),
+            model: Some(model),
+            effort,
             access_mode: None,
             agent_id: Some(AgentId::from(agent_id)),
             cwd: None,
@@ -355,6 +516,31 @@ impl AppView {
 
         self.active_rail_tab = RailTab::Threads;
         self.dispatch_create_thread(params, cx);
+    }
+
+    fn selected_picker_route(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<(pandamux_core::ProviderInstanceId, String, Option<String>)> {
+        let provider_instance_id = self.picker.provider_instance_id();
+        let model = self.picker.model().map(str::to_string);
+        match (provider_instance_id, model) {
+            (Some(provider_instance_id), Some(model)) => {
+                Some((provider_instance_id, model, self.picker.effort.clone()))
+            }
+            _ => {
+                self.active_rail_tab = RailTab::Settings;
+                self.settings_view.active_category =
+                    crate::settings_view::SettingsCategory::Providers;
+                self.settings_view.status_banner = Some((
+                    "No authenticated provider with a discovered model is available. Check provider health or complete login first."
+                        .to_string(),
+                    true,
+                ));
+                cx.notify();
+                None
+            }
+        }
     }
 
     fn dispatch_create_thread(&mut self, params: ThreadCreateParams, cx: &mut Context<Self>) {
@@ -403,8 +589,9 @@ impl AppView {
             thread_id: thread_id.clone(),
             text: effective_text,
             attachment_ids,
-            model: Some(self.picker.model().to_string()),
+            model: self.picker.model().map(str::to_string),
             effort: self.picker.effort.clone(),
+            hub_routing_context: None,
         };
 
         self.composer.clear();
@@ -598,6 +785,54 @@ impl AppView {
         }
     }
 
+    /// Starts the durable continuation offered after unsafe capacity exhaustion.
+    pub fn continue_after_capacity(
+        &mut self,
+        thread_id: ThreadId,
+        continuation_id: String,
+        cx: &mut Context<Self>,
+    ) {
+        let params = ThreadContinueParams {
+            continuation_id: pandamux_core::ContinuationId::new(continuation_id),
+            thread_id: Some(thread_id),
+            provider_instance_id: None,
+            hub_routing_context: None,
+        };
+        let Some(bridge) = &self.bridge else {
+            self.notify_user(
+                "Continuation unavailable",
+                "The server bridge is unavailable.",
+                NotificationLevel::Error,
+                cx,
+            );
+            return;
+        };
+        let rx = bridge.send_request(
+            "thread.continue_capacity",
+            serde_json::to_value(&params).ok(),
+        );
+        cx.spawn(async move |this, cx| {
+            let result = decode_rpc_result::<ThreadContinueResult>(rx.await);
+            cx.update(|cx| {
+                let _ = this.update(cx, |this: &mut AppView, cx| match result {
+                    Ok(_) => this.notify_user(
+                        "Continuation started",
+                        "A fresh provider session is continuing from the saved checkpoint.",
+                        NotificationLevel::Info,
+                        cx,
+                    ),
+                    Err(error) => this.notify_user(
+                        "Continuation failed",
+                        &error,
+                        NotificationLevel::Error,
+                        cx,
+                    ),
+                });
+            });
+        })
+        .detach();
+    }
+
     /// Cancels or interrupts the active turn.
     pub fn cancel_turn(&mut self, thread_id: ThreadId, _cx: &mut Context<Self>) {
         let params = ThreadCancelTurnParams {
@@ -628,7 +863,20 @@ impl AppView {
 
     /// Toggles the visibility of the right-side surfaces panel.
     pub fn toggle_surfaces_panel(&mut self, cx: &mut Context<Self>) {
-        self.surfaces_panel.toggle_open();
+        if self.active_rail_tab == RailTab::Usage {
+            self.active_rail_tab = RailTab::Threads;
+            self.surfaces_panel.is_open = true;
+        } else {
+            self.surfaces_panel.toggle_open();
+        }
+        if self.surfaces_panel.is_open
+            && self.surfaces_panel.active_tab == Some(SurfaceTab::Terminal)
+        {
+            self.focus_terminal_on_render = true;
+            self.start_surface_terminal_poll(cx);
+        } else if !self.surfaces_panel.is_open {
+            self.terminal_poll_generation = self.terminal_poll_generation.wrapping_add(1);
+        }
         cx.notify();
     }
 
@@ -645,36 +893,297 @@ impl AppView {
         if tab == Some(SurfaceTab::Files) {
             self.load_surface_files(cx);
         } else if tab == Some(SurfaceTab::Terminal) {
+            self.focus_terminal_on_render = true;
             self.ensure_surface_terminal(cx);
+        } else {
+            self.terminal_poll_generation = self.terminal_poll_generation.wrapping_add(1);
         }
+        cx.notify();
+    }
+
+    fn set_terminal_focus_target(
+        &mut self,
+        target: TerminalFocusTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.surfaces_panel.terminal_output_mode = target == TerminalFocusTarget::Output;
+        window.focus(&self.terminal_focus, cx);
         cx.notify();
     }
 
     /// Ensures a terminal session view state exists when the Terminal surface is opened.
     pub fn ensure_surface_terminal(&mut self, cx: &mut Context<Self>) {
-        if self.surfaces_panel.terminal.is_none() {
-            let (cwd, env_id) = self
-                .active_thread_id
-                .as_ref()
-                .and_then(|tid| self.thread_projections.get(tid))
-                .map(|p| {
-                    (
-                        p.thread.workspace.effective_path().to_string(),
-                        Some(p.thread.environment_id.clone()),
-                    )
-                })
-                .unwrap_or_else(|| (".".to_string(), None));
-            let term_id = format!("term-{}", &uuid::Uuid::new_v4().to_string()[..8]);
-            let term = crate::terminal_view::TerminalViewState::new_with_env(
-                term_id, cwd, 30, 120, env_id,
-            );
-            if let Some(ref tid) = self.active_thread_id {
-                self.surfaces_panel
-                    .set_terminal_for_thread(tid.as_str(), term.clone());
-            }
-            self.surfaces_panel.set_terminal(term);
-            cx.notify();
+        if self.surfaces_panel.terminal.is_some() {
+            self.start_surface_terminal_poll(cx);
+            return;
         }
+
+        let (cwd, env_id) = self
+            .active_thread_id
+            .as_ref()
+            .and_then(|tid| self.thread_projections.get(tid))
+            .map(|projection| {
+                (
+                    projection.thread.workspace.effective_path().to_string(),
+                    Some(projection.thread.environment_id.clone()),
+                )
+            })
+            .unwrap_or_else(|| (".".to_string(), None));
+        let terminal_id = format!("term-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let mut terminal = crate::terminal_view::TerminalViewState::new_with_env(
+            terminal_id.clone(),
+            cwd,
+            30,
+            120,
+            env_id,
+        );
+        terminal.is_attached = false;
+        terminal.is_running = false;
+        let open_params = terminal.build_open_params();
+        if let Some(ref thread_id) = self.active_thread_id {
+            self.surfaces_panel
+                .set_terminal_for_thread(thread_id.as_str(), terminal.clone());
+        }
+        self.surfaces_panel.set_terminal(terminal);
+
+        let Some(bridge) = &self.bridge else {
+            if let Some(terminal) = self.surfaces_panel.terminal_mut() {
+                terminal.set_error("Server bridge is unavailable");
+            }
+            cx.notify();
+            return;
+        };
+        let rx = bridge.send_request("terminal.open", serde_json::to_value(open_params).ok());
+        cx.spawn(async move |this, cx| {
+            let result = decode_rpc_result::<TerminalOpenResult>(rx.await);
+            let _ = this.update(cx, |app, cx| {
+                let is_current = app
+                    .surfaces_panel
+                    .terminal
+                    .as_ref()
+                    .is_some_and(|terminal| terminal.terminal_id == terminal_id);
+                if !is_current {
+                    return;
+                }
+                match result {
+                    Ok(opened) => {
+                        if let Some(terminal) = app.surfaces_panel.terminal_mut() {
+                            terminal.cwd = opened.cwd;
+                            terminal.resize(opened.rows, opened.cols);
+                            terminal.is_attached = true;
+                            terminal.is_running = true;
+                            terminal.error = None;
+                        }
+                        app.start_surface_terminal_poll(cx);
+                    }
+                    Err(message) => {
+                        if let Some(terminal) = app.surfaces_panel.terminal_mut() {
+                            terminal.set_error(format!("Could not open terminal: {message}"));
+                        }
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn start_surface_terminal_poll(&mut self, cx: &mut Context<Self>) {
+        let Some(terminal) = self.surfaces_panel.terminal.as_ref() else {
+            return;
+        };
+        let terminal_id = terminal.terminal_id.clone();
+        let Some(command_tx) = self
+            .bridge
+            .as_ref()
+            .and_then(|bridge| bridge.request_sender())
+        else {
+            if let Some(terminal) = self.surfaces_panel.terminal_mut() {
+                terminal.set_error("Server bridge is unavailable");
+            }
+            cx.notify();
+            return;
+        };
+
+        self.terminal_poll_generation = self.terminal_poll_generation.wrapping_add(1);
+        let generation = self.terminal_poll_generation;
+        let command_tx = Some(command_tx);
+        cx.spawn(async move |this, cx| {
+            let mut delay = std::time::Duration::from_millis(50);
+            loop {
+                smol::Timer::after(delay).await;
+                let params = match this.update(cx, |app, _cx| {
+                    if app.terminal_poll_generation != generation
+                        || !app.surfaces_panel.is_open
+                        || app.surfaces_panel.active_tab != Some(SurfaceTab::Terminal)
+                    {
+                        return None;
+                    }
+                    app.surfaces_panel
+                        .terminal
+                        .as_ref()
+                        .filter(|terminal| terminal.terminal_id == terminal_id)
+                        .map(|terminal| TerminalAttachParams {
+                            terminal_id: terminal.terminal_id.clone(),
+                            since_offset: Some(terminal.attached_offset),
+                        })
+                }) {
+                    Ok(Some(params)) => params,
+                    _ => break,
+                };
+
+                let rx = crate::server_bridge::send_request_channel(
+                    &command_tx,
+                    "terminal.attach",
+                    serde_json::to_value(params).ok(),
+                );
+                let result = decode_rpc_result::<TerminalAttachResult>(rx.await);
+                let received_output = result.as_ref().is_ok_and(|result| !result.data.is_empty());
+                let update = this.update(cx, |app, cx| {
+                    let is_current = app.terminal_poll_generation == generation
+                        && app
+                            .surfaces_panel
+                            .terminal
+                            .as_ref()
+                            .is_some_and(|terminal| terminal.terminal_id == terminal_id);
+                    if !is_current {
+                        return (false, None);
+                    }
+
+                    let resize_nudge = match result {
+                        Ok(result) => app.surfaces_panel.terminal_mut().and_then(|terminal| {
+                            if terminal.apply_attach_result(&result) {
+                                Some(terminal.create_resize_nudge())
+                            } else {
+                                None
+                            }
+                        }),
+                        Err(message) => {
+                            if let Some(terminal) = app.surfaces_panel.terminal_mut() {
+                                terminal
+                                    .set_error(format!("Could not refresh terminal: {message}"));
+                            }
+                            None
+                        }
+                    };
+                    cx.notify();
+                    let keep_polling = app.surfaces_panel.is_open
+                        && app.surfaces_panel.active_tab == Some(SurfaceTab::Terminal);
+                    (keep_polling, resize_nudge)
+                });
+                let Ok((keep_polling, resize_nudge)) = update else {
+                    break;
+                };
+                if let Some((shrink, restore)) = resize_nudge {
+                    for resize in [shrink, restore] {
+                        let response = crate::server_bridge::send_request_channel(
+                            &command_tx,
+                            "terminal.resize",
+                            serde_json::to_value(resize).ok(),
+                        );
+                        drop(response);
+                    }
+                }
+                if !keep_polling {
+                    break;
+                }
+
+                delay = if received_output {
+                    std::time::Duration::from_millis(50)
+                } else {
+                    (delay * 2).min(std::time::Duration::from_secs(1))
+                };
+            }
+        })
+        .detach();
+    }
+
+    pub fn send_surface_terminal_input(&mut self, data: String, cx: &mut Context<Self>) {
+        let Some(params) =
+            self.surfaces_panel
+                .terminal
+                .as_ref()
+                .map(|terminal| TerminalInputParams {
+                    terminal_id: terminal.terminal_id.clone(),
+                    data,
+                })
+        else {
+            return;
+        };
+        let terminal_id = params.terminal_id.clone();
+        let Some(bridge) = &self.bridge else {
+            if let Some(terminal) = self.surfaces_panel.terminal_mut() {
+                terminal.set_error("Server bridge is unavailable");
+            }
+            cx.notify();
+            return;
+        };
+        let rx = bridge.send_request("terminal.input", serde_json::to_value(params).ok());
+        cx.spawn(async move |this, cx| {
+            let result = decode_rpc_result::<serde_json::Value>(rx.await);
+            let _ = this.update(cx, |app, cx| {
+                if let Err(message) = result
+                    && let Some(terminal) = app
+                        .surfaces_panel
+                        .terminal_mut()
+                        .filter(|terminal| terminal.terminal_id == terminal_id)
+                {
+                    terminal.set_error(format!("Could not send terminal input: {message}"));
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub fn close_surface_terminal(&mut self, cx: &mut Context<Self>) {
+        let Some(terminal_id) = self
+            .surfaces_panel
+            .terminal
+            .as_ref()
+            .map(|terminal| terminal.terminal_id.clone())
+        else {
+            return;
+        };
+        let Some(bridge) = &self.bridge else {
+            if let Some(terminal) = self.surfaces_panel.terminal_mut() {
+                terminal.set_error("Server bridge is unavailable");
+            }
+            cx.notify();
+            return;
+        };
+        self.terminal_poll_generation = self.terminal_poll_generation.wrapping_add(1);
+        let rx = bridge.send_request(
+            "terminal.close",
+            serde_json::to_value(TerminalCloseParams {
+                terminal_id: terminal_id.clone(),
+            })
+            .ok(),
+        );
+        cx.spawn(async move |this, cx| {
+            let result = decode_rpc_result::<serde_json::Value>(rx.await);
+            let _ = this.update(cx, |app, cx| {
+                match result {
+                    Ok(_) => {
+                        app.surfaces_panel.clear_terminal(&terminal_id);
+                        app.surfaces_panel.set_active_tab(None, None);
+                    }
+                    Err(message) => {
+                        if let Some(terminal) = app
+                            .surfaces_panel
+                            .terminal_mut()
+                            .filter(|terminal| terminal.terminal_id == terminal_id)
+                        {
+                            terminal.set_error(format!("Could not close terminal: {message}"));
+                        }
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Selects a file in the Files surface and reads its content under root confinement.
@@ -809,7 +1318,7 @@ impl AppView {
     }
 
     /// Synchronizes the active GPUI Theme from the loaded user settings.
-    pub fn sync_theme_from_settings(&mut self) {
+    pub fn sync_theme_from_settings(&mut self, cx: &mut Context<Self>) {
         let accent = match self.settings_view.settings.ui.accent.as_str() {
             "gold" => AccentColor::Gold,
             "blue" => AccentColor::Blue,
@@ -822,6 +1331,15 @@ impl AppView {
         } else {
             Theme::dark(accent)
         };
+        ComponentTheme::change(
+            if is_light {
+                ComponentThemeMode::Light
+            } else {
+                ComponentThemeMode::Dark
+            },
+            None,
+            cx,
+        );
     }
 
     /// Loads settings from the server daemon.
@@ -835,13 +1353,709 @@ impl AppView {
                 {
                     let _ = this.update(cx, |app, cx| {
                         app.settings_view.settings = res.settings;
-                        app.sync_theme_from_settings();
+                        app.settings_view.settings_revision = res.revision;
+                        app.synchronize_picker();
+                        app.sync_theme_from_settings(cx);
                         cx.notify();
                     });
                 }
             })
             .detach();
         }
+    }
+
+    fn active_project_id(&self) -> Option<ProjectId> {
+        self.active_thread_id
+            .as_ref()
+            .and_then(|thread_id| self.thread_projections.get(thread_id))
+            .and_then(|projection| projection.thread.project_id.clone())
+    }
+
+    /// Loads the complete trusted configuration review projection. The base
+    /// requests are dispatched together, then exact candidate and project diffs
+    /// are requested only for the identities returned by the server.
+    pub fn load_trusted_configuration(&mut self, cx: &mut Context<Self>) {
+        self.trusted_configuration_request_generation = self
+            .trusted_configuration_request_generation
+            .wrapping_add(1);
+        let request_generation = self.trusted_configuration_request_generation;
+        self.settings_view.trusted_configuration.is_loading = true;
+        let Some(bridge) = &self.bridge else {
+            self.settings_view.trusted_configuration.is_loading = false;
+            self.settings_view.trusted_configuration.status_message =
+                Some("Server bridge is unavailable".to_string());
+            cx.notify();
+            return;
+        };
+
+        let request_sender = bridge.request_sender();
+        let project_id = self.active_project_id();
+        let status_rx = bridge.send_request("instructions.status", None);
+        let history_rx = bridge.send_request(
+            "instructions.history",
+            serde_json::to_value(InstructionsHistoryParams {
+                before_at_ms: None,
+                limit: Some(50),
+            })
+            .ok(),
+        );
+        let personal_rx = bridge.send_request(
+            "personalConfig.history",
+            serde_json::to_value(PersonalConfigHistoryParams {
+                before_source_commit_sha: None,
+                limit: Some(50),
+            })
+            .ok(),
+        );
+        let mutations_rx = bridge.send_request(
+            "mutation.list",
+            serde_json::to_value(MutationListParams {
+                include_terminal: true,
+                before_created_at_ms: None,
+                limit: Some(50),
+            })
+            .ok(),
+        );
+        let project_rx = project_id.as_ref().map(|project_id| {
+            bridge.send_request(
+                "projectLayer.status",
+                serde_json::to_value(ProjectLayerStatusParams {
+                    project_id: project_id.clone(),
+                })
+                .ok(),
+            )
+        });
+
+        cx.spawn(async move |this, cx| {
+            let status = decode_rpc_result::<InstructionsStatusResult>(status_rx.await);
+            let history = decode_rpc_result::<InstructionsHistoryResult>(history_rx.await);
+            let personal = decode_rpc_result::<PersonalConfigHistoryResult>(personal_rx.await);
+            let mutations = decode_rpc_result::<MutationListResult>(mutations_rx.await);
+            let project = match project_rx {
+                Some(rx) => decode_rpc_result::<ProjectLayerStatusResult>(rx.await).map(Some),
+                None => Ok(None),
+            };
+
+            let candidate_diff = match status
+                .as_ref()
+                .ok()
+                .and_then(|result| result.candidate.as_ref())
+            {
+                Some(candidate) => {
+                    let rx = crate::server_bridge::send_request_channel(
+                        &request_sender,
+                        "instructions.diff",
+                        serde_json::to_value(InstructionsDiffParams {
+                            candidate_id: candidate.id.clone(),
+                        })
+                        .ok(),
+                    );
+                    decode_rpc_result::<InstructionsDiffResult>(rx.await).map(Some)
+                }
+                None => Ok(None),
+            };
+            let project_diff = match project
+                .as_ref()
+                .ok()
+                .and_then(|result| result.as_ref())
+                .and_then(|result| result.project_content_sha256.as_ref())
+                .zip(project_id.as_ref())
+            {
+                Some((project_content_sha256, project_id)) => {
+                    let rx = crate::server_bridge::send_request_channel(
+                        &request_sender,
+                        "projectLayer.diff",
+                        serde_json::to_value(ProjectLayerDiffParams {
+                            project_id: project_id.clone(),
+                            project_content_sha256: project_content_sha256.clone(),
+                        })
+                        .ok(),
+                    );
+                    decode_rpc_result::<ProjectLayerDiffResult>(rx.await).map(Some)
+                }
+                None => Ok(None),
+            };
+
+            let mut failures = Vec::new();
+            if let Err(error) = &status {
+                failures.push(error.clone());
+            }
+            if let Err(error) = &history {
+                failures.push(error.clone());
+            }
+            if let Err(error) = &personal {
+                failures.push(error.clone());
+            }
+            if let Err(error) = &mutations {
+                failures.push(error.clone());
+            }
+            if let Err(error) = &project {
+                failures.push(error.clone());
+            }
+            if let Err(error) = &candidate_diff {
+                failures.push(error.clone());
+            }
+            if let Err(error) = &project_diff {
+                failures.push(error.clone());
+            }
+
+            let _ = this.update(cx, |app, cx| {
+                if app.trusted_configuration_request_generation != request_generation {
+                    return;
+                }
+                let projection = &mut app.settings_view.trusted_configuration;
+                match status {
+                    Ok(result) => {
+                        projection.source = result.source;
+                        projection.candidate = result.candidate;
+                    }
+                    Err(_) => {
+                        projection.source = None;
+                        projection.candidate = None;
+                    }
+                }
+                match history {
+                    Ok(result) => projection.configuration_history = result.entries,
+                    Err(_) => projection.configuration_history.clear(),
+                }
+                match personal {
+                    Ok(result) => {
+                        projection.personal_head_source_commit_sha =
+                            Some(result.head_source_commit_sha);
+                        projection.personal_revision = Some(result.revision);
+                        projection.personal_history = result.entries;
+                    }
+                    Err(_) => {
+                        projection.personal_head_source_commit_sha = None;
+                        projection.personal_revision = None;
+                        projection.personal_history.clear();
+                    }
+                }
+                match mutations {
+                    Ok(result) => {
+                        let now_ms = wall_clock_ms();
+                        projection.confirmations = result
+                            .proposals
+                            .iter()
+                            .map(|proposal| {
+                                MutationConfirmationProjection::from_proposal(proposal, now_ms)
+                            })
+                            .collect();
+                    }
+                    Err(_) => projection.confirmations.clear(),
+                }
+                match project {
+                    Ok(Some(result)) => {
+                        projection.repository = Some(result.repository);
+                        projection.project_content_sha256 = result.project_content_sha256;
+                        projection.project_trust = result.trust;
+                        projection.project_visible_but_inactive = result.visible_but_inactive;
+                    }
+                    Ok(None) | Err(_) => {
+                        projection.repository = None;
+                        projection.project_content_sha256 = None;
+                        projection.project_trust = None;
+                        projection.project_visible_but_inactive = false;
+                    }
+                }
+                match candidate_diff {
+                    Ok(result) => projection.candidate_diff = result,
+                    Err(_) => projection.candidate_diff = None,
+                }
+                match project_diff {
+                    Ok(result) => projection.project_diff = result,
+                    Err(_) => projection.project_diff = None,
+                }
+                projection.is_loading = false;
+                projection.status_message = if failures.is_empty() {
+                    Some("Trusted configuration status is current".to_string())
+                } else {
+                    Some(format!(
+                        "Trusted configuration loaded partially: {}",
+                        failures[0]
+                    ))
+                };
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Dispatches one explicit trusted configuration action. Every mutating
+    /// request carries the exact displayed identity and expected revision.
+    pub fn handle_trusted_configuration_intent(
+        &mut self,
+        intent: TrustedConfigurationIntent,
+        cx: &mut Context<Self>,
+    ) {
+        if intent == TrustedConfigurationIntent::Refresh {
+            self.load_trusted_configuration(cx);
+            return;
+        }
+        if self.settings_view.trusted_configuration.is_loading {
+            self.settings_view.trusted_configuration.status_message =
+                Some("Wait for the current trusted configuration refresh to finish".to_string());
+            cx.notify();
+            return;
+        }
+        let Some(bridge) = &self.bridge else {
+            self.settings_view.trusted_configuration.status_message =
+                Some("Server bridge is unavailable".to_string());
+            cx.notify();
+            return;
+        };
+
+        let projection = &self.settings_view.trusted_configuration;
+        let action = match intent {
+            TrustedConfigurationIntent::Refresh => unreachable!(),
+            TrustedConfigurationIntent::ApproveMutation(proposal_id) => Ok((
+                "mutation.approveOnce",
+                serde_json::to_value(MutationResolveParams {
+                    proposal_id: MutationProposalId::new(proposal_id),
+                }),
+                "Configuration proposal approved once".to_string(),
+            )),
+            TrustedConfigurationIntent::RejectMutation(proposal_id) => Ok((
+                "mutation.reject",
+                serde_json::to_value(MutationResolveParams {
+                    proposal_id: MutationProposalId::new(proposal_id),
+                }),
+                "Configuration proposal rejected".to_string(),
+            )),
+            TrustedConfigurationIntent::ApproveCandidate => {
+                match (
+                    self.active_project_id(),
+                    projection.source.as_ref(),
+                    projection.candidate.as_ref(),
+                ) {
+                    (Some(project_id), Some(source), Some(candidate)) => Ok((
+                        "instructions.approve",
+                        serde_json::to_value(InstructionsApproveParams {
+                            request_id: trusted_configuration_request_id("candidate-approval"),
+                            project_id,
+                            candidate_id: candidate.id.clone(),
+                            observed_source_commit_sha: candidate
+                                .observed_source_commit_sha
+                                .clone(),
+                            diff_digest: candidate.diff_digest.clone(),
+                            expected_revision: source.revision,
+                        }),
+                        "Exact instructions candidate activated".to_string(),
+                    )),
+                    _ => Err(
+                        "Candidate approval requires an active project and current source status"
+                            .to_string(),
+                    ),
+                }
+            }
+            TrustedConfigurationIntent::TrustProject => match (
+                self.active_project_id(),
+                projection.repository.as_ref(),
+                projection.project_content_sha256.as_ref(),
+            ) {
+                (Some(project_id), Some(repository), Some(project_content_sha256)) => Ok((
+                    "projectLayer.trust",
+                    serde_json::to_value(ProjectLayerTrustParams {
+                        request_id: trusted_configuration_request_id("project-trust"),
+                        project_id,
+                        project_content_sha256: project_content_sha256.clone(),
+                        expected_revision: repository.revision,
+                    }),
+                    "Exact project trust proposal created".to_string(),
+                )),
+                _ => Err("Current project content is unavailable for trust".to_string()),
+            },
+            TrustedConfigurationIntent::RevokeProject => {
+                match (self.active_project_id(), projection.repository.as_ref()) {
+                    (Some(project_id), Some(repository)) => Ok((
+                        "projectLayer.revoke",
+                        serde_json::to_value(ProjectLayerRevokeParams {
+                            request_id: trusted_configuration_request_id("project-revoke"),
+                            project_id,
+                            expected_revision: repository.revision,
+                        }),
+                        "Project trust revocation proposal created".to_string(),
+                    )),
+                    _ => Err("Current project trust is unavailable for revocation".to_string()),
+                }
+            }
+            TrustedConfigurationIntent::RevertPersonal(target) => match (
+                SourceCommitSha::parse(target),
+                projection.personal_head_source_commit_sha.as_ref(),
+                projection.personal_revision,
+            ) {
+                (Ok(target_source_commit_sha), Some(head), Some(revision)) => Ok((
+                    "personalConfig.revert",
+                    serde_json::to_value(PersonalConfigRevertParams {
+                        request_id: trusted_configuration_request_id("personal-revert"),
+                        target_source_commit_sha,
+                        expected_source_commit_sha: head.clone(),
+                        expected_revision: revision,
+                    }),
+                    "Personal configuration revert proposal created".to_string(),
+                )),
+                _ => Err("Current personal configuration identity is unavailable".to_string()),
+            },
+            TrustedConfigurationIntent::RevertBundle(bundle) => {
+                match (BundleSha::parse(bundle), projection.source.as_ref()) {
+                    (Ok(bundle_sha), Some(source)) => Ok((
+                        "instructions.revert",
+                        serde_json::to_value(InstructionsRevertParams {
+                            request_id: trusted_configuration_request_id("bundle-revert"),
+                            source_id: source.id.clone(),
+                            bundle_sha,
+                            expected_revision: source.revision,
+                        }),
+                        "Bundle reactivation proposal created".to_string(),
+                    )),
+                    _ => Err(
+                        "Current instructions source or bundle identity is unavailable".to_string(),
+                    ),
+                }
+            }
+        };
+
+        let (method, params, success_message) = match action {
+            Ok((method, Ok(params), success_message)) => (method, params, success_message),
+            Ok((_method, Err(error), _success_message)) => {
+                self.settings_view.trusted_configuration.status_message = Some(format!(
+                    "Could not encode trusted configuration action: {error}"
+                ));
+                cx.notify();
+                return;
+            }
+            Err(message) => {
+                self.settings_view.trusted_configuration.status_message = Some(message);
+                cx.notify();
+                return;
+            }
+        };
+        self.settings_view.trusted_configuration.is_loading = true;
+        let rx = bridge.send_request(method, Some(params));
+        cx.spawn(async move |this, cx| {
+            let result = decode_rpc_result::<serde_json::Value>(rx.await);
+            let _ = this.update(cx, |app, cx| {
+                app.settings_view.trusted_configuration.is_loading = false;
+                app.settings_view.trusted_configuration.status_message = Some(match result {
+                    Ok(_) => success_message,
+                    Err(message) => message,
+                });
+                app.load_trusted_configuration(cx);
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn synchronize_picker(&mut self) {
+        self.picker.synchronize(
+            &self.settings_view.settings,
+            &self.settings_view.health_reports,
+            &self.provider_models.reports,
+        );
+    }
+
+    /// Loads bounded, non-interactive model discovery for configured provider
+    /// instances. A failed discovery leaves that instance out of the composer
+    /// instead of offering a fabricated or stale model.
+    pub fn load_provider_models(&mut self, cx: &mut Context<Self>) {
+        let Some(bridge) = &self.bridge else {
+            return;
+        };
+        let rx = bridge.send_request(
+            "provider.models",
+            serde_json::to_value(ProviderModelsParams::default()).ok(),
+        );
+        cx.spawn(async move |this, cx| {
+            let result = decode_rpc_result::<ProviderModelsResult>(rx.await);
+            let _ = this.update(cx, |app, cx| {
+                if let Ok(result) = result {
+                    app.provider_models = result;
+                    app.synchronize_picker();
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Loads the Usage projection and its display catalog through independent,
+    /// read-only RPCs. Requests are dispatched together so sequential awaits do
+    /// not serialize server work.
+    pub fn load_usage(&mut self, cx: &mut Context<Self>) {
+        self.usage_request_generation = self.usage_request_generation.wrapping_add(1);
+        let request_generation = self.usage_request_generation;
+        self.usage_view.reduce(UsageAction::LoadStarted);
+        let Some(bridge) = &self.bridge else {
+            self.usage_view.reduce(UsageAction::LoadFailed {
+                kind: UsageLoadFailure::Offline,
+                message: "Server bridge is unavailable".to_string(),
+            });
+            cx.notify();
+            return;
+        };
+        let usage_rx = bridge.send_request(
+            "usage.query",
+            serde_json::to_value(self.usage_view.filters.to_query_params()).ok(),
+        );
+        let capacity_rx = bridge.send_request(
+            "capacity.query",
+            serde_json::to_value(self.usage_view.filters.to_capacity_params()).ok(),
+        );
+        let catalog_rx = bridge.send_request("usage.catalog", None);
+        cx.spawn(async move |this, cx| {
+            let usage = decode_rpc_result::<UsageQueryResult>(usage_rx.await);
+            let capacity = decode_rpc_result::<CapacityQueryResult>(capacity_rx.await);
+            let catalog = decode_rpc_result::<UsageCatalogResult>(catalog_rx.await);
+            let _ = this.update(cx, |app, cx| {
+                if app.usage_request_generation != request_generation {
+                    return;
+                }
+                match (usage, capacity, catalog) {
+                    (Ok(usage), Ok(capacity), Ok(catalog)) => {
+                        app.usage_catalog = catalog;
+                        app.usage_view.reduce(UsageAction::Loaded {
+                            usage: Box::new(usage),
+                            capacity: Box::new(capacity),
+                            now_ms: wall_clock_ms(),
+                        });
+                    }
+                    (usage, capacity, catalog) => {
+                        let message = usage
+                            .err()
+                            .or_else(|| capacity.err())
+                            .or_else(|| catalog.err())
+                            .unwrap_or_else(|| "Usage request failed".to_string());
+                        let kind = if matches!(
+                            app.server_status,
+                            ServerStatus::Disconnected
+                                | ServerStatus::Connecting
+                                | ServerStatus::Failed(_)
+                        ) {
+                            UsageLoadFailure::Offline
+                        } else {
+                            UsageLoadFailure::Server
+                        };
+                        app.usage_view
+                            .reduce(UsageAction::LoadFailed { kind, message });
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    pub fn cycle_usage_filter(&mut self, intent: UsageFilterIntent, cx: &mut Context<Self>) {
+        let change = match intent {
+            UsageFilterIntent::Date => {
+                if self.usage_view.filters.from_ms.is_some() {
+                    UsageFilterChange::DateRange {
+                        from_ms: None,
+                        to_ms: None,
+                    }
+                } else {
+                    UsageFilterChange::DateRange {
+                        from_ms: Some(wall_clock_ms().saturating_sub(7 * 24 * 60 * 60 * 1_000)),
+                        to_ms: None,
+                    }
+                }
+            }
+            UsageFilterIntent::Environment => UsageFilterChange::Environment(cycle_value(
+                &self.usage_view.filters.environment_id,
+                self.settings_view
+                    .settings
+                    .environments
+                    .iter()
+                    .map(|environment| environment.id.clone())
+                    .chain(
+                        self.usage_view
+                            .filter_options
+                            .environment_ids
+                            .iter()
+                            .cloned(),
+                    )
+                    .collect(),
+            )),
+            UsageFilterIntent::Provider => UsageFilterChange::Provider(cycle_value(
+                &self.usage_view.filters.provider,
+                self.usage_catalog
+                    .subscriptions
+                    .iter()
+                    .map(|subscription| subscription.provider.clone())
+                    .chain(self.usage_view.filter_options.providers.iter().cloned())
+                    .collect(),
+            )),
+            UsageFilterIntent::Subscription => UsageFilterChange::Subscription(cycle_value(
+                &self.usage_view.filters.subscription_key,
+                self.usage_catalog
+                    .subscriptions
+                    .iter()
+                    .map(|subscription| subscription.key.clone())
+                    .chain(
+                        self.usage_view
+                            .filter_options
+                            .subscription_keys
+                            .iter()
+                            .cloned(),
+                    )
+                    .collect(),
+            )),
+            UsageFilterIntent::Agent => UsageFilterChange::Agent(cycle_value(
+                &self.usage_view.filters.agent_id,
+                self.usage_view.filter_options.agent_ids.clone(),
+            )),
+            UsageFilterIntent::Schedule => UsageFilterChange::Schedule(cycle_value(
+                &self.usage_view.filters.schedule_id,
+                self.usage_view.filter_options.schedule_ids.clone(),
+            )),
+            UsageFilterIntent::Model => UsageFilterChange::Model(cycle_value(
+                &self.usage_view.filters.model,
+                self.usage_view.filter_options.models.clone(),
+            )),
+            UsageFilterIntent::Source => UsageFilterChange::Source(cycle_value(
+                &self.usage_view.filters.source_kind,
+                self.usage_view.filter_options.source_kinds.clone(),
+            )),
+        };
+        self.usage_view.reduce(UsageAction::SetFilter(change));
+        self.load_usage(cx);
+    }
+
+    pub fn clear_usage_filters(&mut self, cx: &mut Context<Self>) {
+        self.usage_view.reduce(UsageAction::ClearFilters);
+        self.load_usage(cx);
+    }
+
+    pub fn begin_usage_subscription_edit(
+        &mut self,
+        target: UsageEditorTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.usage_editor_previous_focus = window.focused(cx).map(|handle| handle.downgrade());
+        let subscription = target.subscription_key.as_ref().and_then(|key| {
+            self.usage_catalog
+                .subscriptions
+                .iter()
+                .find(|subscription| &subscription.key == key)
+        });
+        let default_name = subscription
+            .map(|subscription| subscription.display_name.clone())
+            .unwrap_or_else(|| target.provider_display_name.clone());
+        let account_label = subscription
+            .and_then(|subscription| subscription.masked_account_label.clone())
+            .unwrap_or_default();
+        self.usage_subscription_name_input
+            .update(cx, |input, cx| input.set_value(default_name, window, cx));
+        self.usage_account_label_input
+            .update(cx, |input, cx| input.set_value(account_label, window, cx));
+        self.usage_editor_target = Some(target);
+        self.usage_scroll_handle.scroll_to_bottom();
+        let name_focus = self.usage_subscription_name_input.read(cx).focus_handle(cx);
+        cx.notify();
+        window.defer(cx, move |window, cx| {
+            window.focus(&name_focus, cx);
+        });
+    }
+
+    pub fn cancel_usage_subscription_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.usage_editor_target = None;
+        let subscriptions_scroll_anchor = self.usage_subscriptions_scroll_anchor.clone();
+        if let Some(previous_focus) = self
+            .usage_editor_previous_focus
+            .take()
+            .and_then(|handle| handle.upgrade())
+        {
+            window.focus(&previous_focus, cx);
+        }
+        cx.notify();
+        subscriptions_scroll_anchor.scroll_to(window, cx);
+        schedule_post_scroll_refresh(window);
+    }
+
+    pub fn save_usage_subscription_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(target) = self.usage_editor_target.clone() else {
+            return;
+        };
+        let display_name = self
+            .usage_subscription_name_input
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
+        let account_label = self
+            .usage_account_label_input
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
+        if display_name.is_empty() {
+            self.usage_view.reduce(UsageAction::LoadFailed {
+                kind: UsageLoadFailure::Server,
+                message: "Subscription name is required".to_string(),
+            });
+            cx.notify();
+            return;
+        }
+        if account_label
+            .split_once('@')
+            .is_some_and(|(local, _)| !local.contains('*'))
+        {
+            self.usage_view.reduce(UsageAction::LoadFailed {
+                kind: UsageLoadFailure::Server,
+                message: "Email-shaped account labels must be masked".to_string(),
+            });
+            cx.notify();
+            return;
+        }
+        let params = UsageSubscriptionSetParams {
+            subscription_key: target.subscription_key,
+            environment_id: target.environment_id,
+            provider_instance_id: target.provider_instance_id,
+            provider: target.provider,
+            display_name,
+            masked_account_label: (!account_label.is_empty()).then_some(account_label),
+        };
+        let Some(bridge) = &self.bridge else {
+            self.usage_view.reduce(UsageAction::LoadFailed {
+                kind: UsageLoadFailure::Offline,
+                message: "Server bridge is unavailable".to_string(),
+            });
+            cx.notify();
+            return;
+        };
+        let rx = bridge.send_request("usage.subscription.set", serde_json::to_value(params).ok());
+        cx.spawn_in(window, async move |this, cx| {
+            let result = decode_rpc_result::<UsageCatalogResult>(rx.await);
+            let _ = this.update_in(cx, |app, window, cx| match result {
+                Ok(catalog) => {
+                    app.usage_catalog = catalog;
+                    app.usage_editor_target = None;
+                    let subscriptions_scroll_anchor = app.usage_subscriptions_scroll_anchor.clone();
+                    if let Some(previous_focus) = app
+                        .usage_editor_previous_focus
+                        .take()
+                        .and_then(|handle| handle.upgrade())
+                    {
+                        window.focus(&previous_focus, cx);
+                    }
+                    subscriptions_scroll_anchor.scroll_to(window, cx);
+                    schedule_post_scroll_refresh(window);
+                    app.load_usage(cx);
+                }
+                Err(message) => {
+                    app.usage_view.reduce(UsageAction::LoadFailed {
+                        kind: UsageLoadFailure::Server,
+                        message,
+                    });
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     /// Saves settings to the server daemon.
@@ -849,86 +2063,265 @@ impl AppView {
         if let Some(bridge) = &self.bridge {
             self.settings_view.is_saving = true;
             let params = SettingsSetParams {
+                expected_revision: self.settings_view.settings_revision,
+                request_id: Some(format!(
+                    "desktop-settings-{}",
+                    uuid::Uuid::new_v4().simple()
+                )),
                 settings: Some(self.settings_view.settings.clone()),
                 key: None,
                 value: None,
             };
             let rx = bridge.send_request("settings.set", serde_json::to_value(&params).ok());
             cx.spawn(async move |this, cx| {
-                if let Ok(Ok(resp)) = rx.await
-                    && resp.is_success()
-                {
-                    let _ = this.update(cx, |app, cx| {
+                let result = decode_rpc_result::<SettingsSetResult>(rx.await);
+                let _ = this.update(cx, |app, cx| {
+                    if result.as_ref().is_ok_and(|result| result.success) {
+                        app.settings_view.settings_revision = result
+                            .as_ref()
+                            .expect("successful settings result")
+                            .revision;
                         app.settings_view.is_saving = false;
                         app.settings_view.status_banner =
                             Some(("Settings saved successfully".to_string(), false));
-                        app.sync_theme_from_settings();
-                        cx.notify();
-                    });
-                } else {
-                    let _ = this.update(cx, |app, cx| {
+                        app.sync_theme_from_settings(cx);
+                        app.run_health_checks(None, cx);
+                    } else {
                         app.settings_view.is_saving = false;
-                        app.settings_view.status_banner =
-                            Some(("Failed to save settings".to_string(), true));
-                        cx.notify();
-                    });
-                }
+                        let message = result
+                            .err()
+                            .unwrap_or_else(|| "Failed to save settings".to_string());
+                        let revision_drift =
+                            message.contains("changed before this update could be applied");
+                        app.settings_view.status_banner = Some((message, true));
+                        if revision_drift {
+                            app.load_settings(cx);
+                        } else {
+                            app.load_trusted_configuration(cx);
+                        }
+                    }
+                    cx.notify();
+                });
             })
             .detach();
         }
     }
 
-    /// Triggers zero-spawn, offline health checks for all configured providers.
-    pub fn run_health_checks(&mut self, cx: &mut Context<Self>) {
-        if let Some(bridge) = &self.bridge {
-            self.settings_view.is_checking_health = true;
-            let rx = bridge.send_request("provider.health", None);
-            cx.spawn(async move |this, cx| {
-                if let Ok(Ok(resp)) = rx.await
-                    && let Some(val) = resp.result
-                    && let Ok(res) = serde_json::from_value::<ProviderHealthResult>(val)
-                {
-                    let _ = this.update(cx, |app, cx| {
-                        app.settings_view.health_reports = res.reports;
-                        app.settings_view.is_checking_health = false;
+    /// Triggers a bounded, non-interactive health check for one or all providers.
+    pub fn run_health_checks(
+        &mut self,
+        instance_id: Option<pandamux_core::ProviderInstanceId>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(bridge) = &self.bridge else {
+            self.settings_view.status_banner =
+                Some(("Server bridge is unavailable".to_string(), true));
+            cx.notify();
+            return;
+        };
+        self.settings_view.is_checking_health = true;
+        let request = instance_id.clone().map(|instance_id| ProviderHealthParams {
+            instance_id: Some(instance_id),
+            ..ProviderHealthParams::default()
+        });
+        let rx = bridge.send_request("provider.health", serde_json::to_value(request).ok());
+        cx.spawn(async move |this, cx| {
+            let result = decode_rpc_result::<ProviderHealthResult>(rx.await);
+            let _ = this.update(cx, |app, cx| {
+                match result {
+                    Ok(result) => {
+                        if instance_id.is_some() {
+                            for report in result.reports {
+                                if let Some(existing) = app
+                                    .settings_view
+                                    .health_reports
+                                    .iter_mut()
+                                    .find(|existing| existing.instance_id == report.instance_id)
+                                {
+                                    *existing = report;
+                                } else {
+                                    app.settings_view.health_reports.push(report);
+                                }
+                            }
+                        } else {
+                            app.settings_view.health_reports = result.reports;
+                        }
                         app.settings_view.status_banner = Some((
-                            "Offline health checks complete (Rule 1: zero-spawn, zero-auth)"
+                            if instance_id.is_some() {
+                                "Provider health check complete. No interactive login was started."
+                            } else {
+                                "Provider health checks complete. No interactive login was started."
+                            }
+                            .to_string(),
+                            false,
+                        ));
+                        app.synchronize_picker();
+                        app.load_provider_models(cx);
+                    }
+                    Err(message) => {
+                        app.settings_view.status_banner = Some((message, true));
+                    }
+                }
+                app.settings_view.is_checking_health = false;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub fn preview_provider_login(
+        &mut self,
+        provider_instance_id: pandamux_core::ProviderInstanceId,
+        environment_id: EnvironmentId,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(bridge) = &self.bridge else {
+            self.settings_view.status_banner =
+                Some(("Server bridge is unavailable".to_string(), true));
+            cx.notify();
+            return;
+        };
+        self.settings_view.is_login_busy = true;
+        self.settings_view.login_preview = None;
+        self.settings_scroll_handle
+            .set_offset(point(px(0.), px(0.)));
+        let rx = bridge.send_request(
+            "provider.login.preview",
+            serde_json::to_value(ProviderLoginPreviewParams {
+                provider_instance_id,
+                environment_id: Some(environment_id),
+            })
+            .ok(),
+        );
+        cx.spawn(async move |this, cx| {
+            let result = decode_rpc_result::<ProviderLoginPreview>(rx.await);
+            let _ = this.update(cx, |app, cx| {
+                app.settings_view.is_login_busy = false;
+                match result {
+                    Ok(preview) => {
+                        app.settings_view.login_preview = Some(preview);
+                        app.settings_view.status_banner = Some((
+                            "Login command prepared. Review it before opening a terminal."
                                 .to_string(),
                             false,
                         ));
-                        cx.notify();
-                    });
-                } else {
-                    let _ = this.update(cx, |app, cx| {
-                        app.settings_view.is_checking_health = false;
-                        cx.notify();
-                    });
+                    }
+                    Err(message) => {
+                        app.settings_view.status_banner = Some((message, true));
+                    }
                 }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub fn launch_provider_login(&mut self, cx: &mut Context<Self>) {
+        let Some(preview) = self.settings_view.login_preview.clone() else {
+            return;
+        };
+        let Some(bridge) = &self.bridge else {
+            self.settings_view.status_banner =
+                Some(("Server bridge is unavailable".to_string(), true));
+            cx.notify();
+            return;
+        };
+        self.settings_view.is_login_busy = true;
+        let rx = bridge.send_request(
+            "provider.login.launch",
+            serde_json::to_value(ProviderLoginLaunchParams {
+                preview_id: preview.preview_id,
+                provider_instance_id: preview.provider_instance_id,
+                environment_id: Some(preview.environment_id),
             })
-            .detach();
-        }
+            .ok(),
+        );
+        cx.spawn(async move |this, cx| {
+            let result = decode_rpc_result::<ProviderLoginLaunchResult>(rx.await);
+            let _ = this.update(cx, |app, cx| {
+                app.settings_view.is_login_busy = false;
+                match result {
+                    Ok(result) => {
+                        let provider_name = app
+                            .settings_view
+                            .settings
+                            .providers
+                            .iter()
+                            .find(|provider| provider.id == result.provider_instance_id)
+                            .map(|provider| provider.display_name.clone())
+                            .unwrap_or_else(|| "Provider".to_string());
+                        let mut terminal = crate::terminal_view::TerminalViewState::new_with_env(
+                            result.terminal_id,
+                            "Provider authentication",
+                            30,
+                            120,
+                            Some(result.environment_id),
+                        );
+                        terminal.title = format!("{provider_name} login");
+                        terminal.is_attached = false;
+                        app.surfaces_panel.show_terminal(None, terminal);
+                        app.focus_terminal_on_render = true;
+                        app.settings_view.login_preview = None;
+                        app.settings_view.status_banner = Some((
+                            format!(
+                                "{provider_name} login is open in the Terminal surface on the right. Complete authentication there, then retry health."
+                            ),
+                            false,
+                        ));
+                        app.start_surface_terminal_poll(cx);
+                    }
+                    Err(message) => {
+                        app.settings_view.status_banner = Some((message, true));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub fn cancel_provider_login(&mut self, cx: &mut Context<Self>) {
+        self.settings_view.login_preview = None;
+        self.settings_view.is_login_busy = false;
+        self.settings_view.status_banner = Some(("Login cancelled".to_string(), false));
+        cx.notify();
     }
 
     /// Renders the Settings workspace surface.
-    fn render_settings_surface(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_settings_surface(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let server_status_label = format!("{}", self.server_status);
         render_settings_view(
             &self.settings_view,
+            &self.usage_catalog,
             theme,
             server_status_label,
+            &self.settings_scroll_handle,
             |this, _win, cx| {
                 this.save_settings(cx);
             },
+            |this, instance_id, _win, cx| {
+                this.run_health_checks(instance_id, cx);
+            },
+            |this, provider_instance_id, environment_id, _win, cx| {
+                this.preview_provider_login(provider_instance_id, environment_id, cx);
+            },
             |this, _win, cx| {
-                this.run_health_checks(cx);
+                this.launch_provider_login(cx);
+            },
+            |this, _win, cx| {
+                this.cancel_provider_login(cx);
+            },
+            |this, intent, _win, cx| {
+                this.handle_trusted_configuration_intent(intent, cx);
             },
             |this, modifier, _win, cx| {
                 modifier(&mut this.settings_view.settings);
-                this.sync_theme_from_settings();
+                this.sync_theme_from_settings(cx);
                 cx.notify();
             },
             cx,
         )
+        .into_any_element()
     }
 
     /// Queries current Git status for the active thread worktree.
@@ -1157,11 +2550,16 @@ impl AppView {
                                 .h_flex()
                                 .items_center()
                                 .gap_1p5()
-                                .child(Button::new("btn-git-refresh").ghost().label("🔄").on_click(
-                                    cx.listener(|this, _event, _window, cx| {
-                                        this.refresh_git_status(cx);
-                                    }),
-                                ))
+                                .child(
+                                    Button::new("btn-git-refresh")
+                                        .ghost()
+                                        .label("🔄")
+                                        .accessibility_label("Refresh Git status")
+                                        .tooltip("Refresh Git status")
+                                        .on_click(cx.listener(|this, _event, _window, cx| {
+                                            this.refresh_git_status(cx);
+                                        })),
+                                )
                                 .child(
                                     Button::new("btn-git-commit")
                                         .ghost()
@@ -1210,11 +2608,29 @@ impl AppView {
 
 impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let active_title = self.active_thread_id.as_ref().and_then(|id| {
-            self.thread_projections
-                .get(id)
-                .map(|p| p.thread.title.as_str())
-        });
+        if self.focus_terminal_on_render
+            && self.surfaces_panel.is_open
+            && self.surfaces_panel.active_tab == Some(SurfaceTab::Terminal)
+        {
+            self.focus_terminal_on_render = false;
+            self.surfaces_panel.terminal_output_mode = false;
+            let terminal_focus = self.terminal_focus.clone();
+            window.defer(cx, move |window, cx| {
+                window.focus(&terminal_focus, cx);
+            });
+        }
+
+        let active_title = if self.active_rail_tab == RailTab::Usage {
+            Some("Usage & Capacity")
+        } else if self.active_rail_tab == RailTab::Settings {
+            Some("Settings")
+        } else {
+            self.active_thread_id.as_ref().and_then(|id| {
+                self.thread_projections
+                    .get(id)
+                    .map(|p| p.thread.title.as_str())
+            })
+        };
 
         let theme = self.theme.clone();
         let server_status = self.server_status.clone();
@@ -1242,6 +2658,7 @@ impl Render for AppView {
                 &theme,
                 &server_status,
                 active_title,
+                self.surfaces_panel.is_open,
                 |this, _win, cx| {
                     this.toggle_command_palette(cx);
                 },
@@ -1270,6 +2687,9 @@ impl Render for AppView {
                         &theme,
                         |this, tab, _win, cx| {
                             this.select_rail_tab(tab);
+                            if tab == RailTab::Usage {
+                                this.load_usage(cx);
+                            }
                             cx.notify();
                         },
                         cx,
@@ -1280,6 +2700,7 @@ impl Render for AppView {
                         &self.thread_order,
                         &self.thread_projections,
                         self.active_thread_id.as_ref(),
+                        &self.settings_view.settings.providers,
                         &theme,
                         |this, _win, cx| {
                             this.create_default_thread(cx);
@@ -1292,20 +2713,51 @@ impl Render for AppView {
                             this.create_agent_thread(agent_id, cx);
                         },
                         self.settings_view.active_category,
-                        |this, cat, _win, cx| {
+                        |this, cat, _window, cx| {
                             this.settings_view.set_category(cat);
+                            this.settings_scroll_handle
+                                .set_offset(point(px(0.), px(0.)));
+                            if cat == SettingsCategory::TrustedConfiguration {
+                                this.load_trusted_configuration(cx);
+                            }
                             cx.notify();
                         },
                         cx,
                     ))
                     // 2c. Main Surface (Timeline + Header + Composer OR Settings View)
-                    .child(if self.active_rail_tab == RailTab::Settings {
-                        self.render_settings_surface(&theme, cx).into_any_element()
-                    } else {
-                        self.render_main_surface(&theme, cx).into_any_element()
+                    .child(match self.active_rail_tab {
+                        RailTab::Settings => {
+                            self.render_settings_surface(&theme, cx).into_any_element()
+                        }
+                        RailTab::Usage => render_usage_view(
+                            &self.usage_view,
+                            &self.usage_catalog,
+                            &self.settings_view.settings,
+                            self.usage_editor_target.as_ref(),
+                            &self.usage_subscription_name_input,
+                            &self.usage_account_label_input,
+                            &self.usage_scroll_handle,
+                            &self.usage_table_focus,
+                            &self.usage_table_scroll_anchor,
+                            &self.usage_subscriptions_scroll_anchor,
+                            &theme,
+                            wall_clock_ms(),
+                            |app, _window, cx| app.load_usage(cx),
+                            |app, intent, _window, cx| app.cycle_usage_filter(intent, cx),
+                            |app, _window, cx| app.clear_usage_filters(cx),
+                            |app, target, window, cx| {
+                                app.begin_usage_subscription_edit(target, window, cx);
+                            },
+                            |app, window, cx| app.save_usage_subscription_edit(window, cx),
+                            |app, window, cx| app.cancel_usage_subscription_edit(window, cx),
+                            window,
+                            cx,
+                        )
+                        .into_any_element(),
+                        _ => self.render_main_surface(&theme, cx).into_any_element(),
                     })
                     // 2d. Right-side Surfaces Panel
-                    .when(self.active_rail_tab != RailTab::Settings, |this| {
+                    .when(self.active_rail_tab != RailTab::Usage, |this| {
                         this.child(render_surfaces_panel(
                             &self.surfaces_panel,
                             self.active_thread_id
@@ -1321,6 +2773,17 @@ impl Render for AppView {
                             |app, file, _win, cx| {
                                 app.select_surface_file(file, cx);
                             },
+                            &self.terminal_focus,
+                            |app, target, window, cx| {
+                                app.set_terminal_focus_target(target, window, cx);
+                            },
+                            |app, input, _win, cx| {
+                                app.send_surface_terminal_input(input, cx);
+                            },
+                            |app, _win, cx| {
+                                app.close_surface_terminal(cx);
+                            },
+                            window,
                             cx,
                         ))
                     }),
@@ -1377,6 +2840,14 @@ impl AppView {
 
         if let Some(proj) = active_proj {
             let thread_id = proj.thread.id.clone();
+            let provider_display_name = self
+                .settings_view
+                .settings
+                .providers
+                .iter()
+                .find(|provider| provider.id == proj.thread.provider_instance_id)
+                .map(|provider| provider.display_name.clone())
+                .unwrap_or_else(|| "Unnamed provider instance".to_string());
             let is_busy = matches!(
                 proj.thread.status,
                 ThreadStatus::Working | ThreadStatus::AwaitingApproval
@@ -1419,8 +2890,7 @@ impl AppView {
                                                 .text_size(Typography::META_SIZE)
                                                 .text_color(theme.accent.color())
                                                 .child(format!(
-                                                    "Provider: {}",
-                                                    proj.thread.provider_instance_id.as_str()
+                                                    "Provider: {provider_display_name}"
                                                 )),
                                         )
                                         .child(
@@ -1461,6 +2931,9 @@ impl AppView {
                         theme,
                         |this: &mut AppView, tid, req_id, dec, _win, cx| {
                             this.respond_approval(tid, req_id, dec, cx);
+                        },
+                        |this: &mut AppView, thread_id, continuation_id, _win, cx| {
+                            this.continue_after_capacity(thread_id, continuation_id, cx);
                         },
                         |this: &mut AppView, idx, _win, cx| {
                             this.timeline_state.selection.start(idx, 0);
@@ -1609,5 +3082,29 @@ impl AppView {
             .text_color(theme.chrome.text_t3)
             .child(div().child(server_desc))
             .child(div().child(git_info))
+    }
+}
+
+/// `ScrollAnchor::scroll_to` applies its offset in a next-frame callback. Ask
+/// for the follow-up paint with the window-scoped API because these callbacks
+/// run outside GPUI's rendered-entity stack; `request_animation_frame` is only
+/// valid while an entity is rendering and panics when invoked here.
+fn schedule_post_scroll_refresh(window: &Window) {
+    window.on_next_frame(|window, _cx| window.refresh());
+}
+
+#[cfg(test)]
+mod usage_filter_tests {
+    use super::cycle_value;
+    use core::prelude::v1::test;
+
+    #[test]
+    fn filter_cycle_reaches_every_known_choice_before_all() {
+        let choices = vec!["one".to_string(), "two".to_string(), "one".to_string()];
+        let first = cycle_value(&None, choices.clone());
+        assert_eq!(first.as_deref(), Some("one"));
+        let second = cycle_value(&first, choices.clone());
+        assert_eq!(second.as_deref(), Some("two"));
+        assert_eq!(cycle_value(&second, choices), None);
     }
 }

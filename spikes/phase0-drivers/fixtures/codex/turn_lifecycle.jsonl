@@ -1,14 +1,15 @@
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"PandaMUX","clientVersion":"1.0.0"}}
-{"jsonrpc":"2.0","id":1,"result":{"serverVersion":"0.8.2","capabilities":{"developerInstructions":true,"sandboxPolicies":true,"rateLimits":true}}}
-{"jsonrpc":"2.0","id":2,"method":"thread/start","params":{"cwd":"C:\\Github\\Pandamux","model":"gpt-4o","developerInstructions":"You are the Reviewer. Check for memory leaks and race conditions.","sandboxPolicy":"workspace-write","approvalPolicy":"on-write"}}
-{"jsonrpc":"2.0","id":2,"result":{"threadId":"th_codex_01"}}
-{"jsonrpc":"2.0","id":3,"method":"turn/start","params":{"threadId":"th_codex_01","input":[{"type":"text","text":"Run cargo check and review synchronization primitives."}]}}
-{"jsonrpc":"2.0","id":3,"result":{"turnId":"turn_01"}}
-{"jsonrpc":"2.0","method":"turn/event","params":{"threadId":"th_codex_01","turnId":"turn_01","event":{"type":"text_delta","text":"I will execute cargo check to analyze synchronization."}}}
-{"jsonrpc":"2.0","method":"turn/approvalRequest","params":{"threadId":"th_codex_01","turnId":"turn_01","approvalId":"appr_01","command":"cargo check --workspace","reason":"Compile check outside sandbox"}}
-{"jsonrpc":"2.0","id":4,"method":"turn/approvalResponse","params":{"approvalId":"appr_01","decision":"approved"}}
-{"jsonrpc":"2.0","id":4,"result":{"status":"acknowledged"}}
-{"jsonrpc":"2.0","method":"turn/event","params":{"threadId":"th_codex_01","turnId":"turn_01","event":{"type":"command_output","stdout":"Finished dev profile in 0.8s\n","exitCode":0}}}
-{"jsonrpc":"2.0","id":5,"method":"account/rateLimits/read","params":{}}
-{"jsonrpc":"2.0","id":5,"result":{"rateLimits":[{"limitName":"tokens","usedPercent":34.2,"windowDurationMins":300,"resetsAt":"2026-09-26T04:00:00Z"}]}}
-{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"th_codex_01","turnId":"turn_01","status":"success","usage":{"inputTokens":1100,"outputTokens":320,"totalTokens":1420}}}
+{"id":1,"method":"initialize","params":{"clientInfo":{"name":"pandamux","title":"PandaMUX","version":"0.54.4"}}}
+{"id":1,"result":{"userAgent":"codex_cli_rs/0.158.0","platformFamily":"unix","platformOs":"linux"}}
+{"method":"initialized","params":{}}
+{"id":2,"method":"thread/start","params":{"cwd":"/workspace/Pandamux","model":"gpt-6-luna","developerInstructions":"Review synchronization primitives.","sandbox":"workspace-write","approvalPolicy":"on-request"}}
+{"id":2,"result":{"thread":{"id":"th_codex_01","status":"idle","turns":[]},"model":"gpt-6-luna","cwd":"/workspace/Pandamux","approvalPolicy":"on-request","sandbox":{"type":"workspaceWrite"}}}
+{"id":3,"method":"turn/start","params":{"threadId":"th_codex_01","input":[{"type":"text","text":"Run cargo check and review synchronization primitives."}]}}
+{"id":3,"result":{"turn":{"id":"turn_01","status":"inProgress","items":[]}}}
+{"method":"turn/started","params":{"threadId":"th_codex_01","turn":{"id":"turn_01","status":"inProgress","items":[]}}}
+{"method":"item/agentMessage/delta","params":{"threadId":"th_codex_01","turnId":"turn_01","itemId":"item_01","delta":"I will execute cargo check to analyze synchronization."}}
+{"id":"approval-01","method":"item/commandExecution/requestApproval","params":{"threadId":"th_codex_01","turnId":"turn_01","itemId":"item_02","startedAtMs":1790388000000,"command":"cargo check --workspace","reason":"Command requires approval"}}
+{"id":"approval-01","result":{"decision":"accept"}}
+{"method":"item/commandExecution/outputDelta","params":{"threadId":"th_codex_01","turnId":"turn_01","itemId":"item_02","delta":"Finished dev profile in 0.8s\n"}}
+{"method":"thread/tokenUsage/updated","params":{"threadId":"th_codex_01","turnId":"turn_01","tokenUsage":{"last":{"inputTokens":1100,"cachedInputTokens":0,"outputTokens":320,"reasoningOutputTokens":0,"totalTokens":1420},"total":{"inputTokens":1100,"cachedInputTokens":0,"outputTokens":320,"reasoningOutputTokens":0,"totalTokens":1420},"modelContextWindow":258400}}}
+{"method":"account/rateLimits/updated","params":{"rateLimits":{"limitId":"codex","limitName":"Codex","primary":{"usedPercent":34,"windowDurationMins":300,"resetsAt":1790395200},"secondary":{"usedPercent":18,"windowDurationMins":10080,"resetsAt":1790913600}}}}
+{"method":"turn/completed","params":{"threadId":"th_codex_01","turn":{"id":"turn_01","status":"completed","items":[]}}}

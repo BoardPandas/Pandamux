@@ -1,4 +1,4 @@
-use crate::ids::{ThreadId, TurnId};
+use crate::ids::{ContinuationId, ProviderInstanceId, ThreadId, TurnAttemptId, TurnId};
 use crate::thread::{TurnInput, TurnUsage};
 use serde::{Deserialize, Serialize};
 
@@ -75,6 +75,13 @@ pub enum ThreadEventKind {
     },
     BudgetExceeded {
         limit: String,
+    },
+    CapacityInterrupted {
+        turn_id: TurnId,
+        attempt_id: TurnAttemptId,
+        continuation_id: ContinuationId,
+        provider_instance_id: ProviderInstanceId,
+        message: String,
     },
     Notice {
         level: String,

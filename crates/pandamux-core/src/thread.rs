@@ -66,6 +66,19 @@ impl ThreadWorkspace {
     }
 }
 
+impl AccessMode {
+    /// Stable permission ordering used when a route declares an access ceiling.
+    pub const fn security_rank(self) -> u8 {
+        match self {
+            Self::ReadOnly => 0,
+            Self::WorkspaceOnly => 1,
+            Self::Ask => 2,
+            Self::AutoEdit => 3,
+            Self::FullAccess => 4,
+        }
+    }
+}
+
 /// A dedicated git worktree backing a thread.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -118,6 +131,8 @@ pub enum ThreadOrigin {
 pub struct Turn {
     pub id: TurnId,
     pub thread_id: ThreadId,
+    pub environment_id: EnvironmentId,
+    pub provider_instance_id: ProviderInstanceId,
     pub seq: u64,
     pub input: TurnInput,
     #[serde(default)]
@@ -160,6 +175,7 @@ pub enum TurnStatus {
     Completed,
     Failed,
     Interrupted,
+    InterruptedForCapacity,
 }
 
 /// Token and cost usage metrics recorded for a turn.
@@ -176,4 +192,44 @@ pub struct TurnUsage {
     pub cache_write_tokens: Option<u64>,
     #[serde(default)]
     pub cost_usd: Option<f64>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub unknown_fields: std::collections::BTreeSet<crate::usage::UsageUnknownField>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_reported_micro_usd: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<TurnUsageProvenance>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub components: Vec<TurnUsageComponent>,
+}
+
+/// Provider-reported usage for one exact assistant message within a CLI turn.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnUsageComponent {
+    pub provider_native_message_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurred_at_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnUsageProvenance {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_native_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_native_turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurred_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }

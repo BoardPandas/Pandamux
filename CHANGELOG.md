@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Claude offers to clean up merged worktrees and branches after a push (0.54.0).** After a push moves `origin/master`, a new hook lists local branches already merged into it and the clean worktrees on them, then has Claude ask once before removing anything. It never deletes on its own, leaves locked worktrees, the session's own worktree and worktrees with uncommitted changes alone, and stays silent for dry runs, rejected pushes and pushes of other branches. The shared commit-hook helper gains the argv walk the hook reuses; commit behaviour is unchanged. No application code changes.
 
 ### Changed
+
 - Restore LL-G and BP contributions through authenticated GitHub with atomic commits, privacy review, conflict protection, and commit-specific CI verification; remove Roundtable dependencies from agent guidance.
 
 - **`/dependency-audit` now audits GitHub Actions (0.53.46).** A new step checks every action the workflows use against its latest release (SHA pins are resolved to their real tag, and each action is checked against GitHub's advisory database, for an archived repo, and for a deprecated Node runtime), every `runs-on` label against GitHub's current runner images and their retirement dates, the tool versions workflows install against current releases and the repo's own pins, container images, and whether Dependabot covers `github-actions`. Self-hosted runners are listed for a manual version check. Synced from claude-code-bootstrap.
@@ -22,6 +23,1166 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recognise. `gh` is used only to create a new LL-G shelf or BP concern, through the bundled
   `.claude/scripts/kb-commit.mjs`. Without Roundtable connected, the skills stop and say how to
   set it up rather than falling back to `gh`. No application code changes.
+
+- **Completed the Phase 5C physical/live acceptance record in version
+  0.60.122.** The maintained status now records the exact Galahad, live Codex,
+  Claude, and Antigravity success and cancellation rows plus the controlled
+  one-effect response-loss result from version 0.60.121. Implementation, local
+  verification, native CI, physical/live acceptance, retained review debt,
+  commit, push, deployment, activation, and release remain separately stated;
+  P4-C5 remains Partial and P4-C7 remains open.
+
+### Fixed
+
+- **Preserved post-side-effect ambiguity across remote crash recovery in
+  version 0.60.121.** When a Node receipt proves that a response-lost provider
+  attempt started a tool before its stream vanished, Hub recovery now restores
+  the exact accepted attempt identity and advances the canonical
+  `tool_side_effect_begun` boundary before pausing for review. Replaying that
+  durable ambiguous outcome reconstructs and deduplicates the original review
+  without reacquiring the review-owned effect or starting another provider.
+
+- **Restored the built-artifact IPC smoke without reopening legacy arguments
+  in version 0.60.117.** The Windows evaluator now starts the already-headless
+  server with its supported default invocation instead of passing the obsolete
+  `--headless` flag. The production parser continues to reject that and every
+  other unknown argument.
+
+- **Accepted native Windows absolute-path prefixes without weakening link
+  checks in version 0.60.116.** Attempt worktree ownership validation now
+  carries drive, UNC, and verbatim prefixes into the rooted path before
+  inspecting filesystem metadata, matching the maintained project-path
+  validator. Every queryable component still rejects links and reparse points.
+
+- **Kept the native Windows ownership diagnostic Clippy-clean in version
+  0.60.115.** The test-only managed-path caller annotation now returns as the
+  cfg branch expression, allowing the Windows CI workspace tests to reach the
+  ownership failure without changing production behavior or validation.
+
+- **Made native Windows worktree ownership failures actionable in version
+  0.60.114.** Windows test builds now append the exact caller location when a
+  managed attempt path fails closed, while production keeps the existing safe
+  reason code and message unchanged. This isolates native path, reparse, and
+  ACL failures without relaxing any ownership check.
+
+- **Kept Phase 5C attempt worktrees private while Git materializes them in
+  version 0.60.113.** PandaMUX now creates and validates the exact empty
+  attempt leaf under its private app-data root before asking Git to populate
+  it, including a protected Windows DACL. A matching durable ambiguous intent
+  can recover that empty pre-Git state, while any non-empty, linked, reparse,
+  or foreign path remains retained and fails closed.
+
+- **Completed Windows Git path normalization for Phase 5C in version
+  0.60.112.** Attempt-worktree Git arguments, managed hook and attribute
+  paths, index paths, and remote execution fixtures now remove Windows
+  verbatim drive or UNC prefixes only at the subprocess boundary. Durable
+  ownership paths remain canonical and continue through the existing private
+  root, reparse-point, and ACL checks unchanged.
+
+- **Restored native Windows compilation for the Phase 5C path fixtures in
+  version 0.60.111.** The Windows-only Managed Git assertions now bind their
+  normalized `Cow<OsStr>` values as `&OsStr`, removing target-specific type
+  inference ambiguity without changing subprocess path normalization.
+
+- **Closed the remaining native Phase 5C CI failures in version 0.60.110.**
+  Immediate provider progress now supplies the monotonic durable clock for
+  local acceptance inside the existing lease-checked transaction, and replay
+  retains the exact accepted state without weakening compare-and-swap checks.
+  Managed Git still validates canonical app-data ownership paths, then removes
+  Windows verbatim drive or UNC prefixes only from subprocess arguments so Git
+  for Windows can initialize, verify, fetch, bundle, and materialize the owned
+  repositories and worktrees.
+
+- **Made the native Phase 5C acceptance fixtures deterministic and portable in
+  version 0.60.109.** Local-provider tests now derive dispatch time from the
+  durable prepared record instead of resampling a rollback-prone wall clock;
+  the strict store clock checks remain unchanged. Windows fixtures create Git
+  bundles through repository-relative paths, pin checkout line endings, compare
+  native paths by component, and inject login-shell selection instead of
+  probing a live PowerShell under test load. Pre-v14 backup durability now
+  opens the temporary database with the write access Windows requires before
+  flushing it and atomically renaming the verified backup.
+
+- **Made the CRLF schema fixture host-independent in version 0.60.108.** The
+  orchestrator test now canonicalizes its checked-out bytes before deliberately
+  constructing CRLF, so Windows checkout conversion cannot turn the fixture
+  into malformed doubled-carriage-return input. A retained negative assertion
+  confirms that genuinely malformed doubled-CR line endings still fail closed.
+
+- **Closed the remaining target-specific Phase 5C CI failures in version
+  0.60.107.** The exact-pinned `gpui-base` 0.6.6 crate now uses the stable
+  Rust 1.89 atomic update equivalent, dependency policy runs in a dedicated
+  Linux job because GitHub container actions cannot execute on Windows, and
+  the Unix proxy bridge treats macOS `NotConnected` during an already-complete
+  half-close as graceful while retaining fail-closed handling for unrelated
+  I/O errors.
+
+- **Completed the target-portable Phase 5C CI repair in version 0.60.106.**
+  Windows-only paths now remain warning-free under strict Clippy, and the
+  exact-pinned GPUI 0.3.6 crate preserves its published API while local,
+  documented compatibility shims replace optimizer and string-boundary APIs
+  stabilized after Rust 1.89. The attempt-worktree case-collision fixture now
+  builds the hostile tree directly in Git's object database, so it exercises
+  the same fail-closed validation on both case-sensitive and case-insensitive
+  filesystems without asking the host filesystem to materialize an impossible
+  pair of names.
+
+- **Restored target-specific Phase 5C verification in version 0.60.105.**
+  Windows process supervision now uses the handle-native null check required by
+  strict Rust 1.98 Clippy. The exact-pinned GPUI utility keeps its upstream
+  0.3.6 API while a documented local patch replaces one post-MSRV slice
+  conversion with its stable Rust 1.89 equivalent. Security-sensitive
+  repository and worktree fixtures now canonicalize only their temporary test
+  roots, allowing macOS runners to traverse the same fail-closed production
+  link checks without trusting the runner's symlinked temporary-directory
+  alias.
+
+- **Preserved the exact winning cancellation report for concurrent Phase 5C
+  callers in version 0.60.103.** A cancellation request that joined an
+  already-running cleanup previously reconstructed terminal state with generic
+  flags and `attempt_cleanup_pending`, losing the owner-reported drain, process
+  death, writer join, lease, and quarantine reason. The attempt owner now
+  publishes one exact report to every in-process waiter, while durable state
+  remains the bounded recovery fallback. Deterministic concurrent-caller tests
+  and 20 pressured 237-test server runs cover both verified cleanup and
+  intentionally retained unknown-usage debt.
+
+- **Prevented shutdown cancellation from dropping provider terminal usage in
+  version 0.60.101.** Provider events sampled immediately before a durable
+  cancellation intent now clamp their owner-internal progress timestamp to the
+  attempt's newer durable clock within the same transaction. The public store
+  API still rejects regressed timestamps. Deterministic cancellation, replay,
+  and strict-clock tests plus repeated shutdown coverage retain usage
+  reconciliation, verified worktree cleanup, and zero lifecycle debt under
+  load.
+
+- **Reported terminal confirmation actions as disabled to native accessibility
+  clients in version 0.60.88.** Resolved trusted-configuration cards retain
+  their visible disabled controls while a narrow AccessKit wrapper now exposes
+  the disabled property, complete action name, and no focus or invocation
+  surface. A retained render-level test covers both terminal actions after
+  physical Windows UI Automation found that the framework's inert button did
+  not publish its disabled state.
+
+- **Restored keyboard traversal for trusted-configuration confirmations in
+  version 0.60.87.** Confirmation cards now establish a GPUI tab group so
+  `Approve once` and `Reject` participate in native focus traversal and retain
+  their named Enter and Space activation paths. A retained render-level test
+  covers both actions after physical Windows acceptance exposed that accessible
+  buttons without a tab group were not reachable with Tab.
+
+- **Stabilized native trusted-source polling verification in version 0.60.86.**
+  The launch-poller acceptance test now allows enough scheduling headroom for
+  native Windows Git durability work while retaining the same production poll
+  interval and candidate assertions. This removes a load-sensitive test race
+  without weakening the trusted-source behavior or its acceptance criteria.
+
+- **Hardened native Windows trusted configuration storage in version 0.60.85.**
+  PandaMUX now creates app-data roots with a protected current-user DACL,
+  rejects foreign ownership, broad access, and reparse-point substitution, and
+  validates every existing managed Git path component before use. Managed Git
+  writes enable long Windows paths and full fsync durability, while atomic
+  personal-repository recovery accommodates read-only loose objects without
+  weakening byte verification. Windows drive-root discovery and exact Git
+  fixture bytes are now portable across native line-ending settings.
+
+### Added
+
+- **Reconciled Phase 5C local/native acceptance after exact descendant-cleanup
+  proof in version 0.60.120.** Exact version 0.60.119 commit `ce9c48f` passes
+  the Linux process-group descendant fixture locally and both the Windows Job
+  Object descendant and macOS process-group descendant fixtures in all-green
+  eight-job native run `38054202454`. Together with the retained portable,
+  Windows path/reparse/worktree, and Unix worktree rows, this closes the
+  checkpoint's automated local/native scope without implying production
+  readiness. Physical remote Linux, live Codex/Claude/Antigravity, and the
+  controlled external-effect row remain unrun. P4-C5 remains Partial and
+  P4-C7 remains open.
+
+- **Added exact native descendant-cleanup acceptance coverage in version
+  0.60.119.** The retained lifecycle integration now proves that terminating
+  the production supervisor kills a live descendant through a Windows Job
+  Object and through native Linux and macOS process groups. The Windows fixture
+  waits until the leader is assigned to its Job Object before it creates the
+  descendant, so the assertion measures inherited job ownership rather than a
+  process-start race.
+
+- **Reconciled the Phase 5C native CI evidence without overstating native or
+  production acceptance in version 0.60.118.** Exact version 0.60.117 commit
+  `e53406b` passes all eight jobs in native run `38040781118`, including Windows
+  and Apple Silicon workspace tests, Windows and macOS release builds, both
+  Rust 1.89 graphs, both pure-orchestrator musl graphs, dependency policy, and
+  the built Windows server/CLI IPC smoke. The maintained record now includes
+  every failed repair run from 0.60.104 through 0.60.116 and the exact
+  0.60.105 through 0.60.117 repair chain. Native Windows and macOS automation
+  are recorded as partial because the required Windows Job Object descendant
+  and macOS process-group descendant rows still lack exact tests; physical
+  remote, live-provider, controlled-external-effect, deployment, activation,
+  packaging, signing, publication, and release evidence remain absent. P4-C5
+  remains Partial and P4-C7 remains open.
+
+- **Reconciled the final Phase 5C acceptance record in version 0.60.104.**
+  Exact version 0.60.103 commit `d78a22c` preserves one winning cancellation
+  report for every concurrent caller and passes the complete Section 11 matrix,
+  20 pressured server-unit-suite repetitions, and the explicit native Linux
+  process-group and real-worktree rows. The maintained guides now distinguish
+  that deciding runtime repair from the documentation-only reconciliation and
+  continue to record Windows, macOS, physical-remote, live-provider,
+  controlled external-effect, and CI rows as unrun. This checkpoint changes no
+  runtime behavior, keeps P4-C5 Partial and P4-C7 open, and does not push,
+  deploy, activate, package, sign, publish, or release.
+
+- **Documented the exact Phase 5C execution-runtime acceptance boundary in
+  version 0.60.102.** The maintained architecture, orchestration, operations,
+  task, roadmap, and repository guides now map checkpoints C-A through C-K,
+  the C-J verification repair, AC-C01 through AC-C18, CRASH-01 through
+  CRASH-12, and the complete local verification matrix to retained evidence.
+  The record separates the passing portable suite and exact Linux
+  process-group and real-worktree rows from unrun Windows, macOS,
+  physical-remote, live-provider, controlled external-effect, and CI rows.
+  This documentation-only checkpoint changes no runtime behavior, keeps P4-C5
+  Partial and P4-C7 open, and does not push, deploy, activate, package, sign,
+  publish, or release.
+
+- **Added supervised Phase 5C execution lifecycle and crash recovery in version
+  0.60.100.** Durable meaningful-progress records now drive independent stall
+  and absolute-runtime watchdogs, while cooperative interrupt, bounded drain,
+  process-group escalation, death verification, cancellation replay, and
+  service shutdown retain explicit join ownership. Startup recovery acquires a
+  single incarnation lock before auditing exact attempts, leases, budgets,
+  worktrees, checkpoints, provider effects, and remote receipts; safe pending
+  work is reclaimed or reattached, while ambiguous execution and unverifiable
+  cleanup deduplicate into retained human review. Typed not-started outcomes
+  release capacity and budget only after the responsible cleanup owner proves
+  its boundary. Injected-clock, crash, replay, dirty-worktree, hung-process,
+  remote-response-loss, and concurrent-shutdown fixtures cover the lifecycle
+  contract, including a native Linux descendant-process termination test. No
+  external provider or repository was contacted, and this checkpoint does not
+  add Windows, macOS, physical-remote, or live-provider acceptance or any push,
+  CI, deployment, activation, packaging, signing, publication, or release.
+
+- **Added typed Phase 5C blackboard artifacts and durable verification evidence
+  in version 0.60.99.** Successful tasks now atomically publish bounded,
+  canonical, content-hashed JSON artifacts before dependent tasks become ready.
+  Exact output contracts, schema digests, producer and consumer scope, immutable
+  identities, version predecessors, per-task and per-run counts, and the 16 MiB
+  run aggregate are enforced in both the pure engine and SQLite boundary.
+  Verification records are derived only from durable command events, owned
+  checkpoints and diff receipts, the existing Phase 4 tool ledger, or exact
+  budget reconciliation observations. The app-owned `run-artifacts` directory
+  remains a verified content-addressed cache rather than a second authority and
+  rejects link or reparse-point substitution. Architect, builder, and reviewer
+  fixtures cover typed dependency readiness, evidence-gated review, schema and
+  authority-injection failures, producer failure propagation, every artifact
+  bound, atomic rollback, and post-commit replay. This checkpoint contacts no
+  external provider or repository, adds no native or live-provider acceptance,
+  and does not push, run CI, deploy, activate, package, sign, publish, or
+  release.
+
+- **Added authenticated Phase 5C node execution in version 0.60.98.** Private
+  NodeProxy/internal repository prepare, attempt prepare, dispatch, status,
+  cancellation, ordered events, and acknowledgement now bind every request to
+  the authenticated environment, exact effect lease, route, baseline, pinned
+  bundle, payload, and idempotency digest. Nodes retain content-addressed
+  baseline repositories, real attempt-owned branch refs, deterministic
+  worktree/thread/turn identities, and byte-exact durable receipts; conflicting
+  retries fail closed. A two-store Hub/node handshake persists both prepare and
+  dispatch authority before `ThreadManager` can obtain the shared admission and
+  provider permits. Lost replies reconcile through exact status, marked or
+  ambiguous starts never cause a replacement turn, and cancellation preserves
+  terminal or unverified-session authority. Local mock-node tests cover forged
+  environments and lease generations, replay conflicts, inline and staged
+  baselines, missing inputs, every prepare/dispatch marker boundary, exact live
+  reattachment, proxy disconnect, response loss, cancel replay, ordered events,
+  and acknowledgements. This checkpoint contacts no external provider or
+  repository, adds no native or live-provider acceptance, and does not push,
+  run CI, deploy, activate, package, sign, publish, or release.
+
+- **Added crash-safe local provider effect execution in version 0.60.97.**
+  Orchestrated attempts now persist their exact effect, route, bundle,
+  worktree, checkpoint, thread, turn, turn-attempt, capacity, and budget
+  identities before `ThreadManager` obtains the final provider permit or
+  starts a session. Server-derived instructions and tool policy come from the
+  run-pinned immutable bundle even after active configuration changes, while
+  typed not-started receipts are the only post-marker path that releases
+  capacity and budget for one bounded fallback. Lost responses, ambiguous
+  starts, unresolved tools, visible output, and approval interaction remain
+  suppressed or review-required without blind resend. The existing Phase 4
+  event loop, side-effect ledger, attempt boundary, and durable continuation
+  remain authoritative. Local mock-provider tests cover persist-before-start,
+  exact policy injection, start and prompt failure, marker replay, duplicate
+  events, false success, safe fallback, unsafe fallback refusal, route
+  immutability, and permit release. This checkpoint contacts no external
+  provider or repository, adds no native or live-provider acceptance, and does
+  not push, run CI, deploy, activate, package, sign, publish, or release.
+
+- **Added durable Phase 5C budget enforcement and reconciliation in version
+  0.60.96.** `ExecutionBudgetService` now plans checked attempt-bound task and
+  run reservations, while the shared admission transaction authoritatively
+  checks compiled agent and organization UTC-day ceilings before dispatch.
+  Exact local budget approvals create one digest-bound supplemental grant;
+  rejection, expiry, disconnect, policy drift, and changed bytes fail closed.
+  Settled attempts reconcile integer tokens, runtime, and provider-reported or
+  effective-dated estimated micro-USD from exact durable managed-turn facts;
+  legacy floating-point cost is ignored, unknown cost retains its reservation,
+  and actual overage is recorded before the run pauses. Pre-dispatch release,
+  grant, and reconciliation failpoints prove rollback or database-only replay,
+  and conservation diagnostics report mismatches without claiming source
+  truth. This checkpoint does not start a provider, contact a node or external
+  repository, add native or live-provider acceptance, push, run CI, deploy,
+  activate, package, sign, publish, or release.
+
+- **Added durable shared execution admission in version 0.60.95.** Manual and
+  orchestrated provider starts now share stable SQLite queue identities,
+  owner-bound TTL leases, compare-and-swap claims, bounded retry delay, and
+  run, agent, provider, environment, organization, and global limits. Global
+  and per-environment capacity retain an interactive lane when possible, while
+  cap-one scheduling admits the oldest eligible orchestration after at most
+  four consecutive interactive claims. Orchestrated claims atomically reserve
+  capacity, the exact attempt budget and UTC daily ledger, canonical
+  `BudgetReserved` and `DispatchRequested` events, and the derived dispatch
+  effect. `ThreadManager` now obtains the same durable admission before its
+  final provider permit and releases exact ownership on every session teardown
+  path. Separate-connection race, ordering, reserve, starvation, replay,
+  rollback, renewal, reclaim, and cap-decrease fixtures pass locally. This
+  checkpoint does not connect a run effect to a provider, contact a node or
+  external repository, add native or live-provider acceptance, push, run CI,
+  deploy, activate, package, sign, publish, or release.
+
+- **Added crash-safe, attempt-owned Phase 5C worktrees and checkpoints in
+  version 0.60.94.** Each attempt now commits an exact repository, baseline,
+  full branch ref, private app-data path, environment, and active lease before
+  bounded Git materialization. Before, after, and recovery checkpoints use
+  private indices and stable refs without changing the user checkout or attempt
+  index; exact replay recovers intent/Git/receipt crashes while changed bytes,
+  foreign ownership, custom filters, unsafe links/reparse points, and
+  case-colliding paths fail closed. Automatic cleanup is ordinary and
+  non-forced only after terminal, process-death, evidence, checkpoint, and
+  review gates; dirty, locked, or ambiguous output remains retained. This
+  checkpoint starts no provider, contacts no node or external repository, and
+  adds no native Windows/live-provider acceptance, push, CI, deployment,
+  activation, packaging, signing, publication, or release claim.
+
+- **Added the crash-safe Phase 5C run engine adapter and effect outbox in
+  version 0.60.93.** Canonical transitions now commit immutable events,
+  verified snapshots, derived effects, and transaction-owned rows once, with
+  exact-byte replay and hard identity-conflict handling. Durable effect claims,
+  ownership leases, preparation receipts, dispatch markers, outcomes, and
+  acknowledgements recover across every declared failpoint without authorizing
+  a second external dispatch, while bounded projection notices contain only
+  safe identities and digests after commit. This checkpoint executes no
+  provider or tool, contacts no node, and adds no native/live acceptance, push,
+  CI, deployment, activation, packaging, signing, publication, or release
+  claim.
+
+- **Added the durable Phase 5C execution store in version 0.60.92.** Migration
+  14 preserves and backs up every earlier schema while adding verified canonical
+  run replay, immutable events and artifacts, effect delivery, attempt, queue,
+  lease, worktree, budget, progress, recovery-review, and node-receipt records.
+  Private Hub/node DTOs bind every request to exact run, effect, baseline,
+  bundle, route, lease, and idempotency identities without accepting environment
+  authority from JSON, and app-owned worktree/artifact roots reject link
+  substitution. This storage checkpoint starts no provider, contacts no node,
+  and adds no push, deployment, activation, packaging, signing, publication, or
+  release claim.
+
+- **Repaired the Phase 5 execution contracts in version 0.60.91.** Canonical
+  runs now retain attempt-bound budget reservations and truthful partial or
+  over-limit usage, replayable checkpoints and ambiguity, exact supplemental
+  grants, immutable bounded artifacts, and server-fact verification evidence.
+  Successful tasks publish every declared artifact atomically before addressed
+  consumers become ready, while post-commit notifications contain identity and
+  digest only. This pure-runtime checkpoint adds no live provider dispatch,
+  migration, push, deployment, activation, packaging, signing, publication, or
+  release claim.
+
+- **Published the detailed Phase 5C execution-runtime contract in version
+  0.60.90.** The plan defines one server-owned effect interpreter, additive
+  migration 14, crash-safe event and outbox ordering, per-attempt app-data
+  worktrees, durable multi-scope scheduling, run and daily budget ledgers,
+  bounded typed artifacts, provider watchdogs, and conservative restart
+  recovery. This planning-only checkpoint adds no runtime dispatch, public run
+  surface, push, deployment, packaging, signing, publication, or release claim.
+
+- **Completed Phase 5B trusted-configuration acceptance in version 0.60.89.**
+  The maintained guides and acceptance record now capture the full checkpoint
+  chain, the exact 0.60.88 local matrix, native Windows storage hardening, and
+  physical limited-user confirmation evidence. The record keeps external Git
+  and SFTP, CI, production activation, push, deployment, packaging, signing,
+  publication, release, and the independent P4-C5/P4-C7 gates explicitly
+  separate.
+
+- **Recorded Phase 5B trusted configuration evidence in version 0.60.84.**
+  Root guidance and the maintained wiki now map the private source graph,
+  layered trust, immutable activation, authenticated distribution, durable
+  proposal review, and desktop controls to their implementation. The acceptance
+  record ties AC-B01 through AC-B18 to retained tests and the complete local
+  matrix while explicitly preserving absent native Windows, live remote, CI,
+  push, deployment, packaging, signing, publication, and release evidence.
+  This documentation checkpoint adds no executable behavior and leaves P4-C5
+  Partial and P4-C7 open.
+
+- **Added durable trusted mutation review and configuration controls in version
+  0.60.83.** Server-stamped request context now binds canonical proposals to
+  their authenticated caller, tool, environment, exact prior revision, and
+  content digests before local notification. Duplicate requests replay one
+  proposal, conflicting identities are rejected, and expiry, disconnect,
+  rejection, revision drift, or failed audit prevents mutation. Local approval
+  applies one exact target with immutable audit evidence, while direct MCP
+  settings mutation remains disabled. The desktop now provides non-color-only
+  confirmation cards plus trusted source, candidate, project trust, diff,
+  history, and forward-only revert surfaces using safe redacted projections.
+
+- **Added verified bundle activation and durable node distribution in version
+  0.60.82.** PandaMUX now materializes each compiled configuration as one
+  content-addressed private object containing the canonical payload, exact
+  instructions and personal Git objects, and bounded project snapshots. Local
+  activation commits the active pointer, immutable audit, candidate state, and
+  remote outbox together, so interruption leaves either the complete old state
+  or the complete new state. Authenticated node proxies receive private SFTP
+  uploads, independently verify every archive, source, layer, payload, and
+  prior-bundle identity before atomic activation, and return replay-stable
+  receipts. Pending transfers resume on reconnect exactly once, while existing
+  run records retain their originally pinned bundle.
+
+- **Added exact project-layer trust and trusted local agent controls in version
+  0.60.81.** PandaMUX now discovers a project repository from its server-owned
+  workspace, binds approval to the exact organization, project, credential-free
+  remote, canonical repository root, and strict `.pandamux/` content hash, and
+  automatically revokes approval when repository identity changes. Declined or
+  invalid content remains inspectable through local-control status and diff RPC,
+  with origin-aware hostile diagnostics. Revisioned local settings can disable
+  exact agents or opt them into FullAccess only after repository policy checks,
+  so authored layers cannot use trusted settings to rescue a widening override.
+
+- **Added trusted instructions mirroring and candidate inspection in version
+  0.60.80.** PandaMUX can now poll a configured branch, tag, or exact commit
+  from one private bare mirror, skip fetches when discovery is unchanged, and
+  retain annotated tag identity while keeping pinned commits fixed. Candidate
+  trees are inspected without checkout, filters, submodules, LFS, or repository
+  code execution, with bounded files, complete safe diagnostics, signature
+  blocking, force-push visibility, behavioral diffs, schedule impact, and
+  immutable candidate refs. Launch and five-minute polling, local-control
+  check and diff RPC, bounded node status, safe offline state, and last-good
+  retention establish the acquisition boundary without activating a bundle.
+
+- **Added the managed personal configuration repository in version 0.60.79.**
+  PandaMUX now initializes and recovers one private local Git repository under
+  its injected app-data root, retains exact authored bytes, and records each
+  accepted logical edit as one compare-and-swap commit with durable request
+  identity. Bounded plumbing rejects secrets, runtime files, unsafe paths,
+  case collisions, hooks, signing, inherited Git redirects, and stale writers
+  before they can change the active ref. Retained history, exact diff, and
+  inverse-commit revert operations preserve a valid last-good HEAD across
+  interruption and response-loss retries, while startup and shutdown keep Git
+  process work off asynchronous workers. Agent-specific authoring, candidate
+  activation, and user interface controls remain assigned to later Phase 5B
+  checkpoints.
+
+- **Added the Phase 5B trusted-configuration foundation in version 0.60.78.**
+  Configuration identities now distinguish source commits, layer content,
+  compiled bundles, transfer archives, and monotonic settings revisions.
+  One injected private app-data graph owns configuration storage, schema 13
+  creates the durable source, candidate, trust, bundle, distribution, and
+  mutation tables only after verifying a private pre-migration database
+  backup, and settings updates now reject stale compare-and-swap writes across
+  RPC and desktop callers. Shared canonical JSON hashing and typed protocol
+  contracts keep later personal Git, mirror, activation, and proposal work on
+  one trust boundary without claiming those later checkpoints are complete.
+
+- **Recorded exact Phase 5A pure-domain acceptance in version 0.60.77.** The
+  new acceptance record ties every commit-sized checkpoint to the complete
+  local Section 12 matrix on exact 0.60.76, including the rejected 0.60.75
+  workspace-feature candidate and its canonical approval-digest repair. It
+  preserves P4-C5 as Partial and P4-C7 as open, and makes no new behavior,
+  native-platform, CI, runtime, live-provider, push, deployment, signing,
+  packaging, publication, or release claim.
+
+- **Completed the Phase 5A CI and documentation checkpoint in version
+  0.60.75.** The macOS job now explicitly tests the pure orchestrator, while
+  compile-only all-target checks cover its musl x64 and arm64 graphs without
+  weakening the Windows workspace, x64 remote-binary, or Rust 1.89 MSRV jobs.
+  The active plan and maintained wiki now use the implemented V1 schema and
+  tier vocabulary, map every canonical orchestration module, and clearly
+  separate pure-domain evidence from the still-absent persistence, effect
+  interpreter, runtime dispatch, worktree, RPC, CLI, desktop, and live-provider
+  paths.
+
+- **Added bounded model proposals and replayable Phase 5 run state in version
+  0.60.74.** Model output now accepts only one size- and depth-bounded strict
+  V1 JSON object, allows one parse-only correction, and cannot grant authority
+  through unknown fields or hostile content. Pure command decision, durable
+  event application, and prefix replay enforce canonical event receipts,
+  sequence and idempotency conflicts, terminal absorption, immutable route
+  ledgers, approval replacement and expiry, checked budget reservations,
+  parallel dispatch limits, safe retry boundaries, deterministic cancellation
+  effects, hash-bound blackboard entries, partial-failure propagation, and
+  settlement only after effects and usage are reconciled.
+
+- **Added deterministic Phase 5 routing and approval reconciliation in version
+  0.60.73.** Task routing now hard-filters every agent and trusted environment,
+  organization, access, output, concurrency, tier, capability, capacity, and
+  provider candidate before scoring; explicit class rules outrank specialty
+  hints; and the existing provider selector remains the sole provider scorer.
+  Recorded routes are immutable, safe fallback stops after visible or ambiguous
+  effects, and one-node work uses the complete pipeline. Canonical approval
+  identity binds run, task, kind, policy revision, and action digest through one
+  Auto/Approve-first reconciler that deduplicates exact decisions and refuses
+  stale, expired, rejected, conflicting, or authority-widening authorization.
+
+- **Added deterministic Phase 5 plan and DAG validation in version 0.60.72.**
+  Proposed plans now normalize into ordered task and edge maps only after fixed
+  fail-closed stages for bounds, duplicate or missing identities, stable cycle
+  witnesses, trusted project and organization policy, agent and typed-output
+  references, checked token/cost/runtime budgets, route capability feasibility,
+  and approval availability. Stable topological ordering and one shared
+  dependency-readiness predicate produce byte-identical validated plans across
+  input permutations without adding a graph dependency.
+
+- **Added the trust-aware Phase 5 instruction-bundle compiler in version
+  0.60.71.** Bounded authored documents now compile only with server-issued
+  layer grants bound to exact source hashes, project and organization scope,
+  and a trusted tier mapping. References resolve before merge, effective values
+  retain their source origins, and project or personal overrides cannot widen
+  access, tools, environments, capability requirements, prompt control, or
+  FullAccess. Canonical ordered JSON is signed internally with the exact-pinned
+  SHA-256 dependency, produces identical bytes across source permutations, and
+  fails closed if either the payload or nested agent bundle identity changes.
+
+- **Added strict Phase 5 authored schemas and safe diagnostics in version
+  0.60.70.** The pure orchestrator now parses all five authored v1 document
+  kinds through version-first, deny-unknown decoding; rejects unsafe YAML,
+  unconfined paths, invalid identities, unsupported minimum versions, and every
+  published size or structure bound; normalizes CRLF without rewriting source;
+  and emits bounded, stable diagnostics that cannot echo source bodies. A
+  generated Schemars catalog publishes the same enforced limits and round-trips
+  as JSON.
+
+- **Added canonical Phase 5 orchestration records in version 0.60.69.** Core now
+  owns typed run, task, attempt, event, effect, edge, approval, budget, and
+  blackboard identities; ordered replay state; provider-neutral compiled
+  agents; and immutable instruction-bundle manifests. The client derives a
+  presentation projection from canonical state and no longer owns run
+  transitions. Existing thread, turn, schedule, and Phase 4 provider-routing
+  records remain unchanged.
+
+- **Froze Phase 1 orchestration compatibility at version 0.60.68.** Legacy
+  runs, run events, agents, vector-bearing memory, and schedules now validate
+  against private exact V0 wire records instead of the evolving live core
+  model. Existing migration codes and recovery guidance remain stable, later
+  canonical fields fail closed, runs and events remain non-executable, memory
+  stays deferred to Phase 5E, and schedules stay deferred to Phase 6.
+
+- **Established the Phase 5 dependency and orchestration boundary.** Added a
+  pure `pandamux-orchestrator` crate whose retained Phase 1 run, agent, memory,
+  and schedule inputs fail closed with stable migration guidance instead of
+  becoming accepted state. A target-resolved Cargo graph checker now enforces
+  exact direct registry pins, GPUI ownership, terminal feature separation,
+  orchestrator purity, future memory isolation, native-stack uniqueness, and
+  exact GPUI snapshot alignment against deliberately failing fixture
+  workspaces. Development and evidence
+  use pinned Rust 1.98.1, while CI separately proves the declared Rust 1.89
+  MSRV for the Windows product and Linux headless graphs. This authorized
+  sequencing change does not mark the open P4-C5 or P4-C7 rows complete.
+
+### Changed
+
+- **Published the detailed Phase 5A implementation contract.** The plan now
+  fixes ownership for canonical run and agent records, versioned authored
+  schemas, composite bundle identity, deterministic DAG and routing policy,
+  replay and approval invariants, commit-sized implementation checkpoints, and
+  an acceptance matrix. Version 0.60.67 is planning-only and adds no runtime
+  orchestration, persistence, provider dispatch, push, deployment, activation,
+  packaging, signing, or release claim.
+
+- **Recorded exact physical-laptop P4-C6 acceptance.** Exact 0.60.64 commit
+  `a41c5bd40861fb37de7a53252d96dcb055828362` passed the required 30-minute
+  provider disconnect and full-screen terminal Modern Standby rows on the
+  physical MSI laptop, including bounded abandoned-proxy cleanup, unique event
+  and usage replay, stable terminal ownership, exact offset replay, and verified
+  host and Galahad restoration. Version 0.60.65 is documentation-only and makes
+  no new executable, native, live, push, deployment, activation, or release
+  claim.
+
+### Fixed
+
+- **Made approval identity canonical under workspace feature unification in
+  version 0.60.76.** Approval action objects now sort every nested JSON key
+  before hashing even when another workspace crate enables Serde JSON's
+  insertion-order map backend. The digest contract is pinned by an exact hash
+  fixture, so focused and full-workspace builds cannot assign different
+  approval identities to byte-equivalent actions.
+
+- Fixed the Linux SSH proxy bridge so a node-side heartbeat lease closure
+  terminates the dedicated bridge process even while the Hub-side stdin pipe is
+  still half-open after a client network loss.
+- **Retired abandoned SSH proxy bridges after Hub suspension.** Proxy protocol
+  version 2 adds an application heartbeat every 15 seconds and a 90-second
+  node-side client lease, so a sleeping or disconnected Hub no longer leaves
+  its remote `pandamux-server proxy` process attached to a half-open SSH
+  session. Normal shutdown now drains the node's goodbye before falling back
+  to forced local task cleanup. Exact 0.60.62 physical-laptop continuity rows
+  completed successfully, but cleanup found one pre-sleep Galahad proxy still
+  alive and therefore rejected that P4-C6 candidate. Version 0.60.63 carries
+  the lifecycle repair and requires a fresh exact-candidate P4-C6 rerun.
+
+- **Rejected unusable Windows PowerShell App Execution Aliases.** Shell
+  discovery now requires PowerShell candidates to return a real version within
+  a bounded non-interactive probe. This prevents a `pwsh.exe` Store alias from
+  winning the normal `pwsh` -> Windows PowerShell fallback and leaving provider
+  login or ordinary terminal surfaces dead on otherwise healthy Windows 11
+  systems. Exact 0.60.61 physical-laptop acceptance exposed the alias after the
+  login confirmation and Surfaces accessibility repairs passed their reopened
+  checks; version 0.60.62 carries the compatibility repair and requires fresh
+  exact-candidate native evidence.
+
+- **Exposed the Surfaces toggle state to Windows assistive technology.**
+  The titlebar control now publishes its pressed state through the button's
+  accessibility toggle contract in addition to retaining selected styling and
+  its state-specific `Open surfaces panel` or `Close surfaces panel` name.
+  Exact 0.60.59 physical-laptop diagnostics proved the visual state and action
+  changed but Windows UI Automation exposed only Invoke, so that candidate is
+  rejected for the reopened accessibility row. Version 0.60.61 carries the
+  semantic repair and requires a fresh exact-candidate native rerun.
+
+- **Kept provider login handoffs visible and made Surfaces state explicit.**
+  Prepared login confirmation now stays above the scrolling provider list,
+  instead of appearing below the user's current viewport. Opening the reviewed
+  command atomically reveals the non-collapsing right-side Terminal surface,
+  the titlebar control now reads `Hide Surfaces` with selected, tooltip, and
+  accessibility state while the panel is open. Focused desktop regressions
+  cover the open/select transition and the toggle presentation. Version
+  0.60.59 carried the initial repair, but its physical-laptop UI Automation run
+  exposed the missing semantic toggle state corrected in 0.60.61.
+
+- **Model Codex included usage and credits as separate serviceability paths.**
+  Codex account snapshots now keep reported utilization separate from both
+  included-use permission and paid-credit availability. A 100 percent window,
+  `ordinaryUsageAllowed=false`, and `rateLimitReachedType=rate_limit_reached`
+  remain routable when credits are available or unlimited. Spend-control
+  blocks, workspace-level limit types, or explicitly exhausted included use
+  plus unavailable credits still produce a hard limit. Terminal structured
+  `usageLimitExceeded` and `rateLimitExceeded` errors request failover only
+  when the app server will not retry them. Structured non-capacity errors
+  remain nonrecoverable, with message matching retained only for older payloads
+  that lack a discriminator. Retained exact 0.60.55 diagnostics proved that
+  Codex could complete a turn in the credit-serviceable state and exposed the
+  first correction as too broad. Exact 0.60.56 commit `2ca7d70` then passed a
+  live Galahad proof with capacity-aware routing enabled: the reported primary
+  window remained serviceable at 100 percent included-use utilization, one
+  Codex attempt completed, and no capacity retry or Claude fallback appeared.
+  The separate real provider-capacity failover row remains open because paid
+  credits were available throughout this proof.
+
+- **Persist continuation provider handoffs on the thread.** Existing thread
+  upserts now store the provider instance and model selected for a continuation
+  instead of silently retaining the interrupted source route. This prevents a
+  valid failover-pool target from being reloaded as the stale source provider
+  and then rejected by organization policy before its target turn starts.
+  Store and lifecycle regressions require the selected route to survive a
+  SQLite reload and manager restart. Version 0.60.52 contains this fix and its
+  exact Galahad artifact passed the pending-continuation restart rehearsal.
+
+- **Made completed tool-result projection atomic and restart-idempotent.** The
+  production provider event path now gives each terminal tool result a stable
+  delivery identity and commits its immutable ledger transition, timeline
+  event, and delivered marker in one SQLite transaction. Identical provider
+  redelivery after replay or database restart creates no second result;
+  conflicting payloads fail closed, and a failed timeline write rolls the
+  entire result back to its prior Started state. Store and lifecycle
+  regressions cover rollback, reopen, and duplicate provider emission.
+
+- **Fail closed when a provider reports success with an unresolved tool
+  result.** Before accepting provider success, the thread manager now checks
+  the durable tool ledger. Any still-started side-effecting tool, or inability
+  to read that ledger, emits a nonrecoverable `unresolved_tool_result` error
+  and records the turn and attempt as failed. PandaMUX preserves the ambiguous
+  ledger for manual recovery and never retries or invents a continuation. A
+  lifecycle regression reproduces a started network tool followed by provider
+  success and verifies contiguous error, failed-completion, and settled events.
+
+### Changed
+
+- **Reopened the scoped P4-C3 native rows affected by the 0.60.59 UI fix.**
+  The Phase 4 plan and acceptance ledger now distinguish the prior accepted
+  terminal TextPattern and IPC evidence from the provider-login confirmation,
+  Surfaces handoff, scaling, visual, High Contrast, and accessibility rows that
+  must be rerun on exact 0.60.59 Windows artifacts. Version 0.60.60 records
+  this acceptance boundary only; it adds no runtime behavior or native result.
+
+- **Rebuilt the maintained wiki for the current GPUI architecture.** The
+  generated documentation now maps all 142 Rust source modules across the nine
+  active crates, documents provider routing and explicit login behavior, and
+  separates current implementation authority from archived Iced material.
+  Root contributor guidance now routes readers to the current docs without
+  implying that Phase 4 production acceptance has completed. Version 0.60.58
+  records documentation and release-metadata changes only; it adds no new
+  executable behavior or release claim.
+
+- **Recorded the real external-service interruption Pass for P4-C5.** The
+  unchanged exact 0.60.52 Galahad server opened one disposable Webhook.site
+  HTTPS endpoint and organization policy selected real `claude-default` plus
+  `claude-3-7-sonnet-latest`. The provider performed exactly one marked POST,
+  then remained inside the side-effecting shell tool with one Started ledger
+  row at `tool_side_effect_begun`. The harness froze and killed the exact
+  five-process server, provider, shell, and sleep tree. Restart reconciled the
+  thread, turn, and attempt to Idle, Interrupted, and Failed without a second
+  request, terminal tool result, continuation, or delivery. Cleanup restored
+  authentication, revoked the endpoint with HTTP 204, verified HTTP 404 after
+  deletion, and preserved both source databases at their pre-run hashes. The
+  accepted 31-entry manifest has SHA-256
+  `0fea7f40c9d511da82734f28b2b463041b1e14e82025433883e94166a6553db6`.
+  This closes the real external-service action portion of P4-C5 row 5. Real
+  pre-output provider capacity exhaustion remains open, so P4-C5 stays Partial.
+  Version 0.60.54 records this evidence only and has no new executable, native,
+  production, push, deployment, activation, or release claim.
+
+- **Recorded the repaired P4-C5 pending-continuation restart pass.** Exact
+  0.60.52 commit `5d8b77d7086a7a266251cd3106e5f124d6cd2aec` passed the
+  complete local gate with 445 tests and supplied the hash-pinned Galahad
+  server. A controlled source interruption launched one real Codex
+  continuation through the explicit organization policy and failover pool.
+  The target route survived persistence, performed exactly one loopback HTTP
+  POST, and remained Running with one Started tool when the harness killed the
+  exact five-process descendant tree. Restart reconciled the continuation and
+  target attempt to Failed without a second request, terminal result, or
+  delivery. Two duplicate continuation submissions both refused redispatch.
+  This closes the pending-continuation restart portion of P4-C5 row 6, but the
+  controlled source fixture does not prove real provider capacity exhaustion
+  or interruption of a real external service. Version 0.60.53 records this
+  evidence only and has no new executable, native, production, push,
+  deployment, activation, or release claim.
+
+- **Recorded an exact process crash inside atomic tool-result persistence.**
+  The hash-pinned 0.60.49 Galahad server ran one real Codex tool call that made
+  exactly one loopback HTTP side effect. A clone-only trigger held the terminal
+  tool-result transaction open after the ledger and delivery writes but before
+  timeline insertion. After three consecutive writer-lock observations, the
+  harness sent `SIGKILL` only to the isolated daemon process group. SQLite
+  reopened to the complete pre-result state: one ambiguous Started tool, no
+  terminal event, and no tool-result delivery row. An exact daemon restart
+  reconciled the turn to Interrupted and its attempt to Failed without a second
+  network request or an invented result. Version 0.60.51 records this evidence
+  only and has no executable, native, production, push, deployment,
+  activation, or release claim.
+
+- **Recorded the exact P4-C5 pending-approval restart pass and clarified the
+  tool-result restart contract.** Exact 0.60.49 commit
+  `d09641e86cd06d72d7312ceb1fa3b20e5931ff5f` passed the complete local gate
+  with 444 tests and supplied the hash-pinned Galahad server. A controlled
+  post-dispatch persistence fault left one real Codex approval delivery
+  Pending after exactly one loopback HTTP side effect. After an exact daemon
+  restart, two identical approval submissions both returned
+  `approval_delivery_pending`, the request count remained one, and no
+  resolution or second dispatch was invented. The acceptance contract now
+  states the stronger tool-result invariant: terminal ledger state, timeline
+  projection, and delivery state are atomic, so restart can observe either the
+  pre-result state or one Delivered result, never a durable half-commit.
+  Version 0.60.50 records this evidence only and has no executable, native,
+  production, push, deployment, activation, or release claim.
+
+- **Recorded the repaired P4-C5 approval and loopback-network recovery row.**
+  An exact 0.60.43 diagnostic exposed a false-success path when provider output
+  ended after starting a side-effecting tool without a durable result. Exact
+  0.60.47 commit `1822486b4f7d98ba6026bbfd7224e97f09e447c9`
+  repaired that invariant and passed the complete local gate. Its final clean
+  live rehearsal killed the exact remote proxy after one approval and one
+  loopback HTTP POST, then reconnected after a measured 20.135-second gap with
+  unique contiguous replay, one request, one succeeded tool ledger row, one
+  completed protected attempt, one settled turn, and one matching managed
+  usage observation. Two earlier fixed-runtime runs remain recorded as
+  rejected instrumentation: one had a wrapper-only logging failure after the
+  product correctly failed closed, and one proved safe resolved success but
+  exposed an overly narrow harness assertion. P4-C5 remains Partial because
+  real provider capacity exhaustion, an external-service interruption, and
+  the pending-delivery restart rows were still open at that revision. Version
+  0.60.48 is documentation-only and makes no new executable, production,
+  push, deployment, activation, or release claim.
+
+- **Recorded supporting live P4-C5 recovery after an abrupt post-side-effect
+  proxy loss.** Exact 0.60.43 runtime code completed one real Codex turn after
+  its exact remote proxy process was killed with `SIGKILL`. Before the cut, the
+  turn emitted visible text, created one hash-pinned marker through a successful
+  shell tool, emitted more visible text, and started a separate 120-second tool.
+  Reconnect after a 20.125-second gap replayed unique event sequences, retained
+  one completed `tool_side_effect_begun` attempt, preserved the one-line marker,
+  and exposed one matching managed usage observation. P4-C5 remains Partial:
+  provider quota or capacity exhaustion, a network side effect, an approval
+  result, and the remaining live restart rows are still open. Cleanup stopped
+  only the isolated server, restored its original auth, preserved both source
+  databases, and retained a hash manifest for audit. Version 0.60.46 is
+  documentation-only and makes no new executable, production, push,
+  deployment, activation, or release claim.
+
+- **Recorded supporting 30-minute Hyper-V P4-C6 rehearsals without closing the
+  physical rows.** Exact 0.60.43 runtime code replayed one real Codex turn after
+  a 1,825.420-second guest network outage with unique event sequences, exact
+  output, one durable attempt, and one matching managed usage observation. A
+  separate full-screen terminal remained remotely owned across 1,814.121
+  seconds of VM saved state, replayed exactly 5,246 bytes from offset 1,655 to
+  6,901 without truncation, and retained exactly one input marker. Hash-pinned
+  guest and host evidence remains in isolated acceptance roots. Cleanup stopped
+  only the rehearsal server, restored the original auth and SSH authorization,
+  preserved the retained source database, removed only the temporary checkpoint
+  and tasks, and returned the shared VM to its Off, disconnected, GSI-disabled,
+  eight-checkpoint baseline. The required physical laptop disconnect and sleep
+  rows remain open. Version 0.60.45 is documentation-only and makes no new
+  executable, physical, production, push, deployment, activation, or release
+  claim.
+
+- **Recorded exact 0.60.43 local, live, and native provider-routing
+  acceptance.** The clean candidate passed the complete local source gate,
+  migrated only the shipped Codex `o3-mini` defaults, discovered six current
+  models from authenticated Codex 0.157.0, and completed a real
+  `codex-default` plus `gpt-6-luna` turn. Exact limited-user Windows artifacts
+  then passed build and headless smoke. The desktop visibly rejected a
+  no-route create into Provider Settings without creating a thread, and the
+  authenticated path rendered `Codex CLI` plus live `GPT-6.1-Sol` before the
+  shipped CLI read the same `codex-default` and `gpt-6.1-sol` thread route.
+  Cleanup removed every temporary credential, task, process, and runtime
+  record while the Hyper-V lab remained Off and unchanged. P4-C3 is Pass again;
+  P4-C5, the final archive, and physical laptop rows remain open. Version
+  0.60.44 is this documentation-only follow-up and makes no new executable,
+  production, push, deployment, activation, or release claim.
+
+- **Closed the P4-C3 native Windows acceptance gate on exact 0.60.41.** Clean
+  commit `c6a20ff4f768747d0dadd59b88b40d3e20f7674d` passed the complete local
+  source gate, clean limited-user MSVC build, host smoke and remote lifecycle,
+  controlled successful-login interaction at 100 and 200 percent scaling,
+  High Contrast, disabled animations, visual inspection, genuine Windows
+  Narrator traversal, and the full local plus independent-peer named-pipe
+  security matrix on one desktop, server, and CLI artifact set. Narrator
+  directly copied the exact READY, ECHO, and reopened-output phrases while
+  three synchronized Speech Recap screenshot pairs remain as audit evidence.
+  The full guest evidence root and task definitions are hash-archived on the
+  host, and the shared Hyper-V lab is restored to its Off, disconnected,
+  eight-checkpoint baseline.
+  P4-C5 real external quota exhaustion and post-side-effect interruptions, the
+  final documentation archive, and the physical disconnect and sleep rows stay
+  open. Version 0.60.42 is this documentation-only accounting follow-up; it
+  makes no new executable, native, live, production, or release claim.
+
+### Fixed
+
+- **Routed new threads through real provider instances and current model discovery.**
+  The composer now uses enabled, authenticated `ProviderInstanceConfig` IDs instead
+  of hard-coded provider kinds, and its model choices come from bounded driver-backed
+  discovery rather than stale desktop constants. New Thread fails visibly into
+  Provider Settings when no usable route exists. Settings schema 7 also replaces only
+  the shipped Codex `o3-mini` defaults with the provider-owned `default` selector while
+  preserving custom provider and tier targets.
+
+- **Made the terminal Document's bounded text traversable by Narrator.** The
+  visible terminal grid now sits inside an explicit semantic Text child whose
+  AccessKit value is backed by a synthetic text run using the same
+  4,096-character bounded output. That gives Windows a concrete UIA Text node
+  and TextPattern content while retaining the stable `terminal-output-log`
+  Document identity and input/output focus controls. This supersedes the first
+  child-node attempt, whose label-only property was absent from the exact
+  0.60.40 Windows UIA tree.
+
+- **Exposed visible terminal output through the platform terminal document role.**
+  The bounded terminal grid now uses AccessKit's dedicated `Terminal` role,
+  which Windows publishes as a UI Automation Document. Genuine Narrator
+  diagnostics proved that its item navigation reached the terminal header
+  controls but skipped the former semantic Log group entirely, even though
+  ordinary UI Automation could focus it. The stable `terminal-output-log`
+  automation ID, explicit focus actions, bounded accessible text, visible read
+  mode, and active-descendant behavior remain intact.
+
+- **Made visible Terminal output predictably reachable by assistive technology.**
+  Terminal surfaces publish their bounded visible grid as a semantic log with
+  a visible focus border. The Terminal header exposes explicit `Type here` and
+  `Read output` buttons, so assistive technology can select a mode without
+  depending on application shortcuts being passed through. Those controls use
+  direct AccessKit Click handlers instead of GPUI's synthesized-pointer
+  fallback, which Narrator can suppress. PandaMUX now keeps real keyboard focus
+  on the interactive terminal container and publishes the output Log as that
+  container's active descendant while read mode is selected. This matches
+  GPUI's supported composite-widget focus pattern and avoids trying to move
+  real keyboard focus to a child while Windows UI Automation reports the
+  application root. F6 remains a keyboard fast path between live terminal
+  input and the read-only output Log, while Shift Tab returns from the Log to
+  input. Switching to another terminal resets the mode to input; ordinary
+  terminal refreshes preserve the selected mode.
+  An application-level keystroke interceptor handles delivered F6 input before
+  focus-path dispatch. Ordinary Tab remains PTY input for shell completion.
+  Visible and accessible instructions report the active focus mode and its
+  return path without exposing unbounded scrollback.
+
+- **Submitted provider login commands with the native PTY Enter sequence.**
+  Windows ConPTY login terminals now receive a carriage return, so PowerShell
+  executes the reviewed command instead of opening a continuation prompt.
+
+- **Made successful provider login terminals visible and interactive.** Confirming
+  a reviewed login now opens and focuses the Terminal surface without leaving
+  Settings, streams retained PTY output, forwards keyboard input, exposes an
+  explicit close action, and keeps attach errors visible for recovery. The
+  confirmation card now appears near the top of Provider settings instead of
+  below the full provider list.
+
+- **Routed remote provider login terminal sessions back to their owning node.**
+  The Hub now records terminal IDs returned by a forwarded
+  `provider.login.launch`, so later attach, input, resize, and close requests do
+  not fall through to the local terminal manager.
+
+- **Made Phase 4 status, error, and table semantics speakable.** Usage and
+  Settings status changes now publish atomic AccessKit live regions, failed
+  provider-health evidence is an assertive named alert, and the Usage table is
+  a keyboard-focusable, scroll-anchored stop whose name announces its row count
+  and column shape for Narrator even when no observations match.
+
+- **Connected Phase 4 scroll commands to the rendered viewports.** The Usage
+  editor and Settings Page Up/Page Down paths now share their `ScrollHandle`
+  with the actual scrolling element and visible scrollbar. Programmatic focus
+  scrolling no longer updates a detached content handle while the screen stays
+  at the top.
+
+- **Stopped keyboard activation from crashing the Usage subscription editor.**
+  Opening, saving, or canceling the editor now schedules its follow-up scroll
+  repaint through the window-safe GPUI refresh path, so Enter activation no
+  longer aborts after the render context has ended.
+
+- **Kept Phase 4 keyboard scrolling on the window-safe repaint path.** Settings
+  Page Up and Page Down no longer request a view-scoped animation frame from an
+  event callback. Opening the Usage subscription editor now scrolls directly to
+  the newly appended editor, while Save and Cancel restore the originating
+  provider row rather than the top of the whole subscription section.
+
+- **Made server inspection commands side-effect free.** `pandamux-server --help`
+  and `pandamux-server --version` now print and exit without creating a runtime
+  or database. Unknown, incomplete, conflicting, and invalid startup arguments
+  fail closed instead of being ignored and launching the default Hub.
+
+- **Reconciled Claude managed usage with its exact transcript message totals.**
+  PandaMUX now requests Claude's final partial-message usage events and folds each
+  terminal message delta into the matching provider message ID. Simple and tool-using
+  turns therefore preserve their complete input, output, and cache measurements instead
+  of retaining the smaller preliminary stream values and reporting false conflicts.
+
+- **Rejected local named-pipe servers whose kernel identity does not match PandaMUX.**
+  Windows desktop and CLI connections now read the server PID from the opened pipe,
+  compare it with the matching runtime record when available, resolve the process image,
+  and require `pandamux-server.exe` before sending authentication or RPC bytes. This
+  completes the client side of the existing SID-scoped DACL, remote-client rejection,
+  first-instance, and server-side client-image controls.
+
+- **Kept keyboard focus visible across the Phase 4 Usage and Settings workflows.**
+  Opening the subscription editor now scrolls it into view on a guaranteed follow-up frame,
+  and Cancel or Save returns both focus and the viewport to the subscription list. Settings
+  categories retain scroll state, respond to Page Up and Page Down, and reset at the top when
+  changed, so provider health, login, policy, and diagnostics actions remain reachable at
+  compact sizes and high display scaling. Filter announcements include
+  their current values, settings results expose Alert or Status semantics, and active rail
+  and Settings destinations use explicit markers plus selected state instead of tint alone.
+
+### Added
+
+- **Added exact-artifact Phase 4 acceptance evidence.** The new record separates
+  verified native Windows startup, accessible Usage controls, live Galahad
+  providers, Hub SSH routing, and usage synchronization from the remaining
+  interaction, reconciliation, failover, and production-release gates.
+
+- **Added Phase 4F explicit failover pools and side-effect-aware capacity recovery.**
+  Organization settings now create and edit named pools whose provider, subscription,
+  model, capability, access, and preference claims are validated against server-derived
+  driver metadata. New turns apply organization, capability, model, authentication,
+  health, capacity, concurrency, locality, and user-preference policy through a
+  deterministic hard-filter-first router with durable explanations. Every provider
+  attempt records its routing decision plus exact execution snapshot and advances a
+  monotonic side-effect boundary before output, tool activity, or approval interaction is
+  forwarded. Completed retry identity drives managed usage attribution. Capacity exhaustion
+  retries at most once only before output; later exhaustion persists exact evidence,
+  partial output, checkpoint, and tool ledger state and offers an audited continuation in
+  a fresh provider session. Continuations and approval or tool-result deliveries are
+  restart-safe and idempotent, native resume tokens are retired across provider changes,
+  and independent rollback switches gate scanning, Hub synchronization, capacity-aware
+  routing, and automatic failover without deleting observations.
+
+- **Added the Phase 4E Usage, named-identity, organization-policy, and accessibility
+  surfaces.** A top-level Usage rail now presents token-first totals, separately labeled
+  provider-reported and API-equivalent spend, source freshness and coverage, equivalent
+  data tables, conservative capacity evidence, and every required loading or failure
+  state through a pure client reducer. Users can name provider instances and subscription
+  boundaries without exposing opaque keys. Organization settings edit named routing
+  boundaries, budgets, concurrency, tier defaults, and Broadside permissions, while
+  project routes, local and remote turns, schedules, failover candidates, and read-only
+  MCP proposals enforce the canonical policy before provider selection. Provider health
+  now has truthful evidence details, targeted retry, and a separate explicit login flow.
+
+- **Added Phase 4D capacity, provider-health, and explicit login controls.** Nodes
+  now persist schema-versioned quota revisions with source, confidence, freshness,
+  reset, and hard-limit evidence, while authenticated Hub synchronization carries the
+  bounded subscription metadata needed to bootstrap a fresh replica. Capacity
+  projections age evidence conservatively, preserve local hard limits until verified
+  reset, expose conflicting and offline evidence, and choose the safer remaining value.
+  Concurrent provider health checks now have bounded deadlines and concurrency, durable
+  last-success state, separate installation, authentication, and runtime fields, masked
+  account labels, and structured guidance. Claude and Codex login actions require a
+  one-time preview of the exact isolated profile and safely quoted command before a
+  retryable Terminal launch.
+
+- **Added the Phase 4C Hub usage synchronization, aggregation, and pricing layer.**
+  The Hub now pulls bounded pages from every registered node, assigns authenticated
+  environment identity, commits facts with each durable high-water mark, resumes after
+  reconnect or restart, and reconciles changed node-store identities through bounded
+  snapshots. Acknowledged node outboxes compact by age, count, and serialized bytes;
+  retention gaps remain explicit until backfill completes. Indexed SQL totals apply all
+  usage filters, preserve provider-reported spend separately, calculate effective-dated
+  API-equivalent estimates with checked integer arithmetic, and report cross-node
+  freshness, quarantine, source, reachability, and unknown-price coverage.
+
+- **Added the Phase 4B node-owned usage scanner and reconciliation service.** PandaMUX
+  now scans Claude and Codex transcript sources on one bounded server-owned worker at
+  startup, after managed turns, and on a jittered fallback cadence. Durable platform
+  file identities, parser state, transactional cursors, incomplete-record handling,
+  bounded quarantine retention, safe coverage diagnostics, and joined shutdown make
+  restart, append, rotation, truncation, replacement, malformed data, and source loss
+  explicit without exposing transcript paths or content. Managed PandaMUX turns remain
+  authoritative when the same provider usage also appears in a transcript.
+
+- **Added the normalized Phase 4A usage and policy foundation.** PandaMUX now stores
+  retry-safe usage observations with checked integer token and cost values, durable
+  scanner cursors and hub outbox state, opaque subscription mappings, capacity facts,
+  canonical revisioned organization and failover policy, deterministic legacy
+  reconciliation, and explicit quarantine records. Authenticated usage export and ack,
+  plus bounded usage, capacity, and provider-health queries, expose stable page and
+  validation contracts without leaking transcript paths or profile data.
+
+### Changed
+
+- **Archived the exact Phase 4 native Windows acceptance result.** The
+  acceptance record now ties the 0.60.22 candidate to its limited-user startup,
+  Offline and Retry behavior, complete 100 and 200 percent interaction paths,
+  empty and populated semantic table evidence, dark and light visual review,
+  High Contrast, disabled animations, genuine Narrator output, and normal-user
+  named-pipe security evidence. Remaining external failover and physical laptop
+  rows stay explicit instead of being inferred from native UI or fixture results.
+
+- **Archived the exact Phase 4 durability and control result.** The acceptance
+  record now ties the 0.60.17 candidate to its scanner rotation and recovery
+  matrix, bounded Hub restart and retention-gap backfill, real and controlled
+  capacity projections, route explanations, rollback-control proof, exact
+  artifact hashes, isolation corrections, and retained-store preservation. It
+  keeps real quota exhaustion and post-side-effect interruption explicitly open
+  instead of promoting diagnostic fixtures to live acceptance.
+
+- **Archived the exact Phase 4 accounting acceptance result.** The acceptance
+  record now ties the 0.60.15 candidate to its clean source commit, artifact
+  hashes, full local verification, cloned Galahad migration and rescans, fresh
+  simple and tool-using Claude turns, exact message-level transcript matches,
+  stable query totals, explicit historical reconciliation debt, and Unknown
+  independent-provider comparisons. The remaining native, durability,
+  failover, and physical gates stay open.
+
+- **Rewrote the Phase 4 onward recovery plan around current evidence and exact
+  acceptance gates.** The plan now records the 0.60.5 through 0.60.8
+  accessibility, bridge, and theme work; makes Claude per-message usage
+  components and a separate terminal cost fact the first correctness blocker;
+  forbids timestamp-based historical merging; and orders the final local,
+  native, reconciliation, durability, IPC, physical, and documentation gates.
+  Phase 5 now begins with legacy-domain and resolved-boundary inventory, Phase 6
+  migrates existing schedules conservatively, and Phase 7 keeps signing,
+  publication, deployment, and served-version proof separate.
+
+- **Made the Usage surface screen-reader navigable and scale-safe.** The usage
+  observation grid now exposes native table, row, column-header, and cell
+  semantics with row and column counts. Every row also exposes a complete
+  labeled text equivalent for Windows accessibility adapters that do not
+  implement table navigation patterns. The layout remains horizontally
+  scrollable at high display scaling. Usage status is published as a status
+  node, and persistent request failures are announced as alerts with an explicit
+  Retry recovery cue.
+
+- **Reconciled the Phase 4 plan and acceptance record through the exact 0.60.3
+  native accessibility follow-up.** The record now separates the repaired Usage
+  editor focus and direct UI Automation Cancel rows from the still-open visual,
+  screen-reader, reconciliation, failover, current IPC, and physical-laptop gates.
+
+- **Restored the dependency policy check.** Current `cargo-deny` now validates
+  advisories, sources, bans, and a narrow license allowlist with version-scoped
+  exceptions for seven existing transitive crates; it still reports a yanked
+  transitive version as a non-failing warning.
+
+- **Made provider quota and health claims evidence-based.** Codex account rate limits
+  use exact integer fractions and Reported confidence. Grok quota collection remains
+  disabled until a live semantic smoke test exists, while Claude and Antigravity report
+  Unknown capacity. Best-effort providers no longer fabricate versions, account tiers,
+  or authenticated state from the presence of local configuration files.
+
+- **Closed R0 as a development gate through an explicit user-approved rescope.** Phase 4
+  implementation may continue while the deferred 30-minute physical laptop disconnect
+  and sleep checks remain mandatory production-acceptance and release evidence.
+
+- **Completed native Windows IPC acceptance for R0.5.** Exact `0.54.12`
+  Windows server and CLI artifacts passed SID-scoped pipe naming, same-user control,
+  the user-only DACL, client PID and image rejection, first-instance anti-squatting,
+  and controlled remote-client rejection on the isolated Colt-Shine Hyper-V guest.
+  The recovery gate remains open only for the required 30-minute physical laptop
+  disconnect and sleep checks.
+- **Archived authenticated Claude and Antigravity R0 evidence.** The Phase 3 acceptance
+  record now identifies the exact `0.54.11` Galahad artifact and captures both live
+  provider matrices while keeping the required physical laptop and native Windows rows
+  explicitly open.
+- **Closed Claude's ReadOnly plan-mode approval escape.** ReadOnly sessions now add
+  `ExitPlanMode` to Claude's disallowed tools without replacing configured tool
+  restrictions, preventing a plan-only turn from asking to leave the enforced
+  read-only ceiling.
+- **Updated the Claude provider to the current SDK streaming contract.** Claude turns
+  now send structured user messages, parse nested assistant tool and result content,
+  preserve the exact pending tool input across approval, serialize current control
+  responses and interrupts, classify error results as failed, and explicitly enable
+  the CLI safety gate only for full-access bypass mode. Legacy fixture envelopes remain
+  readable.
+- **Updated Claude access policy mapping for the current CLI contract.** Read-only
+  sessions now use `plan`, approval-required sessions use `manual`, automatic edit
+  sessions use `acceptEdits`, and full-access sessions explicitly use
+  `bypassPermissions`. Contract coverage fixes all four mappings.
+- **Made unexpected provider process exits durably terminal.** A provider event stream
+  that closes without a completion now records its final checkpoint, failed turn state,
+  process error, `TurnCompleted`, and `TurnSettled` as a contiguous serialized sequence.
+  Explicit cancellation remains authoritative.
+- **Recorded the current Phase 3 recovery acceptance boundary.** The acceptance matrix
+  now identifies the exact `0.54.7` Galahad artifact and Codex live evidence, preserves
+  the managed-install and transfer proofs, and leaves Claude, Antigravity sign-in,
+  physical sleep, and native Windows checks explicitly open. No public release or
+  publication is enabled.
+- **Made Codex Ask mode fail closed at the provider boundary.** Ask sessions now use
+  Codex's `untrusted` approval policy instead of `on-request`, so Codex cannot classify a
+  mutating command as safe and execute it without surfacing PandaMUX's approval flow. A
+  contract test fixes the sandbox and approval pair for every PandaMUX access mode.
+- **Serialized approval and provider continuation events.** A thread session now has one
+  event writer that refreshes the durable sequence before every provider event. Approval
+  decisions cannot collide with an immediately resumed tool event, and an event that
+  fails SQLite persistence is no longer broadcast as though it were replayable.
+- **Made explicit turn cancellation authoritative.** Once cancellation removes a session
+  generation, its late provider events and expected stream closure cannot overwrite the
+  interrupted state as a failure. The cancel path now persists terminal and settled
+  events, including the post-cancel worktree checkpoint, before returning success.
+- **Recovered and hardened the Phase 3 production foundation.** The Hub now composes the
+  SSH-backed node transport, the node proxy uses a versioned bounded protocol with replay
+  and explicit stale state, and remote calls no longer fall back to local execution.
+  Provider turns resolve one exact stored instance and retain its environment, profile,
+  binary, settings, audit identity, and lifetime concurrency permit. The server terminal
+  dependency is PTY-only, and a clean-commit artifact harness now builds and verifies the
+  Galahad server and CLI without enabling publication.
+- **Replaced the placeholder Antigravity path with the pinned Google ACP runtime flow.**
+  Managed installs now stream and verify the official platform archive, enforce the exact
+  two-file extraction contract, validate ACP capabilities before atomic activation, and
+  fall back to a verified Hub cache plus private SFTP transfer when a node cannot download.
+  Google sign-in now owns the actual ACP process and strict one-shot loopback relay.
+  Active sessions use ACP v1 content blocks, account model options, resumable sessions,
+  bounded tool events, workspace-confined file handlers, opaque permission choices,
+  read-only enforcement, a bounded cancellation drain, and a shared two-process ceiling
+  across sessions, model refresh, sign-in, and install validation. Live Windows and
+  Galahad acceptance remains required before this path is described as production-accepted.
+- **Replaced caller-asserted trust with transport-assigned request contexts.** Desktop,
+  CLI, MCP, provider-child, and node-proxy callers receive distinct server-owned roles and
+  scopes. Provider capabilities are expiring and thread-bound, node proxies are bound to
+  one authenticated environment, and request JSON cannot promote either identity.
+- **Updated contributor documentation to the current GPUI, Rust workspace, authenticated
+  server, remote-composition, and recovery-gate truth.** Historical Iced material remains
+  available but is clearly labeled as archive content.
 - **Cleared ground for Phase 1 GPUI rewrite (Step 1).** Extracted SSH pool, authentication, known hosts, and SFTP into new `pandamux-remote` crate. Reshaped `pandamux-term` with `grid` and `pty` feature flags, decoupling it from `russh`. Trimmed `pandamux-core` to retain domain types (`ids`, `project`, `project_registry`, `ssh`, `notification`, `i18n`, `home`, `settings`), and pruned multiplexer files (`split_tree`, `state`, `surface_content`, `keymap`, `sidebar`, old `agent`, `config`). Removed obsolete crates `pandamux-ui` and `pandamux-app`, retired resource folders, and legacy terminal spikes. Guarded `release.yml` with `RELEASES_ENABLED` check, disabled `winget.yml`, and updated CI workflows and crate boundaries.
 - **AI agents and contributors now have a faster, more reliable documentation path.**
   `AGENTS.md` defines the reading order and authority hierarchy, current behavior is
@@ -35,6 +1196,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Added hardened local control endpoints and safe MCP projections.** Unix runtime paths
+  enforce owner and mode checks plus peer credentials. Windows pipes use SID-scoped names,
+  user-only DACLs, remote-client rejection, first-instance protection, and client process
+  validation. General MCP reads return purpose-built redacted settings and schedule views.
+- **Added a durable Phase 3 acceptance record.** Source, fixture, cross-target, local socket,
+  artifact, and live Windows and Galahad evidence are tracked independently so compilation
+  cannot be mistaken for production acceptance.
 - **Implemented Phase 4 Step 1 (Best-effort providers: Cursor, Grok, and OpenCode profiles on shared ACP driver).** Extended `pandamux-providers` and `pandamux-server` with driver implementations for Cursor, Grok, and OpenCode:
   - **Shared ACP driver enhancement**: Updated `parse_acp_line` in `acp.rs` to support `session/request_permission` alongside `request_permission` and handle structured `toolCall` payloads for file editing and command execution approvals. Added `with_preamble` to `AcpSession` for preamble instruction delivery.
   - **Cursor driver**: Implemented `CursorDriver` in `cursor.rs` using `cursor-agent acp` over stdio with fallback preamble instruction delivery (`=== PANDAMUX AGENT ROLE INSTRUCTIONS ===`, knowledge context, task prompt) and coarse permission response mapping (`ReadOnly`, `AutoEdit`, `Ask`, `FullAccess`).
@@ -170,8 +1338,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **An update banner on launch.** When the automatic check (on launch and every few hours) finds a newer release, PandaMUX shows a banner across the top with **Install** and **Dismiss**. Installing downloads and launches the installer, then closes PandaMUX so the update can finish (your sessions are restored on next launch). Dismissing hides the banner until a newer version appears. This replaces the previous update toast.
 - A CI guard for the `.claude/` wiring (`scripts/check-claude-wiring.mjs`, run by the new Claude Wiring workflow and by the Rust workflow). It fails the build when a rule's `paths:` globs match no files or a hook matcher is written in permissions syntax, both of which otherwise fail silently and are indistinguishable from a rule that simply has not fired yet. Both workflows pin Node 24 LTS via `actions/setup-node@v7` rather than relying on whatever the runner ships. (Internal tooling; no runtime change.)
 
+### Security
+
+- **Updated the SSH transport to the patched `russh` 0.63 line.** The candidate
+  no longer resolves the vulnerable 0.62.2 release identified by nine current
+  GitHub Security Advisories. The workspace minimum Rust version is now 1.89,
+  matching the patched dependency's declared requirement.
+
 ### Fixed
 
+- **Claude usage now reconciles by exact assistant message identity.** Repeated
+  stream chunks for one message contribute once, distinct assistant messages
+  remain separate token components with their actual model and cache categories,
+  and terminal result cost remains a separate turn-level fact. Managed and
+  transcript observations tolerate timestamp skew and optional cost enrichment,
+  while conflicting measurements remain visible with partial source coverage.
+  Ambiguous historical result UUID and message-ID overlaps remain unmerged and
+  appear as explicit legacy reconciliation debt.
+
+- **Component controls now retain readable contrast in both PandaMUX themes.**
+  The global GPUI component theme now starts in Dark mode with the PandaMUX
+  shell and follows every loaded or interactive light/dark setting change.
+  Buttons, inputs, hover states, and focus styles no longer resolve light-theme
+  foregrounds on dark PandaMUX surfaces.
+
+- **Usage requests no longer stay in Loading forever when the server is unavailable.**
+  The desktop bridge now rejects queued requests after server discovery or IPC
+  connection failures and rejects in-flight requests when a connected server
+  disconnects. Usage presents the persistent Offline alert and Retry recovery
+  cue instead of waiting on response channels that cannot complete.
+
+- **Usage subscription editing now works with assistive technology.** Opening the editor
+  moves focus after its controls are mounted, the semantic TextInput nodes now track the
+  real editing focus recognized by Windows UI Automation, and Save and Cancel respond
+  directly to accessibility activation while retaining their keyboard, pointer, theme,
+  and visible focus behavior.
+
+- **Codex sessions now speak the authenticated App Server 0.158.0 contract.** Sessions
+  complete the required initialize handshake, retain server-issued thread and turn IDs,
+  use current sandbox and approval fields, answer server-initiated approvals, interrupt
+  active turns, resume native threads, send remote images as `localImage` input, query
+  live models and rate limits, and map current streamed events and token usage into
+  PandaMUX events. Recorded fixtures now match the generated v2 schema projection
+  instead of the retired prototype protocol.
+- **Idle launcher-owned nodes can now upgrade on Linux without weakening the busy-work
+  guard.** The lifecycle probe reads child PIDs across every daemon thread through
+  `/proc` instead of treating `ps` exit code 1 for an empty selection as an indeterminate
+  failure. Active PTYs still defer replacement, while a truly idle node may stop
+  gracefully and activate the requested exact artifact.
+- **Unverified best-effort providers now fail closed with an actionable reason.** Existing
+  settings migrate once to schema v3, adding Cursor, Grok, and OpenCode as disabled
+  profiles until their live smoke passes. Settings, health reports, and execution errors
+  preserve a typed reason code, message, and remediation instead of presenting an
+  unverified provider as ready.
+- **Remote bootstrap now works with standard OpenSSH user certificates and private SFTP
+  uploads.** Key-file authentication retries with the matching sibling `-cert.pub` file,
+  and streamed fallback uploads no longer include accidental root ownership metadata.
+- **Remote attachment and worktree synchronization now cross the Hub boundary correctly.**
+  Attachment imports run on the desktop host before verified chunk forwarding, turn
+  preflight honors the protocol's `attachmentIds` field and surfaces transfer failures,
+  and worktree bundles are created on the Hub before the request reaches a node.
+- **Launcher-owned node upgrades are safe and observable.** Runtime records preserve
+  ownership, active child work defers replacement, compatible discovered daemons remain
+  attached, and idle upgrades wait for graceful `SIGTERM` cleanup before starting the
+  requested version.
 - Restored the launcher double-submit regression test to the current two-step launch flow (spec 2.7): it now drives a folder submit followed by two session-type choices and confirms only one project is created.
 - The knowledge-base rule that is supposed to fire before code edits was scoped to `src/`, `lib/`, `app/`, `worker/` and `api/`, none of which exist in the Rust workspace, so it had never applied to a single source file. It now points at `crates/` and the other real source trees. (Internal tooling; no runtime change.)
 - A commit blocked for a missing changelog entry now explains why. The check wrote its reason to stdout, which is discarded for a blocking hook, so the commit was refused with no message attached. (Internal tooling; no runtime change.)

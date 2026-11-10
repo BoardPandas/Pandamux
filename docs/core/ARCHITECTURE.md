@@ -4,183 +4,229 @@
 
 The following files were used as evidence for this page:
 
-- [CLAUDE.md:55-82](../../CLAUDE.md#L55-L82)
-- [crates/pandamux-core/src/lib.rs:1-59](../../crates/pandamux-core/src/lib.rs#L1-L59)
-- [scripts/check-rust-boundaries.ps1:1-32](../../scripts/check-rust-boundaries.ps1#L1-L32)
-- [crates/pandamux-ui/src/lib.rs:1-66](../../crates/pandamux-ui/src/lib.rs#L1-L66)
-- [crates/pandamux-core/src/state.rs:16-426](../../crates/pandamux-core/src/state.rs#L16-L426)
-- [crates/pandamux-app/src/backend.rs:1-336](../../crates/pandamux-app/src/backend.rs#L1-L336)
-- [crates/pandamux-app/src/backend.rs:1651-1710](../../crates/pandamux-app/src/backend.rs#L1651-L1710)
-- [crates/pandamux-app/src/backend.rs:2068-2154](../../crates/pandamux-app/src/backend.rs#L2068-L2154)
-- [crates/pandamux-core/src/split_tree.rs:93-179](../../crates/pandamux-core/src/split_tree.rs#L93-L179)
-- [crates/pandamux-ui/src/shell_projection.rs:1-153](../../crates/pandamux-ui/src/shell_projection.rs#L1-L153)
-- [crates/pandamux-core/src/surface_content.rs:1-49](../../crates/pandamux-core/src/surface_content.rs#L1-L49)
-- [crates/pandamux-app/src/iced_runtime.rs:52-149](../../crates/pandamux-app/src/iced_runtime.rs#L52-L149)
-- [crates/pandamux-app/src/iced_runtime.rs:2509-2565](../../crates/pandamux-app/src/iced_runtime.rs#L2509-L2565)
-- [crates/pandamux-app/src/iced_runtime.rs:3843-3902](../../crates/pandamux-app/src/iced_runtime.rs#L3843-L3902)
-- [crates/pandamux-app/src/iced_runtime.rs:4242-4290](../../crates/pandamux-app/src/iced_runtime.rs#L4242-L4290)
+- [Cargo.toml:1-48](../../Cargo.toml#L1-L48)
+- [CLAUDE.md:218-377](../../CLAUDE.md#L218-L377)
+- [crates/pandamux-client/src/lib.rs:1-702](../../crates/pandamux-client/src/lib.rs#L1-L702)
+- [crates/pandamux-desktop/src/lib.rs:1-558](../../crates/pandamux-desktop/src/lib.rs#L1-L558)
+- [crates/pandamux-orchestrator/src/lib.rs:1-55](../../crates/pandamux-orchestrator/src/lib.rs#L1-L55)
+- [crates/pandamux-orchestrator/src/compatibility.rs:1-501](../../crates/pandamux-orchestrator/src/compatibility.rs#L1-L501)
+- [crates/pandamux-orchestrator/src/bundle.rs:1-1157](../../crates/pandamux-orchestrator/src/bundle.rs#L1-L1157)
+- [crates/pandamux-orchestrator/src/state.rs:1-1300](../../crates/pandamux-orchestrator/src/state.rs#L1-L1300)
+- [crates/pandamux-protocol/src/lib.rs:1-245](../../crates/pandamux-protocol/src/lib.rs#L1-L245)
+- [crates/pandamux-server/src/lib.rs:1-159](../../crates/pandamux-server/src/lib.rs#L1-L159)
+- [crates/pandamux-server/src/attempt_watchdog.rs:11-230](../../crates/pandamux-server/src/attempt_watchdog.rs#L11-L230)
+- [crates/pandamux-server/src/attempt_worktree.rs:1280-1402](../../crates/pandamux-server/src/attempt_worktree.rs#L1280-L1402)
+- [crates/pandamux-server/src/remote_execution.rs:101-851](../../crates/pandamux-server/src/remote_execution.rs#L101-L851)
+- [crates/pandamux-server/src/run_execution_service.rs:123-330](../../crates/pandamux-server/src/run_execution_service.rs#L123-L330)
+- [crates/pandamux-server/src/run_recovery.rs:37-225](../../crates/pandamux-server/src/run_recovery.rs#L37-L225)
+- [crates/pandamux-server/src/store/orchestration_phase5c.rs:26-490](../../crates/pandamux-server/src/store/orchestration_phase5c.rs#L26-L490)
+- [tools/pandamux-boundary-check/src/lib.rs:1-761](../../tools/pandamux-boundary-check/src/lib.rs#L1-L761)
 
 </details>
 
 # Architecture
 
-> **Related Pages**: [Core Domain and State](CORE_DOMAIN.md), [Application Runtime](APP_RUNTIME.md), [Named Pipe Control Plane](../features/NAMED_PIPE_IPC.md)
+> **Related Pages**: [Core Domain](CORE_DOMAIN.md), [Application Runtime](APP_RUNTIME.md), [Local IPC and Security](../features/NAMED_PIPE_IPC.md)
 
 ---
 
 <!-- BEGIN:AUTOGEN pandamux_03_architecture_crates -->
 ## Workspace and Crate Boundaries
 
-PandaMUX is a five-crate Cargo workspace built around a hard crate-isolation invariant: the terminal engine and the UI framework can each be swapped without touching the other, because neither leaks its types across the boundary (CLAUDE.md:78).
+PandaMUX has ten product crates plus one workspace validation tool. Domain, orchestration, and wire contracts sit below server, client, CLI, and desktop composition; terminal and SSH implementation details remain in dedicated crates rather than leaking into those contracts ([Cargo.toml:1-14](../../Cargo.toml#L1-L14), [lib.rs:368-416](../../tools/pandamux-boundary-check/src/lib.rs#L368-L416)).
 
-| Crate | Kind | Responsibility | Source |
-|---|---|---|---|
-| `pandamux-core` | lib | Shared domain types: split tree, session model, pipe-protocol types, agent/sidebar/notification/ssh models. Canonical state lives here. Zero Iced ([lib.rs:1-16](../../crates/pandamux-core/src/lib.rs#L1-L16)) |
-| `pandamux-term` | lib | Terminal engine: `alacritty_terminal` grid, `portable-pty` local PTY, `russh` remote PTY + SFTP, OSC 52 policy, shell lifecycle. Exposes PandaMUX's own grid types; `alacritty_terminal` never leaks out (CLAUDE.md:58-61) |
-| `pandamux-ui` | lib | Iced app: canvas terminal viewport, panes/splits/tabs, chrome, session panel, command palette, settings, theming. The ONLY crate that imports Iced ([lib.rs:1-26](../../crates/pandamux-ui/src/lib.rs#L1-L26)) |
-| `pandamux-app` | bin (`pandamux.exe`) | Composition root + tokio runtime; owns authoritative mutable state; named-pipe server, agent manager, pollers, persistence, updater (CLAUDE.md:65-67) |
-| `pandamux-cli` | bin (`pandamux-cli.exe`) | The `pandamux` CLI, pipe client wire-compatible with the V2 JSON-RPC protocol (CLAUDE.md:68-69) |
-
-The invariant is CI-enforced, not just documented. `scripts/check-rust-boundaries.ps1` reads each crate's `Cargo.toml` and fails the build if a forbidden dependency line is present: `pandamux-core` may depend on neither `iced` nor `alacritty_terminal`, and `pandamux-term` may not depend on `iced` ([check-rust-boundaries.ps1:7-16](../../scripts/check-rust-boundaries.ps1#L7-L16)). The check is a regex match against `^\s*<dep>\s*=` in the manifest text, so it catches the dependency regardless of version pin or feature list ([check-rust-boundaries.ps1:24-29](../../scripts/check-rust-boundaries.ps1#L24-L29)).
-
-`pandamux-core`'s module list confirms the "zero Iced" boundary in practice: every exported type (`AppState`, `SplitNode`, `AgentRegistry`, `SshProfiles`, `Keymap`, and so on) is a plain Rust/serde type with no rendering dependency ([lib.rs:1-59](../../crates/pandamux-core/src/lib.rs#L1-L59)). `pandamux-ui`'s module list is gated almost entirely behind the `iced-runtime` feature, and its `shell_projection` module (the only one built unconditionally) is the seam that lets a headless build still compute layout projections without pulling in Iced ([pandamux-ui/src/lib.rs:1-26](../../crates/pandamux-ui/src/lib.rs#L1-L26)).
+| Crate | Primary responsibility | Boundary evidence |
+|---|---|---|
+| `pandamux-core` | Framework-free IDs, threads, events, policy, settings, routing, and usage types | Foundation for pure domain consumers ([CLAUDE.md:222-222](../../CLAUDE.md#L222-L222)) |
+| `pandamux-orchestrator` | Pure Phase 5A schema, bundle, DAG, routing, approval, proposal-parse, and run-state engine | Its public surface is value-to-value behavior, and forbidden transitive runtime implementations are rejected ([lib.rs:3-55](../../crates/pandamux-orchestrator/src/lib.rs#L3-L55), [lib.rs:614-647](../../tools/pandamux-boundary-check/src/lib.rs#L614-L647)) |
+| `pandamux-protocol` | Versioned JSON-RPC, subscriptions, terminal, settings, usage, and proxy messages | Carries wire values without importing implementation crates ([CLAUDE.md:224-224](../../CLAUDE.md#L224-L224)) |
+| `pandamux-providers` | Provider drivers and process supervision | Runtime implementation remains outside the pure orchestrator ([CLAUDE.md:225-240](../../CLAUDE.md#L225-L240)) |
+| `pandamux-remote` | SSH pool, bootstrap, command execution, SFTP, proxy tunnels, and worktree bundles | Server remains the production composition owner ([CLAUDE.md:226-242](../../CLAUDE.md#L226-L242)) |
+| `pandamux-term` | Feature-split grid and PTY primitives | Server resolves exactly `pty`; desktop resolves exactly `grid` ([lib.rs:524-612](../../tools/pandamux-boundary-check/src/lib.rs#L524-L612)) |
+| `pandamux-server` | Store, orchestration effects, worktrees, admission, budgets, artifacts, recovery, providers, terminals, remote environments, and Hub/node runtime | Exposes the production composition surface and keeps runtime implementations out of the pure engine ([lib.rs:1-159](../../crates/pandamux-server/src/lib.rs#L1-L159)) |
+| `pandamux-client` | Event projections, client state, usage presentation, and transport seam | Exports projections and a mockable transport without UI types ([lib.rs:1-19](../../crates/pandamux-client/src/lib.rs#L1-L19)) |
+| `pandamux-desktop` | GPUI shell and the server bridge | Re-exports view state and bridge types from focused modules ([lib.rs:3-60](../../crates/pandamux-desktop/src/lib.rs#L3-L60)) |
+| `pandamux-cli` | Authenticated command-line and MCP adapter | Client entry point without UI ownership ([CLAUDE.md:230-230](../../CLAUDE.md#L230-L230)) |
+| `pandamux-boundary-check` | Target-resolved Cargo graph and feature validation | Validates the locked graph for five declared targets and reports stable violation codes ([lib.rs:9-15](../../tools/pandamux-boundary-check/src/lib.rs#L9-L15), [lib.rs:368-416](../../tools/pandamux-boundary-check/src/lib.rs#L368-L416)) |
 
 ```mermaid
 graph TD
-    Core["pandamux-core"]
-    Term["pandamux-term"]
-    UI["pandamux-ui"]
-    App["pandamux-app exe"]
-    Cli["pandamux-cli exe"]
-    IcedDep["iced crate"]
-    AlacrittyDep["alacritty_terminal"]
-    App --> Core
-    App --> Term
-    App --> UI
-    Cli --> Core
-    UI --> Core
-    Term --> Core
-    UI --> IcedDep
-    Term --> AlacrittyDep
-    Core -.->|"forbidden"| IcedDep
-    Term -.->|"forbidden"| IcedDep
-    Core -.->|"forbidden"| AlacrittyDep
-    UI -.->|"forbidden"| AlacrittyDep
+    Core["pandamux-core"] --> Protocol["pandamux-protocol"]
+    Core --> Orchestrator["pandamux-orchestrator"]
+    Core --> Providers["pandamux-providers"]
+    Core --> Remote["pandamux-remote"]
+    Core --> Term["pandamux-term"]
+    Protocol --> Server["pandamux-server"]
+    Providers --> Server
+    Remote --> Server
+    Term --> Server
+    Protocol --> Client["pandamux-client"]
+    Client --> Desktop["pandamux-desktop"]
+    Server --> Desktop
+    Protocol --> Cli["pandamux-cli"]
+    Checker["pandamux-boundary-check"] -. validates resolved graphs .-> Orchestrator
+    Checker -. validates resolved graphs .-> Server
+    Checker -. validates resolved graphs .-> Desktop
 ```
 
-Sources: [CLAUDE.md:55-82](../../CLAUDE.md#L55-L82), [lib.rs:1-59](../../crates/pandamux-core/src/lib.rs#L1-L59), [pandamux-ui/src/lib.rs:1-66](../../crates/pandamux-ui/src/lib.rs#L1-L66), [check-rust-boundaries.ps1:1-32](../../scripts/check-rust-boundaries.ps1#L1-L32)
+Sources: [Cargo.toml:1-48](../../Cargo.toml#L1-L48), [CLAUDE.md:218-249](../../CLAUDE.md#L218-L249), [lib.rs:1-55](../../crates/pandamux-orchestrator/src/lib.rs#L1-L55), [lib.rs:1-159](../../crates/pandamux-server/src/lib.rs#L1-L159), [lib.rs:368-449](../../tools/pandamux-boundary-check/src/lib.rs#L368-L449), [lib.rs:524-647](../../tools/pandamux-boundary-check/src/lib.rs#L524-L647)
 <!-- END:AUTOGEN pandamux_03_architecture_crates -->
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_03_architecture_state -->
-## Backend-Owned State
+<!-- BEGIN:AUTOGEN pandamux_03_architecture_ownership -->
+## State and Process Ownership
 
-State ownership follows an intent-in, delta-out, single-writer pattern: `pandamux-app` owns the canonical `AppState` (workspace/pane/surface split tree and friends), and the Iced UI holds only a read-projection over it, submitting intents rather than mutating state directly (CLAUDE.md:79).
+The server owns durable and executable state; clients own projections and presentation state. This prevents the desktop from becoming a second authority for threads, provider processes, terminals, event ordering, or remote routing ([CLAUDE.md:242-245](../../CLAUDE.md#L242-L245), [CLAUDE.md:251-267](../../CLAUDE.md#L251-L267)).
 
-`AppState` is the root of canonical state: a list of `WorkspaceState` (each carrying its own immutable `SplitNode` split tree, focus, and zoom), the active workspace id, the project registry, and the Home dashboard layout ([state.rs:16-31](../../crates/pandamux-core/src/state.rs#L16-L31)). Every workspace's `split_tree`, `focused_pane_id`, and `zoomed_pane_id` live on `WorkspaceState` ([state.rs:35-48](../../crates/pandamux-core/src/state.rs#L35-L48)), and mutation happens through exactly one entry point: `AppState::apply(&mut self, intent: AppIntent) -> Result<AppDelta, String>`, which routes to a per-domain handler (`apply_system`, `apply_workspace`, `apply_pane`, `apply_surface`, `apply_project`, `apply_home`) and returns a typed `AppDelta` describing what changed ([state.rs:416-426](../../crates/pandamux-core/src/state.rs#L416-L426)).
+| Owner | State or process | Client-facing consequence |
+|---|---|---|
+| Server | SQLite store, orchestration effect interpreter, admission and budget services, worktree and artifact owners, recovery, provider drivers, terminal manager, attachments, environment router, usage services | Mutations are submitted to server services; neither the desktop nor the pure engine writes executable state directly ([lib.rs:41-151](../../crates/pandamux-server/src/lib.rs#L41-L151)) |
+| Pure orchestrator | Authored-schema parsing, canonical bundles, validated plans, deterministic routes, command decisions, event reduction, and replay | Produces serializable events and effects but does not persist or execute them ([lib.rs:9-55](../../crates/pandamux-orchestrator/src/lib.rs#L9-L55), [state.rs:55-356](../../crates/pandamux-orchestrator/src/state.rs#L55-L356)) |
+| Client crate | Thread/run projections, token smoothing, usage view state | Rendering state is derived from server events and can be rebuilt ([lib.rs:7-19](../../crates/pandamux-client/src/lib.rs#L7-L19)) |
+| Desktop | GPUI views, composer, picker, terminal view, tray, and bridge handle | UI modules consume projections and send commands through the bridge ([lib.rs:21-60](../../crates/pandamux-desktop/src/lib.rs#L21-L60)) |
+| Protocol | Serializable request, response, event, and proxy contracts | Both sides share data types without importing the other's implementation ([lib.rs:1-22](../../crates/pandamux-protocol/src/lib.rs#L1-L22)) |
 
-Both callers of this single writer build the same `DispatchCtx<'_>` (mutable borrows of `AppState`, `PtySessionManager`, `Notifications`, and the rest of the backend-owned collections) and pass it to the same free function, `handle_line` ([backend.rs:36-63](../../crates/pandamux-app/src/backend.rs#L36-L63)). The headless `Backend` struct (used by the standalone pipe server) builds a `DispatchCtx` from its own owned fields in `Backend::handle_line` ([backend.rs:111-133](../../crates/pandamux-app/src/backend.rs#L111-L133)); the live Iced runtime builds an equivalent `DispatchCtx` from `NativeShellRuntime` fields when it receives a `ShellMessage::PipeRequest` ([iced_runtime.rs:2509-2534](../../crates/pandamux-app/src/iced_runtime.rs#L2509-L2534)). Because both paths funnel into the same `dispatch` function and the same `app.apply(intent)` call, a CLI-driven split and a UI-driven split are indistinguishable at the state layer (CLAUDE.md:79; [backend.rs:326-336](../../crates/pandamux-app/src/backend.rs#L326-L336)).
+`RunExecutionService` is the single adapter between pure run transitions and
+durable effect delivery. It composes the existing `ThreadManager` session
+owner, shared admission, pinned bundle materialization, authenticated remote
+transport, blackboard storage, watchdog, and recovery services without moving
+provider-session ownership into the orchestrator
+([run_execution_service.rs:253-330](../../crates/pandamux-server/src/run_execution_service.rs#L253-L330)).
+
+The server's public composition surface makes these responsibilities explicit:
+`Store`, `RunExecutionService`, `ThreadManager`, `AttemptWorktreeService`,
+`NodeExecutionService`, `RunRecoveryService`, `TerminalServerManager`, and
+`EnvironmentRouter` are server exports, while the client exports projection
+and formatting types ([lib.rs:41-151](../../crates/pandamux-server/src/lib.rs#L41-L151), [lib.rs:7-19](../../crates/pandamux-client/src/lib.rs#L7-L19)).
+
+Sources: [CLAUDE.md:218-377](../../CLAUDE.md#L218-L377), [lib.rs:9-55](../../crates/pandamux-orchestrator/src/lib.rs#L9-L55), [state.rs:55-356](../../crates/pandamux-orchestrator/src/state.rs#L55-L356), [lib.rs:41-151](../../crates/pandamux-server/src/lib.rs#L41-L151), [run_execution_service.rs:253-330](../../crates/pandamux-server/src/run_execution_service.rs#L253-L330), [lib.rs:7-19](../../crates/pandamux-client/src/lib.rs#L7-L19)
+<!-- END:AUTOGEN pandamux_03_architecture_ownership -->
+
+---
+
+<!-- BEGIN:AUTOGEN pandamux_03_architecture_local-flow -->
+## Local Request and Event Flow
+
+Local desktop and CLI traffic uses versioned JSON-RPC. The protocol crate exports the request/response types, `system.hello` contracts, subscriptions, and event envelopes; the server authenticates and routes them, and the client reduces returned events into projections ([lib.rs:48-76](../../crates/pandamux-protocol/src/lib.rs#L48-L76), [lib.rs:7-13](../../crates/pandamux-client/src/lib.rs#L7-L13)).
 
 ```mermaid
 sequenceDiagram
-    participant Caller as UI or CLI
-    participant Dispatcher as handle_line
-    participant State as AppState
+    participant D as Desktop or CLI
+    participant S as Local server
+    participant R as Router
+    participant P as Client projection
 
-    Caller->>Dispatcher: submit intent ;
-    activate Dispatcher
-    Dispatcher->>State: apply intent ;
-    activate State
-    State-->>Dispatcher: return delta ;
-    deactivate State
-    Dispatcher-->>Caller: delta out ;
-    deactivate Dispatcher
+    D->>S: system.hello with capability
+    activate S
+    S->>R: authenticated request context
+    R-->>S: hello result
+    S-->>D: JSON-RPC response
+    deactivate S
+    D->>S: system.subscribe with cursor
+    S-->>D: event envelopes
+    D->>P: apply ordered events
 ```
 
-The pipe server itself is not a standalone process in the live app: it runs as an Iced `Subscription` inside the running GUI, so activating and deactivating the embedded pipe server is tied to the runtime's own subscription lifecycle rather than a separate service (CLAUDE.md:79; [iced_runtime.rs:3843-3871](../../crates/pandamux-app/src/iced_runtime.rs#L3843-L3871)).
+The shared wire surface includes thread, provider, terminal, settings, schedule, attachment, filesystem, Git, usage, and worktree contracts. `EventEnvelope` adds environment identity and sequence information around domain events, allowing projections to remain transport-agnostic ([lib.rs:24-96](../../crates/pandamux-protocol/src/lib.rs#L24-L96)).
 
-Sources: [state.rs:16-426](../../crates/pandamux-core/src/state.rs#L16-L426), [backend.rs:1-63](../../crates/pandamux-app/src/backend.rs#L1-L63), [backend.rs:111-336](../../crates/pandamux-app/src/backend.rs#L111-L336), [iced_runtime.rs:2509-2565](../../crates/pandamux-app/src/iced_runtime.rs#L2509-L2565)
-<!-- END:AUTOGEN pandamux_03_architecture_state -->
+Sources: [lib.rs:24-96](../../crates/pandamux-protocol/src/lib.rs#L24-L96), [lib.rs:7-19](../../crates/pandamux-client/src/lib.rs#L7-L19), [lib.rs:36-39](../../crates/pandamux-desktop/src/lib.rs#L36-L39)
+<!-- END:AUTOGEN pandamux_03_architecture_local-flow -->
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_03_architecture_intents -->
-## Intent Dispatch and Deltas
+<!-- BEGIN:AUTOGEN pandamux_03_architecture_remote-flow -->
+## Remote Node Flow
 
-`handle_line` in `pandamux-app::backend` is the single dispatch code path shared by both clients of canonical state: the named-pipe server (CLI / agents / orchestrator) and the live Iced runtime ([backend.rs:1-6](../../crates/pandamux-app/src/backend.rs#L1-L6)). It is synchronous and never awaits, so the pipe server calls it under an async mutex while the Iced runtime calls it directly inside `update` ([backend.rs:8-12](../../crates/pandamux-app/src/backend.rs#L8-L12)).
+The same server binary composes a desktop-machine Hub and remote Linux nodes. The Hub owns environment routing and connects to a node through the SSH-backed proxy transport; protocol contracts remain identical on either side ([CLAUDE.md:505-514](../../CLAUDE.md#L505-L514), [lib.rs:31-47](../../crates/pandamux-server/src/lib.rs#L31-L47)).
 
-`handle_line` first handles two non-JSON protocol lines (the V1 `ping` liveness check and `report_pwd <surfaceId> <path>` shell-integration cwd reports), then parses everything else as a V2 `RpcRequest` and calls `dispatch` ([backend.rs:192-228](../../crates/pandamux-app/src/backend.rs#L192-L228)). `dispatch` tries a sequence of domain-specific sub-dispatchers before falling through to the generic `AppIntent`/`AppState::apply` path:
+```mermaid
+sequenceDiagram
+    participant U as Desktop client
+    participant H as Hub server
+    participant T as SSH proxy tunnel
+    participant N as Node server
 
-| Sub-dispatcher | Domain | Source |
+    U->>H: environment-scoped RPC
+    activate H
+    H->>T: proxy request frame
+    activate T
+    T->>N: forward JSON-RPC request
+    activate N
+    N-->>T: response and event frames
+    deactivate N
+    T-->>H: ordered proxy frames
+    deactivate T
+    H-->>U: response and event envelopes
+    deactivate H
+```
+
+`pandamux-server` exposes both sides of this boundary: `serve_proxy_connection` runs on the node, while `ProxyEnvironmentTransport` and `EnvironmentRouter` run on the Hub ([lib.rs:31-47](../../crates/pandamux-server/src/lib.rs#L31-L47)). The protocol crate carries the proxy envelope and environment-scoped RPC types without importing the SSH implementation ([lib.rs:4-22](../../crates/pandamux-protocol/src/lib.rs#L4-L22)).
+
+Phase 5C remote attempts add a private two-store handshake above that transport.
+The authenticated environment comes from request context, while repository
+prepare, attempt prepare, dispatch, status, cancel, ordered event, and
+acknowledgement records bind the exact run, effect, baseline, bundle, route,
+lease generation, and idempotency identity
+([orchestration_execution.rs:9-184](../../crates/pandamux-protocol/src/orchestration_execution.rs#L9-L184), [remote_execution.rs:101-851](../../crates/pandamux-server/src/remote_execution.rs#L101-L851)).
+
+Sources: [CLAUDE.md:505-516](../../CLAUDE.md#L505-L516), [lib.rs:71-118](../../crates/pandamux-server/src/lib.rs#L71-L118), [lib.rs:1-22](../../crates/pandamux-protocol/src/lib.rs#L1-L22), [orchestration_execution.rs:9-230](../../crates/pandamux-protocol/src/orchestration_execution.rs#L9-L230), [remote_execution.rs:101-851](../../crates/pandamux-server/src/remote_execution.rs#L101-L851)
+<!-- END:AUTOGEN pandamux_03_architecture_remote-flow -->
+
+---
+
+<!-- BEGIN:AUTOGEN pandamux_03_architecture_persistence -->
+## Durability and Replay
+
+Durable state and event ordering belong to the server, while the client projection is deliberately reconstructable. This split lets local reconnects and remote proxy reconnects resume from sequence cursors instead of treating the desktop's in-memory view as canonical ([CLAUDE.md:245-253](../../CLAUDE.md#L245-L253)).
+
+| Durable concern | Authority | Replay consumer |
 |---|---|---|
-| `dispatch_notifications` | `notification.*` | [backend.rs:251](../../crates/pandamux-app/src/backend.rs#L251) |
-| `dispatch_sidebar` | `sidebar.*` | [backend.rs:255](../../crates/pandamux-app/src/backend.rs#L255) |
-| `dispatch_settings` | `config` settings get/set | [backend.rs:259](../../crates/pandamux-app/src/backend.rs#L259) |
-| `dispatch_config` | `theme.*` / locale | [backend.rs:263](../../crates/pandamux-app/src/backend.rs#L263) |
-| `dispatch_window` | `window.*` | [backend.rs:267](../../crates/pandamux-app/src/backend.rs#L267) |
-| `dispatch_surface_scheme` | `surface.set_color_scheme` | [backend.rs:271](../../crates/pandamux-app/src/backend.rs#L271) |
-| `dispatch_agents` | `agent.*` | [backend.rs:275](../../crates/pandamux-app/src/backend.rs#L275) |
-| `dispatch_projects` | project registry / launch | [backend.rs:279-289](../../crates/pandamux-app/src/backend.rs#L279-L289) |
-| `dispatch_ssh` | `ssh.*` | [backend.rs:291-300](../../crates/pandamux-app/src/backend.rs#L291-L300) |
-| `dispatch_clipboard` | `clipboard.*` | [backend.rs:302](../../crates/pandamux-app/src/backend.rs#L302) |
-| `dispatch_terminal_io` | `surface.send_text` / `send_key` / `paste` | [backend.rs:306-310](../../crates/pandamux-app/src/backend.rs#L306-L310) |
-| `dispatch_surface_content` | `markdown.*` / `diff.*` | [backend.rs:312](../../crates/pandamux-app/src/backend.rs#L312) |
+| Threads, turns, events, settings, schedules, usage, and attachments | Server `Store` ([lib.rs:47-58](../../crates/pandamux-server/src/lib.rs#L47-L58)) | Desktop/client projections |
+| Thread and run timeline state | Ordered protocol event envelopes ([lib.rs:67-95](../../crates/pandamux-protocol/src/lib.rs#L67-L95)) | `ThreadProjection` and `RunProjection` |
+| Phase 5C runs, effects, attempts, queues, leases, worktrees, budgets, artifacts, progress, reviews, and node receipts | Migration 14 tables plus replay verification ([migrations.rs:1711-2084](../../crates/pandamux-server/src/store/migrations.rs#L1711-L2084), [orchestration_phase5c.rs:648-933](../../crates/pandamux-server/src/store/orchestration_phase5c.rs#L648-L933)) | `RunExecutionService`, recovery, and future Phase 5D projections |
+| Remote event cursor | Hub-side environment transport ([lib.rs:31-47](../../crates/pandamux-server/src/lib.rs#L31-L47)) | Reconnected node proxy |
+| Terminal attachment state | Server terminal manager and terminal RPC offsets ([lib.rs:73-77](../../crates/pandamux-protocol/src/lib.rs#L73-L77)) | Reattached desktop terminal grid |
 
-`browser.*` and `cdp` methods are rejected explicitly with a message directing callers to Claude Code's own browser tooling, rather than falling through to a generic "method not found" ([backend.rs:316-324](../../crates/pandamux-app/src/backend.rs#L316-L324)). Everything else is translated by `intent_for_request` from an RPC method name and JSON params into a typed `AppIntent` variant (for example `"surface.create"` becomes `AppIntent::Surface(SurfaceIntent::Create { .. })`) ([backend.rs:1651-1699](../../crates/pandamux-app/src/backend.rs#L1651-L1699)), applied via `app.apply(intent)`, and converted back to a JSON result with `delta_to_result(delta)` ([backend.rs:326-336](../../crates/pandamux-app/src/backend.rs#L326-L336)). After a successful mutation, `dispatch` also reconciles side effects that follow from a changed tree: respawning/killing local PTYs (`sync_terminal_sessions`), dropping markdown/diff content and color-scheme overrides for surfaces that no longer exist, and killing orphaned SSH sessions (`sync_remote_sessions`) ([backend.rs:328-334](../../crates/pandamux-app/src/backend.rs#L328-L334)).
+The protocol test surface verifies that event envelopes retain their subscription id and sequence across serialization, and that terminal attach responses preserve replay offset and truncation state ([lib.rs:129-155](../../crates/pandamux-protocol/src/lib.rs#L129-L155), [lib.rs:213-243](../../crates/pandamux-protocol/src/lib.rs#L213-L243)).
 
-Sources: [backend.rs:1-12](../../crates/pandamux-app/src/backend.rs#L1-L12), [backend.rs:192-336](../../crates/pandamux-app/src/backend.rs#L192-L336), [backend.rs:1651-1710](../../crates/pandamux-app/src/backend.rs#L1651-L1710)
-<!-- END:AUTOGEN pandamux_03_architecture_intents -->
+Server startup keeps orchestration intake closed while one incarnation owner
+replays and verifies nonterminal runs. Shutdown closes intake, stops new
+claims, joins or quarantines every active attempt owner, checkpoints SQLite,
+and refuses to report graceful completion while live owners or checkpoint debt
+remain ([run_recovery.rs:37-225](../../crates/pandamux-server/src/run_recovery.rs#L37-L225), [run_execution_service.rs:1260-1490](../../crates/pandamux-server/src/run_execution_service.rs#L1260-L1490), [main.rs:86-146](../../crates/pandamux-server/src/main.rs#L86-L146)).
 
----
-
-<!-- BEGIN:AUTOGEN pandamux_03_architecture_split-tree -->
-## Immutable Split Tree
-
-Pane layouts are a binary `SplitNode` tree: a `Leaf` holds a pane id and its tabbed surfaces, a `Branch` holds a direction, a ratio, and exactly two child `SplitNode`s ([split_tree.rs:85-106](../../crates/pandamux-core/src/split_tree.rs#L85-L106)). Mutations never edit a tree in place; they produce a new tree. `split_node`, for example, recurses to the target pane and, on finding it, returns a brand-new `Branch` wrapping the untouched original leaf and a freshly created leaf; every ancestor on the path to that pane is likewise rebuilt as a new `Branch`, and any subtree that did not change is returned via `tree.clone()` unchanged ([split_tree.rs:134-179](../../crates/pandamux-core/src/split_tree.rs#L134-L179)).
-
-The Iced UI does not render the binary tree directly. `pandamux-ui::shell_projection` projects it into the design's 2-level column layout (decision 12.1): a root horizontal split yields side-by-side columns, and a vertical split stacks panes within one column ([shell_projection.rs:14-19](../../crates/pandamux-ui/src/shell_projection.rs#L14-L19)). `columns_from_node` implements this: a `Pane` becomes a single one-pane column; a horizontal `Split` concatenates the columns of both sides; a vertical `Split` flattens everything beneath it (including a nested horizontal split) into one column's stack ([shell_projection.rs:116-142](../../crates/pandamux-ui/src/shell_projection.rs#L116-L142)). That flattening is the graceful fallback for arbitrary-depth trees: UI-initiated splits stay 2-level so the projection round-trips exactly, while a deeper tree built by the CLI or orchestrator (for example via `layout.grid`) still renders every pane, just stacked instead of laid out at native depth ([shell_projection.rs:124-127](../../crates/pandamux-ui/src/shell_projection.rs#L124-L127)).
-
-| `SplitNode` variant | Fields | Source |
-|---|---|---|
-| `Leaf` | `pane_id`, `surfaces: Vec<SurfaceRef>`, `active_surface_index` | [split_tree.rs:86-91](../../crates/pandamux-core/src/split_tree.rs#L86-L91) |
-| `Branch` | `direction: SplitDirection`, `ratio: f32`, `children: Box<[SplitNode; 2]>` | [split_tree.rs:93-99](../../crates/pandamux-core/src/split_tree.rs#L93-L99) |
-
-Sources: [split_tree.rs:93-179](../../crates/pandamux-core/src/split_tree.rs#L93-L179), [shell_projection.rs:1-153](../../crates/pandamux-ui/src/shell_projection.rs#L1-L153)
-<!-- END:AUTOGEN pandamux_03_architecture_split-tree -->
+Sources: [CLAUDE.md:245-377](../../CLAUDE.md#L245-L377), [lib.rs:67-95](../../crates/pandamux-protocol/src/lib.rs#L67-L95), [lib.rs:129-155](../../crates/pandamux-protocol/src/lib.rs#L129-L155), [lib.rs:213-243](../../crates/pandamux-protocol/src/lib.rs#L213-L243), [migrations.rs:1711-2084](../../crates/pandamux-server/src/store/migrations.rs#L1711-L2084), [orchestration_phase5c.rs:648-933](../../crates/pandamux-server/src/store/orchestration_phase5c.rs#L648-L933), [run_recovery.rs:37-225](../../crates/pandamux-server/src/run_recovery.rs#L37-L225), [run_execution_service.rs:1260-1490](../../crates/pandamux-server/src/run_execution_service.rs#L1260-L1490), [main.rs:86-146](../../crates/pandamux-server/src/main.rs#L86-L146)
+<!-- END:AUTOGEN pandamux_03_architecture_persistence -->
 
 ---
 
-<!-- BEGIN:AUTOGEN pandamux_03_architecture_surfaces -->
-## Surfaces and Keep-Alive
+<!-- BEGIN:AUTOGEN pandamux_03_architecture_invariants -->
+## Architectural Invariants
 
-Each terminal surface keeps its PTY (or SSH channel) alive in memory keyed by its own surface id, so switching the active tab in a pane never reconstructs grid state (CLAUDE.md:80). `sync_terminal_sessions` makes this literal: the session id handed to `PtySessionManager::spawn` is `surface.id.to_string()` for every terminal surface in every workspace, and a surface already present in `ptys` is left alone rather than respawned ([backend.rs:2078-2112](../../crates/pandamux-app/src/backend.rs#L2078-L2112)). Sessions for surfaces that no longer exist in the tree are the only ones killed ([backend.rs:2116-2120](../../crates/pandamux-app/src/backend.rs#L2116-L2120)).
+The repository encodes its most important boundaries as build-time checks and narrow public APIs rather than relying only on convention.
 
-The live Iced runtime relies on the same key when it reads grid state to render: `terminal_snapshots` collects the surface ids visible in the active workspace's projection, then reads each one's styled grid straight out of `ptys.screen_cells(surface_id.as_str())` (or `remotes.screen_cells` for an SSH-backed surface) ([iced_runtime.rs:4253-4289](../../crates/pandamux-app/src/iced_runtime.rs#L4253-L4289)). Because `ptys`/`remotes` are long-lived fields on `NativeShellRuntime` rather than per-view state, bringing a tab back to front is a lookup by surface id, not a re-spawn ([iced_runtime.rs:52-95](../../crates/pandamux-app/src/iced_runtime.rs#L52-L95)).
+- `pandamux-core` stays independent of UI, terminal-grid, and database implementations ([CLAUDE.md:238-240](../../CLAUDE.md#L238-L240)).
+- `pandamux-orchestrator` stays free of runtimes, filesystem, network, storage, UI, provider, keyring, and embedding implementations ([lib.rs:3-7](../../crates/pandamux-orchestrator/src/lib.rs#L3-L7), [lib.rs:614-647](../../tools/pandamux-boundary-check/src/lib.rs#L614-L647)).
+- `pandamux-protocol` contains wire contracts and cannot import implementation crates ([CLAUDE.md:241-241](../../CLAUDE.md#L241-L241)).
+- `pandamux-server` is the production composition owner for SSH remoting, PTYs, provider execution, persistence, and routing ([CLAUDE.md:242-245](../../CLAUDE.md#L242-L245), [CLAUDE.md:251-267](../../CLAUDE.md#L251-L267)).
+- `RunExecutionService` owns Phase 5C effect interpretation and explicit lifecycle joins, while `ThreadManager` remains the sole provider-session owner ([run_execution_service.rs:253-330](../../crates/pandamux-server/src/run_execution_service.rs#L253-L330), [thread_manager.rs:174-385](../../crates/pandamux-server/src/thread_manager.rs#L174-L385)).
+- Attempt worktree ownership is checked against the canonical app-data root, private descendant metadata, and every queryable path component; Windows drive, UNC, and verbatim prefixes are carried into the rooted path without treating the prefix alone as a filesystem object ([attempt_worktree.rs:1280-1402](../../crates/pandamux-server/src/attempt_worktree.rs#L1280-L1402)).
+- Desktop code holds rendering-oriented state and sends intents; it is not a durable-state writer ([CLAUDE.md:245-245](../../CLAUDE.md#L245-L245)).
+- Request identity and capability scope are assigned by the accepting server transport, not accepted from request JSON ([CLAUDE.md:257-263](../../CLAUDE.md#L257-L263)).
+- Full-access providers have host-user authority; the local boundary is per OS user and is not hostile same-user process isolation ([CLAUDE.md:265-267](../../CLAUDE.md#L265-L267)).
+- Direct registry dependencies must be exact-pinned; path dependencies remain exempt ([lib.rs:418-449](../../tools/pandamux-boundary-check/src/lib.rs#L418-L449)).
+- The boundary check reconstructs each workspace root's resolved feature graph per declared target, so indirect dependencies and default-feature leakage are visible ([lib.rs:140-339](../../tools/pandamux-boundary-check/src/lib.rs#L140-L339), [lib.rs:341-416](../../tools/pandamux-boundary-check/src/lib.rs#L341-L416)).
+- GPUI snapshot alignment, desktop-only GPUI ownership, PTY/grid separation, future embedding isolation, and native-stack uniqueness are executable invariants ([lib.rs:451-698](../../tools/pandamux-boundary-check/src/lib.rs#L451-L698)).
 
-Non-terminal surfaces (markdown/diff) have no PTY at all; their content is a plain string set over the pipe (`markdown.set_content`, `markdown.load_file`, `diff.refresh`) and stored in `SurfaceContents`, a `HashMap<SurfaceId, String>` owned alongside `AppState` on the single-writer path ([surface_content.rs:1-15](../../crates/pandamux-core/src/surface_content.rs#L1-L15)). `SurfaceContents::retain_live` is called after every dispatch that can close surfaces, so a closed markdown/diff pane's content does not leak ([surface_content.rs:44-48](../../crates/pandamux-core/src/surface_content.rs#L44-L48)).
+```bash
+cargo test --locked -p pandamux-boundary-check
+cargo run --locked -p pandamux-boundary-check --quiet
+```
 
-| Surface kind | Backing store | Keyed by | Source |
-|---|---|---|---|
-| Terminal (local) | `PtySessionManager` (live PTY + `alacritty_terminal` grid) | `SurfaceId` as string | [backend.rs:2068-2113](../../crates/pandamux-app/src/backend.rs#L2068-L2113) |
-| Terminal (SSH remote) | `RemoteSessionManager` (russh channel) | `SurfaceId` as string | [backend.rs:2078-2088](../../crates/pandamux-app/src/backend.rs#L2078-L2088) |
-| Markdown / Diff | `SurfaceContents` (`HashMap<SurfaceId, String>`) | `SurfaceId` | [surface_content.rs:12-15](../../crates/pandamux-core/src/surface_content.rs#L12-L15) |
+The fixture test makes the guard falsifiable before the real locked graph is accepted ([CLAUDE.md:246-249](../../CLAUDE.md#L246-L249)).
 
-Sources: [surface_content.rs:1-49](../../crates/pandamux-core/src/surface_content.rs#L1-L49), [backend.rs:2068-2154](../../crates/pandamux-app/src/backend.rs#L2068-L2154), [iced_runtime.rs:4242-4290](../../crates/pandamux-app/src/iced_runtime.rs#L4242-L4290)
-<!-- END:AUTOGEN pandamux_03_architecture_surfaces -->
-
----
-
-<!-- BEGIN:AUTOGEN pandamux_03_architecture_runtime -->
-## Runtime Composition
-
-`pandamux-app` is the composition root: the binary that owns the tokio runtime, the authoritative mutable state, the named-pipe server, the agent manager, git/port pollers, session persistence, and the in-app updater (CLAUDE.md:65-67). Its live GUI path is `NativeShellRuntime`, a single struct that owns every piece of backend-owned state alongside UI-only state: `app_state: AppState`, `ptys: PtySessionManager`, `remotes: RemoteSessionManager`, `notifications`, `agents`, `sidebar`, `contents`, `themes`, `settings`, and view-only fields like `chrome`, `drag`, `palette`, and `view_model` all live on one struct ([iced_runtime.rs:52-149](../../crates/pandamux-app/src/iced_runtime.rs#L52-L149)).
-
-The embedded named-pipe server is not a background thread the app happens to also run; it is modeled as an Iced `Subscription`, so its lifecycle is driven by the Iced runtime loop itself. `subscription_iced_shell` only pushes the pipe subscription (plus periodic git/port polling and update checks) when `state.live_ptys` is true; headless smoke runs and tests never bind a pipe ([iced_runtime.rs:3843-3871](../../crates/pandamux-app/src/iced_runtime.rs#L3843-L3871)). The subscription's identity is hashed only on the pipe name, while the shared `Arc` handles (registry, sequence counter) are captured by the running stream so the server is spawned exactly once and survives view rebuilds ([iced_runtime.rs:3873-3893](../../crates/pandamux-app/src/iced_runtime.rs#L3873-L3893)). `run_embedded_pipe_server` runs the accept loop for the life of the app, spawning a task per connection that forwards each line into the Iced message loop as a `ShellMessage::PipeRequest` and writes back whatever reply the runtime produces ([iced_runtime.rs:3904-3920](../../crates/pandamux-app/src/iced_runtime.rs#L3904-L3920)).
-
-When `update` receives that `ShellMessage::PipeRequest`, it builds a `DispatchCtx` from `NativeShellRuntime`'s own fields and calls the exact same `crate::backend::handle_line` the headless `Backend` calls, then performs a small set of runtime-only side effects the headless path does not need (persisting SSH profiles, live-applying and debounce-saving settings, saving the session after certain project mutations) before replying to the waiting pipe client through the shared registry ([iced_runtime.rs:2509-2565](../../crates/pandamux-app/src/iced_runtime.rs#L2509-L2565)).
-
-Sources: [iced_runtime.rs:52-149](../../crates/pandamux-app/src/iced_runtime.rs#L52-L149), [iced_runtime.rs:2509-2565](../../crates/pandamux-app/src/iced_runtime.rs#L2509-L2565), [iced_runtime.rs:3843-3902](../../crates/pandamux-app/src/iced_runtime.rs#L3843-L3902)
-<!-- END:AUTOGEN pandamux_03_architecture_runtime -->
+Sources: [CLAUDE.md:236-267](../../CLAUDE.md#L236-L267), [run_execution_service.rs:253-330](../../crates/pandamux-server/src/run_execution_service.rs#L253-L330), [thread_manager.rs:174-385](../../crates/pandamux-server/src/thread_manager.rs#L174-L385), [attempt_worktree.rs:1280-1402](../../crates/pandamux-server/src/attempt_worktree.rs#L1280-L1402), [lib.rs:140-449](../../tools/pandamux-boundary-check/src/lib.rs#L140-L449), [lib.rs:451-698](../../tools/pandamux-boundary-check/src/lib.rs#L451-L698)
+<!-- END:AUTOGEN pandamux_03_architecture_invariants -->
 
 ---

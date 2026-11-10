@@ -19,10 +19,13 @@ use crate::acp::{
 };
 use crate::error::ProviderError;
 use crate::models::{
-    InjectedInstructions, ModelInfo, ProviderAuthStatus, ProviderEvent, ProviderHealth,
-    ProviderMetadata, ProviderSnapshot, SessionSpec, ToolPolicy, UsageLimits,
+    InjectedInstructions, ModelInfo, ProviderAuthConfidence, ProviderAuthStatus, ProviderEvent,
+    ProviderHealth, ProviderMetadata, ProviderSnapshot, SessionSpec, ToolPolicy, UsageLimits,
+    provider_snapshot_expiry, provider_snapshot_now_ms,
 };
-use crate::profiles::{apply_profile_environment, ensure_profile_dir, resolve_profile_dir};
+use crate::profiles::{
+    apply_profile_environment, ensure_profile_dir, resolve_instance_profile_dir,
+};
 use crate::shim_resolver::resolve_command_shim;
 use crate::supervision::{SupervisedChild, create_supervised_command};
 use crate::traits::{BoxFuture, ProviderDriver, ProviderSession};
@@ -205,11 +208,12 @@ impl OpenCodeDriver {
     }
 
     fn resolve_binary(&self, cfg: &ProviderInstanceConfig) -> Option<PathBuf> {
-        let explicit = cfg
-            .settings
-            .get("binaryPath")
-            .and_then(|v| v.as_str())
-            .map(PathBuf::from);
+        let explicit = cfg.binary_path.as_ref().map(PathBuf::from).or_else(|| {
+            cfg.settings
+                .get("binaryPath")
+                .and_then(|v| v.as_str())
+                .map(PathBuf::from)
+        });
         resolve_opencode_binary(explicit.as_deref())
     }
 }
@@ -229,6 +233,7 @@ impl ProviderDriver for OpenCodeDriver {
                 supports_rate_limits: false,
                 supports_resume: true,
                 supports_images: false,
+                max_access_mode: pandamux_core::AccessMode::FullAccess,
             },
             supported_models: vec![
                 ModelInfo {
@@ -259,21 +264,18 @@ impl ProviderDriver for OpenCodeDriver {
     fn probe<'a>(&'a self, cfg: &'a ProviderInstanceConfig) -> BoxFuture<'a, ProviderSnapshot> {
         Box::pin(async move {
             let binary = self.resolve_binary(cfg);
-            if let Some(_bin) = binary {
-                let profile_dir =
-                    resolve_profile_dir(&self.base_data_dir, ProviderKind::OpenCode, &cfg.id);
+            let checked_at_ms = provider_snapshot_now_ms();
+            let expires_at_ms = provider_snapshot_expiry(checked_at_ms);
+            if let Some(bin) = binary {
+                let profile_dir = resolve_instance_profile_dir(&self.base_data_dir, cfg);
                 let has_auth = profile_dir.join("config.json").exists()
                     || cfg.settings.get("serverPassword").is_some()
                     || std::env::var("OPENCODE_SERVER_PASSWORD").is_ok();
 
                 let auth = if has_auth {
-                    ProviderAuthStatus::Authenticated {
-                        account_label: Some("OpenCode Local".to_string()),
-                        email: None,
-                        subscription: Some("Self-Hosted".to_string()),
-                    }
+                    ProviderAuthStatus::Configured
                 } else {
-                    ProviderAuthStatus::Unauthenticated
+                    ProviderAuthStatus::Unknown
                 };
 
                 let health = if has_auth {
@@ -287,20 +289,32 @@ impl ProviderDriver for OpenCodeDriver {
 
                 ProviderSnapshot {
                     installed: true,
-                    version: Some("0.18.2".to_string()),
+                    resolved_executable: Some(bin.to_string_lossy().to_string()),
+                    version: None,
                     auth,
+                    auth_confidence: if has_auth {
+                        ProviderAuthConfidence::Detected
+                    } else {
+                        ProviderAuthConfidence::Unknown
+                    },
                     health,
-                    checked_at_ms: 1000,
+                    runtime_code: Some("offline_profile_probe".to_string()),
+                    checked_at_ms,
+                    expires_at_ms,
                 }
             } else {
                 ProviderSnapshot {
                     installed: false,
+                    resolved_executable: None,
                     version: None,
                     auth: ProviderAuthStatus::Unknown,
+                    auth_confidence: ProviderAuthConfidence::Unknown,
                     health: ProviderHealth::Unavailable {
                         reason: "OpenCode binary not found in PATH or settings".to_string(),
                     },
-                    checked_at_ms: 1000,
+                    runtime_code: Some("binary_missing".to_string()),
+                    checked_at_ms,
+                    expires_at_ms,
                 }
             }
         })
@@ -332,8 +346,7 @@ impl ProviderDriver for OpenCodeDriver {
                         message: "OpenCode binary could not be resolved".into(),
                     })?;
 
-            let profile_dir =
-                resolve_profile_dir(&self.base_data_dir, ProviderKind::OpenCode, &cfg.id);
+            let profile_dir = resolve_instance_profile_dir(&self.base_data_dir, cfg);
             ensure_profile_dir(&profile_dir)?;
 
             let is_serve = self.serve_mode
@@ -360,14 +373,17 @@ impl ProviderDriver for OpenCodeDriver {
                 let session_id = format!("opencode-srv-{}", uuid::Uuid::new_v4());
 
                 // Emit initial session event
-                let _ = tx
-                    .send(ProviderEvent::TextDelta {
-                        delta: format!(
+                let _ = crate::forward_provider_event(
+                    &tx,
+                    ProviderEvent::Notice {
+                        level: "info".to_string(),
+                        message: format!(
                             "Connected to OpenCode serve session {} for model {}\n",
                             session_id, create_req.model
                         ),
-                    })
-                    .await;
+                    },
+                )
+                .await;
 
                 Ok(Box::new(OpenCodeServeSession {
                     session_id,
@@ -421,7 +437,7 @@ impl ProviderDriver for OpenCodeDriver {
                     let mut reader = BufReader::new(stdout).lines();
                     while let Ok(Some(line)) = reader.next_line().await {
                         if let Some(event) = parse_acp_line(&line)
-                            && tx.send(event).await.is_err()
+                            && crate::forward_provider_event(&tx, event).await.is_err()
                         {
                             break;
                         }

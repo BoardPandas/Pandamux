@@ -1,6 +1,7 @@
 use pandamux_core::{
-    AccessMode, AgentId, ApprovalDecision, EnvironmentId, ProjectId, ProviderInstanceId, Thread,
-    ThreadId, ThreadStatus, Turn, TurnId, WorktreeRef,
+    AccessMode, AgentId, ApprovalDecision, ContinuationId, ContinuationRecord, EnvironmentId,
+    FailoverPool, OrganizationPolicy, ProjectId, ProviderInstanceId, RoutingDecision, Thread,
+    ThreadId, ThreadStatus, Turn, TurnAttempt, TurnAttemptId, TurnId, WorktreeRef,
 };
 use serde::{Deserialize, Serialize};
 
@@ -58,6 +59,19 @@ pub struct ThreadGetResult {
     pub thread: Thread,
     #[serde(default)]
     pub turns: Vec<Turn>,
+    #[serde(default)]
+    pub attempts: Vec<TurnAttempt>,
+    #[serde(default)]
+    pub continuations: Vec<ContinuationRecord>,
+}
+
+/// Canonical policy and pool snapshot carried only over an authenticated Hub-to-node request.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HubRoutingContext {
+    pub organization: OrganizationPolicy,
+    #[serde(default)]
+    pub failover_pools: Vec<FailoverPool>,
 }
 
 /// Parameters for `thread.send_turn`.
@@ -72,6 +86,8 @@ pub struct ThreadSendTurnParams {
     pub model: Option<String>,
     #[serde(default)]
     pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hub_routing_context: Option<HubRoutingContext>,
 }
 
 /// Result of `thread.send_turn`.
@@ -79,7 +95,31 @@ pub struct ThreadSendTurnParams {
 #[serde(rename_all = "camelCase")]
 pub struct ThreadSendTurnResult {
     pub turn_id: TurnId,
+    pub attempt_id: TurnAttemptId,
     pub seq: u64,
+    pub routing: RoutingDecision,
+}
+
+/// Claims an offered capacity continuation and starts a fresh provider session.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadContinueParams {
+    pub continuation_id: ContinuationId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<ThreadId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_instance_id: Option<ProviderInstanceId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hub_routing_context: Option<HubRoutingContext>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadContinueResult {
+    pub turn_id: TurnId,
+    pub attempt_id: TurnAttemptId,
+    pub seq: u64,
+    pub routing: RoutingDecision,
 }
 
 /// Parameters for `thread.cancel_turn`.

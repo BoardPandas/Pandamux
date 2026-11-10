@@ -1,0 +1,22 @@
+{
+  "id": "effect-legacy-blackboard-1",
+  "sourceEventId": "run-event-legacy-blackboard-1",
+  "kind": {
+    "type": "publish_blackboard_entry",
+    "entry": {
+      "id": "blackboard-legacy-1",
+      "version": 1,
+      "producer": "task-legacy-producer",
+      "consumers": ["task-legacy-consumer"],
+      "outputContract": {
+        "kind": "patch",
+        "schema": null
+      },
+      "content": {
+        "legacy": true
+      },
+      "contentSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "createdEventId": "run-event-legacy-blackboard-1"
+    }
+  }
+}

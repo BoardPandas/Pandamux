@@ -1,0 +1,13 @@
+[package]
+name = "pandamux-term"
+version = "0.0.0"
+edition = "2024"
+
+[features]
+default = ["grid", "pty"]
+grid = ["dep:alacritty_terminal"]
+pty = ["dep:portable-pty"]
+
+[dependencies]
+alacritty_terminal = { path = "../alacritty-terminal", optional = true }
+portable-pty = { path = "../portable-pty", optional = true }

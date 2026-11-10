@@ -1,0 +1,9 @@
+{
+  "id": "run-legacy-1",
+  "kind": { "type": "orchestrator" },
+  "status": "planned",
+  "trigger": "manual",
+  "startedAtMs": 1,
+  "tasks": [],
+  "blackboard": {}
+}

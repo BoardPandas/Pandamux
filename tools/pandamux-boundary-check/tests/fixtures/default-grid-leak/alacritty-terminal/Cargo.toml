@@ -1,0 +1,4 @@
+[package]
+name = "alacritty_terminal"
+version = "0.26.0"
+edition = "2024"

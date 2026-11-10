@@ -1,0 +1,11 @@
+{
+  "type": "planned",
+  "run_id": "run-legacy-1",
+  "tasks": [
+    {
+      "taskId": "task-legacy-1",
+      "status": "pending",
+      "dependsOn": []
+    }
+  ]
+}

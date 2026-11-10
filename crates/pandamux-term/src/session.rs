@@ -1,7 +1,6 @@
+use crate::GridSize;
 use crate::cwd::CwdScanner;
-use crate::grid::{
-    DEFAULT_SCROLLBACK_LINES, GridSize, ScrollAmount, SelectionMode, TermModes, TerminalGrid,
-};
+use crate::grid::{DEFAULT_SCROLLBACK_LINES, ScrollAmount, SelectionMode, TermModes, TerminalGrid};
 use crate::links::DetectedLink;
 use crate::pty::{PtyCommand, PtyResult};
 use crate::search::{SearchMatch, SearchOptions};

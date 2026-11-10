@@ -1,4 +1,5 @@
 use crate::ids::{EnvironmentId, ProviderInstanceId};
+use crate::thread::AccessMode;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -13,6 +14,16 @@ pub enum ProviderKind {
     Grok,
     OpenCode,
     Custom,
+}
+
+/// Persisted explanation for why a provider instance is intentionally disabled.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderDisabledReason {
+    pub code: String,
+    pub message: String,
+    #[serde(default)]
+    pub remediation: Option<String>,
 }
 
 impl ProviderKind {
@@ -65,6 +76,8 @@ pub struct ProviderInstanceConfig {
     pub settings: serde_json::Value,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disabled_reason: Option<ProviderDisabledReason>,
 }
 
 impl ProviderInstanceConfig {
@@ -78,6 +91,9 @@ impl ProviderInstanceConfig {
         if let Some(ovr) = overrides {
             if let Some(en) = ovr.enabled {
                 resolved.enabled = en;
+                if en {
+                    resolved.disabled_reason = None;
+                }
             }
             if let Some(bp) = &ovr.binary_path {
                 resolved.binary_path = Some(bp.clone());
@@ -122,4 +138,12 @@ pub struct ProviderCapabilities {
     pub supports_resume: bool,
     #[serde(default)]
     pub supports_images: bool,
+    #[serde(default)]
+    pub max_access_mode: AccessMode,
+}
+
+impl ProviderCapabilities {
+    pub fn supports_access_mode(self, requested: AccessMode) -> bool {
+        requested.security_rank() <= self.max_access_mode.security_rank()
+    }
 }

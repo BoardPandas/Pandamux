@@ -1,116 +1,191 @@
 # PandaMUX Documentation
 
-> **Current snapshot (September 2026):**
-> - The workspace manifest is at `0.53.3`; read `Cargo.toml` and `CHANGELOG.md` for the authoritative version and unreleased changes.
-> - Current unreleased work includes the in-app update flow and refreshed repository automation for `.claude/` configuration.
-> - v0.52.0 added shared SSH connections, project and tab shortcuts, custom keybindings, the fresh-terminal tool chooser, and the live Home dashboard.
+This index routes contributors to current sources for the GPUI chat-first
+workspace. Read the root [`Cargo.toml`](../Cargo.toml) for the version;
+documentation does not duplicate it.
 
-## Quick Start
+> **Latest Updates (October 2026):**
+> - **v0.60.122:** Phase 5C physical/live acceptance reconciliation.
+> - **v0.60.121:** Remote response-loss recovery preserves the exact ambiguous tool boundary.
+> - **v0.60.120:** Phase 5C local/native acceptance reconciliation.
+> - **v0.60.119:** Exact Windows Job Object and Unix process-group descendant cleanup coverage.
+> - **v0.60.118:** Phase 5C native-CI evidence reconciliation.
 
-| Goal | Start Here |
-|------|------------|
-| **Orient an AI coding agent** | [../AGENTS.md](../AGENTS.md), then [../CLAUDE.md](../CLAUDE.md) |
-| **Understand the system** | [ARCHITECTURE.md](core/ARCHITECTURE.md) |
-| **Build and run locally** | [GETTING_STARTED.md](GETTING_STARTED.md) |
-| **What PandaMUX is** | [OVERVIEW.md](OVERVIEW.md) |
-| **Drive it from the CLI** | [CLI_REFERENCE.md](api/CLI_REFERENCE.md) |
-| **Compare PandaMUX with T3 Code** | [T3_CODE_COMPARISON.md](research/T3_CODE_COMPARISON.md) |
-| **Cut a release** | [RELEASE.md](operations/RELEASE.md) |
-| **Look up a term** | [GLOSSARY.md](GLOSSARY.md) |
+## Authority order
+
+When sources disagree, use this order and correct the lower-authority source:
+
+1. implementation and manifests;
+2. [`CHANGELOG.md`](../CHANGELOG.md);
+3. [`CLAUDE.md`](../CLAUDE.md);
+4. this maintained wiki;
+5. archived plans, acceptance history, and research.
+
+[`AGENTS.md`](../AGENTS.md) is the routing page for agent tooling.
+[`tasks/plan-rewrite.md`](../tasks/plan-rewrite.md) is the active implementation
+and acceptance contract. [`tasks/plan-repo.md`](../tasks/plan-repo.md) retains
+rewrite history and the Section 12 UI specification, but it is not the current
+roadmap.
+
+## Start here
+
+| Goal | Page |
+|---|---|
+| Understand the product and current architecture | [Overview](OVERVIEW.md) |
+| Build, run, and verify the workspace | [Getting Started](GETTING_STARTED.md) |
+| Understand process and state ownership | [Architecture](core/ARCHITECTURE.md) |
+| Change Rust dependencies or toolchains safely | [Toolchain and Dependency Policy](operations/DEPENDENCIES.md) |
+| Find runtime configuration and profile rules | [Configuration](core/CONFIGURATION.md) |
+| Understand trusted sources, activation, and review | [Trusted Configuration](features/TRUSTED_CONFIGURATION.md) |
+| Review Phase 5C implementation and acceptance evidence | [Phase 5C Acceptance](operations/PHASE5C_ACCEPTANCE.md) |
+| Use the command-line client | [CLI Reference](api/CLI_REFERENCE.md) |
+| Understand release gates without implying publication | [Release and Packaging](operations/RELEASE.md) |
+| Decode project terminology | [Glossary](GLOSSARY.md) |
+
+## Current generated wiki
+
+The generated pages below are maintained from [`_toc.yaml`](_toc.yaml). Every
+page names its source files, uses bounded line citations, and marks generated
+sections with stable AUTOGEN identifiers.
+
+### Core
+
+- [Architecture](core/ARCHITECTURE.md)
+- [Core Domain](core/CORE_DOMAIN.md)
+- [Terminal Engine](core/TERMINAL_ENGINE.md)
+- [GPUI Desktop](core/UI_SHELL.md)
+- [Application Runtime](core/APP_RUNTIME.md)
+- [Configuration](core/CONFIGURATION.md)
+
+### Features and interfaces
+
+- [CLI Reference](api/CLI_REFERENCE.md)
+- [Local IPC and Security](features/NAMED_PIPE_IPC.md)
+- [SSH Remote Nodes](features/SSH_REMOTE.md)
+- [Agent Orchestration](features/AGENT_ORCHESTRATION.md)
+- [Trusted Configuration](features/TRUSTED_CONFIGURATION.md)
+- [Provider Routing and Capacity](features/PROVIDER_ROUTING.md)
+
+### Operations and reference
+
+- [Toolchain and Dependency Policy](operations/DEPENDENCIES.md)
+- [Release and Packaging](operations/RELEASE.md)
+- [Phase 5C Execution Runtime Acceptance](operations/PHASE5C_ACCEPTANCE.md)
+- [Glossary](GLOSSARY.md)
+- [Generation Metadata](_meta/GENERATION.md)
+- [Generation Summary](_meta/SUMMARY.md)
+
+## Current architecture map
+
+| Area | Source of truth | Responsibility |
+|---|---|---|
+| Domain | [`crates/pandamux-core`](../crates/pandamux-core) | Framework-free IDs, threads, events, trusted-configuration identities, mutation records, policy, routing, and usage types |
+| Orchestration | [`crates/pandamux-orchestrator`](../crates/pandamux-orchestrator) | Pure schema, candidate inspection, bundle, DAG, routing, approval, model-parse, and replay engine |
+| Wire protocol | [`crates/pandamux-protocol`](../crates/pandamux-protocol) | Versioned JSON-RPC, trusted-configuration, subscriptions, capabilities, and Hub-to-node contracts |
+| Providers | [`crates/pandamux-providers`](../crates/pandamux-providers) | Provider drivers, profiles, discovery, parsing, and process supervision |
+| SSH and bootstrap | [`crates/pandamux-remote`](../crates/pandamux-remote) | SSH pool, exec, SFTP, bootstrap, worktree synchronization, and proxy tunnels |
+| Server | [`crates/pandamux-server`](../crates/pandamux-server) | Durable store, managed configuration, orchestration effects, worktrees, admission, budgets, recovery, provider execution, PTYs, Hub, and node runtime |
+| Client projections | [`crates/pandamux-client`](../crates/pandamux-client) | Event-derived state, trusted-configuration review state, transport, usage projection, and token smoothing |
+| Desktop | [`crates/pandamux-desktop`](../crates/pandamux-desktop) | GPUI chat shell, trusted configuration, timeline, composer, settings, surfaces, terminal grid, and usage views |
+| CLI | [`crates/pandamux-cli`](../crates/pandamux-cli) | Authenticated commands and restricted MCP stdio adapter |
+| Terminal primitives | [`crates/pandamux-term`](../crates/pandamux-term) | Separately selectable `grid` and `pty` features |
+| Dependency validation | [`tools/pandamux-boundary-check`](../tools/pandamux-boundary-check) | Target-resolved ownership, feature, snapshot, embedding, and native-stack checks |
+
+The server owns durable state, provider processes, and local PTYs. The desktop
+and CLI are clients. Remote Linux nodes run `pandamux-server daemon` and are
+reached through a versioned SSH exec proxy; PandaMUX does not open a remote TCP
+control listener.
+
+## Acceptance records and current boundary
+
+Five manually maintained pages separate the ongoing Phase 4 closeout from the
+Phase 5A pure-domain checkpoint, Phase 5B trusted configuration, and Phase 5C
+execution-runtime evidence:
+
+- [Usage Observability and Transcript Privacy](features/USAGE_OBSERVABILITY.md)
+  defines the current data, privacy, UI, capacity, and failover contracts.
+- [Phase 4 Acceptance Record](operations/PHASE4_ACCEPTANCE.md) records exact
+  commits, versions, artifact hashes, commands, results, failures, limitations,
+  cleanup, and preserved evidence.
+- [Phase 5A Deterministic Orchestrator Acceptance](operations/PHASE5A_ACCEPTANCE.md)
+  records the exact pure-domain checkpoint chain, local command matrix,
+  rejected 0.60.75 candidate, accepted 0.60.76 repair, and absent runtime or
+  native evidence.
+- [Phase 5B Trusted Configuration Acceptance](operations/PHASE5B_ACCEPTANCE.md)
+  maps every AC-B01 through AC-B18 row to retained evidence, records the exact
+  checkpoint and native-repair chain, and keeps external and production
+  limitations explicit.
+- [Phase 5C Execution Runtime Acceptance](operations/PHASE5C_ACCEPTANCE.md)
+  maps AC-C01 through AC-C18 and CRASH-01 through CRASH-12 to retained tests,
+  records C-A through C-K and the repair chain, and separates portable, native
+  Linux, Windows, macOS, target-CI, physical Galahad, live-provider, and
+  controlled response-loss evidence from product release status.
+
+The current recovery branch includes exact evidence for accounting,
+reconciliation, provider and model discovery, native Windows accessibility and
+local IPC, restart and side-effect boundaries, external-service interruption,
+and Codex credit serviceability. Exact 0.60.62 also closes the affected
+provider-login and Surfaces native matrix on the physical MSI laptop. Exact
+0.60.64 commit `a41c5bd` closes both physical P4-C6 rows with one real provider
+turn across a 30-minute Wi-Fi outage and one remote terminal across 39 minutes
+of Connected Modern Standby. Those accepted rows do not establish complete
+Phase 4 production acceptance.
+
+The following gates remain open:
+
+- a real pre-output provider capacity failure followed by the specified safe
+  failover behavior;
+- final P4-C7 synchronization after the remaining P4-C5 row stabilizes.
+
+Phase 5A pure-domain work passed its exact local acceptance matrix under the
+explicit sequencing exception recorded in the active plan. Its versioned
+schemas, canonical bundle, DAG and routing policy, approvals, bounded model
+parsing, and replay state do not
+convert either open Phase 4 row into a pass. They also do not establish a
+database, effect interpreter, provider dispatch, worktree, RPC, CLI, desktop,
+or live-provider path. Phase 5B now supplies trusted configuration persistence,
+managed Git, source inspection, exact project trust, immutable activation,
+node-distribution contracts, mutation review, and desktop controls. Exact
+0.60.88 passes its complete local matrix and the required native Windows
+storage, hidden-Git-child, atomic-recovery, keyboard, and UI Automation checks.
+No external Git/SFTP transfer or production activation was exercised. Phase 5
+evidence remains separate from exact 0.60.64 Phase 4 runtime evidence and the
+retained Galahad databases. Phase 5C now adds the internal durable execution
+owner. Exact 0.60.119 closes the binding native rows, and all eight jobs of exact
+0.60.120 native run `38056999487` pass. Exact 0.60.121 closes the physical
+Galahad, live Codex/Claude/Antigravity success and cancellation, and controlled
+one-effect response-loss rows. The response-loss repair preserves the Node's
+tool boundary in the canonical Hub run and replay deduplicates one pending
+review without redispatch. The Phase 5C execution-runtime matrix is complete,
+but this generated-wiki refresh remains an interim P4-C7 synchronization. It
+does not claim that Phase 4 is complete or that PandaMUX is production-ready,
+released, deployed, activated, signed, published, or served.
+
+## Security boundary
+
+Local requests authenticate before routing and receive a server-owned request
+context. Desktop and CLI control, MCP, provider-child, node-proxy, and internal
+calls use distinct capabilities. Windows uses a SID-scoped protected named
+pipe. Unix uses a private runtime directory and socket plus peer credentials.
+
+This boundary does not isolate a hostile process already running as the same OS
+user. A FullAccess provider session intentionally has host-user authority. See
+[`CLAUDE.md`](../CLAUDE.md#server-and-local-ipc) and
+[Local IPC and Security](features/NAMED_PIPE_IPC.md).
+
+## Historical material
+
+Removed Electron and Iced implementations remain under [`archive/`](archive/)
+and [`superpowers/`](superpowers/) for history. The former shell-integration
+page is retained at
+[`archive/iced-multiplexer/SHELL_INTEGRATION.md`](archive/iced-multiplexer/SHELL_INTEGRATION.md).
+These files are not current implementation guidance.
+
+The [Phase 3 Acceptance Record](operations/PHASE3_ACCEPTANCE.md) remains a
+historical evidence record. Decision-oriented product research remains under
+[`research/`](research/); verify implementation and external facts again
+before relying on an older comparison.
 
 ---
 
-## Core
-
-Foundational architecture and per-crate documentation.
-
-| Document | Description |
-|----------|-------------|
-| [ARCHITECTURE.md](core/ARCHITECTURE.md) | Crate-isolation invariant, backend-owned state, immutable split tree, PTY=Surface keep-alive |
-| [CORE_DOMAIN.md](core/CORE_DOMAIN.md) | `pandamux-core`: canonical state model, split tree, projects, agents, branded IDs |
-| [TERMINAL_ENGINE.md](core/TERMINAL_ENGINE.md) | `pandamux-term`: grid, local PTY, shell lifecycle, search/links, clipboard, cwd |
-| [UI_SHELL.md](core/UI_SHELL.md) | `pandamux-ui`: Iced shell, chrome, panels, overlays, theming, read-projection |
-| [APP_RUNTIME.md](core/APP_RUNTIME.md) | `pandamux-app`: composition root, intent dispatcher, pollers, persistence, updater |
-| [CONFIGURATION.md](core/CONFIGURATION.md) | JSON settings format, keymap, themes, persistence, and environment variables |
-
----
-
-## API
-
-| Document | Description |
-|----------|-------------|
-| [CLI_REFERENCE.md](api/CLI_REFERENCE.md) | The `pandamux` CLI: every command group and its mapping to V2 JSON-RPC pipe methods |
-
----
-
-## Features
-
-Feature and integration documentation.
-
-| Document | Description |
-|----------|-------------|
-| [NAMED_PIPE_IPC.md](features/NAMED_PIPE_IPC.md) | The `\\.\pipe\pandamux` control plane: V1 hooks, V2 JSON-RPC, shared dispatcher, method catalog |
-| [SSH_REMOTE.md](features/SSH_REMOTE.md) | russh remote PTYs and SFTP: connection model, per-host pool, OSC 52, image paste, launcher UI |
-| [AGENT_ORCHESTRATION.md](features/AGENT_ORCHESTRATION.md) | Agent surfaces in visible panes, agent pipe methods, and manual orchestrator-plugin installation |
-| [SHELL_INTEGRATION.md](features/SHELL_INTEGRATION.md) | Shell hook scripts, OSC 7 / OSC 9;9 cwd tracking, report_pwd, git and port pollers |
-
----
-
-## Operations
-
-Release, packaging, and distribution procedures.
-
-| Document | Description |
-|----------|-------------|
-| [RELEASE.md](operations/RELEASE.md) | Tag-driven GitHub Actions release: build, Azure Trusted Signing, NSIS installer, updater, winget |
-
----
-
-## Product Research
-
-Decision-oriented comparisons and product-expansion research. These pages are maintained manually
-and pin external sources to reviewed commits.
-
-| Document | Description |
-|----------|-------------|
-| [T3_CODE_COMPARISON.md](research/T3_CODE_COMPARISON.md) | T3 Code versus PandaMUX: verified capabilities, architectural differences, adopt or adapt or skip recommendations, and a meeting guide |
-
----
-
-## Glossary
-
-| Document | Description |
-|----------|-------------|
-| [GLOSSARY.md](GLOSSARY.md) | Domain terms, branded ID types, and architecture vocabulary |
-
----
-
-## Plans and Specs
-
-Historical design and planning records. They are useful for rationale, but do not override current code, `CLAUDE.md`, or this generated wiki.
-
-- [superpowers/plans/](superpowers/plans/) — implementation plans from the Rust rewrite
-- [superpowers/specs/](superpowers/specs/) — design specs referenced by the changelog (spec 1.x / 2.x)
-
----
-
-## Archive
-
-Historical reference documents superseded by the Rust rewrite or the current JSON settings model.
-
-- [archive/](archive/) — the prior Electron-era pages (main process, renderer, browser/CDP, AI integration)
-
----
-
-## Related Resources
-
-| Resource | Location |
-|----------|----------|
-| Repo README | [../README.md](../README.md) |
-| Agent Registry | [../AGENTS.md](../AGENTS.md) |
-| Developer Guide | [../CLAUDE.md](../CLAUDE.md) |
-| Historical Rewrite Plan | [../tasks/plan-repo.md](../tasks/plan-repo.md) |
-
----
-
-**Last Updated:** September 2026
+**Last Updated:** October 2026

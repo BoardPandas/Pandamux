@@ -8,11 +8,10 @@ use pandamux_protocol::terminal_rpc::{
     TerminalInputParams, TerminalListResult, TerminalOpenParams, TerminalOpenResult,
     TerminalResizeParams,
 };
-use pandamux_term::grid::GridSize;
 use pandamux_term::pty::PtyCommand;
 use pandamux_term::ring_buffer::{DEFAULT_RING_BUFFER_CAPACITY, TerminalRingBuffer};
-use pandamux_term::session::PtySessionManager;
 use pandamux_term::shell::resolve_shell;
+use pandamux_term::{GridSize, PtyByteSessionManager};
 
 /// Represents an active or recent terminal session managed by the server.
 struct ServerTerminalSession {
@@ -23,7 +22,7 @@ struct ServerTerminalSession {
     ring_buffer: Arc<Mutex<TerminalRingBuffer>>,
     running: Arc<AtomicBool>,
     exit_code: Arc<Mutex<Option<u32>>>,
-    pty_manager: Arc<Mutex<PtySessionManager>>,
+    pty_manager: Arc<Mutex<PtyByteSessionManager>>,
 }
 
 /// Server terminal manager coordinating local PTY sessions and ring buffers.
@@ -66,7 +65,7 @@ impl TerminalServerManager {
             }
         }
 
-        let pty_manager = Arc::new(Mutex::new(PtySessionManager::new()));
+        let pty_manager = Arc::new(Mutex::new(PtyByteSessionManager::new()));
         let size = GridSize {
             rows: rows as usize,
             columns: cols as usize,
