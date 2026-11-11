@@ -1,15 +1,11 @@
 ---
 name: ux-review
-effort: medium
-description: Review UI/UX code against Laws of UX and Gestalt principles. Produces severity-ranked findings with specific improvement recommendations. Use on frontend repos or targeted components.
-user-invocable: true
-argument-hint: [optional: file, directory, or component name to scope the review]
-agent: ux-reviewer
-allowed-tools:
-  - Read
-  - Glob
-  - Grep
+description: "Review UI/UX code against Laws of UX and Gestalt principles. Produces severity-ranked findings with specific improvement recommendations. Use on frontend repos or targeted components."
 ---
+
+> Generated from `.claude/skills/ux-review/SKILL.md` by `scripts/sync-antigravity.mjs --with-skills`. Edit the source, then run `node scripts/sync-antigravity.mjs --with-skills`.
+>
+> In Antigravity, call `invoke_subagent` with `TypeName: "ux-reviewer"` (`.agents/agents/ux-reviewer.md`) and return its summary.
 
 # UX Review
 
@@ -17,8 +13,8 @@ You have been asked to perform a UX review of the codebase. This is a static, co
 
 ## Step 1: Load Knowledge Base
 
-1. Read `.Codex/references/ux-laws.md` to load the full set of 30 UX laws and their code-level indicators. You will reference these throughout the review.
-2. If `.Codex/references/design-guardrails.md` exists, read it as well. Evaluate findings against the project's own guardrails in addition to the generic laws, and cite the specific guardrail when one is violated. Guardrail violations rank at least WARNING.
+1. Read `.claude/references/ux-laws.md` to load the full set of 30 UX laws and their code-level indicators. You will reference these throughout the review.
+2. If `.claude/references/design-guardrails.md` exists, read it as well. Evaluate findings against the project's own guardrails in addition to the generic laws, and cite the specific guardrail when one is violated. Guardrail violations rank at least WARNING.
 
 ## Step 2: Determine Scope
 

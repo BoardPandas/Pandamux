@@ -1,15 +1,9 @@
 ---
 name: add-lesson
-model: haiku
-effort: low
-description: Add a new gotcha, lesson learned, or "thing to avoid" to the shared LL-G knowledge base. Use this whenever the user says "add a lesson", "record this gotcha", "save this to LL-G", "document this dead end", or describes a non-obvious failure, a silent-wrong-output bug, or a hard-won fix that future sessions should not have to rediscover -- even if they don't say "LL-G" explicitly.
-user-invocable: true
-argument-hint: (optional) the lesson title or a short description of the gotcha
-allowed-tools:
-  - Bash
-  - Read
-  - Write
+description: "Add a new gotcha, lesson learned, or \"thing to avoid\" to the shared LL-G knowledge base. Use this whenever the user says \"add a lesson\", \"record this gotcha\", \"save this to LL-G\", \"document this dead end\", or describes a non-obvious failure, a silent-wrong-output bug, or a hard-won fix that future sessions should not have to rediscover -- even if they don't say \"LL-G\" explicitly."
 ---
+
+> Generated from `.claude/skills/add-lesson/SKILL.md` by `scripts/sync-antigravity.mjs --with-skills`. Edit the source, then run `node scripts/sync-antigravity.mjs --with-skills`.
 
 You are adding a new entry to the LL-G lessons-learned knowledge base.
 

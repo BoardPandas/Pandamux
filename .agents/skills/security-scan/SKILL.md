@@ -1,25 +1,13 @@
 ---
 name: security-scan
-effort: high
-description: Run a security audit covering OWASP Top 10, secrets detection, dependency vulnerabilities, and input validation. Use before releases or after security-sensitive changes.
-user-invocable: true
-argument-hint: [optional: file or directory path to scope the scan]
-context: fork
-agent: security
-allowed-tools:
-  - Read
-  - Glob
-  - Grep
-  - Write
-  - Bash(npm audit*)
-  - Bash(pnpm audit*)
-  - Bash(yarn audit*)
-  - Bash(pip-audit*)
-  - Bash(cargo audit*)
-  - Bash(git log*)
-  - Bash(git ls-files*)
-  - Bash(git check-ignore*)
+description: "Run a security audit covering OWASP Top 10, secrets detection, dependency vulnerabilities, and input validation. Use before releases or after security-sensitive changes."
 ---
+
+> Generated from `.claude/skills/security-scan/SKILL.md` by `scripts/sync-antigravity.mjs --with-skills`. Edit the source, then run `node scripts/sync-antigravity.mjs --with-skills`.
+>
+> In Antigravity, call `invoke_subagent` with `TypeName: "security"` (`.agents/agents/security.md`) and return its summary.
+>
+> `$ARGUMENTS` is the text the user supplied with the skill invocation.
 
 # Security Scan
 

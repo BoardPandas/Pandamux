@@ -1,18 +1,11 @@
 ---
 name: performance-review
-effort: high
-description: Analyze the codebase for performance bottlenecks, inefficiencies, and optimization opportunities. Use when investigating slowness or preparing for scale.
-user-invocable: true
-argument-hint: [optional: file or directory path to scope the review]
-context: fork
-agent: performance
-allowed-tools:
-  - Read
-  - Glob
-  - Grep
-  - Bash(npm ls*)
-  - Bash(du*)
+description: "Analyze the codebase for performance bottlenecks, inefficiencies, and optimization opportunities. Use when investigating slowness or preparing for scale."
 ---
+
+> Generated from `.claude/skills/performance-review/SKILL.md` by `scripts/sync-antigravity.mjs --with-skills`. Edit the source, then run `node scripts/sync-antigravity.mjs --with-skills`.
+>
+> In Antigravity, call `invoke_subagent` with `TypeName: "performance"` (`.agents/agents/performance.md`) and return its summary.
 
 # Performance Review
 

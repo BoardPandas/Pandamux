@@ -12,17 +12,23 @@ on:
   pull_request:
     paths:
       - ".claude/**"
+      - ".agents/**"
       - "CLAUDE.md"
+      - "AGENTS.md"
       - "scripts/check-claude-wiring.mjs"
       - "scripts/post-push-cleanup.test.mjs"
+      - "scripts/*antigravity*"
       - ".github/workflows/claude-wiring.yml"
   push:
     branches: ["master", "main"]
     paths:
       - ".claude/**"
+      - ".agents/**"
       - "CLAUDE.md"
+      - "AGENTS.md"
       - "scripts/check-claude-wiring.mjs"
       - "scripts/post-push-cleanup.test.mjs"
+      - "scripts/*antigravity*"
       - ".github/workflows/claude-wiring.yml"
   workflow_dispatch:
 
@@ -44,6 +50,12 @@ jobs:
 
       - name: Claude wiring guard
         run: node scripts/check-claude-wiring.mjs
+
+      - name: Antigravity workspace sync check
+        run: node scripts/sync-antigravity.mjs --with-skills --check
+
+      - name: Antigravity hook adapter tests
+        run: node --test scripts/antigravity-hooks.test.mjs
 
       # The post-push cleanup hook is advisory and must stay silent unless the default
       # branch really moved. Throwaway repos, node --test plus bash, nothing else.

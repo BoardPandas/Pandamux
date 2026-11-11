@@ -1,20 +1,9 @@
 ---
 name: doc-sync
-description: Build, audit, or incrementally refresh comprehensive project documentation in the `Docs/` folder. Generates a TOC-driven wiki with categorized pages (core, features, operations, api, design, runbooks), AUTOGEN markers for safe updates, evidence-based citations with line numbers, Mermaid diagrams, and a README index. Use after significant code changes, when onboarding a new repo, or to audit existing docs for staleness.
-user-invocable: true
-argument-hint: (optional) "audit" | "init" | "update" | a path to focus on
-allowed-tools:
-  - Read
-  - Write
-  - Edit
-  - Glob
-  - Grep
-  - Bash
-  - WebFetch
-  - Agent(builder)
-model: opus
-effort: medium
+description: "Build, audit, or incrementally refresh comprehensive project documentation in the `Docs/` folder. Generates a TOC-driven wiki with categorized pages (core, features, operations, api, design, runbooks), AUTOGEN markers for safe updates, evidence-based citations with line numbers, Mermaid diagrams, and a README index. Use after significant code changes, when onboarding a new repo, or to audit existing docs for staleness."
 ---
+
+> Generated from `.claude/skills/doc-sync/SKILL.md` by `scripts/sync-antigravity.mjs --with-skills`. Edit the source, then run `node scripts/sync-antigravity.mjs --with-skills`.
 
 # Documentation Sync
 
@@ -82,15 +71,15 @@ If the argument is empty: pick **init** when no `{DOCS_ROOT}/_toc.yaml`, otherwi
 
 Load these reference files before generating or updating any page. They contain the rules you must follow:
 
-- `${CLAUDE_SKILL_DIR}/references/page-template.md` — required page structure, markers, headings
-- `${CLAUDE_SKILL_DIR}/references/citation-policy.md` — evidence rules, source URL format, line numbers
-- `${CLAUDE_SKILL_DIR}/references/mermaid-policy.md` — diagram syntax rules and validation
-- `${CLAUDE_SKILL_DIR}/references/toc-schema.md` — `_toc.yaml` schema and ID conventions
-- `${CLAUDE_SKILL_DIR}/references/doc-categories.md` — when to create which page type
-- `${CLAUDE_SKILL_DIR}/references/incremental-update.md` — safe AUTOGEN replacement rules
-- `${CLAUDE_SKILL_DIR}/references/readme-template.md` — `Docs/README.md` index structure
+- `.agents/skills/doc-sync/references/page-template.md` — required page structure, markers, headings
+- `.agents/skills/doc-sync/references/citation-policy.md` — evidence rules, source URL format, line numbers
+- `.agents/skills/doc-sync/references/mermaid-policy.md` — diagram syntax rules and validation
+- `.agents/skills/doc-sync/references/toc-schema.md` — `_toc.yaml` schema and ID conventions
+- `.agents/skills/doc-sync/references/doc-categories.md` — when to create which page type
+- `.agents/skills/doc-sync/references/incremental-update.md` — safe AUTOGEN replacement rules
+- `.agents/skills/doc-sync/references/readme-template.md` — `Docs/README.md` index structure
 
-Page templates live in `${CLAUDE_SKILL_DIR}/templates/`:
+Page templates live in `.agents/skills/doc-sync/templates/`:
 
 - `overview.md`, `architecture.md`, `api-reference.md`, `feature.md`,
   `database-schema.md`, `module.md`, `data-flow.md`, `runbook.md`,
@@ -119,7 +108,7 @@ Each template defines required sections and minimum content expectations. Do not
 
 ### Step 2: Design the TOC
 
-1. Read `${CLAUDE_SKILL_DIR}/references/toc-schema.md` and `${CLAUDE_SKILL_DIR}/references/doc-categories.md`.
+1. Read `.agents/skills/doc-sync/references/toc-schema.md` and `.agents/skills/doc-sync/references/doc-categories.md`.
 2. Pick page categories that match the project. Use the page-count guideline:
 
    | Project size | Files | Pages |
@@ -135,7 +124,7 @@ Each template defines required sections and minimum content expectations. Do not
    - `source_files` (page-level glob patterns)
    - `sections[]` with `id`, `title`, `autogen: true`, optional section-level `source_files`, `diagrams_needed`, `diagram_types`
    - `related_pages[]` for cross-linking
-5. Write `Docs/_toc.yaml` using `${CLAUDE_SKILL_DIR}/templates/_toc.yaml.template` as a starting point. Replace placeholders with real values.
+5. Write `Docs/_toc.yaml` using `.agents/skills/doc-sync/templates/_toc.yaml.template` as a starting point. Replace placeholders with real values.
 
 ### Step 3: Generate pages
 
@@ -143,29 +132,29 @@ For each page in `_toc.yaml`:
 
 1. Resolve `source_files` (page-level + section-level) using Glob.
 2. Read each resolved file with Read (no line-number guessing — use the actual numbers Read returns).
-3. Pick the matching template from `${CLAUDE_SKILL_DIR}/templates/` based on the page category.
-4. Write the page to `Docs/{folder}/{filename}` following `${CLAUDE_SKILL_DIR}/references/page-template.md`:
+3. Pick the matching template from `.agents/skills/doc-sync/templates/` based on the page category.
+4. Write the page to `Docs/{folder}/{filename}` following `.agents/skills/doc-sync/references/page-template.md`:
    - `<!-- PAGE_ID: {id} -->` at the very top
    - Collapsible "Relevant source files" block listing inputs with line ranges
    - `# {title}` H1
    - `> **Related Pages**:` line linking to `related_pages`
    - One AUTOGEN block per section, with H2 heading, content, inline citations, and end-of-section `Sources:` line
    - `---` separator between sections
-5. Apply citation rules from `${CLAUDE_SKILL_DIR}/references/citation-policy.md`:
+5. Apply citation rules from `.agents/skills/doc-sync/references/citation-policy.md`:
    - Inline citations wrapped in parentheses, before the period
    - End-of-section `Sources:` summary
    - Use real line numbers from Read output; never invent
-6. Generate Mermaid diagrams per `${CLAUDE_SKILL_DIR}/references/mermaid-policy.md` when `diagrams_needed: true`. Use `graph TD`, quote all node text, no special chars in subgraph names.
+6. Generate Mermaid diagrams per `.agents/skills/doc-sync/references/mermaid-policy.md` when `diagrams_needed: true`. Use `graph TD`, quote all node text, no special chars in subgraph names.
 
-For large repos, generate pages in parallel by spawning `builder` agents per page (the custom agent in `.Codex/agents/`, never the built-in `Explore` type -- the built-in loads every MCP tool schema and blows the context window). The `builder` agent has Write and Edit; do NOT use `explorer` for page generation, as it is read-only and cannot write pages. Each subagent receives: the page entry from TOC, the resolved source files, and the template path. Wait for all to complete before validation.
+For large repos, generate pages in parallel by spawning `builder` agents per page (the custom agent in `.claude/agents/`, never the built-in `Explore` type -- the built-in loads every MCP tool schema and blows the context window). The `builder` agent has Write and Edit; do NOT use `explorer` for page generation, as it is read-only and cannot write pages. Each subagent receives: the page entry from TOC, the resolved source files, and the template path. Wait for all to complete before validation.
 
 ### Step 4: Generate the README index
 
-Write `Docs/README.md` using `${CLAUDE_SKILL_DIR}/references/readme-template.md`. Include:
+Write `Docs/README.md` using `.agents/skills/doc-sync/references/readme-template.md`. Include:
 - A "Latest Updates" callout pulled from the most recent `CHANGELOG.md` entries (omit the callout entirely if `CHANGELOG.md` does not exist)
 - A Quick Start table mapping common goals to entry pages
 - One categorized table per folder, listing every generated page with its description from `_toc.yaml`
-- A "Related Resources" section linking to root `README.md`, `agents.md`, and `AGENTS.md` if they exist
+- A "Related Resources" section linking to root `README.md`, `agents.md`, and `CLAUDE.md` if they exist
 
 ### Step 5: Write metadata
 
@@ -194,15 +183,15 @@ Run validation in this order:
    - No orphaned, duplicated, or extra markers
    - Every local link `[text](path)` resolves from the containing page's directory to a file or directory that exists; never validate source citations from the repository root
 2. **Mermaid validation:**
-   - If `mmdc` is on PATH (`command -v mmdc` in Bash), extract each ` ```mermaid` block to a uniquely named temp file in the session scratchpad directory (never `/tmp`) and run `mmdc -i {block}.mmd -o {block}.svg --quiet` per block. Unique filenames keep parallel validations from clobbering each other. If `mmdc` is unavailable, fall back to the static checks in `${CLAUDE_SKILL_DIR}/references/mermaid-policy.md` and note that syntactic validation was skipped.
-   - For each invalid block, attempt at most 3 fixes per block using the rules in `${CLAUDE_SKILL_DIR}/references/mermaid-policy.md`. If still invalid, comment the block out and add a `<!-- TODO: invalid mermaid -->` marker.
+   - If `mmdc` is on PATH (`command -v mmdc` in Bash), extract each ` ```mermaid` block to a uniquely named temp file in the session scratchpad directory (never `/tmp`) and run `mmdc -i {block}.mmd -o {block}.svg --quiet` per block. Unique filenames keep parallel validations from clobbering each other. If `mmdc` is unavailable, fall back to the static checks in `.agents/skills/doc-sync/references/mermaid-policy.md` and note that syntactic validation was skipped.
+   - For each invalid block, attempt at most 3 fixes per block using the rules in `.agents/skills/doc-sync/references/mermaid-policy.md`. If still invalid, comment the block out and add a `<!-- TODO: invalid mermaid -->` marker.
 3. **Coverage check:**
    - List source files referenced by `_toc.yaml` patterns vs. files actually cited in pages
    - List uncited public APIs (exports, route handlers, CLI commands)
 
 ### Step 7: Write the SUMMARY report
 
-Write `Docs/_meta/SUMMARY.md` per `${CLAUDE_SKILL_DIR}/references/incremental-update.md` (Summary section). Include: pages generated vs. expected, citations per page, diagrams per page, validation errors, uncovered files.
+Write `Docs/_meta/SUMMARY.md` per `.agents/skills/doc-sync/references/incremental-update.md` (Summary section). Include: pages generated vs. expected, citations per page, diagrams per page, validation errors, uncovered files.
 
 ---
 
@@ -238,13 +227,13 @@ For each new TOC page: generate as in init Step 3.
 
 For each deleted source file with no remaining coverage:
 - If a section's `source_files` is now empty, remove the AUTOGEN block from the page and delete the section from `_toc.yaml`.
-- If a page has no remaining sections, do NOT delete the page file. Move it to `Docs/archive/`, remove it from `_toc.yaml`, and note the move in `_meta/SUMMARY.md` (per `${CLAUDE_SKILL_DIR}/references/incremental-update.md`). The user deletes from archive when ready.
+- If a page has no remaining sections, do NOT delete the page file. Move it to `Docs/archive/`, remove it from `_toc.yaml`, and note the move in `_meta/SUMMARY.md` (per `.agents/skills/doc-sync/references/incremental-update.md`). The user deletes from archive when ready.
 
 ### Step 4: Update README and metadata
 
 1. Update `Docs/README.md` only if pages were added, removed, or renamed.
 2. Rewrite `Docs/_meta/GENERATION.md` with the new commit, timestamp, and `mode: update`.
-3. Update the `project` block in `Docs/_toc.yaml`: `ref_commit_hash` = target commit, `branch`, and `updated_at` = today (per `${CLAUDE_SKILL_DIR}/references/incremental-update.md`).
+3. Update the `project` block in `Docs/_toc.yaml`: `ref_commit_hash` = target commit, `branch`, and `updated_at` = today (per `.agents/skills/doc-sync/references/incremental-update.md`).
 4. Update the "Latest Updates" callout in `Docs/README.md` from new `CHANGELOG.md` entries since `base_commit` (skip if `CHANGELOG.md` does not exist).
 
 ### Step 5: Validate
@@ -329,7 +318,7 @@ For update mode, single-page jobs are usually fine without subagents. Spawn suba
 ## Final checklist before reporting completion
 
 - [ ] `Docs/_toc.yaml` valid (unique IDs, kebab-case slugs, every page has ≥ 1 source file)
-- [ ] Every page has PAGE_ID and matched AUTOGEN markers per `${CLAUDE_SKILL_DIR}/references/page-template.md`
+- [ ] Every page has PAGE_ID and matched AUTOGEN markers per `.agents/skills/doc-sync/references/page-template.md`
 - [ ] Every page has at least: 6 H2 sections, 8 substantive bullets across sections, 2 tables when applicable, 2 code/file snippets when sources exist, 8+ source paths in "Relevant source files"
 - [ ] Every diagram block parses (or is commented out with TODO)
 - [ ] `Docs/README.md` lists every generated page

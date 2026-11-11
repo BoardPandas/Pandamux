@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Added
 
+- **Google Antigravity workspace compatibility and hook adapter (0.60.123).** Adds `.claude/scripts/_antigravity-hook.sh`, `scripts/antigravity-format.mjs`, `scripts/sync-antigravity.mjs`, and `scripts/antigravity-hooks.test.mjs` to generate `.agents/agents/`, `.agents/rules/`, `.agents/skills/` (all `SKILL.md` files under Antigravity's 24 KB limit), and `.agents/hooks.json` from `.claude/`, and removes the zero-byte retired `gpui-kit` and `gpui-kit-design-guides` skill stubs. Translates Antigravity hook payloads (`command_line`, `file_path`, `agent_response`) so commit gates, knowledge-base checks, and advisory injections work natively in Antigravity alongside Claude Code and Codex. No application code changes.
+
 - **Claude offers to clean up merged worktrees and branches after a push (0.54.0).** After a push moves `origin/master`, a new hook lists local branches already merged into it and the clean worktrees on them, then has Claude ask once before removing anything. It never deletes on its own, leaves locked worktrees, the session's own worktree and worktrees with uncommitted changes alone, and stays silent for dry runs, rejected pushes and pushes of other branches. The shared commit-hook helper gains the argv walk the hook reuses; commit behaviour is unchanged. No application code changes.
 
 ### Changed

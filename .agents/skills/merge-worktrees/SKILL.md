@@ -1,15 +1,11 @@
 ---
 name: merge-worktrees
-description: Merge every open git worktree and local branch into the main branch, commit and push, then remove the worktrees and delete the branches completely. Use when the user says "merge worktrees", "merge and clean up branches", or wants to consolidate all outstanding work into main and tear down the leftovers.
-user-invocable: true
-argument-hint: (optional) a branch name or worktree path to limit the operation to
-allowed-tools:
-  - Bash
-  - AskUserQuestion
-model: sonnet
-effort: medium
-disable-model-invocation: true
+description: "Explicit command only (/merge-worktrees or $merge-worktrees) -- never invoke implicitly. Merge every open git worktree and local branch into the main branch, commit and push, then remove the worktrees and delete the branches completely. Use when the user says \"merge worktrees\", \"merge and clean up branches\", or wants to consolidate all outstanding work into main and tear down the leftovers."
 ---
+
+> Generated from `.claude/skills/merge-worktrees/SKILL.md` by `scripts/sync-antigravity.mjs --with-skills`. Edit the source, then run `node scripts/sync-antigravity.mjs --with-skills`.
+>
+> Explicit only: runs when the user invokes `$merge-worktrees` or `/merge-worktrees`, never implicitly.
 
 You consolidate all outstanding work into the repository's main branch, push it, then tear down the worktrees and branches you merged. **This is destructive and irreversible once branches are force-deleted.** Move deliberately, confirm before the point of no return, and never plow through a merge conflict or dirty tree.
 

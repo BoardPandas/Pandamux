@@ -1,17 +1,9 @@
 ---
 name: dependency-audit
-model: sonnet
-effort: medium
-description: Audit project dependencies for outdated versions, known vulnerabilities, and unused packages, plus stale runtimes and package managers (Node, npm, pnpm) and GitHub Actions (action versions, runner images, and the tool versions workflows install). Use periodically or before releases.
-user-invocable: true
-argument-hint: [optional: directory to scope the audit, e.g. a monorepo workspace]
-allowed-tools:
-  - Read
-  - Glob
-  - Grep
-  - Bash
-  - WebFetch
+description: "Audit project dependencies for outdated versions, known vulnerabilities, and unused packages, plus stale runtimes and package managers (Node, npm, pnpm) and GitHub Actions (action versions, runner images, and the tool versions workflows install). Use periodically or before releases."
 ---
+
+> Generated from `.claude/skills/dependency-audit/SKILL.md` by `scripts/sync-antigravity.mjs --with-skills`. Edit the source, then run `node scripts/sync-antigravity.mjs --with-skills`.
 
 # Dependency Audit
 

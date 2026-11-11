@@ -1,19 +1,9 @@
 ---
 name: apply-practice
-model: sonnet
-effort: medium
-description: Apply a specific best practice from the BP knowledge base to a target repository. Use this whenever the user says "apply a practice", "apply <slug> to this repo", "adopt the BP pattern for X", "bring this repo up to the BP standard", or wants a proven convention/config/workflow from BP installed into the current project -- even if they don't say "BP" explicitly.
-user-invocable: true
-argument-hint: (optional) the practice slug (e.g. testing/vitest-monorepo-config) and/or target repo path
-allowed-tools:
-  - Read
-  - Glob
-  - Grep
-  - Bash
-  - Edit
-  - Write
-  - WebFetch
+description: "Apply a specific best practice from the BP knowledge base to a target repository. Use this whenever the user says \"apply a practice\", \"apply slug to this repo\", \"adopt the BP pattern for X\", \"bring this repo up to the BP standard\", or wants a proven convention/config/workflow from BP installed into the current project -- even if they don't say \"BP\" explicitly."
 ---
+
+> Generated from `.claude/skills/apply-practice/SKILL.md` by `scripts/sync-antigravity.mjs --with-skills`. Edit the source, then run `node scripts/sync-antigravity.mjs --with-skills`.
 
 You are applying a specific best practice from the BP knowledge base to a target repository.
 

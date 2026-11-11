@@ -1,22 +1,13 @@
 ---
 name: spec-developer
-model: opus
-effort: high
-description: Interview-driven spec generation. Explores the codebase, checks LL-G and BP, asks scoped clarifying questions, then produces a detailed implementation plan saved to /tasks. Use for any feature larger than a single file change.
-user-invocable: true
-argument-hint: <feature name or description>
-disable-model-invocation: true
-allowed-tools:
-  - Read
-  - Write
-  - Edit
-  - Glob
-  - Grep
-  - Agent(explorer)
-  - WebSearch
-  - WebFetch
-  - Bash(pandamux markdown *)
+description: "Explicit command only (/spec-developer or $spec-developer) -- never invoke implicitly. Interview-driven spec generation. Explores the codebase, checks LL-G and BP, asks scoped clarifying questions, then produces a detailed implementation plan saved to /tasks. Use for any feature larger than a single file change."
 ---
+
+> Generated from `.claude/skills/spec-developer/SKILL.md` by `scripts/sync-antigravity.mjs --with-skills`. Edit the source, then run `node scripts/sync-antigravity.mjs --with-skills`.
+>
+> Explicit only: runs when the user invokes `$spec-developer` or `/spec-developer`, never implicitly.
+>
+> `$ARGUMENTS` is the text the user supplied with the skill invocation.
 
 # Spec Developer
 
@@ -44,7 +35,7 @@ Do not pad a small feature to hit a bigger tier's numbers. Depth should come fro
 
 ### 1a. Codebase exploration (Spec Developer Explorer variant)
 
-Spin up parallel `explorer` agents scaled to feature size (see table above). Use the custom `explorer` agent (defined in `.Codex/agents/`), never the built-in `Explore` type; the built-in loads every MCP tool schema and blows the context window before it can do any work. The allowed-tools list enforces this: only `Agent(explorer)` is permitted.
+Spin up parallel `explorer` agents scaled to feature size (see table above). Use the custom `explorer` agent (defined in `.claude/agents/`), never the built-in `Explore` type; the built-in loads every MCP tool schema and blows the context window before it can do any work. The allowed-tools list enforces this: only `Agent(explorer)` is permitted.
 
 Every prompt must name the feature so the explorer can focus its search:
 
@@ -166,8 +157,8 @@ Numbered steps in implementation order, grouped into **checkpoints**: commit-siz
 After implementation, capture here:
 - [ ] Gotchas encountered: route to LL-G via `/add-lesson` (preferred; lessons stored locally stay local)
 - [ ] Proven reusable patterns: route to BP via `/add-practice`
-- [ ] Repo-specific notes that do not generalize: `.Codex/agent-memory/debugging.md` or `patterns.md`
-- [ ] Workflow improvements: update AGENTS.md or agent memory
+- [ ] Repo-specific notes that do not generalize: `.claude/agent-memory/debugging.md` or `patterns.md`
+- [ ] Workflow improvements: update CLAUDE.md or agent memory
 - [ ] Failed approaches: document what was tried and why it failed
 
 *Fill in during/after implementation. Default to LL-G/BP; only keep a lesson local when it truly applies to this repo alone.*

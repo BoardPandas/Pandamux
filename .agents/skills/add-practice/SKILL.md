@@ -1,15 +1,9 @@
 ---
 name: add-practice
-model: haiku
-effort: low
-description: Add a new best-practice entry to the shared BP knowledge base. Use this whenever the user says "add a practice", "record this pattern", "save this to BP", "this should be a best practice", or describes a proven, reusable convention, config, or workflow that other repos should adopt -- even if they don't say "BP" explicitly.
-user-invocable: true
-argument-hint: (optional) the practice title or a short description of the pattern
-allowed-tools:
-  - Bash
-  - Read
-  - Write
+description: "Add a new best-practice entry to the shared BP knowledge base. Use this whenever the user says \"add a practice\", \"record this pattern\", \"save this to BP\", \"this should be a best practice\", or describes a proven, reusable convention, config, or workflow that other repos should adopt -- even if they don't say \"BP\" explicitly."
 ---
+
+> Generated from `.claude/skills/add-practice/SKILL.md` by `scripts/sync-antigravity.mjs --with-skills`. Edit the source, then run `node scripts/sync-antigravity.mjs --with-skills`.
 
 You are adding a new entry to the BP best practices knowledge base.
 
