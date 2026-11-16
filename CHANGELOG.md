@@ -35,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   P4-C5 remains Partial and P4-C7 remains open.
 
 ### Fixed
+- **Hooks now run from any folder (0.60.124).** Every hook in `.claude/settings.json` runs its script from `"$CLAUDE_PROJECT_DIR"/.claude/scripts/` instead of a path relative to the current folder. Before, once a session changed into a subfolder, every hook failed with "No such file or directory" (exit 127). Claude Code treats that as non-blocking, so the commit, changelog and knowledge-base gates were silently skipped and the call went ahead unchecked. `.agents/README.md` is regenerated.
+- **The wiring guard catches it (0.60.124).** `scripts/check-claude-wiring.mjs` now fails any hook that calls a `.claude/` or `scripts/` path without the `"$CLAUDE_PROJECT_DIR"` anchor, whether as the script, an argument or an env assignment (check 3d).
 
 - **Preserved post-side-effect ambiguity across remote crash recovery in
   version 0.60.121.** When a Node receipt proves that a response-lost provider

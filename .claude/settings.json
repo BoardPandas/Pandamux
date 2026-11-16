@@ -33,7 +33,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/scripts/session-start-kb-check.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/session-start-kb-check.sh",
             "statusMessage": "Surfacing LL-G / BP knowledge-base reminder..."
           }
         ]
@@ -46,19 +46,19 @@
           {
             "type": "command",
             "if": "Bash(git commit*)",
-            "command": "bash .claude/scripts/check-commit-herestring.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/check-commit-herestring.sh",
             "statusMessage": "Checking commit message syntax..."
           },
           {
             "type": "command",
             "if": "Bash(git commit*)",
-            "command": "bash .claude/scripts/pre-commit-changelog-reminder.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/pre-commit-changelog-reminder.sh",
             "statusMessage": "Checking changelog update..."
           },
           {
             "type": "command",
             "if": "Bash(git commit*)",
-            "command": "bash .claude/scripts/check-changelog-staged.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/check-changelog-staged.sh",
             "statusMessage": "Verifying changelog is staged..."
           }
         ]
@@ -68,7 +68,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/scripts/pre-plan-kb-check.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/pre-plan-kb-check.sh",
             "statusMessage": "Checking LL-G and BP knowledge bases..."
           }
         ]
@@ -78,7 +78,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/scripts/pre-write-kb-check.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/pre-write-kb-check.sh",
             "statusMessage": "Checking LL-G gotchas for this file..."
           }
         ]
@@ -91,7 +91,7 @@
           {
             "type": "command",
             "if": "Bash(git commit*)",
-            "command": "bash .claude/scripts/post-commit-kb-contribute.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/post-commit-kb-contribute.sh",
             "statusMessage": "Checking for knowledge base contributions..."
           },
           {
