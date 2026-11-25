@@ -49,3 +49,8 @@ git add CHANGELOG.md package.json
 3. Bump version in package.json
 4. `git add CHANGELOG.md package.json`
 5. Proceed with the commit
+
+End every agent-authored commit message with a dynamic trailer identifying the active
+agent and model: `Co-Authored-By: {Agent} {Model}` (e.g., `Co-Authored-By: Gemini 4 Neon`,
+`Co-Authored-By: Claude Opus 5.5`, `Co-Authored-By: Codex GPT-6 Sol`). Never hardcode
+another runtime's name.

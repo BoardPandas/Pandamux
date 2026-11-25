@@ -12,6 +12,7 @@
  *   4. always-on context weight          -> every rule competes with every other rule
  *   5. 2>/dev/null || true on a hook     -> failure is unfalsifiable
  *   3d. cwd-relative hook script path   -> exits 127 from any subfolder; the call runs unchecked
+ *   13. .agents/hooks.json cross-platform & tool matchers -> Windows cmd /c + CLI/ACP 1.5+ safety
  *
  * Portable: node built-ins only, no dependencies, no repo-specific paths. Drop into
  * any Claude Code repo and wire as `node scripts/check-claude-wiring.mjs` in CI.
@@ -187,6 +188,69 @@ for (const settingsPath of SETTINGS) {
 							`(${cmd.slice(0, 48)}...). If it breaks you will never find out. ` +
 							`Let it fail loudly, or log to a file.`,
 					);
+				}
+			}
+		}
+	}
+}
+
+/* ── 13: Antigravity .agents/hooks.json cross-platform & tool matchers ────── */
+// Antigravity runs hook commands via `cmd /c` on Windows with `.agents/` as cwd, so
+// POSIX `$(...)` or backtick command substitution passes literally and silently fails open.
+// Antigravity CLI/ACP 1.5+ also uses `write_file`/`edit_file` (not legacy `write_to_file` /
+// `replace_file_content`), so legacy-only matchers silently never fire there.
+const AGY_HOOKS = ".agents/hooks.json";
+if (exists(AGY_HOOKS)) {
+	let agyHooks;
+	try {
+		agyHooks = JSON.parse(read(AGY_HOOKS));
+	} catch (e) {
+		errors.push(`.agents/hooks.json is not valid JSON: ${e.message}`);
+		agyHooks = null;
+	}
+	if (agyHooks && typeof agyHooks === "object") {
+		const checkAgyCmd = (ctx, cmd) => {
+			if (typeof cmd === "string" && (/\$\(/.test(cmd) || /`/.test(cmd))) {
+				errors.push(
+					`.agents/hooks.json: ${ctx} uses POSIX command substitution ($(...) or backticks), which ` +
+						`Windows cmd /c passes literally so the hook silently fails open. Use a relative path ` +
+						`from .agents/ (e.g. bash ../.claude/scripts/_antigravity-hook.sh).`,
+				);
+			}
+		};
+		for (const [groupName, cfg] of Object.entries(agyHooks)) {
+			if (!cfg || typeof cfg !== "object") continue;
+			for (const ev of ["SessionStart", "PreInvocation", "PostInvocation", "Stop"]) {
+				for (const h of Array.isArray(cfg[ev]) ? cfg[ev] : []) {
+					checkAgyCmd(`${groupName}.${ev}`, h?.command);
+				}
+			}
+			for (const ev of ["PreToolUse", "PostToolUse"]) {
+				for (const block of Array.isArray(cfg[ev]) ? cfg[ev] : []) {
+					const m = block?.matcher ?? "";
+					if (typeof m === "string" && m) {
+						const tokens = m.split("|");
+						if (tokens.includes("write_to_file") && !tokens.includes("write_file")) {
+							errors.push(
+								`.agents/hooks.json: ${groupName}.${ev} matcher ${JSON.stringify(m)} matches legacy ` +
+									`write_to_file without write_file; Antigravity CLI/ACP 1.5+ uses write_file so this ` +
+									`hook silently never fires there.`,
+							);
+						}
+						if (
+							(tokens.includes("replace_file_content") || tokens.includes("multi_replace_file_content")) &&
+							!tokens.includes("edit_file")
+						) {
+							errors.push(
+								`.agents/hooks.json: ${groupName}.${ev} matcher ${JSON.stringify(m)} matches legacy ` +
+									`replace_file_content without edit_file; Antigravity CLI/ACP 1.5+ uses edit_file so ` +
+									`this hook silently never fires there.`,
+							);
+						}
+					}
+					for (const h of Array.isArray(block?.hooks) ? block.hooks : []) {
+						checkAgyCmd(`${groupName}.${ev}[${m || "*"}]`, h?.command);
+					}
 				}
 			}
 		}
